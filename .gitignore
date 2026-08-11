@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & Virtual Envs
+.venv/
+venv/
+ENV/
+env/
+
+# Databases & Local SQLite
+*.db
+*.sqlite
+*.sqlite3
+omini_channel.db
+
+# Vector DB storage
+chroma_db/
+backups_json/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.npm
+*.log
+
+# Environment variables & secrets
+.env
+.env.local
+*.pem
+
+# IDEs & System Files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
