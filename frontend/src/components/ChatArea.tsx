@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, UserCheck, ArrowRightLeft, Bot, Phone, Building, AlertCircle, Paperclip } from 'lucide-react';
+import { Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building, AlertCircle, Paperclip } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, User } from '../types';
 
@@ -144,7 +144,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {conversation.status === 'com_ia' ? (
               <><Bot size={14} /> COM IA (Clique p/ Atendente)</>
             ) : (
-              <><UserCheck size={14} /> COM HUMANO (Clique p/ IA)</>
+              <><Headphones size={14} /> COM HUMANO (Clique p/ IA)</>
             )}
           </button>
 

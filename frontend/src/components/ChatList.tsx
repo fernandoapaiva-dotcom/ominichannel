@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Filter, Phone, Bot, User as UserIcon, Clock, Plus } from 'lucide-react';
+import { Search, Filter, Phone, Bot, Headphones, User as UserIcon, Clock, Plus, MessageSquare } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 
@@ -44,6 +44,18 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   };
 
+  // Helper to calculate unread/pending client conversations for each department
+  const getUnreadCount = (deptId: number | 'all') => {
+    return conversations.filter(conv => {
+      const matchesDept = deptId === 'all' || conv.whatsapp_number_id === deptId;
+      if (!matchesDept) return false;
+      const lastMsg = conv.messages[conv.messages.length - 1];
+      const isUnreadClientMsg = lastMsg && lastMsg.remetente.toLowerCase() === 'cliente';
+      const isNotCurrentlyOpen = activeConversation?.id !== conv.id;
+      return isUnreadClientMsg && isNotCurrentlyOpen;
+    }).length;
+  };
+
   const filteredConversations = conversations.filter(conv => {
     const matchesDept = selectedDepartmentId === 'all' || conv.whatsapp_number_id === selectedDepartmentId;
     const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
@@ -52,6 +64,8 @@ export const ChatList: React.FC<ChatListProps> = ({
     const matchesSearch = contactName.toLowerCase().includes(searchTerm.toLowerCase()) || contactPhone.includes(searchTerm);
     return matchesDept && matchesStatus && matchesSearch;
   });
+
+  const totalUnread = getUnreadCount('all');
 
   return (
     <div style={{
@@ -65,8 +79,20 @@ export const ChatList: React.FC<ChatListProps> = ({
       {/* Header & Search */}
       <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
             Conversas
+            {totalUnread > 0 && (
+              <span style={{
+                backgroundColor: '#ef4444',
+                color: '#fff',
+                borderRadius: '12px',
+                padding: '2px 8px',
+                fontSize: '11px',
+                fontWeight: '700'
+              }}>
+                {totalUnread} pendentes
+              </span>
+            )}
           </h2>
           {onOpenNewConversationModal && (
             <button
@@ -81,10 +107,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         </div>
 
         {/* Search Bar */}
-        <div style={{
-          position: 'relative',
-          marginBottom: '12px'
-        }}>
+        <div style={{ position: 'relative', marginBottom: '12px' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
           <input
             type="text"
@@ -104,7 +127,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           />
         </div>
 
-        {/* Department Filter Pills */}
+        {/* Department Filter Pills with Unread Badges */}
         <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
           <button
             onClick={() => setSelectedDepartmentId('all')}
@@ -116,29 +139,63 @@ export const ChatList: React.FC<ChatListProps> = ({
               whiteSpace: 'nowrap',
               background: selectedDepartmentId === 'all' ? 'var(--accent-primary)' : 'var(--bg-secondary)',
               color: selectedDepartmentId === 'all' ? '#051a12' : 'var(--text-muted)',
-              border: '1px solid var(--border-color)'
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
             }}
           >
             Todos Dptos
+            {totalUnread > 0 && (
+              <span style={{
+                backgroundColor: selectedDepartmentId === 'all' ? '#051a12' : '#ef4444',
+                color: selectedDepartmentId === 'all' ? 'var(--accent-primary)' : '#ffffff',
+                borderRadius: '10px',
+                padding: '1px 6px',
+                fontSize: '10px',
+                fontWeight: 'bold'
+              }}>
+                {totalUnread}
+              </span>
+            )}
           </button>
-          {whatsappNumbers.map(wn => (
-            <button
-              key={wn.id}
-              onClick={() => setSelectedDepartmentId(wn.id)}
-              style={{
-                padding: '6px 12px',
-                borderRadius: 'var(--radius-full)',
-                fontSize: '12px',
-                fontWeight: '500',
-                whiteSpace: 'nowrap',
-                background: selectedDepartmentId === wn.id ? 'var(--accent-primary)' : 'var(--bg-secondary)',
-                color: selectedDepartmentId === wn.id ? '#051a12' : 'var(--text-muted)',
-                border: '1px solid var(--border-color)'
-              }}
-            >
-              {wn.nome_departamento}
-            </button>
-          ))}
+          {whatsappNumbers.map(wn => {
+            const deptUnread = getUnreadCount(wn.id);
+            const isSelectedDept = selectedDepartmentId === wn.id;
+            return (
+              <button
+                key={wn.id}
+                onClick={() => setSelectedDepartmentId(wn.id)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '12px',
+                  fontWeight: '500',
+                  whiteSpace: 'nowrap',
+                  background: isSelectedDept ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                  color: isSelectedDept ? '#051a12' : 'var(--text-muted)',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                {wn.nome_departamento}
+                {deptUnread > 0 && (
+                  <span style={{
+                    backgroundColor: isSelectedDept ? '#051a12' : '#ef4444',
+                    color: isSelectedDept ? 'var(--accent-primary)' : '#ffffff',
+                    borderRadius: '10px',
+                    padding: '1px 6px',
+                    fontSize: '10px',
+                    fontWeight: 'bold'
+                  }}>
+                    {deptUnread}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -182,6 +239,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           filteredConversations.map(conv => {
             const isSelected = activeConversation?.id === conv.id;
             const lastMessage = conv.messages[conv.messages.length - 1];
+            const isUnreadClientMsg = lastMessage && lastMessage.remetente.toLowerCase() === 'cliente' && !isSelected;
 
             return (
               <div
@@ -190,17 +248,20 @@ export const ChatList: React.FC<ChatListProps> = ({
                 style={{
                   padding: '14px 16px',
                   borderBottom: '1px solid var(--border-color)',
-                  backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
-                  borderLeft: isSelected ? '3px solid var(--accent-primary)' : '3px solid transparent',
+                  backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : (isUnreadClientMsg ? 'rgba(239, 68, 68, 0.05)' : 'transparent'),
+                  borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isUnreadClientMsg ? '3px solid #ef4444' : '3px solid transparent'),
                   cursor: 'pointer',
                   transition: 'var(--transition-fast)'
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-main)' }}>
+                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {conv.contact?.nome || conv.contact?.telefone || 'Cliente sem nome'}
+                    {isUnreadClientMsg && (
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} title="Mensagem não lida do cliente" />
+                    )}
                   </span>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontSize: '11px', color: isUnreadClientMsg ? '#ef4444' : 'var(--text-muted)', fontWeight: isUnreadClientMsg ? 'bold' : 'normal' }}>
                     {conv.ultima_interacao_em ? new Date(String(conv.ultima_interacao_em).endsWith('Z') || String(conv.ultima_interacao_em).includes('+') ? String(conv.ultima_interacao_em) : String(conv.ultima_interacao_em) + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
                 </div>
@@ -213,9 +274,9 @@ export const ChatList: React.FC<ChatListProps> = ({
                     onClick={(e) => handleToggleStatus(e, conv)}
                     title={conv.status === 'com_ia' ? 'Clique para alternar para Atendente Humano' : 'Clique para alternar para IA Concierge'}
                     className={`badge badge-${conv.status}`}
-                    style={{ cursor: 'pointer', border: 'none', transition: 'transform 0.1s' }}
+                    style={{ cursor: 'pointer', border: 'none', transition: 'transform 0.1s', display: 'flex', alignItems: 'center', gap: '4px' }}
                   >
-                    {conv.status === 'com_ia' && <Bot size={10} />}
+                    {conv.status === 'com_ia' ? <Bot size={10} /> : <Headphones size={10} />}
                     {conv.status.replace('_', ' ')}
                   </button>
                 </div>
@@ -223,7 +284,8 @@ export const ChatList: React.FC<ChatListProps> = ({
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <p style={{
                     fontSize: '12px',
-                    color: 'var(--text-dim)',
+                    color: isUnreadClientMsg ? 'var(--text-main)' : 'var(--text-dim)',
+                    fontWeight: isUnreadClientMsg ? '600' : 'normal',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',

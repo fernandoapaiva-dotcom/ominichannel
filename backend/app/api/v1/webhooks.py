@@ -18,6 +18,8 @@ from app.api.websockets import manager as ws_manager
 logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
 
+SEEN_WEBHOOK_KEYS = {}
+
 @router.post("/evolution")
 async def receive_evolution_webhook(
     request: Request,
@@ -43,6 +45,21 @@ async def receive_evolution_webhook(
 
     print(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}'", flush=True)
     logger.info(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}' | Payload: {payload}")
+
+    key = data.get("key", {}) if isinstance(data, dict) else {}
+    msg_id = key.get("id") if isinstance(key, dict) else None
+    
+    # Deduplicate incoming webhooks (Evolution API sends duplicate events for same msg_id)
+    if msg_id:
+        now_ts = datetime.utcnow().timestamp()
+        # Clean cache older than 60s
+        to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if now_ts - ts > 60]
+        for k in to_del:
+            del SEEN_WEBHOOK_KEYS[k]
+        if msg_id in SEEN_WEBHOOK_KEYS:
+            logger.info(f"Ignoring duplicate webhook for msg_id '{msg_id}'")
+            return {"status": "ignored", "reason": "Duplicate webhook payload"}
+        SEEN_WEBHOOK_KEYS[msg_id] = now_ts
 
     # Handle QRCODE_UPDATED event to cache QR code in real-time
     if event_type in ["qrcode.updated", "qrcode_updated", "qrcode"]:
@@ -177,7 +194,7 @@ async def receive_evolution_webhook(
         timestamp=datetime.utcnow()
     )
     db.add(user_msg)
-    await db.flush()
+    await db.commit()
 
     # Broadcast customer message via WebSockets to agents
     await ws_manager.broadcast_to_department(
