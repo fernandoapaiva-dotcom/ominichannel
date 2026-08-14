@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, ChevronDown
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -32,55 +32,71 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
+  const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
+  const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Extract all images in conversation for lightbox gallery navigation
-  const conversationImages = (conversation?.messages || [])
-    .filter(m => m.tipo === 'imagem')
+  // Extract all media items in conversation for universal gallery navigation (Images, Videos, Audios, Files)
+  const conversationMedia = (conversation?.messages || [])
+    .filter(m => ['imagem', 'video', 'audio', 'arquivo'].includes(m.tipo))
     .map(m => {
       const parts = (m.conteudo || '').split('|');
       const mediaPath = parts[0];
       const caption = parts.length > 1 ? parts.slice(1).join('|') : null;
       const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+      const fileName = mediaPath.split('/').pop() || 'Arquivo';
       return {
         id: m.id,
+        tipo: m.tipo,
         url: fullUrl,
+        fileName,
         caption,
         timestamp: m.timestamp,
         sender: m.remetente
       };
     });
 
-  const handlePrevImage = () => {
-    if (previewImageIndex === null || conversationImages.length === 0) return;
-    setPreviewImageIndex(prev => (prev! > 0 ? prev! - 1 : conversationImages.length - 1));
+  const handlePrevMedia = () => {
+    if (previewMediaIndex === null || conversationMedia.length === 0) return;
+    setPreviewMediaIndex(prev => (prev! > 0 ? prev! - 1 : conversationMedia.length - 1));
   };
 
-  const handleNextImage = () => {
-    if (previewImageIndex === null || conversationImages.length === 0) return;
-    setPreviewImageIndex(prev => (prev! < conversationImages.length - 1 ? prev! + 1 : 0));
+  const handleNextMedia = () => {
+    if (previewMediaIndex === null || conversationMedia.length === 0) return;
+    setPreviewMediaIndex(prev => (prev! < conversationMedia.length - 1 ? prev! + 1 : 0));
   };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (previewImageIndex === null) return;
-      if (e.key === 'ArrowLeft') handlePrevImage();
-      if (e.key === 'ArrowRight') handleNextImage();
-      if (e.key === 'Escape') setPreviewImageIndex(null);
+      if (previewMediaIndex === null) return;
+      if (e.key === 'ArrowLeft') handlePrevMedia();
+      if (e.key === 'ArrowRight') handleNextMedia();
+      if (e.key === 'Escape') setPreviewMediaIndex(null);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewImageIndex, conversationImages.length]);
+  }, [previewMediaIndex, conversationMedia.length]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const handleContainerScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    // Mark as scrolled up if distance to bottom > 120px
+    const isFar = scrollHeight - scrollTop - clientHeight > 120;
+    setIsUserScrolledUp(isFar);
+  };
+
   useEffect(() => {
-    scrollToBottom();
+    // Only auto-scroll if user is NOT manually reading past chat history!
+    if (!isUserScrolledUp) {
+      scrollToBottom();
+    }
     setSendError(null);
   }, [conversation?.messages]);
 
@@ -174,8 +190,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         backgroundColor: 'var(--bg-secondary)',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
         justifyContent: 'center',
+        alignItems: 'center',
         color: 'var(--text-muted)'
       }}>
         <Bot size={48} style={{ opacity: 0.3, marginBottom: '16px' }} />
@@ -184,21 +200,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   }
 
-  const mediaCount = conversation.messages.filter(m => ['imagem', 'audio', 'video', 'arquivo'].includes(m.tipo)).length;
-
   const renderMediaContent = (msg: any) => {
     const raw = msg.conteudo || '';
     const parts = raw.split('|');
     const mediaPath = parts[0];
     const caption = parts.length > 1 ? parts.slice(1).join('|') : null;
     const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+    const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
 
     switch (msg.tipo) {
       case 'imagem':
-        const imgIndex = conversationImages.findIndex(img => img.id === msg.id);
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => setPreviewImageIndex(imgIndex >= 0 ? imgIndex : 0)}>
+            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}>
               <img src={fullUrl} alt="Imagem" style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block' }} />
               <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <Eye size={12} /> Ampliar
@@ -211,7 +225,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       case 'video':
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <video src={fullUrl} controls style={{ width: '100%', maxWidth: '320px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }} />
+            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px' }} onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}>
+              <video src={fullUrl} controls style={{ width: '100%', maxWidth: '320px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }} />
+            </div>
             {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );
@@ -228,36 +244,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const fileName = mediaPath.split('/').pop() || 'Arquivo';
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '12px',
-              padding: '10px 14px',
-              backgroundColor: 'rgba(255, 255, 255, 0.06)',
-              borderRadius: '8px',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              maxWidth: '300px'
-            }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '10px 14px',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                borderRadius: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                maxWidth: '300px',
+                cursor: 'pointer'
+              }}
+              onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}
+            >
               <FileText size={28} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {fileName}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Documento / Anexo
+                  Clique para ver detalhes
                 </div>
               </div>
-              <a href={fullUrl} download target="_blank" rel="noopener noreferrer" style={{
-                color: 'var(--accent-primary)',
-                padding: '6px',
-                borderRadius: '6px',
-                backgroundColor: 'rgba(0, 230, 153, 0.1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }} title="Baixar Arquivo">
-                <Download size={16} />
-              </a>
             </div>
             {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
@@ -272,18 +281,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-const formatTime = (ts: string | Date | undefined) => {
-  if (!ts) return '';
-  let str = String(ts).trim();
-  if (str.includes(' ') && !str.includes('T')) {
-    str = str.replace(' ', 'T');
-  }
-  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
-    str = str + 'Z';
-  }
-  const d = new Date(str);
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-};
+  const formatTime = (ts: string | Date | undefined) => {
+    if (!ts) return '';
+    let str = String(ts).trim();
+    if (str.includes(' ') && !str.includes('T')) {
+      str = str.replace(' ', 'T');
+    }
+    if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
+      str = str + 'Z';
+    }
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  const currentMedia = previewMediaIndex !== null ? conversationMedia[previewMediaIndex] : null;
 
   return (
     <div
@@ -319,11 +330,11 @@ const formatTime = (ts: string | Date | undefined) => {
         </div>
       )}
 
-      {previewImageIndex !== null && conversationImages[previewImageIndex] && (
+      {previewMediaIndex !== null && currentMedia && (
         <div style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.92)',
+          backgroundColor: 'rgba(0, 0, 0, 0.93)',
           zIndex: 1000,
           display: 'flex',
           flexDirection: 'column',
@@ -331,7 +342,6 @@ const formatTime = (ts: string | Date | undefined) => {
           alignItems: 'center',
           padding: '20px'
         }}>
-          {/* Top Bar Navigation Counter */}
           <div style={{
             width: '100%',
             display: 'flex',
@@ -340,18 +350,21 @@ const formatTime = (ts: string | Date | undefined) => {
             padding: '0 20px',
             color: '#fff'
           }}>
-            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)' }}>
-              Foto {previewImageIndex + 1} de {conversationImages.length}
+            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ textTransform: 'capitalize', color: 'var(--accent-primary)', fontWeight: 'bold' }}>
+                {currentMedia.tipo}
+              </span>
+              <span>•</span>
+              <span>Mídia {previewMediaIndex + 1} de {conversationMedia.length}</span>
             </div>
             <button
-              onClick={() => setPreviewImageIndex(null)}
+              onClick={() => setPreviewMediaIndex(null)}
               style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '8px' }}
             >
               <X size={28} />
             </button>
           </div>
 
-          {/* Center Image Display & Prev/Next Arrows */}
           <div style={{
             flex: 1,
             width: '100%',
@@ -361,10 +374,10 @@ const formatTime = (ts: string | Date | undefined) => {
             position: 'relative',
             padding: '10px 0'
           }}>
-            {conversationImages.length > 1 ? (
+            {conversationMedia.length > 1 ? (
               <button
-                onClick={handlePrevImage}
-                title="Foto anterior (Seta para a esquerda)"
+                onClick={handlePrevMedia}
+                title="Mídia anterior (Seta para a esquerda)"
                 style={{
                   background: 'rgba(255, 255, 255, 0.12)',
                   border: 'none',
@@ -385,14 +398,71 @@ const formatTime = (ts: string | Date | undefined) => {
             ) : <div style={{ width: '48px' }} />}
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', maxHeight: '80vh', maxWidth: '85vw' }}>
-              <img
-                src={conversationImages[previewImageIndex].url}
-                alt="Foto"
-                style={{ maxHeight: '72vh', maxWidth: '85vw', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)' }}
-              />
-              {conversationImages[previewImageIndex].caption && (
+              {currentMedia.tipo === 'imagem' && (
+                <img
+                  src={currentMedia.url}
+                  alt="Imagem"
+                  style={{ maxHeight: '72vh', maxWidth: '85vw', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)' }}
+                />
+              )}
+              {currentMedia.tipo === 'video' && (
+                <video
+                  src={currentMedia.url}
+                  controls
+                  autoPlay
+                  style={{ maxHeight: '72vh', maxWidth: '85vw', borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)' }}
+                />
+              )}
+              {currentMedia.tipo === 'audio' && (
+                <div style={{
+                  padding: '32px 40px',
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderRadius: '16px',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '20px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.8)'
+                }}>
+                  <Music size={56} style={{ color: 'var(--accent-primary)' }} />
+                  <div style={{ fontSize: '15px', fontWeight: '600', color: '#fff' }}>Áudio de {currentMedia.sender === 'cliente' ? 'Cliente' : 'Atendente'}</div>
+                  <audio src={currentMedia.url} controls autoPlay style={{ width: '320px', outline: 'none' }} />
+                </div>
+              )}
+              {currentMedia.tipo === 'arquivo' && (
+                <div style={{
+                  padding: '32px 40px',
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderRadius: '16px',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '20px',
+                  boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                  maxWidth: '450px',
+                  textAlign: 'center'
+                }}>
+                  <FileText size={64} style={{ color: 'var(--accent-primary)' }} />
+                  <div style={{ fontSize: '16px', fontWeight: '600', color: '#fff', wordBreak: 'break-word' }}>
+                    {currentMedia.fileName}
+                  </div>
+                  <a
+                    href={currentMedia.url}
+                    download
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-primary"
+                    style={{ textDecoration: 'none', padding: '12px 24px', fontSize: '14px' }}
+                  >
+                    <Download size={18} /> Baixar Arquivo
+                  </a>
+                </div>
+              )}
+              {currentMedia.caption && (
                 <p style={{
-                  marginTop: '12px',
+                  marginTop: '16px',
                   color: '#fff',
                   fontSize: '14px',
                   textAlign: 'center',
@@ -401,15 +471,15 @@ const formatTime = (ts: string | Date | undefined) => {
                   borderRadius: '8px',
                   maxWidth: '600px'
                 }}>
-                  {conversationImages[previewImageIndex].caption}
+                  {currentMedia.caption}
                 </p>
               )}
             </div>
 
-            {conversationImages.length > 1 ? (
+            {conversationMedia.length > 1 ? (
               <button
-                onClick={handleNextImage}
-                title="Próxima foto (Seta para a direita)"
+                onClick={handleNextMedia}
+                title="Próxima mídia (Seta para a direita)"
                 style={{
                   background: 'rgba(255, 255, 255, 0.12)',
                   border: 'none',
@@ -430,8 +500,7 @@ const formatTime = (ts: string | Date | undefined) => {
             ) : <div style={{ width: '48px' }} />}
           </div>
 
-          {/* Bottom Thumbnails Strip */}
-          {conversationImages.length > 1 && (
+          {conversationMedia.length > 1 && (
             <div style={{
               display: 'flex',
               gap: '10px',
@@ -441,23 +510,36 @@ const formatTime = (ts: string | Date | undefined) => {
               backgroundColor: 'rgba(0,0,0,0.5)',
               borderRadius: '12px'
             }}>
-              {conversationImages.map((img, idx) => (
-                <img
-                  key={img.id}
-                  src={img.url}
-                  alt="Miniatura"
-                  onClick={() => setPreviewImageIndex(idx)}
+              {conversationMedia.map((item, idx) => (
+                <div
+                  key={item.id}
+                  onClick={() => setPreviewMediaIndex(idx)}
                   style={{
                     width: '56px',
                     height: '56px',
-                    objectFit: 'cover',
                     borderRadius: '6px',
                     cursor: 'pointer',
-                    opacity: idx === previewImageIndex ? 1 : 0.4,
-                    border: idx === previewImageIndex ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                    transition: 'all 0.2s ease'
+                    opacity: idx === previewMediaIndex ? 1 : 0.4,
+                    border: idx === previewMediaIndex ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                    transition: 'all 0.2s ease',
+                    overflow: 'hidden',
+                    backgroundColor: 'rgba(255,255,255,0.1)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff'
                   }}
-                />
+                >
+                  {item.tipo === 'imagem' ? (
+                    <img src={item.url} alt="Thumb" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : item.tipo === 'video' ? (
+                    <Video size={24} style={{ color: '#60a5fa' }} />
+                  ) : item.tipo === 'audio' ? (
+                    <Music size={24} style={{ color: '#c084fc' }} />
+                  ) : (
+                    <FileText size={24} style={{ color: 'var(--accent-primary)' }} />
+                  )}
+                </div>
               ))}
             </div>
           )}
@@ -522,7 +604,7 @@ const formatTime = (ts: string | Date | undefined) => {
 
           {onOpenMediaGallery && (
             <button onClick={onOpenMediaGallery} className="btn-secondary" style={{ fontSize: '13px', padding: '8px 14px' }}>
-              <Paperclip size={15} /> Arquivos ({mediaCount})
+              <Paperclip size={15} /> Arquivos ({conversationMedia.length})
             </button>
           )}
 
@@ -532,7 +614,19 @@ const formatTime = (ts: string | Date | undefined) => {
         </div>
       </div>
 
-      <div style={{ flex: 1, padding: '20px 24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleContainerScroll}
+        style={{
+          flex: 1,
+          padding: '20px 24px',
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+          position: 'relative'
+        }}
+      >
         {conversation.messages.map((msg) => {
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
@@ -562,6 +656,31 @@ const formatTime = (ts: string | Date | undefined) => {
           );
         })}
         <div ref={messagesEndRef} />
+        {isUserScrolledUp && (
+          <button
+            onClick={() => { scrollToBottom(); setIsUserScrolledUp(false); }}
+            style={{
+              position: 'sticky',
+              bottom: '16px',
+              alignSelf: 'center',
+              zIndex: 20,
+              backgroundColor: 'var(--bg-primary)',
+              color: 'var(--accent-primary)',
+              border: '1px solid var(--accent-primary)',
+              borderRadius: 'var(--radius-full)',
+              padding: '8px 16px',
+              fontSize: '12px',
+              fontWeight: '600',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.6)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <ChevronDown size={16} /> Ir para o fim da conversa
+          </button>
+        )}
       </div>
 
       {sendError && (
