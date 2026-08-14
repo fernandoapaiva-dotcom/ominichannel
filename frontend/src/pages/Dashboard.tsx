@@ -324,7 +324,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         conversation={activeConversation}
         onTransferSuccess={() => {
           fetchConversations();
-          setActiveConversation(null);
+          setActiveConversationId(null);
         }}
       />
     </div>
