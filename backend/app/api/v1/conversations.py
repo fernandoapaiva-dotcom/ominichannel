@@ -416,7 +416,7 @@ async def transfer_conversation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Conversation).where(
+    stmt = select(Conversation).options(selectinload(Conversation.contact)).where(
         Conversation.id == conversation_id,
         Conversation.tenant_id == current_user.tenant_id
     )
@@ -427,19 +427,116 @@ async def transfer_conversation(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     old_user_id = conv.assigned_user_id
-    conv.assigned_user_id = transfer_in.para_user_id
+    target_desc = ""
+
+    # 1. Update Department/Sector if provided
+    if transfer_in.para_whatsapp_number_id:
+        wn_stmt = select(WhatsAppNumber).where(
+            WhatsAppNumber.id == transfer_in.para_whatsapp_number_id,
+            WhatsAppNumber.tenant_id == current_user.tenant_id
+        )
+        wn_res = await db.execute(wn_stmt)
+        wn_target = wn_res.scalar_one_or_none()
+        if wn_target:
+            conv.whatsapp_number_id = wn_target.id
+            target_desc += f"Setor: {wn_target.nome_departamento}"
+
+    # 2. Update Attendant User if provided
+    if transfer_in.para_user_id:
+        u_stmt = select(User).where(
+            User.id == transfer_in.para_user_id,
+            User.tenant_id == current_user.tenant_id
+        )
+        u_res = await db.execute(u_stmt)
+        u_target = u_res.scalar_one_or_none()
+        if u_target:
+            conv.assigned_user_id = u_target.id
+            if target_desc:
+                target_desc += f" | Atendente: {u_target.nome}"
+            else:
+                target_desc += f"Atendente: {u_target.nome}"
+    else:
+        # If transferring to sector without specific user, unassign current user
+        if transfer_in.para_whatsapp_number_id:
+            conv.assigned_user_id = None
+
+    if not target_desc:
+        target_desc = "Fila Geral de Atendimento"
+
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.ultima_interacao_em = datetime.utcnow()
 
     log = TransferLog(
         conversation_id=conv.id,
         de_user_id=old_user_id,
         para_user_id=transfer_in.para_user_id,
-        motivo=transfer_in.motivo,
+        motivo=transfer_in.motivo or "Transferência de Atendimento",
         timestamp=datetime.utcnow()
     )
     db.add(log)
-    await db.commit()
 
-    return {"status": "success", "message": "Conversa transferida com sucesso"}
+    # 3. Generate AI Summary if requested
+    ai_summary = ""
+    if transfer_in.gerar_resumo_ia is not False:
+        # Fetch all previous messages of the conversation
+        msg_stmt = select(Message).where(Message.conversation_id == conv.id).order_by(Message.criado_em.asc())
+        msg_res = await db.execute(msg_stmt)
+        messages_list = msg_res.scalars().all()
+
+        history_dicts = [
+            {"remetente": m.remetente, "conteudo": m.conteudo or ""}
+            for m in messages_list
+        ]
+
+        decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
+        customer_name = conv.contact.nome if (conv.contact and conv.contact.nome) else "Cliente"
+
+        ai_summary = await gemini_service.summarize_conversation_for_transfer(
+            customer_name=customer_name,
+            messages_history=history_dicts,
+            tenant_gemini_api_key=decrypted.get("gemini_api_key"),
+            tenant_gemini_model_name=decrypted.get("gemini_model_name")
+        )
+
+        # Attach summary as a system message in the chat
+        summary_message_text = (
+            f"🤖 *RESUMO DA IA PARA TRANSFERÊNCIA*\n"
+            f"📍 *Destino*: {target_desc}\n"
+            f"👤 *Transferido por*: {current_user.nome}\n"
+            f"💬 *Motivo*: {transfer_in.motivo or 'Nenhum motivo informado'}\n\n"
+            f"{ai_summary}"
+        )
+
+        sys_msg = Message(
+            conversation_id=conv.id,
+            remetente="sistema",
+            tipo="texto",
+            conteudo=summary_message_text,
+            criado_em=datetime.utcnow()
+        )
+        db.add(sys_msg)
+
+    await db.commit()
+    await db.refresh(conv)
+
+    # Broadcast WebSocket message event
+    try:
+        from app.api.v1.webhooks import manager
+        await manager.broadcast({
+            "type": "conversation_updated",
+            "conversation_id": conv.id,
+            "status": conv.status.value,
+            "whatsapp_number_id": conv.whatsapp_number_id,
+            "assigned_user_id": conv.assigned_user_id
+        })
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "message": f"Conversa transferida com sucesso para {target_desc}",
+        "resumo_ia": ai_summary
+    }
 
 @router.put("/{conversation_id}/status")
 async def update_conversation_status(

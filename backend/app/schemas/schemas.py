@@ -142,7 +142,9 @@ class ConversationResponse(BaseModel):
 
 class ConversationTransfer(BaseModel):
     para_user_id: Optional[int] = None
-    motivo: str
+    para_whatsapp_number_id: Optional[int] = None
+    motivo: Optional[str] = None
+    gerar_resumo_ia: Optional[bool] = True
 
 class ConversationStatusUpdate(BaseModel):
     status: ConversationStatus

@@ -118,4 +118,60 @@ class GeminiService:
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
 
+    async def summarize_conversation_for_transfer(
+        self,
+        customer_name: str,
+        messages_history: List[Dict[str, str]],
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Generates a structured executive AI summary of the entire conversation for seamless transfer
+        to a new attendant or department.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+
+        if not messages_history:
+            return "Nenhum histórico prévio de mensagens para resumir."
+
+        messages_text = []
+        for m in messages_history:
+            remetente = "Cliente" if m.get("remetente") == "cliente" else ("IA" if m.get("remetente") == "ia" else "Atendente")
+            conteudo = m.get("conteudo", "")
+            messages_text.append(f"[{remetente}]: {conteudo}")
+
+        full_prompt = (
+            f"Você é uma inteligência artificial especialista em resumir históricos de atendimento ao cliente.\n"
+            f"Analise toda a conversa com o cliente '{customer_name}' abaixo e gere um RESUMO EXECUTIVO claro, direto e organizado em tópicos para o novo atendente/setor que assumirá a conversa.\n\n"
+            "Siga estritamente esta estrutura em tópicos:\n"
+            "• 🎯 **Objetivo Principal do Cliente**: <uma frase direta>\n"
+            "• 📝 **Principais Pontos / O que foi Tratado**: <2 a 3 tópicos sucintos do diálogo>\n"
+            "• ⚡ **Status & Próximo Passo Recomendado**: <instrução objetiva para quem receber o chamado>\n\n"
+            f"HISTÓRICO DA CONVERSA:\n" + "\n".join(messages_text)
+        )
+
+        if not client:
+            return (
+                f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
+                f"• 📝 **Histórico**: Conversa transferida manualmente pelo atendente.\n"
+                f"• ⚡ **Próximo Passo**: Verifique a última mensagem enviada."
+            )
+
+        try:
+            import asyncio
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=model_name,
+                contents=full_prompt
+            )
+            return response.text.strip() or "Resumo não gerado devido ao formato de saída da IA."
+        except Exception as e:
+            logger.error(f"Error generating transfer summary using model '{model_name}': {e}")
+            return (
+                f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
+                f"• 📝 **Histórico**: Conversa transferida com histórico disponível.\n"
+                f"• ⚡ **Próximo Passo**: Analise as mensagens anteriores."
+            )
+
 gemini_service = GeminiService()
