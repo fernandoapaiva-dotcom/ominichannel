@@ -30,9 +30,9 @@ async def list_conversations(
     status_filter: Optional[ConversationStatus] = None,
     whatsapp_number_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
 ):
-    if current_user.role == "admin":
+    is_admin = current_user.role == "admin" or str(getattr(current_user.role, 'value', current_user.role)).lower() == "admin"
+    if is_admin:
         wn_stmt = select(WhatsAppNumber.id).where(WhatsAppNumber.tenant_id == current_user.tenant_id)
     else:
         wn_stmt = (

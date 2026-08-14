@@ -21,6 +21,7 @@ class MessageSender(str, enum.Enum):
     CLIENTE = "cliente"
     IA = "ia"
     ATENDENTE = "atendente"
+    SISTEMA = "sistema"
 
 class MessageType(str, enum.Enum):
     TEXTO = "texto"
@@ -144,7 +145,7 @@ class Message(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
-    remetente: Mapped[MessageSender] = mapped_column(Enum(MessageSender), nullable=False)
+    remetente: Mapped[str] = mapped_column(String(50), nullable=False)
     conteudo: Mapped[str] = mapped_column(Text, nullable=False)
     tipo: Mapped[MessageType] = mapped_column(Enum(MessageType), default=MessageType.TEXTO)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
