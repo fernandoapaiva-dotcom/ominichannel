@@ -479,7 +479,7 @@ async def transfer_conversation(
     ai_summary = ""
     if transfer_in.gerar_resumo_ia is not False:
         # Fetch all previous messages of the conversation
-        msg_stmt = select(Message).where(Message.conversation_id == conv.id).order_by(Message.criado_em.asc())
+        msg_stmt = select(Message).where(Message.conversation_id == conv.id).order_by(Message.timestamp.asc())
         msg_res = await db.execute(msg_stmt)
         messages_list = msg_res.scalars().all()
 
@@ -512,7 +512,7 @@ async def transfer_conversation(
             remetente="sistema",
             tipo="texto",
             conteudo=summary_message_text,
-            criado_em=datetime.utcnow()
+            timestamp=datetime.utcnow()
         )
         db.add(sys_msg)
 

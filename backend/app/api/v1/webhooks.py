@@ -171,11 +171,11 @@ async def receive_evolution_webhook(
         recent_msg_stmt = select(Message).where(
             Message.conversation_id == conv.id,
             Message.conteudo.like("%O CLIENTE ESTÁ LIGANDO%")
-        ).order_by(Message.criado_em.desc())
+        ).order_by(Message.timestamp.desc())
         recent_msg_res = await db.execute(recent_msg_stmt)
         last_call_msg = recent_msg_res.scalars().first()
 
-        if last_call_msg and (now - last_call_msg.criado_em).total_seconds() < 30.0:
+        if last_call_msg and (now - last_call_msg.timestamp).total_seconds() < 30.0:
             return {"status": "ignored", "reason": "Call alert already logged recently"}
 
         # Register alert message in the chat timeline
@@ -190,7 +190,7 @@ async def receive_evolution_webhook(
             remetente="cliente",
             tipo=MessageType.TEXTO,
             conteudo=call_msg_text,
-            criado_em=now
+            timestamp=now
         )
         db.add(call_msg)
         await db.commit()
