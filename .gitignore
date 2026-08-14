@@ -35,5 +35,7 @@ build/
 
 # Temporary scripts
 backend/test_*.py
-backend/fix_*.py
+# Temporary uploads & media
+uploads/
+backend/uploads/
 
