@@ -26,6 +26,7 @@ class MessageType(str, enum.Enum):
     TEXTO = "texto"
     AUDIO = "audio"
     IMAGEM = "imagem"
+    VIDEO = "video"
     ARQUIVO = "arquivo"
 
 # N:N Join Table for User permissions to WhatsAppNumbers

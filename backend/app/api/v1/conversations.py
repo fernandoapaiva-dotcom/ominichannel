@@ -1,6 +1,9 @@
+import os
+import uuid
+import base64
 from typing import List, Optional
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
@@ -292,6 +295,113 @@ async def send_agent_message(
             "conversation_id": conv.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": msg_in.conteudo,
+            "timestamp": str(message.timestamp),
+            "agent_name": current_user.nome
+        }
+    )
+
+    return message
+
+@router.post("/{conversation_id}/media", response_model=MessageResponse)
+async def send_agent_media(
+    conversation_id: int,
+    file: UploadFile = File(...),
+    caption: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = (
+        select(Conversation)
+        .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    result = await db.execute(stmt)
+    conv = result.scalar_one_or_none()
+
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # 1. Save uploaded file to disk
+    os.makedirs("uploads", exist_ok=True)
+    file_ext = os.path.splitext(file.filename)[1] or ""
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    file_path = os.path.join("uploads", unique_filename)
+
+    file_bytes = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+
+    file_url = f"/uploads/{unique_filename}"
+
+    # 2. Determine MessageType and Evolution media_type
+    mimetype = file.content_type or "application/octet-stream"
+    if mimetype.startswith("image/"):
+        msg_type = MessageType.IMAGEM
+        media_type = "image"
+    elif mimetype.startswith("video/"):
+        msg_type = MessageType.VIDEO
+        media_type = "video"
+    elif mimetype.startswith("audio/"):
+        msg_type = MessageType.AUDIO
+        media_type = "audio"
+    else:
+        msg_type = MessageType.ARQUIVO
+        media_type = "document"
+
+    # 3. Send via Evolution API
+    agent_name = current_user.nome or "Atendente"
+    formatted_caption = f"*👤 {agent_name}:*\n\n{caption}" if caption else f"*👤 {agent_name}:*"
+    base64_data = f"data:{mimetype};base64,{base64.b64encode(file_bytes).decode('utf-8')}"
+
+    from app.services.evolution_service import evolution_service
+    send_res = await evolution_service.send_media_message(
+        instance_name=conv.whatsapp_number.instancia_evolution_api or "instancia_locacao",
+        number=conv.contact.telefone,
+        media_type=media_type,
+        mimetype=mimetype,
+        media=base64_data,
+        file_name=file.filename or unique_filename,
+        caption=formatted_caption
+    )
+
+    if not send_res.get("success", False):
+        error_detail = send_res.get("error", "Falha de conexão ao enviar mídia no WhatsApp")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Falha ao enviar arquivo no WhatsApp: {error_detail}"
+        )
+
+    # 4. Save Message in DB
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    db_content = f"{file_url}|{caption}" if caption else file_url
+
+    message = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=db_content,
+        tipo=msg_type,
+        timestamp=datetime.utcnow()
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    # 5. Broadcast real-time update
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "remetente": MessageSender.ATENDENTE.value,
+            "conteudo": db_content,
+            "tipo": msg_type.value,
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
         }

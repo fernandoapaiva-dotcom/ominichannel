@@ -197,4 +197,42 @@ class EvolutionService:
                 logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_media_message(
+        self,
+        instance_name: str,
+        number: str,
+        media_type: str,
+        mimetype: str,
+        media: str,
+        file_name: str = "",
+        caption: str = "",
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendMedia/{instance_name}"
+        clean_number = "".join(filter(str.isdigit, number))
+        if len(clean_number) == 12 and clean_number.startswith("55") and clean_number[4] != "9":
+            clean_number = clean_number[:4] + "9" + clean_number[4:]
+
+        payload = {
+            "number": clean_number,
+            "mediatype": media_type,
+            "mimetype": mimetype,
+            "media": media,
+            "fileName": file_name or "arquivo",
+            "caption": caption
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                res_data = response.json()
+                if response.status_code >= 400:
+                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                res_data["success"] = True
+                return res_data
+            except Exception as e:
+                logger.error(f"Error sending media message to {number} via instance {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
 evolution_service = EvolutionService()

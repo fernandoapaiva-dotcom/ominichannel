@@ -1,7 +1,7 @@
 export type UserRole = 'admin' | 'atendente';
 export type ConversationStatus = 'com_ia' | 'com_humano' | 'encerrada' | 'expirada_por_inatividade';
 export type MessageSender = 'cliente' | 'ia' | 'atendente';
-export type MessageType = 'texto' | 'audio' | 'imagem' | 'arquivo';
+export type MessageType = 'texto' | 'audio' | 'imagem' | 'video' | 'arquivo';
 
 export interface WhatsAppNumber {
   id: number;

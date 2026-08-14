@@ -92,13 +92,68 @@ async def receive_evolution_webhook(
     # Normalize Brazilian cell numbers: if 13 digits starting with 55+DDD+9+8digits, check 12 digit variant without 9 or vice versa to align contact
     push_name = data.get("pushName") or "Cliente"
 
-    # Extract text content
+    # Extract text or media content
     message_obj = data.get("message", {})
     text_content = (
         message_obj.get("conversation") or
         message_obj.get("extendedTextMessage", {}).get("text") or
         ""
     )
+
+    msg_type = MessageType.TEXTO
+
+    # Check media payloads
+    img_msg = message_obj.get("imageMessage")
+    vid_msg = message_obj.get("videoMessage")
+    aud_msg = message_obj.get("audioMessage")
+    doc_msg = message_obj.get("documentMessage")
+
+    media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
+
+    if img_msg or vid_msg or aud_msg or doc_msg:
+        caption = ""
+        ext = ""
+        if img_msg:
+            msg_type = MessageType.IMAGEM
+            caption = img_msg.get("caption") or ""
+            ext = ".png"
+        elif vid_msg:
+            msg_type = MessageType.VIDEO
+            caption = vid_msg.get("caption") or ""
+            ext = ".mp4"
+        elif aud_msg:
+            msg_type = MessageType.AUDIO
+            ext = ".ogg"
+        elif doc_msg:
+            msg_type = MessageType.ARQUIVO
+            caption = doc_msg.get("caption") or ""
+            doc_filename = doc_msg.get("fileName") or "documento.pdf"
+            ext = os.path.splitext(doc_filename)[1] or ".bin"
+
+        # If base64 is present, save file to disk
+        if media_base64:
+            try:
+                import base64
+                import os
+                import uuid
+                os.makedirs("uploads", exist_ok=True)
+                if "," in media_base64:
+                    media_bytes = base64.b64decode(media_base64.split(",")[1])
+                else:
+                    media_bytes = base64.b64decode(media_base64)
+                unique_name = f"{uuid.uuid4().hex}{ext}"
+                media_path = os.path.join("uploads", unique_name)
+                with open(media_path, "wb") as f:
+                    f.write(media_bytes)
+
+                media_url = f"/uploads/{unique_name}"
+                text_content = f"{media_url}|{caption}" if caption else media_url
+            except Exception as e:
+                logger.error(f"Error decoding incoming media base64: {e}")
+                if caption:
+                    text_content = caption
+        elif caption:
+            text_content = caption
 
     if not text_content:
         return {"status": "ignored", "reason": "Non-text or empty message payload"}
@@ -190,7 +245,7 @@ async def receive_evolution_webhook(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
         conteudo=text_content,
-        tipo=MessageType.TEXTO,
+        tipo=msg_type,
         timestamp=datetime.utcnow()
     )
     db.add(user_msg)
