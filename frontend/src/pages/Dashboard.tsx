@@ -143,17 +143,70 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const handleSendMessage = async (text: string) => {
     if (!activeConversation) return;
 
-    await apiFetch(`/conversations/${activeConversation.id}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({
-        conversation_id: activeConversation.id,
-        remetente: 'atendente',
-        conteudo: text,
-        tipo: 'texto'
-      })
-    });
+    const tempId = -Date.now();
+    const optimisticMsg: Message = {
+      id: tempId,
+      conversation_id: activeConversation.id,
+      remetente: 'atendente',
+      conteudo: text,
+      tipo: 'texto',
+      timestamp: new Date().toISOString(),
+      status: 'sending'
+    };
 
-    fetchConversations();
+    // 1. Instantly append message to local state (0ms instant UI update!)
+    setConversations(prevConvs =>
+      prevConvs.map(conv => {
+        if (conv.id === activeConversation.id) {
+          return {
+            ...conv,
+            mensagens: [...conv.mensagens, optimisticMsg],
+            ultima_interacao_em: new Date().toISOString()
+          };
+        }
+        return conv;
+      })
+    );
+
+    try {
+      // 2. Dispatch network HTTP request asynchronously
+      const res = await apiFetch(`/conversations/${activeConversation.id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({
+          conversation_id: activeConversation.id,
+          remetente: 'atendente',
+          conteudo: text,
+          tipo: 'texto'
+        })
+      });
+
+      // 3. Confirm delivery: replace tempId with real server DB message
+      setConversations(prevConvs =>
+        prevConvs.map(conv => {
+          if (conv.id === activeConversation.id) {
+            return {
+              ...conv,
+              mensagens: conv.mensagens.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
+            };
+          }
+          return conv;
+        })
+      );
+    } catch (err) {
+      console.error('Optimistic message send error:', err);
+      // Mark as failed if connection drops
+      setConversations(prevConvs =>
+        prevConvs.map(conv => {
+          if (conv.id === activeConversation.id) {
+            return {
+              ...conv,
+              mensagens: conv.mensagens.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
+            };
+          }
+          return conv;
+        })
+      );
+    }
   };
 
   const handleConversationCreated = (conv: Conversation) => {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -169,32 +169,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!inputText.trim() && pendingFiles.length === 0) || isSending) return;
+    if (!inputText.trim() && pendingFiles.length === 0) return;
 
-    setIsSending(true);
+    const textToSend = inputText.trim();
     setSendError(null);
 
     try {
       if (pendingFiles.length > 0) {
+        setIsSending(true);
         for (let i = 0; i < pendingFiles.length; i++) {
           const file = pendingFiles[i];
           const formData = new FormData();
           formData.append('file', file);
-          if (i === 0 && inputText.trim()) {
-            formData.append('caption', inputText.trim());
+          if (i === 0 && textToSend) {
+            formData.append('caption', textToSend);
           }
           await apiUpload(`/conversations/${conversation?.id}/media`, formData);
         }
         setPendingFiles([]);
         setInputText('');
-      } else if (inputText.trim()) {
-        await onSendMessage(inputText.trim());
+        setIsSending(false);
+      } else if (textToSend) {
+        // INSTANT UI CLEAR (0ms Delay)
         setInputText('');
+        onSendMessage(textToSend);
       }
     } catch (err: any) {
       console.error('Send error:', err);
       setSendError(err.message || 'Falha ao enviar arquivo ou mensagem.');
-    } finally {
       setIsSending(false);
     }
   };
@@ -713,7 +715,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <span style={{ fontWeight: '600', color: isAI ? '#c084fc' : isCustomer ? '#94a3b8' : 'var(--accent-primary)' }}>
                   {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                 </span>
-                <span>{formatTime(msg.timestamp)}</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  {formatTime(msg.timestamp)}
+                  {!isCustomer && (
+                    msg.status === 'sending' ? (
+                      <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
+                    ) : msg.status === 'failed' ? (
+                      <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
+                    ) : (
+                      <Check size={12} style={{ color: 'var(--accent-primary)' }} title="Enviado" />
+                    )
+                  )}
+                </span>
               </div>
               {renderMediaContent(msg)}
             </div>

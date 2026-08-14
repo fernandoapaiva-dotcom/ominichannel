@@ -36,11 +36,12 @@ export interface Contact {
 
 export interface Message {
   id: number;
-  conversation_id: int;
+  conversation_id: number;
   remetente: MessageSender;
   conteudo: string;
   tipo: MessageType;
   timestamp: string;
+  status?: 'sending' | 'sent' | 'failed';
 }
 
 export interface Conversation {
