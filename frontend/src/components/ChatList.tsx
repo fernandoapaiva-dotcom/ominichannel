@@ -140,22 +140,23 @@ export const ChatList: React.FC<ChatListProps> = ({
           />
         </div>
 
-        {/* Department Filter Pills with Unread Badges */}
-        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '4px' }}>
+        {/* Department Filter Pills with Unread Badges - Wrap Layout (No horizontal scrolling) */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
           <button
             onClick={() => setSelectedDepartmentId('all')}
             style={{
               padding: '6px 12px',
-              borderRadius: 'var(--radius-full)',
+              borderRadius: 'var(--radius-md)',
               fontSize: '12px',
-              fontWeight: '500',
-              whiteSpace: 'nowrap',
+              fontWeight: '600',
+              cursor: 'pointer',
               background: selectedDepartmentId === 'all' ? 'var(--accent-primary)' : 'var(--bg-secondary)',
               color: selectedDepartmentId === 'all' ? '#051a12' : 'var(--text-muted)',
-              border: '1px solid var(--border-color)',
+              border: selectedDepartmentId === 'all' ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              transition: 'all 0.15s ease'
             }}
           >
             Todos Dptos
@@ -181,16 +182,17 @@ export const ChatList: React.FC<ChatListProps> = ({
                 onClick={() => setSelectedDepartmentId(wn.id)}
                 style={{
                   padding: '6px 12px',
-                  borderRadius: 'var(--radius-full)',
+                  borderRadius: 'var(--radius-md)',
                   fontSize: '12px',
-                  fontWeight: '500',
-                  whiteSpace: 'nowrap',
+                  fontWeight: '600',
+                  cursor: 'pointer',
                   background: isSelectedDept ? 'var(--accent-primary)' : 'var(--bg-secondary)',
                   color: isSelectedDept ? '#051a12' : 'var(--text-muted)',
-                  border: '1px solid var(--border-color)',
+                  border: isSelectedDept ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '6px'
+                  gap: '6px',
+                  transition: 'all 0.15s ease'
                 }}
               >
                 {wn.nome_departamento}
