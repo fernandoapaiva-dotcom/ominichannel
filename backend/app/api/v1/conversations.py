@@ -1,6 +1,9 @@
 import os
 import uuid
 import base64
+import zipfile
+import io
+import re
 from typing import List, Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
@@ -285,6 +288,135 @@ async def sync_conversation_whatsapp_history(
         await db.commit()
 
     return {"message": f"Sincronização concluída! {imported} mensagens importadas.", "imported": imported}
+
+PATTERNS = [
+    re.compile(r"^(\d{1,2}/\d{1,2}/\d{2,4})\s*,?\s*(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\s*-\s*([^:]+):\s*(.*)$", re.IGNORECASE),
+    re.compile(r"^\[(\d{1,2}/\d{1,2}/\d{2,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?)\]\s*([^:]+):\s*(.*)$", re.IGNORECASE)
+]
+
+@router.post("/{conversation_id}/import-backup-file")
+async def import_whatsapp_backup_file(
+    conversation_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada ou acesso negado")
+
+    content_bytes = await file.read()
+    txt_content = ""
+
+    if file.filename and file.filename.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(content_bytes)) as z:
+                txt_files = [f for f in z.namelist() if f.endswith(".txt")]
+                if txt_files:
+                    txt_bytes = z.read(txt_files[0])
+                    txt_content = txt_bytes.decode("utf-8", errors="ignore")
+                else:
+                    raise HTTPException(status_code=400, detail="Nenhum arquivo .txt de conversa encontrado dentro do .zip")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Erro ao descompactar .zip: {e}")
+    else:
+        try:
+            txt_content = content_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            txt_content = content_bytes.decode("latin-1", errors="ignore")
+
+    contact_name = conv.contact.nome if (conv.contact and conv.contact.nome) else ""
+    lines = txt_content.splitlines()
+
+    parsed = []
+    current_msg = None
+
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+
+        matched = False
+        for p in PATTERNS:
+            m = p.match(clean_line)
+            if m:
+                matched = True
+                date_str, time_str, sender_raw, text = m.groups()
+                sender_raw = sender_raw.strip()
+
+                if contact_name and (contact_name.lower() in sender_raw.lower() or sender_raw.lower() in contact_name.lower()):
+                    remetente = "cliente"
+                elif any(t in sender_raw.lower() for t in ["atendente", "suporte", "vendas", "locação", "empresa"]):
+                    remetente = "atendente"
+                else:
+                    remetente = "cliente"
+
+                dt = datetime.utcnow()
+                try:
+                    parts = date_str.split("/")
+                    if len(parts) == 3:
+                        day, month, year = parts[0], parts[1], parts[2]
+                        if len(year) == 2:
+                            year = "20" + year
+                        clean_dt_str = f"{day.zfill(2)}/{month.zfill(2)}/{year} {time_str}"
+                        if len(time_str.split(":")) == 2:
+                            dt = datetime.strptime(clean_dt_str, "%d/%m/%Y %H:%M")
+                        else:
+                            dt = datetime.strptime(clean_dt_str, "%d/%m/%Y %H:%M:%S")
+                except Exception:
+                    dt = datetime.utcnow()
+
+                current_msg = {
+                    "remetente": remetente,
+                    "conteudo": text.strip(),
+                    "tipo": "texto",
+                    "timestamp": dt
+                }
+                parsed.append(current_msg)
+                break
+
+        if not matched and current_msg and clean_line:
+            current_msg["conteudo"] += "\n" + clean_line
+
+    if not parsed:
+        return {"message": "Nenhuma mensagem válida no formato de exportação do WhatsApp foi encontrada no arquivo.", "imported": 0}
+
+    existing_stmt = select(Message.conteudo, Message.timestamp).where(Message.conversation_id == conv.id)
+    existing_res = await db.execute(existing_stmt)
+    existing_set = {(m[0], m[1]) for m in existing_res.all()}
+
+    imported = 0
+    for p_msg in parsed:
+        if (p_msg["conteudo"], p_msg["timestamp"]) not in existing_set:
+            new_m = Message(
+                conversation_id=conv.id,
+                remetente=p_msg["remetente"],
+                conteudo=p_msg["conteudo"],
+                tipo=p_msg["tipo"],
+                timestamp=p_msg["timestamp"]
+            )
+            db.add(new_m)
+            imported += 1
+
+    if imported > 0:
+        latest_ts = parsed[-1]["timestamp"]
+        if latest_ts > conv.ultima_interacao_em:
+            conv.ultima_interacao_em = latest_ts
+        await db.commit()
+
+    return {"message": f"Backup do WhatsApp importado com sucesso! {imported} mensagens adicionadas.", "imported": imported}
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation_detail(

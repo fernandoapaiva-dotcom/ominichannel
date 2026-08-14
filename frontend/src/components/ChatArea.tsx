@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -76,6 +76,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       alert(`Erro ao sincronizar histórico: ${err.message}`);
     } finally {
       setIsSyncingHistory(false);
+    }
+  };
+
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
+
+  const handleBackupFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !conversation) return;
+
+    try {
+      setIsImportingBackup(true);
+      const res = await apiUpload(`/conversations/${conversation.id}/import-backup-file`, file);
+      if (onStatusToggle) onStatusToggle();
+      alert(res.message || 'Backup importado com sucesso!');
+    } catch (err: any) {
+      alert(`Erro ao importar backup: ${err.message}`);
+    } finally {
+      setIsImportingBackup(false);
+      if (backupFileInputRef.current) backupFileInputRef.current.value = '';
     }
   };
 
@@ -775,6 +795,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Paperclip size={15} /> Arquivos ({conversationMedia.length})
             </button>
           )}
+
+          <input
+            type="file"
+            ref={backupFileInputRef}
+            onChange={handleBackupFileSelected}
+            accept=".txt,.zip"
+            style={{ display: 'none' }}
+          />
+
+          <button
+            onClick={() => backupFileInputRef.current?.click()}
+            disabled={isImportingBackup}
+            className="btn-secondary"
+            style={{ fontSize: '13px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            title="Importar arquivo de conversa exportado do WhatsApp (.txt ou .zip)"
+          >
+            <Upload size={15} style={{ animation: isImportingBackup ? 'spin 1s linear infinite' : 'none' }} />
+            {isImportingBackup ? 'Importando...' : 'Importar Backup'}
+          </button>
 
           <button
             onClick={handleSyncHistory}
