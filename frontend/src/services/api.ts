@@ -1,4 +1,7 @@
-const API_BASE = 'http://localhost:8000/api/v1';
+const getApiBase = () => {
+  const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+  return `http://${host}:8000/api/v1`;
+};
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
   const token = localStorage.getItem('token');
@@ -11,10 +14,15 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBase()}${endpoint}`, {
+      ...options,
+      headers,
+    });
+  } catch (err: any) {
+    throw new Error(`Falha ao conectar com o servidor backend (${getApiBase()}). Verifique se o servidor está ativo.`);
+  }
 
   if (response.status === 401) {
     localStorage.removeItem('token');
@@ -38,11 +46,16 @@ export async function apiUpload(endpoint: string, formData: FormData) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    method: 'POST',
-    headers,
-    body: formData
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBase()}${endpoint}`, {
+      method: 'POST',
+      headers,
+      body: formData
+    });
+  } catch (err: any) {
+    throw new Error(`Falha ao conectar com o servidor backend (${getApiBase()}). Verifique se o servidor está ativo.`);
+  }
 
   if (response.status === 401) {
     localStorage.removeItem('token');
