@@ -108,7 +108,15 @@ async def receive_evolution_webhook(
     aud_msg = message_obj.get("audioMessage")
     doc_msg = message_obj.get("documentMessage")
 
+    msg_id = key.get("id", "") if isinstance(key, dict) else ""
     media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
+
+    if (img_msg or vid_msg or aud_msg or doc_msg) and not media_base64 and msg_id:
+        try:
+            from app.services.evolution_service import evolution_service
+            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id)
+        except Exception as err:
+            logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
     if img_msg or vid_msg or aud_msg or doc_msg:
         caption = ""

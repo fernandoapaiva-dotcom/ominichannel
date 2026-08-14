@@ -232,6 +232,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+const formatTime = (ts: string | Date | undefined) => {
+  if (!ts) return '';
+  let str = String(ts).trim();
+  if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T');
+  }
+  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
+    str = str + 'Z';
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
   return (
     <div
       onDragOver={handleDragOver}
@@ -378,7 +391,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <span style={{ fontWeight: '600', color: isAI ? '#c084fc' : isCustomer ? '#94a3b8' : 'var(--accent-primary)' }}>
                   {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                 </span>
-                <span>{msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                <span>{formatTime(msg.timestamp)}</span>
               </div>
               {renderMediaContent(msg)}
             </div>

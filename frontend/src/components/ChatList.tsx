@@ -3,6 +3,19 @@ import { Search, Filter, Phone, Bot, Headphones, User as UserIcon, Clock, Plus, 
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 
+const formatTime = (ts: string | Date | undefined) => {
+  if (!ts) return '';
+  let str = String(ts).trim();
+  if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T');
+  }
+  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
+    str = str + 'Z';
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 interface ChatListProps {
   conversations: Conversation[];
   activeConversation: Conversation | null;
@@ -262,7 +275,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     )}
                   </span>
                   <span style={{ fontSize: '11px', color: isUnreadClientMsg ? '#ef4444' : 'var(--text-muted)', fontWeight: isUnreadClientMsg ? 'bold' : 'normal' }}>
-                    {conv.ultima_interacao_em ? new Date(String(conv.ultima_interacao_em).endsWith('Z') || String(conv.ultima_interacao_em).includes('+') ? String(conv.ultima_interacao_em) : String(conv.ultima_interacao_em) + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    {formatTime(conv.ultima_interacao_em)}
                   </span>
                 </div>
 
