@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
-  AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft
+  AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -31,10 +32,48 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
+  const [previewImageIndex, setPreviewImageIndex] = useState<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Extract all images in conversation for lightbox gallery navigation
+  const conversationImages = (conversation?.messages || [])
+    .filter(m => m.tipo === 'imagem')
+    .map(m => {
+      const parts = (m.conteudo || '').split('|');
+      const mediaPath = parts[0];
+      const caption = parts.length > 1 ? parts.slice(1).join('|') : null;
+      const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+      return {
+        id: m.id,
+        url: fullUrl,
+        caption,
+        timestamp: m.timestamp,
+        sender: m.remetente
+      };
+    });
+
+  const handlePrevImage = () => {
+    if (previewImageIndex === null || conversationImages.length === 0) return;
+    setPreviewImageIndex(prev => (prev! > 0 ? prev! - 1 : conversationImages.length - 1));
+  };
+
+  const handleNextImage = () => {
+    if (previewImageIndex === null || conversationImages.length === 0) return;
+    setPreviewImageIndex(prev => (prev! < conversationImages.length - 1 ? prev! + 1 : 0));
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (previewImageIndex === null) return;
+      if (e.key === 'ArrowLeft') handlePrevImage();
+      if (e.key === 'ArrowRight') handleNextImage();
+      if (e.key === 'Escape') setPreviewImageIndex(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewImageIndex, conversationImages.length]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -156,9 +195,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     switch (msg.tipo) {
       case 'imagem':
+        const imgIndex = conversationImages.findIndex(img => img.id === msg.id);
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => setPreviewMediaUrl(fullUrl)}>
+            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => setPreviewImageIndex(imgIndex >= 0 ? imgIndex : 0)}>
               <img src={fullUrl} alt="Imagem" style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block' }} />
               <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <Eye size={12} /> Ampliar
@@ -279,24 +319,148 @@ const formatTime = (ts: string | Date | undefined) => {
         </div>
       )}
 
-      {previewMediaUrl && (
+      {previewImageIndex !== null && conversationImages[previewImageIndex] && (
         <div style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.85)',
-          zIndex: 200,
+          backgroundColor: 'rgba(0, 0, 0, 0.92)',
+          zIndex: 1000,
           display: 'flex',
-          justifyContent: 'center',
+          flexDirection: 'column',
+          justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '40px'
-        }} onClick={() => setPreviewMediaUrl(null)}>
-          <img src={previewMediaUrl} alt="Visualização" style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: '8px', objectFit: 'contain' }} />
-          <button onClick={() => setPreviewMediaUrl(null)} style={{
-            position: 'absolute', top: '20px', right: '20px',
-            background: 'none', border: 'none', color: '#fff', cursor: 'pointer'
+          padding: '20px'
+        }}>
+          {/* Top Bar Navigation Counter */}
+          <div style={{
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: '0 20px',
+            color: '#fff'
           }}>
-            <X size={32} />
-          </button>
+            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)' }}>
+              Foto {previewImageIndex + 1} de {conversationImages.length}
+            </div>
+            <button
+              onClick={() => setPreviewImageIndex(null)}
+              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '8px' }}
+            >
+              <X size={28} />
+            </button>
+          </div>
+
+          {/* Center Image Display & Prev/Next Arrows */}
+          <div style={{
+            flex: 1,
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            position: 'relative',
+            padding: '10px 0'
+          }}>
+            {conversationImages.length > 1 ? (
+              <button
+                onClick={handlePrevImage}
+                title="Foto anterior (Seta para a esquerda)"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  margin: '0 16px',
+                  transition: 'background 0.2s'
+                }}
+              >
+                <ChevronLeft size={32} />
+              </button>
+            ) : <div style={{ width: '48px' }} />}
+
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', maxHeight: '80vh', maxWidth: '85vw' }}>
+              <img
+                src={conversationImages[previewImageIndex].url}
+                alt="Foto"
+                style={{ maxHeight: '72vh', maxWidth: '85vw', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)' }}
+              />
+              {conversationImages[previewImageIndex].caption && (
+                <p style={{
+                  marginTop: '12px',
+                  color: '#fff',
+                  fontSize: '14px',
+                  textAlign: 'center',
+                  backgroundColor: 'rgba(0,0,0,0.6)',
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  maxWidth: '600px'
+                }}>
+                  {conversationImages[previewImageIndex].caption}
+                </p>
+              )}
+            </div>
+
+            {conversationImages.length > 1 ? (
+              <button
+                onClick={handleNextImage}
+                title="Próxima foto (Seta para a direita)"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: 'none',
+                  color: '#fff',
+                  borderRadius: '50%',
+                  width: '48px',
+                  height: '48px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  margin: '0 16px',
+                  transition: 'background 0.2s'
+                }}
+              >
+                <ChevronRight size={32} />
+              </button>
+            ) : <div style={{ width: '48px' }} />}
+          </div>
+
+          {/* Bottom Thumbnails Strip */}
+          {conversationImages.length > 1 && (
+            <div style={{
+              display: 'flex',
+              gap: '10px',
+              overflowX: 'auto',
+              padding: '10px 20px',
+              maxWidth: '90vw',
+              backgroundColor: 'rgba(0,0,0,0.5)',
+              borderRadius: '12px'
+            }}>
+              {conversationImages.map((img, idx) => (
+                <img
+                  key={img.id}
+                  src={img.url}
+                  alt="Miniatura"
+                  onClick={() => setPreviewImageIndex(idx)}
+                  style={{
+                    width: '56px',
+                    height: '56px',
+                    objectFit: 'cover',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    opacity: idx === previewImageIndex ? 1 : 0.4,
+                    border: idx === previewImageIndex ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                    transition: 'all 0.2s ease'
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
