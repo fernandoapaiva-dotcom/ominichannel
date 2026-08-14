@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import httpx
 from app.core.config import settings
 
@@ -262,5 +262,107 @@ class EvolutionService:
             except Exception as e:
                 logger.error(f"Error fetching media base64 for msg {message_id}: {e}")
         return None
+
+    async def fetch_chat_history(
+        self,
+        instance_name: str,
+        phone: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        clean_digits = "".join(filter(str.isdigit, phone))
+        if not clean_digits:
+            return []
+
+        phone_variants = [clean_digits]
+        if len(clean_digits) == 13 and clean_digits.startswith("55"):
+            phone_variants.append(clean_digits[:4] + clean_digits[5:])
+        elif len(clean_digits) == 12 and clean_digits.startswith("55"):
+            phone_variants.append(clean_digits[:4] + "9" + clean_digits[4:])
+
+        jids = [f"{p}@s.whatsapp.net" for p in phone_variants]
+        all_records = []
+        seen_ids = set()
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for jid in jids:
+                url = f"{base_url}/chat/findMessages/{instance_name}"
+                payload = {
+                    "where": {
+                        "key": {
+                            "remoteJid": jid
+                        }
+                    },
+                    "take": limit
+                }
+                try:
+                    r = await client.post(url, json=payload, headers=headers)
+                    if r.status_code == 200:
+                        data = r.json()
+                        records = data.get("messages", {}).get("records", []) or data.get("records", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                        for m in records:
+                            msg_id = m.get("key", {}).get("id") or str(m.get("messageTimestamp"))
+                            if msg_id not in seen_ids:
+                                seen_ids.add(msg_id)
+                                all_records.append(m)
+                except Exception as e:
+                    logger.error(f"Error fetching history for {jid} on {instance_name}: {e}")
+
+        # Sort records chronologically
+        def get_ts(item):
+            ts = item.get("messageTimestamp")
+            if isinstance(ts, (int, float)):
+                return ts
+            return 0
+        
+        all_records.sort(key=get_ts)
+
+        from datetime import datetime
+        parsed_messages = []
+        for m in all_records:
+            key = m.get("key", {})
+            from_me = key.get("fromMe", False)
+            remetente = "atendente" if from_me else "cliente"
+            
+            ts_val = m.get("messageTimestamp")
+            if isinstance(ts_val, (int, float)):
+                if ts_val > 1e11:
+                    ts_val = ts_val / 1000
+                dt = datetime.utcfromtimestamp(ts_val)
+            else:
+                dt = datetime.utcnow()
+
+            msg_body = m.get("message", {}) or {}
+            text = ""
+            tipo = "texto"
+
+            if "conversation" in msg_body:
+                text = msg_body["conversation"]
+            elif "extendedTextMessage" in msg_body:
+                text = msg_body["extendedTextMessage"].get("text", "")
+            elif "imageMessage" in msg_body:
+                text = msg_body["imageMessage"].get("caption", "[Imagem]")
+                tipo = "imagem"
+            elif "audioMessage" in msg_body:
+                text = "[Áudio no WhatsApp]"
+                tipo = "audio"
+            elif "videoMessage" in msg_body:
+                text = msg_body["videoMessage"].get("caption", "[Vídeo]")
+                tipo = "video"
+            elif "documentMessage" in msg_body:
+                text = msg_body["documentMessage"].get("fileName", "[Arquivo]")
+                tipo = "arquivo"
+
+            if text and text.strip():
+                parsed_messages.append({
+                    "remetente": remetente,
+                    "conteudo": text.strip(),
+                    "tipo": tipo,
+                    "timestamp": dt
+                })
+
+        return parsed_messages
 
 evolution_service = EvolutionService()

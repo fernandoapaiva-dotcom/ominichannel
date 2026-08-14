@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -58,6 +58,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       alert(`Erro ao atualizar nome do contato: ${err.message}`);
     } finally {
       setSavingContact(false);
+    }
+  };
+
+  const [isSyncingHistory, setIsSyncingHistory] = useState(false);
+
+  const handleSyncHistory = async () => {
+    if (!conversation) return;
+    try {
+      setIsSyncingHistory(true);
+      const res = await apiFetch(`/conversations/${conversation.id}/sync-history`, {
+        method: 'POST'
+      });
+      if (onStatusToggle) onStatusToggle();
+      alert(res.message || 'Histórico sincronizado com sucesso!');
+    } catch (err: any) {
+      alert(`Erro ao sincronizar histórico: ${err.message}`);
+    } finally {
+      setIsSyncingHistory(false);
     }
   };
 
@@ -757,6 +775,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Paperclip size={15} /> Arquivos ({conversationMedia.length})
             </button>
           )}
+
+          <button
+            onClick={handleSyncHistory}
+            disabled={isSyncingHistory}
+            className="btn-secondary"
+            style={{ fontSize: '13px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            title="Sincronizar mensagens anteriores do WhatsApp"
+          >
+            <RefreshCw size={15} style={{ animation: isSyncingHistory ? 'spin 1s linear infinite' : 'none' }} />
+            {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
+          </button>
 
           <button onClick={onOpenTransferModal} className="btn-secondary" style={{ fontSize: '13px', padding: '8px 14px' }}>
             <ArrowRightLeft size={15} /> Transferir

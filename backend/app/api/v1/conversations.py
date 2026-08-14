@@ -21,6 +21,7 @@ from app.schemas.schemas import (
 from app.services.whatsapp_provider_service import WhatsAppProviderFactory
 from app.services.settings_service import settings_service
 from app.services.gemini_service import gemini_service
+from app.services.evolution_service import evolution_service
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
@@ -181,6 +182,40 @@ async def start_new_conversation(
             db.add(msg)
             await db.commit()
 
+    # 5. Automatically fetch and sync historical WhatsApp messages from Evolution API
+    try:
+        inst_name = wn.instancia_evolution_api or "instancia_locacao"
+        history_msgs = await evolution_service.fetch_chat_history(
+            instance_name=inst_name,
+            phone=clean_phone,
+            limit=100
+        )
+        if history_msgs:
+            existing_stmt = select(Message.conteudo, Message.timestamp).where(Message.conversation_id == conv.id)
+            existing_res = await db.execute(existing_stmt)
+            existing_set = {(m[0], m[1]) for m in existing_res.all()}
+
+            added_any = False
+            for hm in history_msgs:
+                if (hm["conteudo"], hm["timestamp"]) not in existing_set:
+                    new_m = Message(
+                        conversation_id=conv.id,
+                        remetente=hm["remetente"],
+                        conteudo=hm["conteudo"],
+                        tipo=hm["tipo"],
+                        timestamp=hm["timestamp"]
+                    )
+                    db.add(new_m)
+                    added_any = True
+
+            if added_any:
+                latest_ts = history_msgs[-1]["timestamp"]
+                if latest_ts > conv.ultima_interacao_em:
+                    conv.ultima_interacao_em = latest_ts
+                await db.commit()
+    except Exception as e:
+        print(f"Auto-sync WhatsApp history error: {e}")
+
     # Re-fetch full object with relations
     res_stmt = (
         select(Conversation)
@@ -193,6 +228,63 @@ async def start_new_conversation(
     )
     final_res = await db.execute(res_stmt)
     return final_res.scalar_one()
+
+@router.post("/{conversation_id}/sync-history")
+async def sync_conversation_whatsapp_history(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada ou acesso negado")
+
+    if not conv.contact or not conv.contact.telefone:
+        return {"message": "Contato sem número de telefone para busca", "imported": 0}
+
+    inst_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else "instancia_locacao"
+    history_msgs = await evolution_service.fetch_chat_history(
+        instance_name=inst_name or "instancia_locacao",
+        phone=conv.contact.telefone,
+        limit=100
+    )
+
+    existing_stmt = select(Message.conteudo, Message.timestamp).where(Message.conversation_id == conv.id)
+    existing_res = await db.execute(existing_stmt)
+    existing_set = {(m[0], m[1]) for m in existing_res.all()}
+
+    imported = 0
+    for hm in history_msgs:
+        if (hm["conteudo"], hm["timestamp"]) not in existing_set:
+            new_m = Message(
+                conversation_id=conv.id,
+                remetente=hm["remetente"],
+                conteudo=hm["conteudo"],
+                tipo=hm["tipo"],
+                timestamp=hm["timestamp"]
+            )
+            db.add(new_m)
+            imported += 1
+
+    if imported > 0:
+        latest_ts = history_msgs[-1]["timestamp"]
+        if latest_ts > conv.ultima_interacao_em:
+            conv.ultima_interacao_em = latest_ts
+        await db.commit()
+
+    return {"message": f"Sincronização concluída! {imported} mensagens importadas.", "imported": imported}
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation_detail(
