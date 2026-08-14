@@ -150,10 +150,15 @@ async def receive_evolution_webhook(
                 text_content = f"{media_url}|{caption}" if caption else media_url
             except Exception as e:
                 logger.error(f"Error decoding incoming media base64: {e}")
-                if caption:
-                    text_content = caption
-        elif caption:
-            text_content = caption
+
+        # Fallback to direct media URL if base64 decoding was not available
+        if not text_content:
+            target_obj = img_msg or vid_msg or aud_msg or doc_msg or {}
+            fallback_url = target_obj.get("url") or ""
+            if fallback_url:
+                text_content = f"{fallback_url}|{caption}" if caption else fallback_url
+            elif caption:
+                text_content = caption
 
     if not text_content:
         return {"status": "ignored", "reason": "Non-text or empty message payload"}

@@ -354,7 +354,7 @@ async def send_agent_media(
     # 3. Send via Evolution API
     agent_name = current_user.nome or "Atendente"
     formatted_caption = f"*👤 {agent_name}:*\n\n{caption}" if caption else f"*👤 {agent_name}:*"
-    base64_data = f"data:{mimetype};base64,{base64.b64encode(file_bytes).decode('utf-8')}"
+    base64_data = base64.b64encode(file_bytes).decode('utf-8')
 
     from app.services.evolution_service import evolution_service
     send_res = await evolution_service.send_media_message(
