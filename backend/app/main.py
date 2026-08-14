@@ -12,6 +12,8 @@ from app.api.v1.whatsapp_numbers import router as whatsapp_numbers_router
 from app.api.v1.users import router as users_router
 from app.api.v1.conversations import router as conversations_router
 from app.api.v1.webhooks import router as webhooks_router
+from app.api.v1.contacts import router as contacts_router
+from app.api.v1.segments import router as segments_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.settings import router as settings_router
 from app.api.websockets import router as ws_router
@@ -58,6 +60,8 @@ app.include_router(tenants_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_numbers_router, prefix=settings.API_V1_STR)
 app.include_router(users_router, prefix=settings.API_V1_STR)
 app.include_router(conversations_router, prefix=settings.API_V1_STR)
+app.include_router(contacts_router, prefix=settings.API_V1_STR)
+app.include_router(segments_router, prefix=settings.API_V1_STR)
 app.include_router(webhooks_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(settings_router, prefix=settings.API_V1_STR)

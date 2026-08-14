@@ -8,11 +8,14 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.models import (
-    Conversation, Message, User, WhatsAppNumber, TransferLog,
+    Conversation, Message, User, WhatsAppNumber, Contact, TransferLog,
     ConversationStatus, MessageSender, MessageType, user_number_access
 )
-from app.schemas.schemas import ConversationResponse, MessageCreate, MessageResponse, ConversationTransfer
-from app.services.evolution_service import evolution_service
+from app.schemas.schemas import (
+    ConversationResponse, MessageCreate, MessageResponse,
+    ConversationTransfer, StartConversationPayload, ConversationStatusUpdate
+)
+from app.services.whatsapp_provider_service import WhatsAppProviderFactory
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
@@ -65,6 +68,120 @@ async def list_conversations(
     result = await db.execute(stmt)
     return result.scalars().all()
 
+@router.post("/start", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
+async def start_new_conversation(
+    payload: StartConversationPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Starts a new conversation with a phone number (creates Contact if not existing).
+    Dispatches initial message via the department's configured WhatsApp Provider if provided.
+    """
+    clean_phone = "".join(filter(str.isdigit, payload.telefone))
+    if not clean_phone or len(clean_phone) < 8:
+        raise HTTPException(status_code=400, detail="Número de telefone inválido.")
+
+    # 1. Verify access to requested department
+    wn_stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.id == payload.whatsapp_number_id,
+        WhatsAppNumber.tenant_id == current_user.tenant_id
+    )
+    wn_res = await db.execute(wn_stmt)
+    wn = wn_res.scalar_one_or_none()
+    if not wn:
+        raise HTTPException(status_code=404, detail="Departamento / Número de WhatsApp não encontrado")
+
+    # 2. Find or create Contact
+    contact_stmt = select(Contact).where(
+        Contact.tenant_id == current_user.tenant_id,
+        Contact.telefone == clean_phone
+    )
+    contact_res = await db.execute(contact_stmt)
+    contact = contact_res.scalar_one_or_none()
+
+    if not contact:
+        contact = Contact(
+            tenant_id=current_user.tenant_id,
+            telefone=clean_phone,
+            nome=payload.nome or f"Contato {clean_phone[-4:]}"
+        )
+        db.add(contact)
+        await db.commit()
+        await db.refresh(contact)
+    elif payload.nome and (not contact.nome or contact.nome.startswith("Contato ")):
+        contact.nome = payload.nome
+        await db.commit()
+
+    # 3. Find active conversation or create new
+    conv_stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(
+            Conversation.tenant_id == current_user.tenant_id,
+            Conversation.whatsapp_number_id == wn.id,
+            Conversation.contact_id == contact.id
+        )
+        .order_by(Conversation.criado_em.desc())
+    )
+    conv_res = await db.execute(conv_stmt)
+    conv = conv_res.scalars().first()
+
+    now = datetime.utcnow()
+    if not conv:
+        conv = Conversation(
+            tenant_id=current_user.tenant_id,
+            whatsapp_number_id=wn.id,
+            contact_id=contact.id,
+            status=ConversationStatus.COM_HUMANO,
+            assigned_user_id=current_user.id,
+            criado_em=now,
+            ultima_interacao_em=now
+        )
+        db.add(conv)
+        await db.commit()
+        await db.refresh(conv)
+    else:
+        conv.status = ConversationStatus.COM_HUMANO
+        conv.assigned_user_id = current_user.id
+        conv.ultima_interacao_em = now
+        await db.commit()
+
+    # 4. Dispatch initial message if provided
+    if payload.mensagem_inicial and payload.mensagem_inicial.strip():
+        provider = WhatsAppProviderFactory.get_provider(wn)
+        send_res = await provider.send_text_message(
+            number=clean_phone,
+            text=payload.mensagem_inicial.strip()
+        )
+        if send_res.get("success", False):
+            msg = Message(
+                conversation_id=conv.id,
+                remetente=MessageSender.ATENDENTE,
+                conteudo=payload.mensagem_inicial.strip(),
+                tipo=MessageType.TEXTO,
+                timestamp=now
+            )
+            db.add(msg)
+            await db.commit()
+
+    # Re-fetch full object with relations
+    res_stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(Conversation.id == conv.id)
+    )
+    final_res = await db.execute(res_stmt)
+    return final_res.scalar_one()
+
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation_detail(
     conversation_id: int,
@@ -89,6 +206,24 @@ async def get_conversation_detail(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
     return conv
 
+@router.get("/{conversation_id}/media", response_model=List[MessageResponse])
+async def get_conversation_media_files(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns media messages (audio, image, file) for a specific conversation.
+    """
+    stmt = select(Message).join(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id,
+        Message.tipo.in_([MessageType.AUDIO, MessageType.IMAGEM, MessageType.ARQUIVO])
+    ).order_by(Message.timestamp.desc())
+    
+    res = await db.execute(stmt)
+    return res.scalars().all()
+
 @router.post("/{conversation_id}/messages", response_model=MessageResponse)
 async def send_agent_message(
     conversation_id: int,
@@ -97,8 +232,8 @@ async def send_agent_message(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Sends a message from a human agent to the customer via Evolution API.
-    Enforces delivery error checking: if Evolution API fails, message is NOT saved as delivered.
+    Sends a message from a human agent to the customer via the department's configured provider.
+    Enforces delivery error checking before committing to DB.
     """
     stmt = (
         select(Conversation)
@@ -114,19 +249,22 @@ async def send_agent_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    # 1. Attempt Dispatch to WhatsApp via Evolution API first
-    evo_res = await evolution_service.send_text_message(
-        instance_name=conv.whatsapp_number.instancia_evolution_api,
+    # 1. Dispatch via provider factory (Evolution API or Meta Cloud API)
+    provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+    agent_name = current_user.nome or "Atendente"
+    formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+
+    send_res = await provider.send_text_message(
         number=conv.contact.telefone,
-        text=msg_in.conteudo
+        text=formatted_whatsapp_text
     )
 
-    # 2. If delivery failed and not in test/mock override, raise HTTP error and do not commit message
-    if not evo_res.get("success", False):
-        error_detail = evo_res.get("error", "Erro de conexão com a Evolution API")
+    # 2. If delivery failed, raise HTTP error and do not commit message
+    if not send_res.get("success", False):
+        error_detail = send_res.get("error", "Falha de conexão com o Provedor WhatsApp")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Falha ao enviar mensagem no WhatsApp (Evolution API): {error_detail}"
+            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}"
         )
 
     # 3. Save Message only after successful delivery confirmation
@@ -192,3 +330,36 @@ async def transfer_conversation(
     await db.commit()
 
     return {"status": "success", "message": "Conversa transferida com sucesso"}
+
+@router.put("/{conversation_id}/status")
+async def update_conversation_status(
+    conversation_id: int,
+    payload: ConversationStatusUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    conv.status = payload.status
+    conv.ultima_interacao_em = datetime.utcnow()
+    await db.commit()
+
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "status_updated": conv.status.value
+        }
+    )
+
+    return {"status": "success", "new_status": conv.status.value}

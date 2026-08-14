@@ -1,11 +1,11 @@
 import React from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter } from 'lucide-react';
 import { User } from '../types';
 
 interface SidebarProps {
   user: User;
-  activeTab: 'chats' | 'admin';
-  setActiveTab: (tab: 'chats' | 'admin') => void;
+  activeTab: 'chats' | 'contacts' | 'segmentation' | 'admin';
+  setActiveTab: (tab: 'chats' | 'contacts' | 'segmentation' | 'admin') => void;
   onLogout: () => void;
 }
 
@@ -47,7 +47,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, activeTab, setActiveTab,
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '16px' }}>
           <button
             onClick={() => setActiveTab('chats')}
-            title="Conversas"
+            title="Conversas WhatsApp"
             style={{
               width: '48px',
               height: '48px',
@@ -61,6 +61,42 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, activeTab, setActiveTab,
             }}
           >
             <MessageSquare size={22} />
+          </button>
+
+          <button
+            onClick={() => setActiveTab('contacts')}
+            title="Histórico de Clientes"
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: 'var(--radius-md)',
+              background: activeTab === 'contacts' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+              color: activeTab === 'contacts' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              border: activeTab === 'contacts' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <Users size={22} />
+          </button>
+
+          <button
+            onClick={() => setActiveTab('segmentation')}
+            title="Segmentação & Tags"
+            style={{
+              width: '48px',
+              height: '48px',
+              borderRadius: 'var(--radius-md)',
+              background: activeTab === 'segmentation' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+              color: activeTab === 'segmentation' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              border: activeTab === 'segmentation' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <Filter size={22} />
           </button>
 
           {user.role === 'admin' && (

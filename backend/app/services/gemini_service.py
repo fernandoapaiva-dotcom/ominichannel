@@ -34,7 +34,7 @@ class GeminiService:
         Zero hardcoded model strings.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        model_name = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
 
         system_instruction = (
             f"Você é a IA Concierge de atendimento da loja para o departamento '{department_name}'.\n"
@@ -71,7 +71,9 @@ class GeminiService:
             }
 
         try:
-            response = client.models.generate_content(
+            import asyncio
+            response = await asyncio.to_thread(
+                client.models.generate_content,
                 model=model_name,
                 contents=full_prompt
             )

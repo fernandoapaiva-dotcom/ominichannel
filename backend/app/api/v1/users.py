@@ -100,8 +100,10 @@ async def update_user(
         user.whatsapp_numbers = numbers_res.scalars().all()
 
     await db.commit()
-    await db.refresh(user)
-    return user
+    
+    stmt_final = select(User).options(selectinload(User.whatsapp_numbers)).where(User.id == user.id)
+    res_final = await db.execute(stmt_final)
+    return res_final.scalar_one()
 
 @router.delete("/{user_id}", status_code=status.HTTP_200_OK)
 async def delete_user(

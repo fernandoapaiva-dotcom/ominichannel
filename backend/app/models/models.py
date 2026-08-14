@@ -57,7 +57,11 @@ class WhatsAppNumber(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     numero: Mapped[str] = mapped_column(String(50), nullable=False)
     nome_departamento: Mapped[str] = mapped_column(String(100), nullable=False)
-    instancia_evolution_api: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    provider_type: Mapped[str] = mapped_column(String(20), default="evolution", nullable=False)
+    instancia_evolution_api: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    meta_phone_number_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    meta_waba_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    meta_access_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[bool] = mapped_column(Boolean, default=True)
     
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="whatsapp_numbers")
@@ -77,6 +81,34 @@ class User(Base):
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="users")
     whatsapp_numbers: Mapped[List[WhatsAppNumber]] = relationship("WhatsAppNumber", secondary=user_number_access, back_populates="users")
 
+# N:N Join Table for Contact Tags
+contact_tag_access = Table(
+    "contact_tag_access",
+    Base.metadata,
+    Column("contact_id", Integer, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True)
+)
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    nome: Mapped[str] = mapped_column(String(50), nullable=False)
+    cor_hex: Mapped[str] = mapped_column(String(10), default="#10b981")
+
+    contacts: Mapped[List["Contact"]] = relationship("Contact", secondary=contact_tag_access, back_populates="tags")
+
+class ContactSegment(Base):
+    __tablename__ = "contact_segments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    nome: Mapped[str] = mapped_column(String(100), nullable=False)
+    descricao: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    regras: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 class Contact(Base):
     __tablename__ = "contacts"
     
@@ -87,6 +119,7 @@ class Contact(Base):
     dados_adicionais: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=dict)
 
     conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="contact")
+    tags: Mapped[List["Tag"]] = relationship("Tag", secondary=contact_tag_access, back_populates="contacts")
 
 class Conversation(Base):
     __tablename__ = "conversations"

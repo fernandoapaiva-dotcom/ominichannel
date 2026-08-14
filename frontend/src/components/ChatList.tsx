@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Search, Filter, Phone, Bot, User as UserIcon, Clock } from 'lucide-react';
+import { Search, Filter, Phone, Bot, User as UserIcon, Clock, Plus } from 'lucide-react';
+import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 
 interface ChatListProps {
@@ -11,6 +12,8 @@ interface ChatListProps {
   setSelectedDepartmentId: (id: number | 'all') => void;
   statusFilter: ConversationStatus | 'all';
   setStatusFilter: (status: ConversationStatus | 'all') => void;
+  onOpenNewConversationModal?: () => void;
+  onStatusToggle?: () => void;
 }
 
 export const ChatList: React.FC<ChatListProps> = ({
@@ -21,9 +24,25 @@ export const ChatList: React.FC<ChatListProps> = ({
   selectedDepartmentId,
   setSelectedDepartmentId,
   statusFilter,
-  setStatusFilter
+  setStatusFilter,
+  onOpenNewConversationModal,
+  onStatusToggle
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+
+  const handleToggleStatus = async (e: React.MouseEvent, conv: Conversation) => {
+    e.stopPropagation();
+    const nextStatus = conv.status === 'com_ia' ? 'com_humano' : 'com_ia';
+    try {
+      await apiFetch(`/conversations/${conv.id}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: nextStatus })
+      });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err) {
+      console.error('Failed to toggle status from list:', err);
+    }
+  };
 
   const filteredConversations = conversations.filter(conv => {
     const matchesDept = selectedDepartmentId === 'all' || conv.whatsapp_number_id === selectedDepartmentId;
@@ -45,9 +64,21 @@ export const ChatList: React.FC<ChatListProps> = ({
     }}>
       {/* Header & Search */}
       <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-color)' }}>
-        <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', marginBottom: '14px' }}>
-          Conversas WhatsApp
-        </h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700' }}>
+            Conversas
+          </h2>
+          {onOpenNewConversationModal && (
+            <button
+              onClick={onOpenNewConversationModal}
+              className="btn-primary"
+              style={{ fontSize: '12px', padding: '6px 12px', borderRadius: 'var(--radius-md)' }}
+              title="Iniciar nova conversa por telefone"
+            >
+              <Plus size={15} /> Nova Conversa
+            </button>
+          )}
+        </div>
 
         {/* Search Bar */}
         <div style={{
@@ -170,7 +201,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     {conv.contact?.nome || conv.contact?.telefone || 'Cliente sem nome'}
                   </span>
                   <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                    {new Date(conv.ultima_interacao_em).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    {conv.ultima_interacao_em ? new Date(String(conv.ultima_interacao_em).endsWith('Z') || String(conv.ultima_interacao_em).includes('+') ? String(conv.ultima_interacao_em) : String(conv.ultima_interacao_em) + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
                 </div>
 
@@ -178,10 +209,15 @@ export const ChatList: React.FC<ChatListProps> = ({
                   <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Phone size={12} /> {conv.contact?.telefone}
                   </span>
-                  <span className={`badge badge-${conv.status}`}>
+                  <button
+                    onClick={(e) => handleToggleStatus(e, conv)}
+                    title={conv.status === 'com_ia' ? 'Clique para alternar para Atendente Humano' : 'Clique para alternar para IA Concierge'}
+                    className={`badge badge-${conv.status}`}
+                    style={{ cursor: 'pointer', border: 'none', transition: 'transform 0.1s' }}
+                  >
                     {conv.status === 'com_ia' && <Bot size={10} />}
                     {conv.status.replace('_', ' ')}
-                  </span>
+                  </button>
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

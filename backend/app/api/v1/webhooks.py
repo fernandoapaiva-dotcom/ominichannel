@@ -26,19 +26,53 @@ async def receive_evolution_webhook(
     """
     Webhook handler for Evolution API incoming WhatsApp messages.
     """
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except Exception as err:
+        logger.error(f"Failed to parse JSON body from webhook: {err}")
+        return {"status": "error", "message": "Invalid JSON body"}
+
     event_type = payload.get("event")
     data = payload.get("data", {})
+    if isinstance(data, list):
+        data = data[0] if len(data) > 0 and isinstance(data[0], dict) else {}
+    elif not isinstance(data, dict):
+        data = {}
+
     instance_name = payload.get("instance") or data.get("instance")
-    key = data.get("key", {})
-    from_me = key.get("fromMe", False)
+
+    print(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}'", flush=True)
+    logger.info(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}' | Payload: {payload}")
+
+    # Handle QRCODE_UPDATED event to cache QR code in real-time
+    if event_type in ["qrcode.updated", "qrcode_updated", "qrcode"]:
+        qr_obj = data.get("qrcode") or data
+        qr_base64 = None
+        if isinstance(qr_obj, dict):
+            qr_base64 = qr_obj.get("base64")
+        elif isinstance(qr_obj, str):
+            qr_base64 = qr_obj
+        if not qr_base64:
+            qr_base64 = payload.get("qrcode", {}).get("base64") if isinstance(payload.get("qrcode"), dict) else None
+
+        if qr_base64 and instance_name:
+            evolution_service.qr_code_cache[instance_name] = qr_base64
+            logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
+            return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
+
+    key = data.get("key", {}) if isinstance(data, dict) else {}
+    from_me = key.get("fromMe", False) if isinstance(key, dict) else False
 
     # Ignore messages sent by ourselves
     if from_me:
         return {"status": "ignored", "reason": "Outgoing message"}
 
-    remote_jid = key.get("remoteJid", "")
-    phone_number = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+    remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
+    raw_phone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+    phone_number = "".join(filter(str.isdigit, raw_phone))
+    if len(phone_number) == 12 and phone_number.startswith("55") and phone_number[4] != "9":
+        phone_number = phone_number[:4] + "9" + phone_number[4:]
+    # Normalize Brazilian cell numbers: if 13 digits starting with 55+DDD+9+8digits, check 12 digit variant without 9 or vice versa to align contact
     push_name = data.get("pushName") or "Cliente"
 
     # Extract text content
@@ -66,17 +100,30 @@ async def receive_evolution_webhook(
 
     tenant_id = whatsapp_number.tenant_id
 
-    # 2. Get or Create Contact
-    contact_stmt = select(Contact).where(Contact.tenant_id == tenant_id, Contact.telefone == phone_number)
+    # 2. Get or Create Contact (matching exact phone or normalized variant)
+    phone_variants = [phone_number]
+    if len(phone_number) == 13 and phone_number.startswith("55"):
+        # e.g., 55 61 9 8334 8333 -> variant without extra 9: 55 61 8334 8333
+        phone_variants.append(phone_number[:4] + phone_number[5:])
+    elif len(phone_number) == 12 and phone_number.startswith("55"):
+        # e.g., 55 61 8334 8333 -> variant with 9: 55 61 9 8334 8333
+        phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
+
+    contact_stmt = select(Contact).where(
+        Contact.tenant_id == tenant_id,
+        Contact.telefone.in_(phone_variants)
+    )
     contact_res = await db.execute(contact_stmt)
-    contact = contact_res.scalar_one_or_none()
+    contact = contact_res.scalars().first()
 
     if not contact:
         contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name)
         db.add(contact)
         await db.flush()
+    elif push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente"):
+        contact.nome = push_name
 
-    # 3. Get or Create Conversation
+    # 3. Get or Create Conversation (Always reuse open/existing active conversation for this contact and department)
     conv_stmt = (
         select(Conversation)
         .options(selectinload(Conversation.messages))
@@ -86,20 +133,38 @@ async def receive_evolution_webhook(
             Conversation.contact_id == contact.id,
             Conversation.status.in_([ConversationStatus.COM_IA, ConversationStatus.COM_HUMANO])
         )
+        .order_by(Conversation.ultima_interacao_em.desc())
     )
     conv_res = await db.execute(conv_stmt)
-    conversation = conv_res.scalar_one_or_none()
+    conversation = conv_res.scalars().first()
 
     if not conversation:
-        conversation = Conversation(
-            tenant_id=tenant_id,
-            whatsapp_number_id=whatsapp_number.id,
-            contact_id=contact.id,
-            status=ConversationStatus.COM_IA,
-            assunto_atual="Atendimento Inicial Concierge"
+        # Also check if there is ANY conversation for this contact to reopen instead of duplicating
+        any_conv_stmt = (
+            select(Conversation)
+            .options(selectinload(Conversation.messages))
+            .where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.whatsapp_number_id == whatsapp_number.id,
+                Conversation.contact_id == contact.id
+            )
+            .order_by(Conversation.ultima_interacao_em.desc())
         )
-        db.add(conversation)
-        await db.flush()
+        any_conv_res = await db.execute(any_conv_stmt)
+        conversation = any_conv_res.scalars().first()
+
+        if conversation:
+            conversation.status = ConversationStatus.COM_IA
+        else:
+            conversation = Conversation(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                contact_id=contact.id,
+                status=ConversationStatus.COM_IA,
+                assunto_atual="Atendimento Concierge"
+            )
+            db.add(conversation)
+            await db.flush()
 
     conversation.ultima_interacao_em = datetime.utcnow()
 
@@ -123,7 +188,7 @@ async def receive_evolution_webhook(
             "conversation_id": conversation.id,
             "remetente": MessageSender.CLIENTE.value,
             "conteudo": text_content,
-            "timestamp": str(user_msg.timestamp),
+            "timestamp": user_msg.timestamp.isoformat() + "Z" if hasattr(user_msg.timestamp, "isoformat") else str(user_msg.timestamp),
             "contact_name": contact.nome,
             "contact_phone": contact.telefone,
             "department": whatsapp_number.nome_departamento
@@ -198,17 +263,34 @@ async def receive_evolution_webhook(
         if escalar_humano:
             conversation.status = ConversationStatus.COM_HUMANO
             logger.info(f"Conversation {conversation.id} escalated to human agent.")
+            
+            # Broadcast high-priority escalation alert event to agents!
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                message_data={
+                    "type": "CONVERSATION_ESCALATED",
+                    "conversation_id": conversation.id,
+                    "contact_name": contact.nome or contact.telefone,
+                    "contact_phone": contact.telefone,
+                    "department": whatsapp_number.nome_departamento,
+                    "whatsapp_number_id": whatsapp_number.id,
+                    "message": f"🚨 ATENÇÃO: Nova conversa com {contact.nome or contact.telefone} no departamento '{whatsapp_number.nome_departamento}' aguardando atendente!"
+                }
+            )
 
         await db.commit()
 
-        # Send AI reply back to WhatsApp via Evolution API
+        # Send AI reply back to WhatsApp via Evolution API with header
+        formatted_ai_text = f"*🤖 IA Concierge:*\n\n{ai_reply}"
         await evolution_service.send_text_message(
             instance_name=instance_name,
             number=phone_number,
-            text=ai_reply
+            text=formatted_ai_text
         )
 
-        # Broadcast AI message to WebSocket clients
+        # Broadcast AI message to WebSocket clients with ISO Z timestamp
+        ts_str = ai_msg.timestamp.isoformat() + "Z" if hasattr(ai_msg.timestamp, "isoformat") else str(ai_msg.timestamp)
         await ws_manager.broadcast_to_department(
             tenant_id=tenant_id,
             whatsapp_number_id=whatsapp_number.id,
@@ -217,7 +299,7 @@ async def receive_evolution_webhook(
                 "conversation_id": conversation.id,
                 "remetente": MessageSender.IA.value,
                 "conteudo": ai_reply,
-                "timestamp": str(ai_msg.timestamp),
+                "timestamp": ts_str,
                 "conversation_status": conversation.status.value
             }
         )

@@ -6,9 +6,13 @@ export type MessageType = 'texto' | 'audio' | 'imagem' | 'arquivo';
 export interface WhatsAppNumber {
   id: number;
   tenant_id: number;
+  provider_type?: 'evolution' | 'meta';
   numero: string;
   nome_departamento: string;
-  instancia_evolution_api: string;
+  instancia_evolution_api?: string;
+  meta_phone_number_id?: string;
+  meta_waba_id?: string;
+  meta_access_token_masked?: string;
   status: boolean;
 }
 

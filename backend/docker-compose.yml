@@ -23,9 +23,13 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      default:
+        aliases:
+          - redis
 
   evolution-api:
-    image: evoapicloud/evolution-api:v2.1.1
+    image: evoapicloud/evolution-api:latest
     container_name: omini_evolution_api
     restart: always
     ports:
@@ -33,13 +37,17 @@ services:
     environment:
       - SERVER_URL=http://localhost:8080
       - DOCKER_ENV=true
+      - CONFIG_SESSION_PHONE_CLIENT=Evolution API
+      - CONFIG_SESSION_PHONE_NAME=Chrome
+      - CONFIG_SESSION_PHONE_VERSION=2.3000.1026080446
       # Database Config (PostgreSQL)
       - DATABASE_ENABLED=true
-      - DATABASE_CONNECTION_URI=postgres://${POSTGRES_USER:-omini_user}:${POSTGRES_PASSWORD:-omini_password}@postgres:5432/${POSTGRES_DB:-omini_db}
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER:-omini_user}:${POSTGRES_PASSWORD:-omini_password}@postgres:5432/${POSTGRES_DB:-omini_db}
       - DATABASE_CLIENT_NAME=evolution_v2
-      # Cache Config (Redis - Mandatory in v2)
+      # Cache Config (Redis)
       - CACHE_REDIS_ENABLED=true
-      - CACHE_REDIS_URI=redis://redis:6379/1
+      - CACHE_REDIS_URI=redis://omini_redis:6379/1
       - CACHE_REDIS_PREFIX_KEY=evolution
       # Authentication Config
       - AUTHENTICATION_TYPE=apikey

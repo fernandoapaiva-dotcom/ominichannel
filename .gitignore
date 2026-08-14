@@ -18,6 +18,7 @@ omini_channel.db
 
 # Vector DB storage
 chroma_db/
+chroma_data/
 backups_json/
 
 # Node / Frontend
@@ -32,8 +33,7 @@ build/
 .env.local
 *.pem
 
-# IDEs & System Files
-.idea/
-.vscode/
-.DS_Store
-Thumbs.db
+# Temporary scripts
+backend/test_*.py
+backend/fix_*.py
+

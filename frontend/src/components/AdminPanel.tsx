@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { WhatsAppNumber, User } from '../types';
 import { apiFetch } from '../services/api';
 
@@ -8,11 +8,23 @@ export const AdminPanel: React.FC = () => {
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>([]);
   const [users, setUsers] = useState<User[]>([]);
 
+  // QR Code Modal & Connection Status State
+  const [qrModalNumber, setQrModalNumber] = useState<WhatsAppNumber | null>(null);
+  const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const [qrConnectedSuccess, setQrConnectedSuccess] = useState(false);
+  const [connectionStatuses, setConnectionStatuses] = useState<{ [numberId: number]: { connected: boolean; state: string } }>({});
+
   // WhatsApp Number Form & Editing State
   const [editingNumberId, setEditingNumberId] = useState<number | null>(null);
+  const [providerType, setProviderType] = useState<'evolution' | 'meta'>('evolution');
   const [deptName, setDeptName] = useState('');
   const [phoneNum, setPhoneNum] = useState('');
   const [instanceName, setInstanceName] = useState('');
+  const [metaPhoneNumberId, setMetaPhoneNumberId] = useState('');
+  const [metaWabaId, setMetaWabaId] = useState('');
+  const [metaAccessToken, setMetaAccessToken] = useState('');
 
   // User Form & Editing State
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
@@ -42,12 +54,30 @@ export const AdminPanel: React.FC = () => {
   // Audit Logs State
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
 
+  const fetchAllStatuses = async (numList: WhatsAppNumber[]) => {
+    const statuses: { [id: number]: { connected: boolean; state: string } } = {};
+    for (const num of numList) {
+      if (num.provider_type === 'meta') {
+        statuses[num.id] = { connected: true, state: 'open' };
+      } else {
+        try {
+          const res = await apiFetch(`/whatsapp-numbers/${num.id}/connection-status`);
+          statuses[num.id] = { connected: res.connected, state: res.state };
+        } catch {
+          statuses[num.id] = { connected: false, state: 'close' };
+        }
+      }
+    }
+    setConnectionStatuses(statuses);
+  };
+
   const loadData = async () => {
     try {
-      const numData = await apiFetch('/whatsapp-numbers/');
+      const numData: WhatsAppNumber[] = await apiFetch('/whatsapp-numbers/');
       const userData = await apiFetch('/users/');
       setNumbers(numData);
       setUsers(userData);
+      fetchAllStatuses(numData);
     } catch (err) {
       console.error(err);
     }
@@ -72,18 +102,118 @@ export const AdminPanel: React.FC = () => {
   useEffect(() => {
     loadData();
     loadSettingsAndAudit();
+
+    const interval = setInterval(() => {
+      if (numbers.length > 0) {
+        fetchAllStatuses(numbers);
+      }
+    }, 10000);
+    return () => clearInterval(interval);
   }, []);
+
+  const openQrModal = async (num: WhatsAppNumber) => {
+    setQrModalNumber(num);
+    setQrConnectedSuccess(false);
+    setQrLoading(true);
+    setQrError(null);
+    setQrCodeBase64(null);
+
+    try {
+      const res = await apiFetch(`/whatsapp-numbers/${num.id}/qrcode`);
+      if (res.qrcode) {
+        setQrCodeBase64(res.qrcode);
+        setQrError(null);
+      } else if (res.error) {
+        setQrError(res.error);
+      } else {
+        setQrError("Não foi possível gerar a imagem do QR Code. Verifique se o servidor da Evolution API está acessível.");
+      }
+    } catch (err: any) {
+      console.error('Error fetching QR code:', err);
+      setQrError(err.message || "Erro ao conectar com a Evolution API.");
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  // Poll connection status and refresh QR code when QR Modal is active
+  // Poll connection status and refresh QR code while QR Modal is active
+  useEffect(() => {
+    if (!qrModalNumber) return;
+
+    const modalInterval = setInterval(async () => {
+      try {
+        const statusRes = await apiFetch(`/whatsapp-numbers/${qrModalNumber.id}/connection-status`);
+        if (statusRes.connected) {
+          setQrConnectedSuccess(true);
+          setQrError(null);
+          setConnectionStatuses(prev => ({ ...prev, [qrModalNumber.id]: { connected: true, state: 'open' } }));
+          setTimeout(() => {
+            setQrModalNumber(null);
+            setQrConnectedSuccess(false);
+            loadData();
+          }, 2500);
+        } else if (!qrConnectedSuccess) {
+          // Refresh QR Code image in real-time in case Evolution API rotated the QR token
+          const qrRes = await apiFetch(`/whatsapp-numbers/${qrModalNumber.id}/qrcode`);
+          if (qrRes.qrcode) {
+            setQrCodeBase64(qrRes.qrcode);
+            setQrError(null);
+          }
+        }
+      } catch (err: any) {
+        console.error('Error in QR status polling:', err);
+      }
+    }, 3000);
+
+    return () => clearInterval(modalInterval);
+  }, [qrModalNumber, qrConnectedSuccess]);
 
   // --- WhatsApp Numbers Handlers ---
   const handleSaveNumber = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const payload = {
-        nome_departamento: deptName,
-        numero: phoneNum,
-        instancia_evolution_api: instanceName,
+      if (!deptName.trim() || !phoneNum.trim()) {
+        alert('Por favor, preencha o nome do departamento e o número do WhatsApp.');
+        return;
+      }
+
+      if (providerType === 'evolution') {
+        if (!instanceName.trim()) {
+          alert('Por favor, preencha o Nome da Instância na Evolution API.');
+          return;
+        }
+      } else if (providerType === 'meta') {
+        if (!metaPhoneNumberId.trim()) {
+          alert('Por favor, preencha o Phone Number ID da Meta API.');
+          return;
+        }
+        if (!metaWabaId.trim()) {
+          alert('Por favor, preencha o WABA ID da Meta API.');
+          return;
+        }
+        if (!editingNumberId && !metaAccessToken.trim()) {
+          alert('Por favor, informe o Access Token da Meta API.');
+          return;
+        }
+      }
+
+      const payload: any = {
+        provider_type: providerType,
+        nome_departamento: deptName.trim(),
+        numero: phoneNum.trim(),
         status: true
       };
+
+      if (providerType === 'evolution') {
+        payload.instancia_evolution_api = instanceName.trim();
+      } else {
+        payload.meta_phone_number_id = metaPhoneNumberId.trim();
+        payload.meta_waba_id = metaWabaId.trim();
+        if (metaAccessToken.trim()) {
+          payload.meta_access_token = metaAccessToken.trim();
+        }
+      }
 
       if (editingNumberId) {
         await apiFetch(`/whatsapp-numbers/${editingNumberId}`, {
@@ -108,9 +238,13 @@ export const AdminPanel: React.FC = () => {
 
   const handleEditNumber = (num: WhatsAppNumber) => {
     setEditingNumberId(num.id);
+    setProviderType(num.provider_type || 'evolution');
     setDeptName(num.nome_departamento);
     setPhoneNum(num.numero);
-    setInstanceName(num.instancia_evolution_api);
+    setInstanceName(num.instancia_evolution_api || '');
+    setMetaPhoneNumberId(num.meta_phone_number_id || '');
+    setMetaWabaId(num.meta_waba_id || '');
+    setMetaAccessToken('');
   };
 
   const handleDeleteNumber = async (num: WhatsAppNumber) => {
@@ -126,9 +260,13 @@ export const AdminPanel: React.FC = () => {
 
   const resetNumberForm = () => {
     setEditingNumberId(null);
+    setProviderType('evolution');
     setDeptName('');
     setPhoneNum('');
     setInstanceName('');
+    setMetaPhoneNumberId('');
+    setMetaWabaId('');
+    setMetaAccessToken('');
   };
 
   // --- User Handlers ---
@@ -365,6 +503,17 @@ export const AdminPanel: React.FC = () => {
 
               <form onSubmit={handleSaveNumber} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Provedor de Conexão</label>
+                  <select
+                    value={providerType}
+                    onChange={(e) => setProviderType(e.target.value as 'evolution' | 'meta')}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                  >
+                    <option value="evolution">Evolution API (Self-Hosted)</option>
+                    <option value="meta">WhatsApp API Oficial (Meta)</option>
+                  </select>
+                </div>
+                <div>
                   <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nome do Departamento</label>
                   <input
                     type="text"
@@ -386,17 +535,57 @@ export const AdminPanel: React.FC = () => {
                     style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
                   />
                 </div>
-                <div>
-                  <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Instância Evolution API (Self-Hosted)</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: instancia_vendas"
-                    value={instanceName}
-                    onChange={(e) => setInstanceName(e.target.value)}
-                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
-                  />
-                </div>
+
+                {providerType === 'evolution' ? (
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Instância Evolution API (Self-Hosted)</label>
+                    <input
+                      type="text"
+                      required={providerType === 'evolution'}
+                      placeholder="Ex: instancia_vendas"
+                      value={instanceName}
+                      onChange={(e) => setInstanceName(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Phone Number ID (Meta API)</label>
+                      <input
+                        type="text"
+                        required={providerType === 'meta'}
+                        placeholder="Ex: 1048209823901"
+                        value={metaPhoneNumberId}
+                        onChange={(e) => setMetaPhoneNumberId(e.target.value)}
+                        style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>WABA ID (WhatsApp Business Account ID)</label>
+                      <input
+                        type="text"
+                        required={providerType === 'meta'}
+                        placeholder="Ex: 9283019823910"
+                        value={metaWabaId}
+                        onChange={(e) => setMetaWabaId(e.target.value)}
+                        style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Access Token (Meta Cloud API)</label>
+                      <input
+                        type="password"
+                        required={providerType === 'meta' && !editingNumberId}
+                        placeholder={editingNumberId ? "Deixe em branco para manter o token atual" : "EAAG... (Token Permanente)"}
+                        value={metaAccessToken}
+                        onChange={(e) => setMetaAccessToken(e.target.value)}
+                        style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                  </>
+                )}
+
                 <button type="submit" className="btn-primary" style={{ marginTop: '8px' }}>
                   {editingNumberId ? <Pencil size={16} /> : <Plus size={16} />}
                   {editingNumberId ? 'Salvar Alterações' : 'Salvar Número'}
@@ -410,8 +599,60 @@ export const AdminPanel: React.FC = () => {
                 {numbers.map(num => (
                   <div key={num.id} style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(255, 255, 255, 0.02)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontWeight: '600', fontSize: '15px' }}>{num.nome_departamento}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: '600', fontSize: '15px' }}>{num.nome_departamento}</span>
+                        <span style={{
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          backgroundColor: num.provider_type === 'meta' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                          color: num.provider_type === 'meta' ? '#60a5fa' : '#34d399',
+                          textTransform: 'uppercase'
+                        }}>
+                          {num.provider_type === 'meta' ? 'Meta Oficial' : 'Evolution'}
+                        </span>
+                        {/* Live Connection Status Badge */}
+                        {connectionStatuses[num.id] && (
+                          <span style={{
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            backgroundColor: connectionStatuses[num.id].connected ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                            color: connectionStatuses[num.id].connected ? '#34d399' : '#f87171',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: connectionStatuses[num.id].connected ? '#34d399' : '#f87171' }} />
+                            {connectionStatuses[num.id].connected ? 'Conectado' : 'Desconectado'}
+                          </span>
+                        )}
+                      </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {num.provider_type !== 'meta' && (
+                          <button
+                            onClick={() => openQrModal(num)}
+                            title="Conectar WhatsApp via QR Code"
+                            style={{
+                              background: 'linear-gradient(135deg, #10b981, #059669)',
+                              color: '#fff',
+                              padding: '6px 12px',
+                              borderRadius: 'var(--radius-sm)',
+                              fontSize: '12px',
+                              fontWeight: '600',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              border: 'none',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <QrCode size={14} />
+                            Conectar WhatsApp
+                          </button>
+                        )}
                         <button
                           onClick={() => handleEditNumber(num)}
                           title="Editar Departamento"
@@ -429,12 +670,163 @@ export const AdminPanel: React.FC = () => {
                       </div>
                     </div>
                     <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                      Número: <strong>{num.numero}</strong> | Instância: <code>{num.instancia_evolution_api}</code>
+                      Número: <strong>{num.numero}</strong> | {num.provider_type === 'meta' ? (
+                        <>Phone ID: <code>{num.meta_phone_number_id}</code></>
+                      ) : (
+                        <>Instância: <code>{num.instancia_evolution_api}</code></>
+                      )}
                     </p>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* QR Code Modal for Evolution Provider */}
+            {qrModalNumber && (
+              <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 9999,
+                backdropFilter: 'blur(4px)'
+              }}>
+                <div style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-lg)',
+                  padding: '28px',
+                  maxWidth: '420px',
+                  width: '90%',
+                  position: 'relative',
+                  textAlign: 'center',
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)'
+                }}>
+                  <button
+                    onClick={() => setQrModalNumber(null)}
+                    style={{
+                      position: 'absolute',
+                      top: '16px',
+                      right: '16px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={20} />
+                  </button>
+
+                  <h3 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '4px', color: 'var(--text-main)' }}>
+                    Conectar WhatsApp
+                  </h3>
+                  <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>
+                    {qrModalNumber.nome_departamento} ({qrModalNumber.instancia_evolution_api || qrModalNumber.numero})
+                  </p>
+
+                  {qrConnectedSuccess ? (
+                    <div style={{ padding: '30px 10px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                      <CheckCircle2 size={54} color="#10b981" />
+                      <h4 style={{ fontSize: '18px', color: '#10b981', margin: 0 }}>WhatsApp Conectado!</h4>
+                      <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Sua instância está ativa e pronta para enviar/receber mensagens.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{
+                        width: '240px',
+                        height: '240px',
+                        margin: '0 auto 16px auto',
+                        backgroundColor: '#ffffff',
+                        padding: '12px',
+                        borderRadius: 'var(--radius-md)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '1px solid var(--border-color)'
+                      }}>
+                        {qrLoading ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: '#666' }}>
+                            <RefreshCw size={32} className="spin" />
+                            <span style={{ fontSize: '12px' }}>Gerando QR Code...</span>
+                          </div>
+                        ) : qrError ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', padding: '10px', color: '#ef4444', textAlign: 'center' }}>
+                            <X size={32} />
+                            <span style={{ fontSize: '11px', fontWeight: '600' }}>{qrError}</span>
+                            <button
+                              onClick={() => openQrModal(qrModalNumber)}
+                              style={{
+                                marginTop: '6px',
+                                padding: '6px 12px',
+                                backgroundColor: '#ef4444',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '4px',
+                                fontSize: '11px',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <RefreshCw size={12} />
+                              Tentar novamente
+                            </button>
+                          </div>
+                        ) : qrCodeBase64 ? (
+                          <img
+                            src={qrCodeBase64.startsWith('data:image') ? qrCodeBase64 : `data:image/png;base64,${qrCodeBase64}`}
+                            alt="QR Code WhatsApp"
+                            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                          />
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', color: '#666' }}>
+                            <RefreshCw size={28} className="spin" />
+                            <span style={{ fontSize: '12px' }}>Aguardando imagem...</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {qrError && (
+                        <button
+                          onClick={() => openQrModal(qrModalNumber)}
+                          className="btn-primary"
+                          style={{
+                            width: '100%',
+                            marginBottom: '14px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            padding: '10px',
+                            backgroundColor: '#3b82f6',
+                            fontSize: '13px',
+                            fontWeight: '600'
+                          }}
+                        >
+                          <RefreshCw size={16} />
+                          Tentar Novamente
+                        </button>
+                      )}
+
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.5', margin: 0 }}>
+                        Abra o WhatsApp no celular {'>'} <strong>Aparelhos conectados</strong> {'>'} <strong>Conectar um aparelho</strong> e aponte a câmera para a imagem acima.
+                      </p>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '14px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        <RefreshCw size={12} className="spin" />
+                        <span>Atualiza automaticamente a cada 4 segundos...</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -695,11 +1087,11 @@ export const AdminPanel: React.FC = () => {
                   {/* Configurable Gemini Model Name Input */}
                   <div style={{ marginBottom: '12px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Modelo da Gemini API (ex: <code>gemini-3.1-flash-lite</code>, <code>gemini-2.0-flash</code>)
+                      Modelo da Gemini API (ex: <code>gemini-2.0-flash</code>, <code>gemini-1.5-flash</code>)
                     </label>
                     <input
                       type="text"
-                      placeholder="gemini-3.1-flash-lite"
+                      placeholder="gemini-2.0-flash"
                       value={geminiModelInput}
                       onChange={(e) => setGeminiModelInput(e.target.value)}
                       style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}

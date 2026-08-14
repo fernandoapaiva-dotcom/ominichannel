@@ -6,6 +6,10 @@ import { ChatList } from '../components/ChatList';
 import { ChatArea } from '../components/ChatArea';
 import { TransferModal } from '../components/TransferModal';
 import { AdminPanel } from '../components/AdminPanel';
+import { ContactsPanel } from '../components/ContactsPanel';
+import { SegmentationPanel } from '../components/SegmentationPanel';
+import { NewConversationModal } from '../components/NewConversationModal';
+import { MediaGalleryModal } from '../components/MediaGalleryModal';
 
 interface DashboardProps {
   user: User;
@@ -13,26 +17,28 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'admin'>('chats');
+  const [activeTab, setActiveTab] = useState<'chats' | 'contacts' | 'segmentation' | 'admin'>('chats');
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all'>('all');
+  
+  const activeConversation = conversations.find(c => c.id === activeConversationId) || (conversations.length > 0 ? conversations[0] : null);
+
+  // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
+  const [isMediaGalleryOpen, setIsMediaGalleryOpen] = useState(false);
 
   const fetchConversations = useCallback(async () => {
     try {
       const data = await apiFetch('/conversations/');
       setConversations(data);
-      if (activeConversation) {
-        const updated = data.find((c: Conversation) => c.id === activeConversation.id);
-        if (updated) setActiveConversation(updated);
-      }
     } catch (err) {
       console.error('Error fetching conversations:', err);
     }
-  }, [activeConversation]);
+  }, []);
 
   const fetchNumbers = async () => {
     try {
@@ -46,7 +52,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   useEffect(() => {
     fetchConversations();
     fetchNumbers();
-  }, []);
+  }, [fetchConversations]);
+
+  const [notificationAlert, setNotificationAlert] = useState<string | null>(null);
+
+  const playNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // WebSocket Live Realtime Connection
   useEffect(() => {
@@ -59,8 +88,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === 'NEW_MESSAGE') {
+        if (payload.type === 'CONVERSATION_ESCALATED') {
           fetchConversations();
+          playNotificationSound();
+          setNotificationAlert(payload.message || "🚨 ATENÇÃO: Nova conversa transferida para atendimento humano!");
+          setTimeout(() => setNotificationAlert(null), 10000);
+        } else if (payload.type === 'NEW_MESSAGE') {
+          fetchConversations();
+          if (payload.remetente === 'cliente') {
+            playNotificationSound();
+          }
         }
       } catch (err) {
         console.error('WebSocket parse error:', err);
@@ -88,8 +125,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     fetchConversations();
   };
 
+  const handleConversationCreated = (conv: Conversation) => {
+    fetchConversations();
+    setActiveConversationId(conv.id);
+    setActiveTab('chats');
+  };
+
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
+      {notificationAlert && (
+        <div style={{
+          position: 'fixed',
+          top: '20px',
+          right: '20px',
+          zIndex: 9999,
+          backgroundColor: '#dc2626',
+          color: '#ffffff',
+          padding: '14px 20px',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          fontWeight: '600',
+          fontSize: '14px'
+        }}>
+          <span>{notificationAlert}</span>
+          <button
+            onClick={() => setNotificationAlert(null)}
+            style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <Sidebar
         user={user}
         activeTab={activeTab}
@@ -97,28 +167,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         onLogout={onLogout}
       />
 
-      {activeTab === 'chats' ? (
+      {activeTab === 'chats' && (
         <>
           <ChatList
             conversations={conversations}
             activeConversation={activeConversation}
-            onSelectConversation={setActiveConversation}
+            onSelectConversation={(conv) => setActiveConversationId(conv.id)}
             whatsappNumbers={whatsappNumbers}
             selectedDepartmentId={selectedDeptId}
             setSelectedDepartmentId={setSelectedDeptId}
             statusFilter={statusFilter}
             setStatusFilter={setStatusFilter}
+            onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
+            onStatusToggle={fetchConversations}
           />
           <ChatArea
             conversation={activeConversation}
             currentUser={user}
             onSendMessage={handleSendMessage}
             onOpenTransferModal={() => setIsTransferModalOpen(true)}
+            onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
+            onStatusToggle={fetchConversations}
           />
         </>
-      ) : (
+      )}
+
+      {activeTab === 'contacts' && (
+        <ContactsPanel />
+      )}
+
+      {activeTab === 'segmentation' && (
+        <SegmentationPanel />
+      )}
+
+      {activeTab === 'admin' && (
         <AdminPanel />
       )}
+
+      {/* Modals */}
+      <NewConversationModal
+        isOpen={isNewConvModalOpen}
+        onClose={() => setIsNewConvModalOpen(false)}
+        whatsappNumbers={whatsappNumbers}
+        onConversationCreated={handleConversationCreated}
+      />
+
+      <MediaGalleryModal
+        isOpen={isMediaGalleryOpen}
+        onClose={() => setIsMediaGalleryOpen(false)}
+        conversation={activeConversation}
+      />
 
       <TransferModal
         isOpen={isTransferModalOpen}

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, UserCheck, ArrowRightLeft, Bot, Phone, Building, AlertCircle } from 'lucide-react';
+import { Send, UserCheck, ArrowRightLeft, Bot, Phone, Building, AlertCircle, Paperclip } from 'lucide-react';
+import { apiFetch } from '../services/api';
 import { Conversation, User } from '../types';
 
 interface ChatAreaProps {
@@ -7,16 +8,21 @@ interface ChatAreaProps {
   currentUser: User;
   onSendMessage: (text: string) => Promise<void>;
   onOpenTransferModal: () => void;
+  onOpenMediaGallery?: () => void;
+  onStatusToggle?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   currentUser,
   onSendMessage,
-  onOpenTransferModal
+  onOpenTransferModal,
+  onOpenMediaGallery,
+  onStatusToggle
 }) => {
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -28,6 +34,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     scrollToBottom();
     setSendError(null);
   }, [conversation?.messages]);
+
+  const handleToggleStatus = async () => {
+    if (!conversation || isTogglingStatus) return;
+    const nextStatus = conversation.status === 'com_ia' ? 'com_humano' : 'com_ia';
+    try {
+      setIsTogglingStatus(true);
+      await apiFetch(`/conversations/${conversation.id}/status`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: nextStatus })
+      });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err) {
+      console.error('Failed to toggle conversation status:', err);
+    } finally {
+      setIsTogglingStatus(false);
+    }
+  };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +87,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   }
 
+  const mediaCount = conversation.messages.filter(m => ['imagem', 'audio', 'arquivo'].includes(m.tipo)).length;
+
   return (
     <div style={{
       flex: 1,
@@ -97,9 +122,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
         {/* Action Controls */}
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <span className={`badge badge-${conversation.status}`}>
-            {conversation.status.replace('_', ' ')}
-          </span>
+          <button
+            onClick={handleToggleStatus}
+            disabled={isTogglingStatus}
+            title={conversation.status === 'com_ia' ? 'Clique para assumir Atendimento Humano' : 'Clique para devolver para a IA Concierge'}
+            style={{
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 14px',
+              borderRadius: 'var(--radius-full)',
+              fontSize: '12px',
+              fontWeight: '600',
+              border: '1px solid var(--border-color)',
+              transition: 'all 0.2s ease',
+              backgroundColor: conversation.status === 'com_ia' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+              color: conversation.status === 'com_ia' ? '#c084fc' : '#60a5fa'
+            }}
+          >
+            {conversation.status === 'com_ia' ? (
+              <><Bot size={14} /> COM IA (Clique p/ Atendente)</>
+            ) : (
+              <><UserCheck size={14} /> COM HUMANO (Clique p/ IA)</>
+            )}
+          </button>
+
+          {onOpenMediaGallery && (
+            <button
+              onClick={onOpenMediaGallery}
+              className="btn-secondary"
+              title="Ver mídias e arquivos da conversa"
+              style={{ fontSize: '13px', padding: '8px 14px' }}
+            >
+              <Paperclip size={15} /> Arquivos ({mediaCount})
+            </button>
+          )}
 
           <button
             onClick={onOpenTransferModal}
@@ -164,7 +222,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                 </span>
                 <span>
-                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {msg.timestamp ? new Date(String(msg.timestamp).endsWith('Z') || String(msg.timestamp).includes('+') ? String(msg.timestamp) : String(msg.timestamp) + 'Z').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                 </span>
               </div>
 

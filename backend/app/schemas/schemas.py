@@ -27,19 +27,45 @@ class TenantResponse(TenantBase):
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
 
-# WhatsAppNumber Schemas
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 class WhatsAppNumberBase(BaseModel):
+    provider_type: str = "evolution"
     numero: str
     nome_departamento: str
-    instancia_evolution_api: str
+    instancia_evolution_api: Optional[str] = None
+    meta_phone_number_id: Optional[str] = None
+    meta_waba_id: Optional[str] = None
+    meta_access_token: Optional[str] = None
     status: bool = True
+
+    @model_validator(mode="after")
+    def validate_provider_fields(self):
+        ptype = (self.provider_type or "evolution").lower()
+        if ptype == "evolution":
+            if not self.instancia_evolution_api or not self.instancia_evolution_api.strip():
+                raise ValueError("Instância da Evolution API é obrigatória para o provedor 'evolution'.")
+        elif ptype == "meta":
+            if not self.meta_phone_number_id or not self.meta_phone_number_id.strip():
+                raise ValueError("Phone Number ID é obrigatório para o provedor 'meta'.")
+            if not self.meta_waba_id or not self.meta_waba_id.strip():
+                raise ValueError("WABA ID é obrigatório para o provedor 'meta'.")
+        return self
 
 class WhatsAppNumberCreate(WhatsAppNumberBase):
     pass
 
-class WhatsAppNumberResponse(WhatsAppNumberBase):
+class WhatsAppNumberResponse(BaseModel):
     id: int
     tenant_id: int
+    provider_type: str = "evolution"
+    numero: str
+    nome_departamento: str
+    instancia_evolution_api: Optional[str] = None
+    meta_phone_number_id: Optional[str] = None
+    meta_waba_id: Optional[str] = None
+    meta_access_token_masked: Optional[str] = None
+    status: bool = True
     model_config = ConfigDict(from_attributes=True)
 
 # User Schemas
@@ -117,6 +143,58 @@ class ConversationResponse(BaseModel):
 class ConversationTransfer(BaseModel):
     para_user_id: Optional[int] = None
     motivo: str
+
+class ConversationStatusUpdate(BaseModel):
+    status: ConversationStatus
+
+class StartConversationPayload(BaseModel):
+    whatsapp_number_id: int
+    telefone: str
+    nome: Optional[str] = None
+    mensagem_inicial: Optional[str] = None
+
+class ContactWithHistoryResponse(ContactBase):
+    id: int
+    tenant_id: int
+    total_conversations: int = 0
+    ultima_interacao: Optional[datetime] = None
+    model_config = ConfigDict(from_attributes=True)
+
+# Tag & Segmentation Schemas
+class TagCreate(BaseModel):
+    nome: str
+    cor_hex: str = "#10b981"
+
+class TagResponse(BaseModel):
+    id: int
+    tenant_id: int
+    nome: str
+    cor_hex: str
+    model_config = ConfigDict(from_attributes=True)
+
+class ContactTagAssociatePayload(BaseModel):
+    tag_ids: List[int]
+
+class ContactSegmentCreate(BaseModel):
+    nome: str
+    descricao: Optional[str] = None
+    whatsapp_number_id: Optional[int] = None
+    dias_inativo: Optional[int] = None
+    tag_ids: List[int] = []
+
+class ContactSegmentResponse(BaseModel):
+    id: int
+    tenant_id: int
+    nome: str
+    descricao: Optional[str] = None
+    regras: Dict[str, Any] = {}
+    criado_em: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+class SegmentPreviewRequest(BaseModel):
+    whatsapp_number_id: Optional[int] = None
+    dias_inativo: Optional[int] = None
+    tag_ids: List[int] = []
 
 # Integration Settings Schemas
 class SaveIntegrationSettingsPayload(BaseModel):
