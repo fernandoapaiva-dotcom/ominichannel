@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.models.models import UserRole, ConversationStatus, MessageSender, MessageType
 
 # Token schemas
@@ -120,9 +120,18 @@ class MessageCreate(MessageBase):
 class MessageResponse(MessageBase):
     id: int
     conversation_id: int
-    remetente: MessageSender
+    remetente: str
     timestamp: datetime
     model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("remetente", mode="before")
+    @classmethod
+    def normalize_remetente(cls, v: Any) -> str:
+        if isinstance(v, str):
+            return v.lower()
+        if hasattr(v, "value"):
+            return str(v.value).lower()
+        return str(v).lower()
 
 # Conversation Schemas
 class ConversationResponse(BaseModel):
