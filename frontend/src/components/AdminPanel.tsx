@@ -1178,21 +1178,58 @@ export const AdminPanel: React.FC = () => {
                   </div>
 
                   <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-secondary)' }}>
-                    <label style={{ fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Link2 size={16} /> Google Drive Backup Sync
+                    <label style={{ fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px' }}>
+                      <Link2 size={16} style={{ color: 'var(--accent-primary)' }} /> Google Drive Backup & Sync
                     </label>
-                    <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <button
-                        type="button"
-                        onClick={handleConnectGoogleOAuth}
-                        className="btn-secondary"
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-                      >
-                        Conectar Conta Google via OAuth2
-                      </button>
-                      <span style={{ fontSize: '12px', color: maskedSettings?.google_drive_connected ? '#34d399' : 'var(--text-muted)' }}>
-                        Status: {maskedSettings?.google_drive_connected ? '● Conta Google Conectada' : 'Não conectado'}
-                      </span>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {/* OAuth Connection Status & Button */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                        <div>
+                          <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>Conexão com a Conta Google</div>
+                          <div style={{ fontSize: '12px', color: maskedSettings?.google_drive_connected ? '#34d399' : '#f87171', marginTop: '2px', fontWeight: '500' }}>
+                            Status: {maskedSettings?.google_drive_connected ? '● Conta Google Conectada e Autorizada' : '○ Não conectado'}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleConnectGoogleOAuth}
+                          className="btn-secondary"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
+                        >
+                          Conectar Conta Google via OAuth2
+                        </button>
+                      </div>
+
+                      {/* Target Folder ID Input */}
+                      <div>
+                        <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '600' }}>
+                          ID ou URL da Pasta Destino no Google Drive (Root Folder ID)
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Cole o ID da pasta (ex: 1ABC_GoogleDriveFolderID_Sample ou a URL completa)"
+                          value={gdriveFolderInput}
+                          onChange={(e) => setGdriveFolderInput(e.target.value)}
+                          style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', fontSize: '13px' }}
+                        />
+                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: '1.4' }}>
+                          💡 <strong>Como obter o ID:</strong> Acesse a pasta desejada no Google Drive e copie o código no final do endereço da página.<br />
+                          Exemplo de URL: <code>drive.google.com/drive/folders/<strong>1ABC_ID_DA_SUA_PASTA</strong></code>
+                        </p>
+                      </div>
+
+                      {/* Folder Structure Explanation Card */}
+                      <div style={{ padding: '12px', backgroundColor: 'rgba(0, 230, 153, 0.05)', border: '1px solid rgba(0, 230, 153, 0.2)', borderRadius: 'var(--radius-md)', fontSize: '12px', color: 'var(--text-main)' }}>
+                        <div style={{ fontWeight: '600', color: 'var(--accent-primary)', marginBottom: '6px' }}>📁 Estrutura de Salvamento Automático no Google Drive:</div>
+                        <div style={{ fontFamily: 'monospace', fontSize: '11px', color: '#cbd5e1', lineHeight: '1.6' }}>
+                          Sua Pasta Google Drive/<br />
+                          ├── 📂 [Departamento] (ex: Vendas, Locação)<br />
+                          │   └── 📂 [Nome do Cliente - Telefone]/<br />
+                          │       ├── 📄 backup_historico_conversa.json<br />
+                          │       └── 📷 arquivos_e_midias/
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
