@@ -46,6 +46,8 @@ export const AdminPanel: React.FC = () => {
   const [evoKeyInput, setEvoKeyInput] = useState('');
   const [inactivityInput, setInactivityInput] = useState(30);
   const [gdriveFolderInput, setGdriveFolderInput] = useState('');
+  const [gdriveClientIdInput, setGdriveClientIdInput] = useState('');
+  const [gdriveClientSecretInput, setGdriveClientSecretInput] = useState('');
 
   // Connection Test Badges State
   const [testResult, setTestResult] = useState<{ type: string; success: boolean; message: string } | null>(null);
@@ -91,6 +93,7 @@ export const AdminPanel: React.FC = () => {
       setEvoUrlInput(settingsData.evolution_api_url);
       setInactivityInput(settingsData.inatividade_minutos);
       setGdriveFolderInput(settingsData.google_drive_folder_id);
+      setGdriveClientIdInput(settingsData.google_client_id || '');
 
       const logs = await apiFetch('/settings/audit-logs');
       setAuditLogs(logs);
@@ -387,11 +390,14 @@ export const AdminPanel: React.FC = () => {
           evolution_api_url: evoUrlInput || undefined,
           evolution_api_key: cleanEvoKey || undefined,
           inatividade_minutos: inactivityInput,
-          google_drive_folder_id: gdriveFolderInput || undefined
+          google_drive_folder_id: gdriveFolderInput || undefined,
+          google_client_id: gdriveClientIdInput || undefined,
+          google_client_secret: gdriveClientSecretInput || undefined
         })
       });
       setGeminiKeyInput('');
       setEvoKeyInput('');
+      setGdriveClientSecretInput('');
       loadSettingsAndAudit();
       alert('Configurações salvas e criptografadas com sucesso!');
     } catch (err: any) {
@@ -1183,6 +1189,34 @@ export const AdminPanel: React.FC = () => {
                     </label>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {/* OAuth Client Credentials Inputs */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                        <div>
+                          <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '600' }}>
+                            Google OAuth Client ID
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="ex: 123456789-abc.apps.googleusercontent.com"
+                            value={gdriveClientIdInput}
+                            onChange={(e) => setGdriveClientIdInput(e.target.value)}
+                            style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', fontSize: '13px' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '600' }}>
+                            Google OAuth Client Secret (Salvo: <code style={{ color: 'var(--accent-primary)' }}>{maskedSettings?.google_client_secret_masked || 'Não salvo'}</code>)
+                          </label>
+                          <input
+                            type="password"
+                            placeholder="Digite o segredo da chave Google"
+                            value={gdriveClientSecretInput}
+                            onChange={(e) => setGdriveClientSecretInput(e.target.value)}
+                            style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', fontSize: '13px' }}
+                          />
+                        </div>
+                      </div>
+
                       {/* OAuth Connection Status & Button */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                         <div>

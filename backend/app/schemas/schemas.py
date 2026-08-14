@@ -204,6 +204,8 @@ class SaveIntegrationSettingsPayload(BaseModel):
     evolution_api_key: Optional[str] = None
     inatividade_minutos: Optional[int] = 30
     google_drive_folder_id: Optional[str] = None
+    google_client_id: Optional[str] = None
+    google_client_secret: Optional[str] = None
 
 class IntegrationSettingsMaskedResponse(BaseModel):
     gemini_configured: bool
@@ -214,6 +216,8 @@ class IntegrationSettingsMaskedResponse(BaseModel):
     inatividade_minutos: int
     google_drive_connected: bool
     google_drive_folder_id: str
+    google_client_id: str
+    google_client_secret_masked: str
 
 class TestIntegrationRequest(BaseModel):
     integration_type: str # 'gemini' or 'evolution'

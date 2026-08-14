@@ -49,7 +49,9 @@ class SettingsService:
             "inatividade_minutos": general_data.get("inatividade_minutos", 30),
             "gdrive_access_token": gdrive_data.get("access_token", ""),
             "gdrive_refresh_token": gdrive_data.get("refresh_token", ""),
-            "gdrive_folder_id": gdrive_data.get("folder_id", "")
+            "gdrive_folder_id": gdrive_data.get("folder_id", ""),
+            "google_client_id": gdrive_data.get("client_id") or os.environ.get("GOOGLE_CLIENT_ID", ""),
+            "google_client_secret": gdrive_data.get("client_secret") or os.environ.get("GOOGLE_CLIENT_SECRET", "")
         }
 
     async def get_tenant_masked_settings(self, db: AsyncSession, tenant_id: int) -> Dict[str, Any]:
@@ -62,7 +64,9 @@ class SettingsService:
             "evolution_api_key_masked": mask_sensitive_string(decrypted["evolution_api_key"]),
             "inatividade_minutos": decrypted["inatividade_minutos"],
             "google_drive_connected": bool(decrypted["gdrive_refresh_token"]),
-            "google_drive_folder_id": decrypted["gdrive_folder_id"]
+            "google_drive_folder_id": decrypted["gdrive_folder_id"],
+            "google_client_id": decrypted["google_client_id"],
+            "google_client_secret_masked": mask_sensitive_string(decrypted["google_client_secret"])
         }
 
     async def save_tenant_integration_settings(
@@ -98,11 +102,13 @@ class SettingsService:
             enc_gen = encrypt_data(json.dumps(raw_gen))
             await self._upsert_setting(db, tenant_id, "general", enc_gen)
 
-        # 4. Update Google Drive Folder ID
-        if "google_drive_folder_id" in payload:
+        # 4. Update Google Drive Settings
+        if "google_drive_folder_id" in payload or "google_client_id" in payload or "google_client_secret" in payload:
             existing = await self.get_tenant_decrypted_settings(db, tenant_id)
             raw_gdrive = {
-                "folder_id": payload["google_drive_folder_id"],
+                "folder_id": payload.get("google_drive_folder_id") if "google_drive_folder_id" in payload else existing["gdrive_folder_id"],
+                "client_id": payload.get("google_client_id") if "google_client_id" in payload else existing["google_client_id"],
+                "client_secret": payload.get("google_client_secret") if "google_client_secret" in payload else existing["google_client_secret"],
                 "access_token": existing["gdrive_access_token"],
                 "refresh_token": existing["gdrive_refresh_token"]
             }

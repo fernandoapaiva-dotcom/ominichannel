@@ -172,18 +172,29 @@ async def get_tenant_audit_logs(
 
 # --- Google OAuth2 Consent Flow for Google Drive ---
 @router.get("/auth/google/url")
-async def get_google_oauth_url(admin_user: User = Depends(get_admin_user)):
+async def get_google_oauth_url(
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
     Generates Google OAuth2 consent URL with cryptographically signed CSRF state token.
     """
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+    client_id = decrypted.get("google_client_id") or os.environ.get("GOOGLE_CLIENT_ID", "")
+    
+    if not client_id or client_id == "SAMPLE_CLIENT_ID_PLACEHOLDER" or not client_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O Google Client ID ainda não foi configurado. Preencha o 'Google Client ID' e 'Google Client Secret' no painel de configurações antes de conectar a conta."
+        )
+
     csrf_state = create_oauth_state(tenant_id=admin_user.tenant_id, user_id=admin_user.id)
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "SAMPLE_CLIENT_ID_PLACEHOLDER")
     redirect_uri = "http://localhost:8000/api/v1/settings/auth/google/callback"
     scope = "https://www.googleapis.com/auth/drive.file"
     
     oauth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
-        f"client_id={client_id}&"
+        f"client_id={client_id.strip()}&"
         f"redirect_uri={redirect_uri}&"
         f"response_type=code&"
         f"scope={scope}&"
