@@ -34,6 +34,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+  const [activeCallUrl, setActiveCallUrl] = useState<string | null>(null);
+
+  const handleStartVideoCall = async () => {
+    if (!conversation) return;
+    const roomName = `OminiChannel-Call-${conversation.id}-${Date.now().toString().slice(-6)}`;
+    const callUrl = `https://meet.jit.si/${roomName}`;
+    setActiveCallUrl(callUrl);
+    setIsVideoModalOpen(true);
+
+    try {
+      const inviteMsg = `🎥 *CHAMADA DE VÍDEO / VOZ AO VIVO*\n\nOlá, *${conversation.contact?.nome || 'Cliente'}*!\n\nPor favor, clique no link abaixo para entrar na sala de chamada de vídeo com o nosso atendente:\n👉 ${callUrl}`;
+      await onSendMessage(inviteMsg);
+    } catch (err) {
+      console.error('Error sending video call invitation link:', err);
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -631,6 +648,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {conversation.status === 'com_ia' ? <><Bot size={14} /> COM IA</> : <><Headphones size={14} /> COM HUMANO</>}
           </button>
 
+          <button
+            onClick={handleStartVideoCall}
+            className="btn-secondary"
+            style={{
+              fontSize: '13px',
+              padding: '8px 14px',
+              backgroundColor: 'rgba(0, 230, 153, 0.12)',
+              color: 'var(--accent-primary)',
+              border: '1px solid var(--accent-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            title="Iniciar chamada de vídeo / voz WebRTC e enviar link para o cliente"
+          >
+            <Video size={15} /> Chamada Vídeo/Voz
+          </button>
+
           {onOpenMediaGallery && (
             <button onClick={onOpenMediaGallery} className="btn-secondary" style={{ fontSize: '13px', padding: '8px 14px' }}>
               <Paperclip size={15} /> Arquivos ({conversationMedia.length})
@@ -747,6 +782,60 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
         </button>
       </form>
+
+      {/* WebRTC Live Video / Audio Call Modal */}
+      {isVideoModalOpen && activeCallUrl && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.9)',
+          zIndex: 2000,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '20px'
+        }}>
+          <div style={{
+            width: '92vw',
+            height: '88vh',
+            backgroundColor: 'var(--bg-secondary)',
+            borderRadius: '16px',
+            border: '1px solid var(--accent-primary)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxShadow: '0 8px 32px rgba(0, 230, 153, 0.25)'
+          }}>
+            <div style={{
+              padding: '12px 20px',
+              backgroundColor: 'var(--bg-primary)',
+              borderBottom: '1px solid var(--border-color)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: '600', color: 'var(--accent-primary)' }}>
+                <Video size={20} />
+                <span>Chamada de Vídeo/Voz ao Vivo com {conversation.contact?.nome || 'Cliente'}</span>
+              </div>
+              <button
+                onClick={() => setIsVideoModalOpen(false)}
+                className="btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '13px' }}
+              >
+                <X size={18} /> Encerrar Chamada
+              </button>
+            </div>
+            <iframe
+              src={activeCallUrl}
+              allow="camera; microphone; display-capture; autoplay"
+              title="Chamada de Vídeo ao Vivo"
+              style={{ width: '100%', flex: 1, border: 'none', backgroundColor: '#000' }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
