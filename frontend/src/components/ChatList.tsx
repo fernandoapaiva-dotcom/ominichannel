@@ -60,9 +60,9 @@ export const ChatList: React.FC<ChatListProps> = ({
   // Helper to calculate unread/pending client conversations for each department
   const getUnreadCount = (deptId: number | 'all') => {
     return conversations.filter(conv => {
-      const matchesDept = deptId === 'all' || conv.whatsapp_number_id === deptId;
+      const matchesDept = deptId === 'all' || String(conv.whatsapp_number_id) === String(deptId);
       if (!matchesDept) return false;
-      const lastMsg = conv.messages[conv.messages.length - 1];
+      const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
       const isUnreadClientMsg = lastMsg && lastMsg.remetente.toLowerCase() === 'cliente';
       const isNotCurrentlyOpen = activeConversation?.id !== conv.id;
       return isUnreadClientMsg && isNotCurrentlyOpen;
@@ -70,7 +70,7 @@ export const ChatList: React.FC<ChatListProps> = ({
   };
 
   const filteredConversations = conversations.filter(conv => {
-    const matchesDept = selectedDepartmentId === 'all' || conv.whatsapp_number_id === selectedDepartmentId;
+    const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
     const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
     const contactName = conv.contact?.nome || '';
     const contactPhone = conv.contact?.telefone || '';

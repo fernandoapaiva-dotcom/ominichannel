@@ -36,8 +36,8 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   // Helper to compute unread messages count per department
   const getUnreadCount = (numberId: number | 'all') => {
     return conversations.filter(c => {
-      if (numberId !== 'all' && c.whatsapp_number_id !== numberId) return false;
-      const lastMsg = c.messages[c.messages.length - 1];
+      if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
+      const lastMsg = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
       return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente';
     }).length;
   };
