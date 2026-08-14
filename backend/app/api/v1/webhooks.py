@@ -77,6 +77,140 @@ async def receive_evolution_webhook(
             logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
             return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
 
+    # Handle Incoming WhatsApp Call event (CALL / call / call.updated)
+    is_call_event = (
+        event_type in ["call", "CALL", "call.updated", "call_received"] or
+        "call" in str(event_type).lower() or
+        data.get("status") in ["offer", "ringing"] or
+        "caller" in data
+    )
+
+    if is_call_event:
+        status_call = data.get("status", "offer")
+        # Only record new call offer / ringing events to avoid duplicate terminate logs
+        if status_call not in ["offer", "ringing"]:
+            return {"status": "ignored", "reason": f"Call status '{status_call}' ignored"}
+
+        raw_phone = data.get("caller") or data.get("from") or data.get("chatId") or data.get("key", {}).get("remoteJid", "")
+        raw_phone = raw_phone.split("@")[0] if "@" in str(raw_phone) else str(raw_phone)
+        phone_number = "".join(filter(str.isdigit, raw_phone))
+
+        if len(phone_number) == 12 and phone_number.startswith("55") and phone_number[4] != "9":
+            phone_number = phone_number[:4] + "9" + phone_number[4:]
+
+        is_video = data.get("isVideo", False)
+        call_type_label = "Vídeo Chamada" if is_video else "Chamada de Voz por Telefone"
+        push_name = data.get("pushName") or "Cliente"
+
+        # Find WhatsApp Number by instance
+        wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+        wn_res = await db.execute(wn_stmt)
+        wn = wn_res.scalar_one_or_none()
+        if not wn:
+            wn_stmt = select(WhatsAppNumber)
+            wn_res = await db.execute(wn_stmt)
+            wn = wn_res.scalars().first()
+
+        if not wn:
+            return {"status": "error", "message": "Nenhum número cadastrado"}
+
+        # Find contact by phone or latest active conversation
+        contact = None
+        if phone_number and len(phone_number) >= 8:
+            c_stmt = select(Contact).where(Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            c_res = await db.execute(c_stmt)
+            contact = c_res.scalars().first()
+
+        if not contact:
+            # Fallback: get contact from latest active conversation of this whatsapp_number
+            conv_recent = select(Conversation).options(selectinload(Conversation.contact)).where(
+                Conversation.whatsapp_number_id == wn.id
+            ).order_by(Conversation.ultima_interacao_em.desc())
+            cr_res = await db.execute(conv_recent)
+            conv_obj = cr_res.scalars().first()
+            if conv_obj and conv_obj.contact:
+                contact = conv_obj.contact
+
+        if not contact:
+            contact = Contact(
+                tenant_id=wn.tenant_id,
+                nome=push_name,
+                telefone=phone_number or "Cliente",
+                criado_em=datetime.utcnow()
+            )
+            db.add(contact)
+            await db.commit()
+            await db.refresh(contact)
+
+        # Find or create conversation
+        conv_stmt = select(Conversation).where(
+            Conversation.contact_id == contact.id,
+            Conversation.whatsapp_number_id == wn.id
+        )
+        conv_res = await db.execute(conv_stmt)
+        conv = conv_res.scalar_one_or_none()
+
+        now = datetime.utcnow()
+        if not conv:
+            conv = Conversation(
+                tenant_id=wn.tenant_id,
+                whatsapp_number_id=wn.id,
+                contact_id=contact.id,
+                status=ConversationStatus.COM_HUMANO,
+                criado_em=now,
+                ultima_interacao_em=now
+            )
+            db.add(conv)
+            await db.commit()
+            await db.refresh(conv)
+        else:
+            conv.ultima_interacao_em = now
+            await db.commit()
+
+        # Check deduplication for call alert message (within 30s)
+        recent_msg_stmt = select(Message).where(
+            Message.conversation_id == conv.id,
+            Message.conteudo.like("%O CLIENTE ESTÁ LIGANDO%")
+        ).order_by(Message.criado_em.desc())
+        recent_msg_res = await db.execute(recent_msg_stmt)
+        last_call_msg = recent_msg_res.scalars().first()
+
+        if last_call_msg and (now - last_call_msg.criado_em).total_seconds() < 30.0:
+            return {"status": "ignored", "reason": "Call alert already logged recently"}
+
+        # Register alert message in the chat timeline
+        call_msg_text = (
+            f"📞 *O CLIENTE ESTÁ LIGANDO VIA {call_type_label.upper()} DO WHATSAPP!*\n\n"
+            f"⚠️ Chamada de voz em tempo real recebida do aplicativo do cliente.\n\n"
+            f"👉 *Clique no botão '📹 Chamada Vídeo/Voz' no topo deste chat para abrir uma sala de atendimento ao vivo em HD com o cliente!*"
+        )
+
+        call_msg = Message(
+            conversation_id=conv.id,
+            remetente="cliente",
+            tipo=MessageType.TEXTO,
+            conteudo=call_msg_text,
+            criado_em=now
+        )
+        db.add(call_msg)
+        await db.commit()
+        await db.refresh(call_msg)
+
+        # Broadcast live call WebSocket alert
+        try:
+            await ws_manager.broadcast({
+                "type": "incoming_call",
+                "conversation_id": conv.id,
+                "contact_name": contact.nome,
+                "phone": contact.telefone,
+                "is_video": is_video,
+                "message_id": call_msg.id
+            })
+        except Exception as err:
+            logger.error(f"Error broadcasting call websocket event: {err}")
+
+        return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
+
     key = data.get("key", {}) if isinstance(data, dict) else {}
     from_me = key.get("fromMe", False) if isinstance(key, dict) else False
 
