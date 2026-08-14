@@ -77,35 +77,64 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   };
 
-  // WebSocket Live Realtime Connection
+  // 1. Polling Fallback Safety Net (Every 3s)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchConversations();
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [fetchConversations]);
+
+  // 2. WebSocket Live Realtime Connection with Auto-Reconnect & Dynamic Host
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) return;
 
-    const wsUrl = `ws://localhost:8000/ws?token=${token}`;
-    const socket = new WebSocket(wsUrl);
+    let socket: WebSocket | null = null;
+    let isSubscribed = true;
+    let reconnectTimeout: any = null;
 
-    socket.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload.type === 'CONVERSATION_ESCALATED') {
-          fetchConversations();
-          playNotificationSound();
-          setNotificationAlert(payload.message || "🚨 ATENÇÃO: Nova conversa transferida para atendimento humano!");
-          setTimeout(() => setNotificationAlert(null), 10000);
-        } else if (payload.type === 'NEW_MESSAGE') {
-          fetchConversations();
-          if (payload.remetente === 'cliente') {
+    const connectWebSocket = () => {
+      if (!isSubscribed) return;
+
+      const host = window.location.hostname || 'localhost';
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${wsProtocol}//${host}:8000/ws?token=${token}`;
+
+      socket = new WebSocket(wsUrl);
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === 'CONVERSATION_ESCALATED') {
+            fetchConversations();
             playNotificationSound();
+            setNotificationAlert(payload.message || "🚨 ATENÇÃO: Nova conversa transferida para atendimento humano!");
+            setTimeout(() => setNotificationAlert(null), 10000);
+          } else if (payload.type === 'NEW_MESSAGE') {
+            fetchConversations();
+            if (payload.remetente === 'cliente') {
+              playNotificationSound();
+            }
           }
+        } catch (err) {
+          console.error('WebSocket parse error:', err);
         }
-      } catch (err) {
-        console.error('WebSocket parse error:', err);
-      }
+      };
+
+      socket.onclose = () => {
+        if (isSubscribed) {
+          reconnectTimeout = setTimeout(connectWebSocket, 2000);
+        }
+      };
     };
 
+    connectWebSocket();
+
     return () => {
-      socket.close();
+      isSubscribed = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (socket) socket.close();
     };
   }, [fetchConversations]);
 
