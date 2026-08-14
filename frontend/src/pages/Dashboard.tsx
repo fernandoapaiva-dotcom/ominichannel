@@ -11,6 +11,8 @@ import { SegmentationPanel } from '../components/SegmentationPanel';
 import { NewConversationModal } from '../components/NewConversationModal';
 import { MediaGalleryModal } from '../components/MediaGalleryModal';
 
+import { DepartmentBar } from '../components/DepartmentBar';
+
 interface DashboardProps {
   user: User;
   onLogout: () => void;
@@ -197,33 +199,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       />
 
       {activeTab === 'chats' && (
-        <>
-          <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', display: 'flex' }}>
-            <ChatList
-              conversations={conversations}
-              activeConversation={activeConversation}
-              onSelectConversation={(conv) => setActiveConversationId(conv.id)}
-              whatsappNumbers={whatsappNumbers}
-              selectedDepartmentId={selectedDeptId}
-              setSelectedDepartmentId={setSelectedDeptId}
-              statusFilter={statusFilter}
-              setStatusFilter={setStatusFilter}
-              onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
-              onStatusToggle={fetchConversations}
-            />
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+          <DepartmentBar
+            whatsappNumbers={whatsappNumbers}
+            selectedDepartmentId={selectedDeptId}
+            onSelectDepartment={(id) => setSelectedDeptId(id)}
+            conversations={conversations}
+          />
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', display: 'flex' }}>
+              <ChatList
+                conversations={conversations}
+                activeConversation={activeConversation}
+                onSelectConversation={(conv) => setActiveConversationId(conv.id)}
+                whatsappNumbers={whatsappNumbers}
+                selectedDepartmentId={selectedDeptId}
+                setSelectedDepartmentId={setSelectedDeptId}
+                statusFilter={statusFilter}
+                setStatusFilter={setStatusFilter}
+                onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
+                onStatusToggle={fetchConversations}
+              />
+            </div>
+            <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', display: 'flex' }}>
+              <ChatArea
+                conversation={activeConversation}
+                currentUser={user}
+                onSendMessage={handleSendMessage}
+                onOpenTransferModal={() => setIsTransferModalOpen(true)}
+                onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
+                onStatusToggle={fetchConversations}
+                onBack={() => setActiveConversationId(null)}
+              />
+            </div>
           </div>
-          <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', display: 'flex' }}>
-            <ChatArea
-              conversation={activeConversation}
-              currentUser={user}
-              onSendMessage={handleSendMessage}
-              onOpenTransferModal={() => setIsTransferModalOpen(true)}
-              onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
-              onStatusToggle={fetchConversations}
-              onBack={() => setActiveConversationId(null)}
-            />
-          </div>
-        </>
+        </div>
       )}
 
       {activeTab === 'contacts' && (

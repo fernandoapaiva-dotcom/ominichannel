@@ -159,42 +159,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, activeTab, setActiveTab,
           <LogOut size={20} />
         </button>
       </div>
-        <div 
-          title={`${user.nome} (${user.role})`}
-          style={{
-            width: '40px',
-            height: '40px',
-            borderRadius: '50%',
-            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-            border: '1px solid var(--border-color)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontWeight: 'bold',
-            fontSize: '14px',
-            color: 'var(--text-main)'
-          }}
-        >
-          {user.nome.charAt(0).toUpperCase()}
-        </div>
-
-        <button
-          onClick={onLogout}
-          title="Sair do sistema"
-          style={{
-            width: '44px',
-            height: '44px',
-            borderRadius: 'var(--radius-md)',
-            background: 'transparent',
-            color: '#f87171',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-        >
-          <LogOut size={20} />
-        </button>
-      </div>
     </aside>
   );
 };
