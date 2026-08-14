@@ -19,6 +19,8 @@ from app.schemas.schemas import (
     ConversationTransfer, StartConversationPayload, ConversationStatusUpdate
 )
 from app.services.whatsapp_provider_service import WhatsAppProviderFactory
+from app.services.settings_service import settings_service
+from app.services.gemini_service import gemini_service
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])

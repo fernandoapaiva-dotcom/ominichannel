@@ -26,6 +26,9 @@ export const TransferModal: React.FC<TransferModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      setSelectedDeptId('');
+      setSelectedUserId('');
+      setMotivo('');
       Promise.all([
         apiFetch('/users/'),
         apiFetch('/whatsapp-numbers/')
@@ -33,13 +36,10 @@ export const TransferModal: React.FC<TransferModalProps> = ({
         .then(([userData, deptData]) => {
           setUsers(userData);
           setDepartments(deptData);
-          if (conversation?.whatsapp_number_id) {
-            setSelectedDeptId(conversation.whatsapp_number_id.toString());
-          }
         })
         .catch((err) => console.error(err));
     }
-  }, [isOpen, conversation]);
+  }, [isOpen]);
 
   if (!isOpen || !conversation) return null;
 
@@ -116,12 +116,15 @@ export const TransferModal: React.FC<TransferModalProps> = ({
                 outline: 'none'
               }}
             >
-              <option value="">Manter departamento atual</option>
-              {departments.map((dept) => (
-                <option key={dept.id} value={dept.id}>
-                  📁 {dept.nome_departamento} ({dept.numero})
-                </option>
-              ))}
+              <option value="">-- Selecione o Setor / Departamento Destino --</option>
+              {departments.map((dept) => {
+                const isCurrent = dept.id === conversation.whatsapp_number_id;
+                return (
+                  <option key={dept.id} value={dept.id}>
+                    📁 {dept.nome_departamento} ({dept.numero}){isCurrent ? ' 👈 (Setor Atual)' : ''}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
