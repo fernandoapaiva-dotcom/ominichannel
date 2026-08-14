@@ -30,6 +30,7 @@ async def list_conversations(
     status_filter: Optional[ConversationStatus] = None,
     whatsapp_number_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
 ):
     is_admin = current_user.role == "admin" or str(getattr(current_user.role, 'value', current_user.role)).lower() == "admin"
     if is_admin:
@@ -494,6 +495,7 @@ async def transfer_conversation(
         history_dicts = [
             {"remetente": m.remetente, "conteudo": m.conteudo or ""}
             for m in messages_list
+            if str(m.remetente).lower() != "sistema"
         ]
 
         decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)

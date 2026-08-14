@@ -56,14 +56,14 @@ class InactivityService:
                             "tenant_id": conv.tenant_id,
                             "contact_phone": conv.contact.telefone if conv.contact else "",
                             "contact_name": conv.contact.nome if conv.contact else "",
-                            "status": conv.status.value,
+                            "status": getattr(conv.status, 'value', conv.status),
                             "criado_em": conv.criado_em,
                             "ultima_interacao_em": conv.ultima_interacao_em,
                             "messages": [
                                 {
-                                    "remetente": m.remetente.value,
+                                    "remetente": getattr(m.remetente, 'value', m.remetente),
                                     "conteudo": m.conteudo,
-                                    "tipo": m.tipo.value,
+                                    "tipo": getattr(m.tipo, 'value', m.tipo),
                                     "timestamp": m.timestamp
                                 } for m in conv.messages
                             ]

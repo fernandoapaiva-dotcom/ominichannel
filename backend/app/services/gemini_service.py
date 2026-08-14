@@ -137,18 +137,32 @@ class GeminiService:
 
         messages_text = []
         for m in messages_history:
-            remetente = "Cliente" if m.get("remetente") == "cliente" else ("IA" if m.get("remetente") == "ia" else "Atendente")
-            conteudo = m.get("conteudo", "")
-            messages_text.append(f"[{remetente}]: {conteudo}")
+            r_raw = str(m.get("remetente", "")).lower()
+            if r_raw == "cliente":
+                remetente = "Cliente"
+            elif r_raw == "ia":
+                remetente = "IA Concierge"
+            elif r_raw == "sistema":
+                remetente = "Sistema"
+            else:
+                remetente = "Atendente"
+            
+            conteudo = str(m.get("conteudo", "")).strip()
+            if conteudo:
+                messages_text.append(f"[{remetente}]: {conteudo}")
 
         full_prompt = (
-            f"Você é uma inteligência artificial especialista em resumir históricos de atendimento ao cliente.\n"
-            f"Analise toda a conversa com o cliente '{customer_name}' abaixo e gere um RESUMO EXECUTIVO claro, direto e organizado em tópicos para o novo atendente/setor que assumirá a conversa.\n\n"
-            "Siga estritamente esta estrutura em tópicos:\n"
-            "• 🎯 **Objetivo Principal do Cliente**: <uma frase direta>\n"
-            "• 📝 **Principais Pontos / O que foi Tratado**: <2 a 3 tópicos sucintos do diálogo>\n"
-            "• ⚡ **Status & Próximo Passo Recomendado**: <instrução objetiva para quem receber o chamado>\n\n"
-            f"HISTÓRICO DA CONVERSA:\n" + "\n".join(messages_text)
+            f"Você é um assistente de IA corporativo ultra-preciso, factual e objetivo.\n"
+            f"Sua tarefa é analisar a conversa real com o cliente '{customer_name}' abaixo e gerar um RESUMO EXECUTIVO verdadeiro para o próximo atendente.\n\n"
+            "REGRAS DE CONFIABILIDADE E ANTI-ALUCINAÇÃO:\n"
+            "1. Baseie-se ESTRITAMENTE E APENAS no conteúdo das mensagens fornecidas no histórico.\n"
+            "2. É PROIBIDO inventar produtos, equipamentos, valores, peças ou ocorrências que não estejam explicitamente no texto.\n"
+            "3. Se o histórico for muito curto (ex: apenas testes, saudações ou solicitações simples), afirme claramente que o cliente solicitou atendimento sem detalhar itens fictícios.\n\n"
+            "FORMATO DE SAÍDA EXIGIDO:\n"
+            "• 🎯 **Objetivo Principal do Cliente**: <resumo factual em 1 frase>\n"
+            "• 📝 **Principais Pontos / O que foi Tratado**: <1 a 3 pontos reais citados no diálogo>\n"
+            "• ⚡ **Status & Próximo Passo Recomendado**: <orientação objetiva ao novo atendente>\n\n"
+            f"HISTÓRICO DA CONVERSA REAL:\n" + "\n".join(messages_text)
         )
 
         if not client:
