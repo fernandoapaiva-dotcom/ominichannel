@@ -161,7 +161,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   };
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
+    <div className="main-app-layout" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
       {notificationAlert && (
         <div style={{
           position: 'fixed',
@@ -198,26 +198,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
       {activeTab === 'chats' && (
         <>
-          <ChatList
-            conversations={conversations}
-            activeConversation={activeConversation}
-            onSelectConversation={(conv) => setActiveConversationId(conv.id)}
-            whatsappNumbers={whatsappNumbers}
-            selectedDepartmentId={selectedDeptId}
-            setSelectedDepartmentId={setSelectedDeptId}
-            statusFilter={statusFilter}
-            setStatusFilter={setStatusFilter}
-            onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
-            onStatusToggle={fetchConversations}
-          />
-          <ChatArea
-            conversation={activeConversation}
-            currentUser={user}
-            onSendMessage={handleSendMessage}
-            onOpenTransferModal={() => setIsTransferModalOpen(true)}
-            onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
-            onStatusToggle={fetchConversations}
-          />
+          <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', display: 'flex' }}>
+            <ChatList
+              conversations={conversations}
+              activeConversation={activeConversation}
+              onSelectConversation={(conv) => setActiveConversationId(conv.id)}
+              whatsappNumbers={whatsappNumbers}
+              selectedDepartmentId={selectedDeptId}
+              setSelectedDepartmentId={setSelectedDeptId}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
+              onStatusToggle={fetchConversations}
+            />
+          </div>
+          <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', display: 'flex' }}>
+            <ChatArea
+              conversation={activeConversation}
+              currentUser={user}
+              onSendMessage={handleSendMessage}
+              onOpenTransferModal={() => setIsTransferModalOpen(true)}
+              onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
+              onStatusToggle={fetchConversations}
+              onBack={() => setActiveConversationId(null)}
+            />
+          </div>
         </>
       )}
 

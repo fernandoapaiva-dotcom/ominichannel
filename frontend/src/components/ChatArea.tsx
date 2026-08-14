@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
-  AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye
+  AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -13,6 +13,7 @@ interface ChatAreaProps {
   onOpenTransferModal: () => void;
   onOpenMediaGallery?: () => void;
   onStatusToggle?: () => void;
+  onBack?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -21,7 +22,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSendMessage,
   onOpenTransferModal,
   onOpenMediaGallery,
-  onStatusToggle
+  onStatusToggle,
+  onBack
 }) => {
   const [inputText, setInputText] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -293,11 +295,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         justifyContent: 'space-between',
         alignItems: 'center'
       }}>
-        <div>
-          <h3 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-main)' }}>{conversation.contact?.nome || 'Cliente'}</h3>
-          <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {onBack && (
+            <button
+              onClick={onBack}
+              title="Voltar para a lista de conversas"
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--accent-primary)',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center'
+              }}
+            >
+              <ArrowLeft size={22} />
+            </button>
+          )}
+          <div>
+            <h3 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-main)' }}>{conversation.contact?.nome || 'Cliente'}</h3>
+            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
+            </div>
           </div>
         </div>
 

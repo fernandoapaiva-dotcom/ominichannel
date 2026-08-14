@@ -171,3 +171,50 @@ button {
   border-radius: 50%;
   animation: pulseGlow 2s infinite;
 }
+
+/* Responsive Smartphone & Mobile Layout Rules */
+@media (max-width: 768px) {
+  body, #root {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .main-app-layout {
+    flex-direction: column-reverse !important;
+  }
+
+  .sidebar-container {
+    width: 100% !important;
+    height: 60px !important;
+    flex-direction: row !important;
+    padding: 0 16px !important;
+    border-right: none !important;
+    border-top: 1px solid var(--border-color) !important;
+    justify-content: space-around !important;
+    z-index: 50;
+  }
+
+  .sidebar-container nav {
+    flex-direction: row !important;
+    margin-top: 0 !important;
+    gap: 12px !important;
+  }
+
+  .sidebar-brand,
+  .sidebar-user {
+    display: none !important;
+  }
+
+  .chat-list-column {
+    width: 100% !important;
+    border-right: none !important;
+  }
+
+  .chat-area-column {
+    width: 100% !important;
+  }
+
+  .mobile-hidden {
+    display: none !important;
+  }
+}
