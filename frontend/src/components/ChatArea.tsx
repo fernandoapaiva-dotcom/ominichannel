@@ -431,33 +431,62 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               )}
               {currentMedia.tipo === 'arquivo' && (
-                <div style={{
-                  padding: '32px 40px',
-                  backgroundColor: 'var(--bg-secondary)',
-                  borderRadius: '16px',
-                  border: '1px solid var(--border-color)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: '20px',
-                  boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
-                  maxWidth: '450px',
-                  textAlign: 'center'
-                }}>
-                  <FileText size={64} style={{ color: 'var(--accent-primary)' }} />
-                  <div style={{ fontSize: '16px', fontWeight: '600', color: '#fff', wordBreak: 'break-word' }}>
-                    {currentMedia.fileName}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' }}>
+                  {currentMedia.fileName.toLowerCase().endsWith('.pdf') || currentMedia.url.toLowerCase().includes('.pdf') ? (
+                    <iframe
+                      src={currentMedia.url}
+                      title="Visualizador de PDF"
+                      style={{
+                        width: '78vw',
+                        height: '62vh',
+                        borderRadius: '12px',
+                        border: '1px solid var(--border-color)',
+                        backgroundColor: '#fff',
+                        boxShadow: '0 8px 30px rgba(0,0,0,0.8)'
+                      }}
+                    />
+                  ) : (
+                    <div style={{
+                      padding: '32px 40px',
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderRadius: '16px',
+                      border: '1px solid var(--border-color)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '16px',
+                      boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                      maxWidth: '450px',
+                      textAlign: 'center'
+                    }}>
+                      <FileText size={64} style={{ color: 'var(--accent-primary)' }} />
+                      <div style={{ fontSize: '16px', fontWeight: '600', color: '#fff', wordBreak: 'break-word' }}>
+                        {currentMedia.fileName}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <a
+                      href={currentMedia.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary"
+                      style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <Eye size={18} /> Visualizar no Navegador
+                    </a>
+                    <a
+                      href={currentMedia.url}
+                      download
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-secondary"
+                      style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <Download size={18} /> Baixar Arquivo
+                    </a>
                   </div>
-                  <a
-                    href={currentMedia.url}
-                    download
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn-primary"
-                    style={{ textDecoration: 'none', padding: '12px 24px', fontSize: '14px' }}
-                  >
-                    <Download size={18} /> Baixar Arquivo
-                  </a>
                 </div>
               )}
               {currentMedia.caption && (
