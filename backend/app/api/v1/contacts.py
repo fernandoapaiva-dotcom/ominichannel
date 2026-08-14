@@ -92,3 +92,38 @@ async def get_contact_conversation_history(
     )
     res = await db.execute(stmt)
     return res.scalars().all()
+
+from pydantic import BaseModel
+
+class UpdateContactPayload(BaseModel):
+    nome: str
+
+@router.put("/{contact_id}")
+async def update_contact(
+    contact_id: int,
+    payload: UpdateContactPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Updates contact's name.
+    """
+    stmt = select(Contact).where(
+        Contact.id == contact_id,
+        Contact.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado")
+
+    contact.nome = payload.nome.strip()
+    await db.commit()
+    await db.refresh(contact)
+    return {
+        "status": "success",
+        "message": "Nome do contato atualizado com sucesso",
+        "id": contact.id,
+        "nome": contact.nome,
+        "telefone": contact.telefone
+    }

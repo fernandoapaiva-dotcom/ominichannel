@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -36,6 +36,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [activeCallUrl, setActiveCallUrl] = useState<string | null>(null);
+
+  // Edit Contact Name State
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [editingContactName, setEditingContactName] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
+
+  const handleSaveContactName = async () => {
+    if (!conversation?.contact || !editingContactName.trim()) return;
+
+    try {
+      setSavingContact(true);
+      await apiFetch(`/contacts/${conversation.contact.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ nome: editingContactName.trim() })
+      });
+      conversation.contact.nome = editingContactName.trim();
+      setIsEditingContact(false);
+      if (onStatusToggle) onStatusToggle();
+    } catch (err: any) {
+      alert(`Erro ao atualizar nome do contato: ${err.message}`);
+    } finally {
+      setSavingContact(false);
+    }
+  };
 
   const handleStartVideoCall = async () => {
     if (!conversation) return;
@@ -621,7 +645,67 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
           <div>
-            <h3 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-main)' }}>{conversation.contact?.nome || 'Cliente'}</h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {isEditingContact ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <input
+                    type="text"
+                    value={editingContactName}
+                    onChange={(e) => setEditingContactName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveContactName();
+                      if (e.key === 'Escape') setIsEditingContact(false);
+                    }}
+                    autoFocus
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-active)',
+                      color: 'var(--text-main)',
+                      fontSize: '14px'
+                    }}
+                  />
+                  <button
+                    onClick={handleSaveContactName}
+                    disabled={savingContact}
+                    className="btn-primary"
+                    style={{ padding: '4px 10px', fontSize: '12px' }}
+                  >
+                    Salvar
+                  </button>
+                  <button
+                    onClick={() => setIsEditingContact(false)}
+                    className="btn-secondary"
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <h3 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-main)' }}>{conversation.contact?.nome || 'Cliente'}</h3>
+                  <button
+                    onClick={() => {
+                      setEditingContactName(conversation.contact?.nome || '');
+                      setIsEditingContact(true);
+                    }}
+                    title="Editar Nome do Cliente"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      padding: '2px',
+                      display: 'inline-flex',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                </>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>

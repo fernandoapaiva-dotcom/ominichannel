@@ -95,13 +95,19 @@ async def start_new_conversation(
     if not wn:
         raise HTTPException(status_code=404, detail="Departamento / Número de WhatsApp não encontrado")
 
-    # 2. Find or create Contact
+    # 2. Find or create Contact (matching phone variants with/without 9th digit)
+    phone_variants = [clean_phone]
+    if len(clean_phone) == 13 and clean_phone.startswith("55"):
+        phone_variants.append(clean_phone[:4] + clean_phone[5:])
+    elif len(clean_phone) == 12 and clean_phone.startswith("55"):
+        phone_variants.append(clean_phone[:4] + "9" + clean_phone[4:])
+
     contact_stmt = select(Contact).where(
         Contact.tenant_id == current_user.tenant_id,
-        Contact.telefone == clean_phone
+        Contact.telefone.in_(phone_variants)
     )
     contact_res = await db.execute(contact_stmt)
-    contact = contact_res.scalar_one_or_none()
+    contact = contact_res.scalars().first()
 
     if not contact:
         contact = Contact(
