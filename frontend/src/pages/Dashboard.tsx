@@ -158,9 +158,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     setConversations(prevConvs =>
       prevConvs.map(conv => {
         if (conv.id === activeConversation.id) {
+          const currentMsgs = conv.messages || [];
           return {
             ...conv,
-            mensagens: [...conv.mensagens, optimisticMsg],
+            messages: [...currentMsgs, optimisticMsg],
             ultima_interacao_em: new Date().toISOString()
           };
         }
@@ -184,9 +185,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       setConversations(prevConvs =>
         prevConvs.map(conv => {
           if (conv.id === activeConversation.id) {
+            const currentMsgs = conv.messages || [];
             return {
               ...conv,
-              mensagens: conv.mensagens.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
+              messages: currentMsgs.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
             };
           }
           return conv;
@@ -198,9 +200,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       setConversations(prevConvs =>
         prevConvs.map(conv => {
           if (conv.id === activeConversation.id) {
+            const currentMsgs = conv.messages || [];
             return {
               ...conv,
-              mensagens: conv.mensagens.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
+              messages: currentMsgs.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
             };
           }
           return conv;
