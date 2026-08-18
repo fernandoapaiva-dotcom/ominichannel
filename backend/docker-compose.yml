@@ -39,8 +39,8 @@ services:
       - DOCKER_ENV=true
       - CONFIG_SESSION_PHONE_CLIENT=Evolution API
       - CONFIG_SESSION_PHONE_NAME=Chrome
-      - CONFIG_SESSION_PHONE_VERSION=2.3000.1026080446
       # Database Config (PostgreSQL)
+
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER:-omini_user}:${POSTGRES_PASSWORD:-omini_password}@postgres:5432/${POSTGRES_DB:-omini_db}

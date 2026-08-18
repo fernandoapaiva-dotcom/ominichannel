@@ -51,6 +51,8 @@ export interface Conversation {
   contact_id: number;
   status: ConversationStatus;
   assigned_user_id?: number;
+  assigned_user_name?: string;
+  resumo_ia?: string;
   assunto_atual?: string;
   criado_em: string;
   ultima_interacao_em: string;
@@ -58,3 +60,18 @@ export interface Conversation {
   whatsapp_number?: WhatsAppNumber;
   messages: Message[];
 }
+
+
+export interface WhatsAppGroup {
+  id: number;
+  tenant_id: number;
+  whatsapp_number_id: number;
+  group_jid: string;
+  nome: string;
+  ia_ativa: boolean;
+  criado_em?: string;
+  departamento?: string;
+  instancia?: string;
+  numero?: string;
+}
+

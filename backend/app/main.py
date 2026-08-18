@@ -18,7 +18,9 @@ from app.api.v1.contacts import router as contacts_router
 from app.api.v1.segments import router as segments_router
 from app.api.v1.rag import router as rag_router
 from app.api.v1.settings import router as settings_router
+from app.api.v1.whatsapp_groups import router as whatsapp_groups_router
 from app.api.websockets import router as ws_router
+
 from app.services.inactivity_service import start_inactivity_checker_loop
 
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +32,10 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Database...")
     await init_db()
     
-    # Start inactivity background monitor task
-    inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=120))
-    logger.info("Inactivity checker background loop started.")
+    # Start inactivity background monitor task (sweeps every 15 seconds for unreplied customer chats)
+    inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=15))
+    logger.info("Inactivity and unreplied customer sweeper background loop started.")
+
     
     yield
     
@@ -71,7 +74,9 @@ app.include_router(segments_router, prefix=settings.API_V1_STR)
 app.include_router(webhooks_router, prefix=settings.API_V1_STR)
 app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(settings_router, prefix=settings.API_V1_STR)
+app.include_router(whatsapp_groups_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router)
+
 
 @app.get("/")
 async def root():

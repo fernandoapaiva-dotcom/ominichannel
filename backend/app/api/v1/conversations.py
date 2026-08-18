@@ -76,7 +76,31 @@ async def list_conversations(
 
     stmt = stmt.order_by(Conversation.ultima_interacao_em.desc())
     result = await db.execute(stmt)
-    return result.scalars().all()
+    conversations = result.scalars().all()
+
+    user_ids = {c.assigned_user_id for c in conversations if c.assigned_user_id}
+    contact_ids = {c.contact_id for c in conversations if c.contact_id}
+
+    user_map = {}
+    if user_ids:
+        u_res = await db.execute(select(User).where(User.id.in_(user_ids)))
+        user_map = {u.id: u.nome for u in u_res.scalars().all()}
+
+    mem_map = {}
+    if contact_ids:
+        from app.models.models import ConversationMemory
+        m_res = await db.execute(select(ConversationMemory).where(ConversationMemory.tenant_id == current_user.tenant_id, ConversationMemory.contact_id.in_(contact_ids)))
+        mem_map = {m.contact_id: m.resumo_estruturado for m in m_res.scalars().all()}
+
+    response_list = []
+    for c in conversations:
+        c_dict = ConversationResponse.model_validate(c).model_dump()
+        c_dict["assigned_user_name"] = user_map.get(c.assigned_user_id)
+        c_dict["resumo_ia"] = mem_map.get(c.contact_id)
+        response_list.append(c_dict)
+
+    return response_list
+
 
 @router.post("/start", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def start_new_conversation(

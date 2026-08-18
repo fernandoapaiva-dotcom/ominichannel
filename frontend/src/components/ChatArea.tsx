@@ -747,6 +747,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
+              {conversation.assigned_user_name && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#60a5fa', fontWeight: '600' }}>
+                  <UserCheck size={13} /> Atendente: {conversation.assigned_user_name}
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -815,6 +820,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {isImportingBackup ? 'Importando...' : 'Importar Backup'}
           </button>
 
+
           <button
             onClick={handleSyncHistory}
             disabled={isSyncingHistory}
@@ -831,6 +837,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
         </div>
       </div>
+
+      {conversation.resumo_ia && (
+        <div style={{
+          padding: '12px 20px',
+          backgroundColor: 'rgba(234, 179, 8, 0.12)',
+          borderBottom: '1px solid rgba(234, 179, 8, 0.3)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          color: '#facc15'
+        }}>
+          <Bot size={22} style={{ color: '#facc15', flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+              📌 Resumo da Transferência da IA:
+            </div>
+            <div style={{ fontSize: '13px', color: '#ffffff', lineHeight: '1.4' }}>
+              {conversation.resumo_ia}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         ref={scrollContainerRef}

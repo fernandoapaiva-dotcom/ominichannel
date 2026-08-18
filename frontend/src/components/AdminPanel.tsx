@@ -1,17 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2 } from 'lucide-react';
-import { WhatsAppNumber, User } from '../types';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot } from 'lucide-react';
+import { WhatsAppNumber, User, WhatsAppGroup } from '../types';
 import { apiFetch } from '../services/api';
 
 export const AdminPanel: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations'>('numbers');
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations' | 'groups'>('numbers');
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
+  const [groupsLoading, setGroupsLoading] = useState(false);
+  const [syncingGroups, setSyncingGroups] = useState(false);
+
 
   // QR Code Modal & Connection Status State
   const [qrModalNumber, setQrModalNumber] = useState<WhatsAppNumber | null>(null);
   const [qrCodeBase64, setQrCodeBase64] = useState<string | null>(null);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
+
   const [qrError, setQrError] = useState<string | null>(null);
   const [qrConnectedSuccess, setQrConnectedSuccess] = useState(false);
   const [connectionStatuses, setConnectionStatuses] = useState<{ [numberId: number]: { connected: boolean; state: string } }>({});
@@ -41,7 +47,8 @@ export const AdminPanel: React.FC = () => {
   // Integration Settings State
   const [maskedSettings, setMaskedSettings] = useState<any>(null);
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
-  const [geminiModelInput, setGeminiModelInput] = useState('gemini-3.1-flash-lite');
+  const [geminiModelInput, setGeminiModelInput] = useState('gemini-2.5-flash');
+
   const [evoUrlInput, setEvoUrlInput] = useState('');
   const [evoKeyInput, setEvoKeyInput] = useState('');
   const [inactivityInput, setInactivityInput] = useState(30);
@@ -89,7 +96,8 @@ export const AdminPanel: React.FC = () => {
     try {
       const settingsData = await apiFetch('/settings/');
       setMaskedSettings(settingsData);
-      setGeminiModelInput(settingsData.gemini_model_name || 'gemini-3.1-flash-lite');
+      setGeminiModelInput(settingsData.gemini_model_name || 'gemini-2.5-flash');
+
       setEvoUrlInput(settingsData.evolution_api_url);
       setInactivityInput(settingsData.inatividade_minutos);
       setGdriveFolderInput(settingsData.google_drive_folder_id);
@@ -102,9 +110,49 @@ export const AdminPanel: React.FC = () => {
     }
   };
 
+  const loadWhatsAppGroups = async () => {
+    try {
+      setGroupsLoading(true);
+      const data: WhatsAppGroup[] = await apiFetch('/whatsapp-groups/');
+      setGroups(data);
+    } catch (err: any) {
+      console.error('Error loading whatsapp groups:', err);
+    } finally {
+      setGroupsLoading(false);
+    }
+  };
+
+  const handleSyncGroups = async () => {
+    try {
+      setSyncingGroups(true);
+      const res = await apiFetch('/whatsapp-groups/sync', { method: 'POST' });
+      alert(res.message || 'Sincronização de grupos concluída com sucesso!');
+      await loadWhatsAppGroups();
+    } catch (err: any) {
+      alert('Erro ao varrer grupos do WhatsApp: ' + err.message);
+    } finally {
+      setSyncingGroups(false);
+    }
+  };
+
+  const handleToggleGroupIA = async (groupId: number, currentStatus: boolean) => {
+    try {
+      const newStatus = !currentStatus;
+      await apiFetch(`/whatsapp-groups/${groupId}/toggle-ia`, {
+        method: 'PUT',
+        body: JSON.stringify({ ia_ativa: newStatus })
+      });
+      setGroups(prev => prev.map(g => g.id === groupId ? { ...g, ia_ativa: newStatus } : g));
+    } catch (err: any) {
+      alert('Erro ao alterar permissão da IA para o grupo: ' + err.message);
+    }
+  };
+
   useEffect(() => {
     loadData();
     loadSettingsAndAudit();
+    loadWhatsAppGroups();
+
 
     const interval = setInterval(() => {
       if (numbers.length > 0) {
@@ -120,11 +168,13 @@ export const AdminPanel: React.FC = () => {
     setQrLoading(true);
     setQrError(null);
     setQrCodeBase64(null);
+    setPairingCode(null);
 
     try {
       const res = await apiFetch(`/whatsapp-numbers/${num.id}/qrcode`);
       if (res.qrcode) {
         setQrCodeBase64(res.qrcode);
+        setPairingCode(res.pairing_code || res.pairingCode || null);
         setQrError(null);
       } else if (res.error) {
         setQrError(res.error);
@@ -138,6 +188,32 @@ export const AdminPanel: React.FC = () => {
       setQrLoading(false);
     }
   };
+
+  const handleResetQrConnection = async (num: WhatsAppNumber) => {
+    try {
+      setQrModalNumber(num);
+      setQrLoading(true);
+      setQrError(null);
+      setQrCodeBase64(null);
+      setPairingCode(null);
+      setQrConnectedSuccess(false);
+
+      const res = await apiFetch(`/whatsapp-numbers/${num.id}/reset-connection`, { method: 'POST' });
+      if (res.qrcode) {
+        setQrCodeBase64(res.qrcode);
+        setPairingCode(res.pairing_code || res.pairingCode || null);
+        setQrError(null);
+      } else {
+        await openQrModal(num);
+      }
+    } catch (err: any) {
+      setQrError(err.message || 'Erro ao resetar a conexão com a Evolution API.');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+
 
   // Poll connection status and refresh QR code when QR Modal is active
   // Poll connection status and refresh QR code while QR Modal is active
@@ -161,8 +237,12 @@ export const AdminPanel: React.FC = () => {
           const qrRes = await apiFetch(`/whatsapp-numbers/${qrModalNumber.id}/qrcode`);
           if (qrRes.qrcode) {
             setQrCodeBase64(qrRes.qrcode);
+            if (qrRes.pairing_code || qrRes.pairingCode) {
+              setPairingCode(qrRes.pairing_code || qrRes.pairingCode);
+            }
             setQrError(null);
           }
+
         }
       } catch (err: any) {
         console.error('Error in QR status polling:', err);
@@ -490,7 +570,14 @@ export const AdminPanel: React.FC = () => {
           >
             <Key size={16} /> Integrações & Segurança (Fernet)
           </button>
+          <button
+            onClick={() => { setActiveSubTab('groups'); loadWhatsAppGroups(); }}
+            className={activeSubTab === 'groups' ? 'btn-primary' : 'btn-secondary'}
+          >
+            <MessageSquare size={16} /> Grupos do WhatsApp
+          </button>
         </div>
+
 
         {/* 1. Numbers / Departments Tab */}
         {activeSubTab === 'numbers' && (
@@ -638,27 +725,50 @@ export const AdminPanel: React.FC = () => {
                       </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         {num.provider_type !== 'meta' && (
-                          <button
-                            onClick={() => openQrModal(num)}
-                            title="Conectar WhatsApp via QR Code"
-                            style={{
-                              background: 'linear-gradient(135deg, #10b981, #059669)',
-                              color: '#fff',
-                              padding: '6px 12px',
-                              borderRadius: 'var(--radius-sm)',
-                              fontSize: '12px',
-                              fontWeight: '600',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              border: 'none',
-                              cursor: 'pointer'
-                            }}
-                          >
-                            <QrCode size={14} />
-                            Conectar WhatsApp
-                          </button>
+                          <>
+                            <button
+                              onClick={() => openQrModal(num)}
+                              title="Conectar WhatsApp via QR Code"
+                              style={{
+                                background: 'linear-gradient(135deg, #10b981, #059669)',
+                                color: '#fff',
+                                padding: '6px 12px',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                border: 'none',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <QrCode size={14} />
+                              Conectar WhatsApp
+                            </button>
+                            <button
+                              onClick={() => handleResetQrConnection(num)}
+                              title="Resetar instância e gerar novo QR Code limpo"
+                              style={{
+                                background: 'rgba(239, 68, 68, 0.15)',
+                                color: '#f87171',
+                                border: '1px solid rgba(239, 68, 68, 0.3)',
+                                padding: '6px 10px',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <RefreshCw size={12} />
+                              Resetar QR
+                            </button>
+                          </>
                         )}
+
                         <button
                           onClick={() => handleEditNumber(num)}
                           title="Editar Departamento"
@@ -821,13 +931,55 @@ export const AdminPanel: React.FC = () => {
                         </button>
                       )}
 
-                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.5', margin: 0 }}>
+                      {pairingCode && (
+                        <div style={{ marginBottom: '16px', padding: '12px 14px', backgroundColor: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 'var(--radius-md)' }}>
+                          <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: '600', marginBottom: '4px' }}>
+                            🔑 OU CONECTE VIA CÓDIGO DE PAREAMENTO (8 DÍGITOS):
+                          </div>
+                          <div style={{ fontSize: '22px', fontWeight: '800', fontFamily: 'monospace', color: '#ffffff', letterSpacing: '3px' }}>
+                            {pairingCode}
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                            No celular: <em>Conectar um aparelho</em> {'>'} <strong>Conectar com número de telefone</strong>
+                          </div>
+                        </div>
+                      )}
+
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: '1.5', margin: '0 0 12px 0' }}>
+
                         Abra o WhatsApp no celular {'>'} <strong>Aparelhos conectados</strong> {'>'} <strong>Conectar um aparelho</strong> e aponte a câmera para a imagem acima.
                       </p>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '14px', fontSize: '11px', color: 'var(--text-muted)' }}>
+
+                      <button
+                        type="button"
+                        onClick={() => handleResetQrConnection(qrModalNumber)}
+                        disabled={qrLoading}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          color: '#f87171',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '12px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          marginBottom: '10px'
+                        }}
+                      >
+                        <RefreshCw size={14} className={qrLoading ? "spin" : ""} />
+                        {qrLoading ? 'Resetando Instância...' : 'Resetar Instância & Gerar Novo QR Code'}
+                      </button>
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
                         <RefreshCw size={12} className="spin" />
                         <span>Atualiza automaticamente a cada 4 segundos...</span>
                       </div>
+
                     </>
                   )}
                 </div>
@@ -1090,19 +1242,24 @@ export const AdminPanel: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Configurable Gemini Model Name Input */}
+                  {/* Configurable Gemini Model Select Dropdown */}
                   <div style={{ marginBottom: '12px' }}>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
-                      Modelo da Gemini API (ex: <code>gemini-2.0-flash</code>, <code>gemini-1.5-flash</code>)
+                      Modelo da Gemini API (Selecione o modelo oficial da Google Generative AI)
                     </label>
-                    <input
-                      type="text"
-                      placeholder="gemini-2.0-flash"
+                    <select
                       value={geminiModelInput}
                       onChange={(e) => setGeminiModelInput(e.target.value)}
                       style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
-                    />
+                    >
+                      <option value="gemini-2.5-flash">gemini-2.5-flash (Recomendado - Rápido e Atual)</option>
+                      <option value="gemini-2.5-pro">gemini-2.5-pro (Raciocínio Avançado)</option>
+                      <option value="gemini-2.0-flash">gemini-2.0-flash (Velocidade Ultra-rápida)</option>
+                      <option value="gemini-1.5-flash">gemini-1.5-flash (Estável)</option>
+                      <option value="gemini-1.5-pro">gemini-1.5-pro (Leitura Estendida)</option>
+                    </select>
                   </div>
+
 
                   {/* RAG Flow Live Execution Button */}
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px', marginTop: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1301,7 +1458,119 @@ export const AdminPanel: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* 5. WhatsApp Groups AI Control Tab */}
+        {activeSubTab === 'groups' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            {/* Info Header Box */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', borderLeft: '4px solid var(--accent-primary)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+                <div>
+                  <h3 style={{ fontSize: '18px', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Bot size={20} style={{ color: 'var(--accent-primary)' }} />
+                    Controle de IA em Grupos do WhatsApp
+                  </h3>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '6px', maxWidth: '750px', lineHeight: '1.5' }}>
+                    Por padrão, a IA Concierge <strong>NÃO</strong> responde em conversas de grupos.
+                    Clique em <strong>"Varrer Grupos de WhatsApp"</strong> para identificar todos os grupos das suas instâncias conectadas e marque a caixa de seleção dos grupos internos da empresa onde a IA está autorizada a responder.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSyncGroups}
+                  disabled={syncingGroups}
+                  className="btn-primary"
+                  style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px' }}
+                >
+                  <RefreshCw size={16} style={{ animation: syncingGroups ? 'spin 1s linear infinite' : 'none' }} />
+                  {syncingGroups ? 'Varrendo Grupos...' : 'Varrer Grupos de WhatsApp'}
+                </button>
+              </div>
+            </div>
+
+            {/* Groups Table Card */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h4 style={{ fontSize: '16px', fontWeight: '600' }}>
+                  Grupos Encontrados ({groups.length})
+                </h4>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {groups.filter(g => g.ia_ativa).length} de {groups.length} grupos com IA autorizada
+                </span>
+              </div>
+
+              {groupsLoading ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: '14px', textAlign: 'center', padding: '32px 0' }}>
+                  Carregando lista de grupos do WhatsApp...
+                </p>
+              ) : groups.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 20px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                  <MessageSquare size={36} style={{ color: 'var(--text-muted)', marginBottom: '12px', opacity: 0.5 }} />
+                  <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                    Nenhum grupo do WhatsApp encontrado no banco de dados.
+                  </p>
+                  <button onClick={handleSyncGroups} className="btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                    <RefreshCw size={14} /> Executar Primeira Varredura de Grupos
+                  </button>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                        <th style={{ padding: '12px 16px', width: '160px' }}>IA Pode Interagir</th>
+                        <th style={{ padding: '12px 16px' }}>Nome do Grupo</th>
+                        <th style={{ padding: '12px 16px' }}>Instância / Departamento</th>
+                        <th style={{ padding: '12px 16px' }}>JID do Grupo (ID WhatsApp)</th>
+                        <th style={{ padding: '12px 16px', width: '140px' }}>Status da IA</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groups.map((group) => (
+                        <tr key={group.id} style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: group.ia_ativa ? 'rgba(16, 185, 129, 0.04)' : 'transparent' }}>
+                          <td style={{ padding: '14px 16px' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: '500' }}>
+                              <input
+                                type="checkbox"
+                                checked={group.ia_ativa}
+                                onChange={() => handleToggleGroupIA(group.id, group.ia_ativa)}
+                                style={{ width: '18px', height: '18px', accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
+                              />
+                              <span style={{ fontSize: '12px', color: group.ia_ativa ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                                {group.ia_ativa ? 'Permitido' : 'Desativado'}
+                              </span>
+                            </label>
+                          </td>
+                          <td style={{ padding: '14px 16px', fontWeight: '600', color: 'var(--text-main)' }}>
+                            {group.nome}
+                          </td>
+                          <td style={{ padding: '14px 16px', color: 'var(--text-muted)' }}>
+                            {group.departamento || 'Geral'} {group.instancia ? `(${group.instancia})` : ''}
+                          </td>
+                          <td style={{ padding: '14px 16px', fontFamily: 'monospace', fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {group.group_jid}
+                          </td>
+                          <td style={{ padding: '14px 16px' }}>
+                            {group.ia_ativa ? (
+                              <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '600', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <CheckCircle2 size={12} /> Responde IA
+                              </span>
+                            ) : (
+                              <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '500', backgroundColor: 'rgba(255, 255, 255, 0.05)', color: 'var(--text-muted)' }}>
+                                Silencioso (Sem IA)
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 };
+

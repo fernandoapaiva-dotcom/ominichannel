@@ -129,11 +129,16 @@ class EvolutionService:
     async def get_qr_code(
         self,
         instance_name: str,
+        number: Optional[str] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        clean_num = "".join(filter(str.isdigit, str(number))) if number else None
         url = f"{base_url}/instance/connect/{instance_name}"
+        if clean_num and len(clean_num) >= 10:
+            url += f"?number={clean_num}"
+
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(url, headers=headers, timeout=15.0)
@@ -145,6 +150,7 @@ class EvolutionService:
             except Exception as e:
                 logger.error(f"Error fetching QR code for instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
+
 
     async def get_connection_state(
         self,
@@ -176,9 +182,7 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, number))
-        if len(clean_number) == 12 and clean_number.startswith("55") and clean_number[4] != "9":
-            clean_number = clean_number[:4] + "9" + clean_number[4:]
+        clean_number = "".join(filter(str.isdigit, str(number)))
         payload = {
             "number": clean_number,
             "textOptions": {
@@ -212,9 +216,8 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendMedia/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, number))
-        if len(clean_number) == 12 and clean_number.startswith("55") and clean_number[4] != "9":
-            clean_number = clean_number[:4] + "9" + clean_number[4:]
+        clean_number = "".join(filter(str.isdigit, str(number)))
+
 
         payload = {
             "number": clean_number,
@@ -365,4 +368,30 @@ class EvolutionService:
 
         return parsed_messages
 
+    async def fetch_all_groups(
+        self,
+        instance_name: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetches all WhatsApp groups associated with the given Evolution API instance.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/group/fetchAllGroups/{instance_name}?getParticipants=false"
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list):
+                        return data
+                    elif isinstance(data, dict):
+                        return data.get("groups") or data.get("records") or data.get("data") or []
+                return []
+            except Exception as e:
+                logger.error(f"Error fetching groups for instance {instance_name}: {e}")
+                return []
+
 evolution_service = EvolutionService()
+

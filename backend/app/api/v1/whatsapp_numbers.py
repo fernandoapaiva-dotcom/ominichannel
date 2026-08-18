@@ -204,9 +204,11 @@ async def get_number_qrcode(
 
             evo_res = await evolution_service.get_qr_code(
                 instance_name=instance,
+                number=wn.numero,
                 custom_base_url=decrypted.get("evolution_api_url"),
                 custom_api_key=decrypted.get("evolution_api_key")
             )
+
             if isinstance(evo_res, dict):
                 if "base64" in evo_res:
                     qrcode_base64 = evo_res.get("base64")
@@ -251,7 +253,102 @@ async def get_number_qrcode(
         "raw_response": evo_res
     }
 
+@router.post("/{number_id}/reset-connection")
+async def reset_whatsapp_connection(
+    number_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Resets/re-creates the WhatsApp instance on Evolution API, clearing stuck sessions and forcing a fresh QR Code generation.
+    """
+    stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.id == number_id,
+        WhatsAppNumber.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    wn = res.scalar_one_or_none()
+    if not wn:
+        raise HTTPException(status_code=404, detail="Número de WhatsApp não encontrado")
+
+    if (wn.provider_type or "evolution") != "evolution":
+        raise HTTPException(status_code=400, detail="Reset de conexão via QR Code disponível apenas para Evolution API.")
+
+    instance = wn.instancia_evolution_api or wn.numero or f"instancia_{wn.id}"
+
+    from app.services.settings_service import settings_service
+    from app.services.evolution_service import evolution_service
+
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
+    base_url = decrypted.get("evolution_api_url")
+    api_key = decrypted.get("evolution_api_key")
+
+    # 1. Clear in-memory QR Code cache
+    evolution_service.qr_code_cache.pop(instance, None)
+
+    # 2. Try logout & delete existing instance on Evolution API to clean stuck session
+    try:
+        await evolution_service.logout_instance(instance_name=instance, custom_base_url=base_url, custom_api_key=api_key)
+    except Exception as err:
+        logger.warning(f"Logout failed during reset for instance {instance}: {err}")
+
+    try:
+        await evolution_service.delete_instance(instance_name=instance, custom_base_url=base_url, custom_api_key=api_key)
+    except Exception as err:
+        logger.warning(f"Delete failed during reset for instance {instance}: {err}")
+
+    await asyncio.sleep(1.5)
+
+    # 3. Create fresh instance
+    create_res = await evolution_service.create_instance(
+        instance_name=instance,
+        custom_base_url=base_url,
+        custom_api_key=api_key
+    )
+    logger.info(f"Re-created instance '{instance}' for reset: {create_res}")
+
+    await asyncio.sleep(2.0)
+
+    # 4. Fetch fresh QR Code
+    qrcode_base64 = None
+    pairing_code = None
+    for attempt in range(15):
+        if instance in evolution_service.qr_code_cache:
+            qrcode_base64 = evolution_service.qr_code_cache[instance]
+            break
+
+        evo_res = await evolution_service.get_qr_code(
+            instance_name=instance,
+            custom_base_url=base_url,
+            custom_api_key=api_key
+        )
+
+        if isinstance(evo_res, dict):
+            if "base64" in evo_res:
+                qrcode_base64 = evo_res.get("base64")
+            elif "code" in evo_res:
+                qrcode_base64 = evo_res.get("code")
+            elif "qrcode" in evo_res and isinstance(evo_res["qrcode"], dict):
+                qrcode_base64 = evo_res["qrcode"].get("base64")
+            pairing_code = evo_res.get("pairingCode")
+
+        if qrcode_base64:
+            evolution_service.qr_code_cache[instance] = qrcode_base64
+            break
+
+        await asyncio.sleep(2.0)
+
+    return {
+        "success": True,
+        "number_id": wn.id,
+        "instancia": instance,
+        "qrcode": qrcode_base64,
+        "pairing_code": pairing_code,
+        "message": f"Instância '{instance}' resetada com sucesso! Escaneie o novo QR Code."
+    }
+
 @router.get("/{number_id}/connection-status")
+
 async def get_number_connection_status(
     number_id: int,
     current_user: User = Depends(get_current_user),

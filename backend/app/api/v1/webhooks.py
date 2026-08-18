@@ -1,15 +1,18 @@
 import logging
+from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Request, HTTPException
+
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
-    ConversationStatus, MessageSender, MessageType
+    ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole
 )
+
 from app.services.evolution_service import evolution_service
 from app.services.gemini_service import gemini_service
 from app.services.rag_service import rag_service
@@ -19,6 +22,48 @@ logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
 
 SEEN_WEBHOOK_KEYS = {}
+
+async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
+    try:
+        users_stmt = (
+            select(User)
+            .options(selectinload(User.whatsapp_numbers))
+            .where(User.tenant_id == tenant_id, User.status == True)
+        )
+        users_res = await db.execute(users_stmt)
+        users = users_res.scalars().all()
+
+        eligible_users = []
+        for u in users:
+            role_str = getattr(u.role, 'value', str(u.role)).lower()
+            if role_str == "admin":
+                eligible_users.append(u)
+            elif any(wn.id == whatsapp_number_id for wn in u.whatsapp_numbers):
+                eligible_users.append(u)
+
+        if not eligible_users:
+            eligible_users = users
+
+        if not eligible_users:
+            return None
+
+        user_workloads = {}
+        for u in eligible_users:
+            count_stmt = select(func.count(Conversation.id)).where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.assigned_user_id == u.id,
+                Conversation.status == ConversationStatus.COM_HUMANO
+            )
+            count_res = await db.execute(count_stmt)
+            active_count = count_res.scalar() or 0
+            user_workloads[u] = active_count
+
+        best_user = min(eligible_users, key=lambda u: user_workloads.get(u, 0))
+        return best_user
+    except Exception as err:
+        logger.error(f"Error in assign_least_busy_attendant: {err}")
+        return None
+
 
 @router.post("/evolution")
 async def receive_evolution_webhook(
@@ -95,8 +140,6 @@ async def receive_evolution_webhook(
         raw_phone = raw_phone.split("@")[0] if "@" in str(raw_phone) else str(raw_phone)
         phone_number = "".join(filter(str.isdigit, raw_phone))
 
-        if len(phone_number) == 12 and phone_number.startswith("55") and phone_number[4] != "9":
-            phone_number = phone_number[:4] + "9" + phone_number[4:]
 
         is_video = data.get("isVideo", False)
         call_type_label = "Vídeo Chamada" if is_video else "Chamada de Voz por Telefone"
@@ -219,12 +262,17 @@ async def receive_evolution_webhook(
         return {"status": "ignored", "reason": "Outgoing message"}
 
     remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
+    is_group = (
+        "@g.us" in str(remote_jid).lower() or
+        data.get("isGroup") is True or
+        bool(key.get("participant")) or
+        "@temp" in str(remote_jid).lower()
+    )
     raw_phone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+
     phone_number = "".join(filter(str.isdigit, raw_phone))
-    if len(phone_number) == 12 and phone_number.startswith("55") and phone_number[4] != "9":
-        phone_number = phone_number[:4] + "9" + phone_number[4:]
-    # Normalize Brazilian cell numbers: if 13 digits starting with 55+DDD+9+8digits, check 12 digit variant without 9 or vice versa to align contact
     push_name = data.get("pushName") or "Cliente"
+
 
     # Extract text or media content
     message_obj = data.get("message", {})
@@ -247,10 +295,10 @@ async def receive_evolution_webhook(
 
     if (img_msg or vid_msg or aud_msg or doc_msg) and not media_base64 and msg_id:
         try:
-            from app.services.evolution_service import evolution_service
             media_base64 = await evolution_service.get_media_base64(instance_name, msg_id)
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
+
 
     if img_msg or vid_msg or aud_msg or doc_msg:
         caption = ""
@@ -414,9 +462,67 @@ async def receive_evolution_webhook(
         }
     )
 
+    # Auto Re-engagement / Anti-Vacuum logic:
+    # If conversation is currently COM_HUMANO, check if customer is sending a greeting or if human agent hasn't replied recently
+    if conversation.status == ConversationStatus.COM_HUMANO:
+        should_reactivate_ai = False
+
+        text_lower = text_content.strip().lower()
+        greetings = ["oi", "olá", "ola", "boa tarde", "bom dia", "boa noite", "oie", "opa", "atendimento", "ajuda", "falar com ia", "menu"]
+        is_greeting = any(g in text_lower for g in greetings)
+
+        # Query latest attendant message safely in async SQLAlchemy
+        att_stmt = select(Message).where(
+            Message.conversation_id == conversation.id,
+            Message.remetente == MessageSender.ATENDENTE
+        ).order_by(Message.timestamp.desc()).limit(1)
+        att_res = await db.execute(att_stmt)
+        last_attendant_msg = att_res.scalar_one_or_none()
+
+        if not last_attendant_msg:
+            should_reactivate_ai = True
+        else:
+            time_diff_min = (datetime.utcnow() - last_attendant_msg.timestamp).total_seconds() / 60.0
+            if time_diff_min >= 3.0 or is_greeting:
+                should_reactivate_ai = True
+
+        if should_reactivate_ai:
+            conversation.status = ConversationStatus.COM_IA
+            logger.info(f"[IA REATIVADA AUTOMATICAMENTE] Conversa {conversation.id} com {contact.nome or contact.telefone} reativada para COM_IA.")
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                message_data={
+                    "type": "STATUS_CHANGE",
+                    "conversation_id": conversation.id,
+                    "status": "com_ia"
+                }
+            )
+
+
+
     # 5. Process AI Concierge response if conversation is with AI
-    if conversation.status == ConversationStatus.COM_IA:
+    current_status_str = getattr(conversation.status, 'value', str(conversation.status))
+    if current_status_str == ConversationStatus.COM_IA.value or conversation.status == ConversationStatus.COM_IA:
+
+
+        # Check if message comes from a WhatsApp group and whether AI is explicitly allowed
+        if is_group:
+            g_stmt = select(WhatsAppGroup).where(
+                WhatsAppGroup.tenant_id == tenant_id,
+                WhatsAppGroup.whatsapp_number_id == whatsapp_number.id,
+                WhatsAppGroup.group_jid == remote_jid
+            )
+            g_res = await db.execute(g_stmt)
+            group_obj = g_res.scalar_one_or_none()
+
+            if not group_obj or not group_obj.ia_ativa:
+                logger.info(f"Skipping AI response for group '{remote_jid}' (ia_ativa = False or group not registered)")
+                await db.commit()
+                return {"status": "success", "message": "Group message logged; AI interaction disabled for this group."}
+
         # Fetch Memory Summary
+
         mem_stmt = select(ConversationMemory).where(
             ConversationMemory.tenant_id == tenant_id,
             ConversationMemory.contact_id == contact.id
@@ -434,9 +540,10 @@ async def receive_evolution_webhook(
         recent_msgs = list(reversed(msg_res.scalars().all()))
 
         history = [
-            {"remetente": m.remetente.value, "conteudo": m.conteudo}
+            {"remetente": getattr(m.remetente, 'value', str(m.remetente)), "conteudo": m.conteudo}
             for m in recent_msgs
         ]
+
 
         from app.services.settings_service import settings_service
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
@@ -481,9 +588,17 @@ async def receive_evolution_webhook(
         # Check Human Escalation
         if escalar_humano:
             conversation.status = ConversationStatus.COM_HUMANO
-            logger.info(f"Conversation {conversation.id} escalated to human agent.")
             
-            # Broadcast high-priority escalation alert event to agents!
+            # Find and assign the least busy eligible operator
+            assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
+            assigned_user_name = "Equipe"
+            if assigned_user:
+                conversation.assigned_user_id = assigned_user.id
+                assigned_user_name = assigned_user.nome
+
+            logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least busy operator).")
+
+            # Broadcast high-priority escalation alert with summary & assigned operator!
             await ws_manager.broadcast_to_department(
                 tenant_id=tenant_id,
                 whatsapp_number_id=whatsapp_number.id,
@@ -494,9 +609,13 @@ async def receive_evolution_webhook(
                     "contact_phone": contact.telefone,
                     "department": whatsapp_number.nome_departamento,
                     "whatsapp_number_id": whatsapp_number.id,
-                    "message": f"🚨 ATENÇÃO: Nova conversa com {contact.nome or contact.telefone} no departamento '{whatsapp_number.nome_departamento}' aguardando atendente!"
+                    "assigned_user_id": conversation.assigned_user_id,
+                    "assigned_user_name": assigned_user_name,
+                    "summary": nova_memoria or memory_summary or "Cliente solicita atendimento especializado.",
+                    "message": f"🚨 TRANSFERÊNCIA DA IA: Cliente {contact.nome or contact.telefone} atribuído a {assigned_user_name} (Operador mais disponível)!"
                 }
             )
+
 
         await db.commit()
 
@@ -519,7 +638,8 @@ async def receive_evolution_webhook(
                 "remetente": MessageSender.IA.value,
                 "conteudo": ai_reply,
                 "timestamp": ts_str,
-                "conversation_status": conversation.status.value
+                "conversation_status": getattr(conversation.status, 'value', str(conversation.status))
+
             }
         )
 

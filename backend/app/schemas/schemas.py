@@ -141,6 +141,8 @@ class ConversationResponse(BaseModel):
     contact_id: int
     status: ConversationStatus
     assigned_user_id: Optional[int] = None
+    assigned_user_name: Optional[str] = None
+    resumo_ia: Optional[str] = None
     assunto_atual: Optional[str] = None
     criado_em: datetime
     ultima_interacao_em: datetime
@@ -148,6 +150,7 @@ class ConversationResponse(BaseModel):
     whatsapp_number: Optional[WhatsAppNumberResponse] = None
     messages: List[MessageResponse] = []
     model_config = ConfigDict(from_attributes=True)
+
 
 class ConversationTransfer(BaseModel):
     para_user_id: Optional[int] = None
@@ -210,7 +213,8 @@ class SegmentPreviewRequest(BaseModel):
 # Integration Settings Schemas
 class SaveIntegrationSettingsPayload(BaseModel):
     gemini_api_key: Optional[str] = None
-    gemini_model_name: Optional[str] = "gemini-3.1-flash-lite"
+    gemini_model_name: Optional[str] = "gemini-2.5-flash"
+
     evolution_api_url: Optional[str] = None
     evolution_api_key: Optional[str] = None
     inatividade_minutos: Optional[int] = 30

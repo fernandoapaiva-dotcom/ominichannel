@@ -40,7 +40,8 @@ class SettingsService:
         if not evo_key or evo_key in ["omini_master_key_123", "Nova Master Key", "Master Key"]:
             evo_key = env_settings.EVOLUTION_API_KEY or "omini_master_key_123"
 
-        gemini_model = gemini_data.get("gemini_model_name") or "gemini-3.1-flash-lite"
+        gemini_model = gemini_data.get("gemini_model_name") or "gemini-2.5-flash"
+
 
         return {
             "gemini_api_key": gemini_data.get("gemini_api_key") or env_settings.GEMINI_API_KEY,

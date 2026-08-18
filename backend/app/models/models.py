@@ -197,3 +197,19 @@ class AuditLog(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="audit_logs")
+
+# WhatsApp Groups AI Control
+class WhatsAppGroup(Base):
+    __tablename__ = "whatsapp_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    whatsapp_number_id: Mapped[int] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="CASCADE"), index=True)
+    group_jid: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    nome: Mapped[str] = mapped_column(String(255), nullable=False)
+    ia_ativa: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    whatsapp_number: Mapped["WhatsAppNumber"] = relationship("WhatsAppNumber")
+
