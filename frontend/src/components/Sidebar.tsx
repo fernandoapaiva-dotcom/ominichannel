@@ -23,6 +23,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return (
       <aside style={{
         width: '44px',
+        minWidth: '44px',
+        maxWidth: '44px',
+        flex: '0 0 44px',
+        flexShrink: 0,
         height: '100%',
         backgroundColor: 'var(--bg-secondary)',
         borderRight: '1px solid var(--border-color)',
@@ -31,7 +35,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         alignItems: 'center',
         padding: '16px 0',
         justifyContent: 'space-between',
-        zIndex: 50
+        zIndex: 50,
+        boxSizing: 'border-box'
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
           {onToggleCollapse && (
@@ -162,6 +167,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="sidebar-container" style={{
       width: '80px',
+      minWidth: '80px',
+      maxWidth: '80px',
+      flex: '0 0 80px',
+      flexShrink: 0,
       height: '100%',
       backgroundColor: 'var(--bg-secondary)',
       borderRight: '1px solid var(--border-color)',
@@ -170,7 +179,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       alignItems: 'center',
       padding: '20px 0',
       justifyContent: 'space-between',
-      transition: 'var(--transition-fast)'
+      transition: 'var(--transition-fast)',
+      boxSizing: 'border-box'
     }}>
       {/* Brand Icon & Collapse Toggle */}
       <div className="sidebar-brand" style={{
