@@ -456,11 +456,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       onDrop={handleDrop}
       style={{
         flex: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+        width: '100%',
         height: '100%',
         backgroundColor: 'var(--bg-secondary)',
         display: 'flex',
         flexDirection: 'column',
-        position: 'relative'
+        position: 'relative',
+        overflow: 'hidden',
+        boxSizing: 'border-box'
       }}
     >
       {isDraggingOver && (
@@ -729,17 +734,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       <div style={{
-        padding: '0 20px',
+        padding: '0 16px',
         height: '64px',
+        width: '100%',
+        boxSizing: 'border-box',
         borderBottom: '1px solid var(--border-color)',
         backgroundColor: 'var(--bg-primary)',
         display: 'flex',
-        justify: 'space-between',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        gap: '16px',
+        gap: '12px',
         overflowX: 'auto',
         overflowY: 'hidden',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        flexShrink: 0
       }}>
         {/* Left Section: Avatar & Customer Metadata */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
@@ -1168,8 +1176,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onScroll={handleContainerScroll}
         style={{
           flex: 1,
+          minWidth: 0,
+          width: '100%',
+          boxSizing: 'border-box',
           padding: '20px 24px',
           overflowY: 'auto',
+          overflowX: 'hidden',
           display: 'flex',
           flexDirection: 'column',
           gap: '12px',
@@ -1453,7 +1465,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
-      <form onSubmit={handleSend} style={{ padding: '16px 24px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center' }}>
+      <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
         <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={conversation.status === 'expirada_por_inatividade'} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
         <input
           type="text"

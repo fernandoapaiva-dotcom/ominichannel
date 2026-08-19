@@ -262,14 +262,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       />
 
       {activeTab === 'chats' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
           <DepartmentBar
             whatsappNumbers={whatsappNumbers}
             selectedDepartmentId={selectedDeptId}
             onSelectDepartment={(id) => setSelectedDeptId(id)}
             conversations={conversations}
           />
-          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+          <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', overflow: 'hidden', boxSizing: 'border-box' }}>
             <div
               className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`}
               style={{

@@ -172,6 +172,16 @@ button {
   animation: pulseGlow 2s infinite;
 }
 
+.dashboard-layout {
+  display: flex !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
 .chat-list-column {
   flex: 0 0 360px !important;
   width: 360px !important;
@@ -179,13 +189,16 @@ button {
   max-width: 360px !important;
   height: 100% !important;
   overflow: hidden !important;
+  box-sizing: border-box !important;
 }
 
 .chat-area-column {
-  flex: 1 1 auto !important;
+  flex: 1 1 0% !important;
   min-width: 0 !important;
+  max-width: 100% !important;
   height: 100% !important;
   overflow: hidden !important;
+  box-sizing: border-box !important;
 }
 
 /* Responsive Smartphone & Mobile Layout Rules */
