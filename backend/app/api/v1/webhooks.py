@@ -1,4 +1,9 @@
 import logging
+import base64
+import uuid
+import os
+import re
+import httpx
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, Depends, Request, HTTPException
@@ -22,6 +27,27 @@ logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
 
 SEEN_WEBHOOK_KEYS = {}
+
+def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
+    if not text:
+        return None
+    patterns = [
+        r'r\$\s*(\d+(?:[.,]\d{2})?)',
+        r'(\d+(?:[.,]\d{2})?)\s*(?:reais|rs)',
+        r'(?:valor|pagar|nota|orcamento|orçamento|pedido)\s*(?:de\s*)?(?:r\$\s*)?(\d+(?:[.,]\d{2})?)',
+        r'\b(\d{2,6}(?:[.,]\d{2})?)\b'
+    ]
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            raw = m.group(1).replace(',', '.')
+            try:
+                v = float(raw)
+                if 1.0 <= v <= 500000.0:
+                    return v
+            except ValueError:
+                pass
+    return None
 
 async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
     try:
@@ -744,6 +770,83 @@ async def receive_evolution_webhook(
                 maps_link = f"https://maps.google.com/?q={loc_lat},{loc_lng}"
                 if maps_link not in ai_reply:
                     ai_reply += f"\n\n📍 *Localização no Google Maps:* {maps_link}"
+
+        # Dispatch Native WhatsApp Pix QR Code Image (with preset amount) if requested by customer/IA
+        if wants_pix:
+            pix_amount = (
+                extract_amount_from_text(text_content) or
+                extract_amount_from_text(memory_summary) or
+                extract_amount_from_text(ai_reply)
+            )
+
+            from app.api.v1.conversations import generate_bacen_pix_string
+            bacen_payload = generate_bacen_pix_string(
+                key="54804458000122",
+                merchant_name="SERVWELD SOLDA",
+                merchant_city="BRASILIA",
+                amount=pix_amount
+            )
+
+            qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={bacen_payload}"
+            file_bytes = None
+            try:
+                async with httpx.AsyncClient() as client:
+                    r = await client.get(qr_image_url, timeout=10.0)
+                    if r.status_code == 200:
+                        file_bytes = r.content
+            except Exception as e:
+                logger.error(f"Error fetching Pix QR Code image in webhook: {e}")
+
+            if file_bytes:
+                os.makedirs("uploads", exist_ok=True)
+                unique_fn = f"pix_{uuid.uuid4().hex}.png"
+                up_path = os.path.join("uploads", unique_fn)
+                with open(up_path, "wb") as f:
+                    f.write(file_bytes)
+
+                amount_caption = f"\n💵 *Valor a Pagar:* R$ {pix_amount:.2f}".replace('.', ',') if pix_amount else ""
+                pix_caption = (
+                    f"💸 *DADOS OFICIAIS PARA PAGAMENTO VIA PIX SERVWELD*\n\n"
+                    f"🏢 *Favorecido:* Servweld / Servsolda Equipamentos e Serviços Ltda\n"
+                    f"🆔 *Chave Pix CNPJ:* 54.804.458/0001-22 (Chave Limpa: 54804458000122)"
+                    f"{amount_caption}\n\n"
+                    f"📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n"
+                    f"{bacen_payload}\n\n"
+                    f"📲 *Escaneie o QR Code acima pelo app do seu Banco.*\n"
+                    f"⚠️ *Importante:* Após realizar a transferência, envie o comprovante neste chat para validação do setor Financeiro."
+                )
+
+                base64_img = base64.b64encode(file_bytes).decode('utf-8')
+                formatted_caption = f"*🤖 IA Concierge:*\n\n{pix_caption}"
+
+                instances_to_try = [instance_name] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != instance_name]
+                pix_sent = False
+                for inst in instances_to_try:
+                    if not inst:
+                        continue
+                    res_pix = await evolution_service.send_media_message(
+                        instance_name=inst,
+                        number=contact.telefone,
+                        media_type="image",
+                        mimetype="image/png",
+                        media=base64_img,
+                        file_name="qrcode_pix.png",
+                        caption=formatted_caption
+                    )
+                    if res_pix.get("success"):
+                        logger.info(f"Successfully sent native Pix QR Code image to {contact.telefone} with amount {pix_amount}")
+                        pix_sent = True
+                        break
+
+                if pix_sent:
+                    pix_msg = Message(
+                        conversation_id=conversation.id,
+                        remetente=MessageSender.IA,
+                        conteudo=f"/uploads/{unique_fn}|{pix_caption}",
+                        tipo=MessageType.IMAGEM,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(pix_msg)
 
         # Update Conversation Memory
         if memory:
