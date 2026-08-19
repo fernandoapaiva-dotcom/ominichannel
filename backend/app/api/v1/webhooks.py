@@ -690,24 +690,43 @@ async def receive_evolution_webhook(
             loc_lat = -15.819305
             loc_lng = -47.954784
 
-            await evolution_service.send_location_message(
-                instance_name=whatsapp_number.instancia_evolution_api,
-                number=contact.telefone,
-                latitude=loc_lat,
-                longitude=loc_lng,
-                name=loc_name,
-                address=loc_addr
-            )
+            # Try sending via current instance first, fallback to all tenant instances if needed
+            instances_to_try = [whatsapp_number.instancia_evolution_api] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != whatsapp_number.instancia_evolution_api]
+            
+            loc_sent = False
+            for inst in instances_to_try:
+                if not inst:
+                    continue
+                res_loc = await evolution_service.send_location_message(
+                    instance_name=inst,
+                    number=contact.telefone,
+                    latitude=loc_lat,
+                    longitude=loc_lng,
+                    name=loc_name,
+                    address=loc_addr
+                )
+                if res_loc.get("success"):
+                    logger.info(f"Successfully sent native location card to {contact.telefone} via instance '{inst}'")
+                    loc_sent = True
+                    break
+                else:
+                    logger.warning(f"Failed to send location via instance '{inst}': {res_loc.get('error')}")
 
-            # Record location message in conversation DB
-            loc_db_msg = Message(
-                conversation_id=conversation.id,
-                remetente=MessageSender.IA,
-                conteudo=f"📍 *LOCALIZAÇÃO ENVIADA*\n{loc_name}\n{loc_addr}\nhttps://maps.google.com/?q={loc_lat},{loc_lng}",
-                tipo=MessageType.LOCALIZACAO,
-                timestamp=datetime.utcnow()
-            )
-            db.add(loc_db_msg)
+            if loc_sent:
+                # Record location message in conversation DB
+                loc_db_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente=MessageSender.IA,
+                    conteudo=f"📍 *LOCALIZAÇÃO ENVIADA*\n{loc_name}\n{loc_addr}\nhttps://maps.google.com/?q={loc_lat},{loc_lng}",
+                    tipo=MessageType.LOCALIZACAO,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(loc_db_msg)
+            else:
+                # Fallback: if native map card dispatch fails across all instances, ensure Google Maps link is included in text reply
+                maps_link = f"https://maps.google.com/?q={loc_lat},{loc_lng}"
+                if maps_link not in ai_reply:
+                    ai_reply += f"\n\n📍 *Localização no Google Maps:* {maps_link}"
 
         # Update Conversation Memory
         if memory:
