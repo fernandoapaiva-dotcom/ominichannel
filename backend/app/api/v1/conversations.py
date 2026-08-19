@@ -4,9 +4,12 @@ import base64
 import zipfile
 import io
 import re
+import logging
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_

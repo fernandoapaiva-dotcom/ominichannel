@@ -81,9 +81,9 @@ export const PixModal: React.FC<PixModalProps> = ({
     const message = `💸 *DADOS PARA PAGAMENTO VIA PIX SERVWELD*\n\n` +
       `🏢 *Favorecido:* ${fullName}\n` +
       `🆔 *Chave CNPJ:* ${formattedCnpj}\n\n` +
-      `📋 *PIX COPIA E COLA (Cole no App do Banco):*\n\`${bacenPixPayload}\`\n\n` +
+      `📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n${bacenPixPayload}\n\n` +
       `📲 *QR Code para Leitura:* ${qrCodeUrl}\n\n` +
-      `⚠️ *Importante:* Após a transferência, envie o comprovante neste chat para a baixa automática no setor financeiro.`;
+      `⚠️ *Importante:* Após a transferência, envie o comprovante neste chat para validação do setor financeiro.`;
 
     onSendPixToChat(message);
     onClose();
