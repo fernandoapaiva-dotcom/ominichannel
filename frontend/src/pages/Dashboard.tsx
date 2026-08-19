@@ -194,8 +194,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           return conv;
         })
       );
-    } catch (err) {
+    } catch (err: any) {
       console.error('Optimistic message send error:', err);
+      setNotificationAlert(err.message || 'Erro ao enviar mensagem no WhatsApp.');
+      setTimeout(() => setNotificationAlert(null), 7000);
       // Mark as failed if connection drops
       setConversations(prevConvs =>
         prevConvs.map(conv => {

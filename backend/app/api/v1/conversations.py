@@ -519,12 +519,34 @@ async def send_agent_message(
         text=formatted_whatsapp_text
     )
 
-    # 2. If delivery failed, raise HTTP error and do not commit message
+    # If delivery failed and provider is Evolution, attempt failover to other active connected instances of the tenant
+    if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
+        wn_all_stmt = select(WhatsAppNumber).where(
+            WhatsAppNumber.tenant_id == current_user.tenant_id,
+            WhatsAppNumber.status == True
+        )
+        wn_all_res = await db.execute(wn_all_stmt)
+        all_wns = wn_all_res.scalars().all()
+
+        for alt_wn in all_wns:
+            if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
+                continue
+            alt_res = await evolution_service.send_text_message(
+                instance_name=alt_wn.instancia_evolution_api,
+                number=conv.contact.telefone,
+                text=formatted_whatsapp_text
+            )
+            if alt_res.get("success"):
+                logger.info(f"Agent message delivered to {conv.contact.telefone} via failover instance '{alt_wn.instancia_evolution_api}'")
+                send_res = alt_res
+                break
+
+    # 2. If delivery failed across all instances, raise HTTP error and do not commit message
     if not send_res.get("success", False):
         error_detail = send_res.get("error", "Falha de conexão com o Provedor WhatsApp")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}"
+            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}. Verifique se a instância de WhatsApp do setor está conectada (QR Code) no Painel Admin."
         )
 
     # 3. Save Message only after successful delivery confirmation
