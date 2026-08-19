@@ -39,6 +39,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleChatList
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
 
   const contactConversations = useMemo(() => {
     if (!conversation || !allConversations) return [];
@@ -1029,76 +1030,114 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
 
-          <input
-            type="file"
-            ref={backupFileInputRef}
-            onChange={handleBackupFileSelected}
-            accept=".txt,.zip"
-            style={{ display: 'none' }}
-          />
+          {/* Mais Ações Dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              className="btn-secondary"
+              style={{
+                height: '34px',
+                padding: '0 10px',
+                fontSize: '11px',
+                fontWeight: '600',
+                borderRadius: 'var(--radius-md)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                cursor: 'pointer'
+              }}
+              title="Mais ações do atendimento"
+            >
+              <span>Mais</span>
+              <ChevronDown size={13} />
+            </button>
 
-          <button
-            onClick={() => backupFileInputRef.current?.click()}
-            disabled={isImportingBackup}
-            className="btn-secondary"
-            style={{
-              height: '34px',
-              padding: '0 12px',
-              fontSize: '11px',
-              fontWeight: '600',
-              borderRadius: 'var(--radius-md)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
-            }}
-            title="Importar arquivo de conversa exportado do WhatsApp (.txt ou .zip)"
-          >
-            <Upload size={14} style={{ animation: isImportingBackup ? 'spin 1s linear infinite' : 'none' }} />
-            {isImportingBackup ? 'Importando...' : 'Importar Backup'}
-          </button>
+            {showMoreMenu && (
+              <div style={{
+                position: 'absolute',
+                top: '110%',
+                right: 0,
+                backgroundColor: '#0f172a',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
+                zIndex: 500,
+                minWidth: '200px',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                padding: '4px 0'
+              }}>
+                <button
+                  onClick={() => {
+                    backupFileInputRef.current?.click();
+                    setShowMoreMenu(false);
+                  }}
+                  disabled={isImportingBackup}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-main)',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <Upload size={14} /> {isImportingBackup ? 'Importando...' : 'Importar Backup'}
+                </button>
 
-          <button
-            onClick={handleSyncHistory}
-            disabled={isSyncingHistory}
-            className="btn-secondary"
-            style={{
-              height: '34px',
-              padding: '0 12px',
-              fontSize: '11px',
-              fontWeight: '600',
-              borderRadius: 'var(--radius-md)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
-            }}
-            title="Sincronizar mensagens anteriores do WhatsApp"
-          >
-            <RefreshCw size={14} style={{ animation: isSyncingHistory ? 'spin 1s linear infinite' : 'none' }} />
-            {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
-          </button>
+                <button
+                  onClick={() => {
+                    handleSyncHistory();
+                    setShowMoreMenu(false);
+                  }}
+                  disabled={isSyncingHistory}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-main)',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  <RefreshCw size={14} /> {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
+                </button>
 
-          <button
-            onClick={onOpenTransferModal}
-            className="btn-secondary"
-            style={{
-              height: '34px',
-              padding: '0 12px',
-              fontSize: '11px',
-              fontWeight: '600',
-              borderRadius: 'var(--radius-md)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
-            }}
-          >
-            <ArrowRightLeft size={14} /> Transferir
-          </button>
+                <button
+                  onClick={() => {
+                    onOpenTransferModal();
+                    setShowMoreMenu(false);
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--text-main)',
+                    fontSize: '12px',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    borderTop: '1px solid rgba(255,255,255,0.05)'
+                  }}
+                >
+                  <ArrowRightLeft size={14} /> Transferir
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
