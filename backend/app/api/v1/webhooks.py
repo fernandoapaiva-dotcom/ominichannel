@@ -686,9 +686,9 @@ async def receive_evolution_webhook(
 
         # Dispatch Native WhatsApp Location Message if requested by customer/IA
         if enviar_localizacao:
-            # Default location coordinates (SOF Q 5 Lote 05 Loja 02 Conjunto A - Guará, Brasília - DF)
+            # Official Servweld location coordinates (SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF - 71215-226)
             loc_name = "Servweld"
-            loc_addr = "SOF Q 5 Lote 05 Loja 02 Conjunto A - Guará, Brasília - DF, 71215-226"
+            loc_addr = "SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF, 71215-226"
             loc_lat = -15.819305
             loc_lng = -47.954784
 
@@ -710,7 +710,6 @@ async def receive_evolution_webhook(
                 timestamp=datetime.utcnow()
             )
             db.add(loc_db_msg)
-        db.add(ai_msg)
 
         # Update Conversation Memory
         if memory:

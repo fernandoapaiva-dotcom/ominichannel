@@ -354,7 +354,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
       case 'localizacao':
-        const mapsLinkMatch = raw.match(/(https?:\/\/maps\.google\.com[^\s]+)/);
+        const safeRawLoc = typeof raw === 'string' ? raw : String(raw || '');
+        const mapsLinkMatch = safeRawLoc.match(/(https?:\/\/[^\s]+maps[^\s]+)/i);
         const mapsUrl = mapsLinkMatch ? mapsLinkMatch[0] : null;
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', maxWidth: '320px' }}>
@@ -362,7 +363,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <MapPin size={18} /> Localização GPS (WhatsApp Map)
             </div>
             <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', margin: 0, whiteSpace: 'pre-wrap' }}>
-              {raw}
+              {safeRawLoc}
             </p>
             {mapsUrl && (
               <a
@@ -898,14 +899,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           position: 'relative'
         }}
       >
-        {conversation.messages.map((msg) => {
+        {conversation.messages.map((msg, idx) => {
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
           const isSystem = msg.remetente === 'sistema';
+          const msgKey = msg.id ? `msg_${msg.id}_${idx}` : `msg_${idx}`;
 
           if (isSystem) {
             return (
-              <div key={msg.id} className="animate-fade-in" style={{
+              <div key={msgKey} className="animate-fade-in" style={{
                 alignSelf: 'center',
                 margin: '8px 0',
                 padding: '6px 14px',
@@ -927,7 +929,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           const border = isCustomer ? '1px solid var(--border-color)' : isAI ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(0, 230, 153, 0.3)';
 
           return (
-            <div key={msg.id} className="animate-fade-in" style={{
+            <div key={msgKey} className="animate-fade-in" style={{
               alignSelf: isCustomer ? 'flex-start' : 'flex-end',
               maxWidth: '65%',
               padding: '12px 16px',
