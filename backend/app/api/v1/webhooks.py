@@ -254,6 +254,11 @@ async def receive_evolution_webhook(
 
         return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
 
+    # Filter non-message events (send.message, messages.update, chats.upsert, etc.)
+    norm_event = str(event_type or "").lower().replace("_", ".")
+    if norm_event not in ["messages.upsert", "messages_upsert"]:
+        return {"status": "ignored", "reason": f"Event '{event_type}' is not a new incoming message"}
+
     key = data.get("key", {}) if isinstance(data, dict) else {}
     from_me = key.get("fromMe", False) if isinstance(key, dict) else False
 
