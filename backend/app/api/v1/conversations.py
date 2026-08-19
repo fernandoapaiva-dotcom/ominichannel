@@ -5,6 +5,8 @@ import zipfile
 import io
 import re
 import logging
+import unicodedata
+import httpx
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
@@ -672,6 +674,178 @@ async def send_location_in_conversation(
     )
 
     return message
+
+def generate_bacen_pix_string(key: str, merchant_name: str, merchant_city: str, amount: Optional[float] = None) -> str:
+    clean_key = key.replace('.', '').replace('/', '').replace('-', '').replace(' ', '') if '@' not in key else key
+    field26 = f"0014br.gov.bcb.pix01{len(clean_key):02d}{clean_key}"
+    
+    name_clean = unicodedata.normalize('NFD', merchant_name).encode('ascii', 'ignore').decode('ascii').upper()[:25]
+    city_clean = unicodedata.normalize('NFD', merchant_city).encode('ascii', 'ignore').decode('ascii').upper()[:15]
+    
+    amount_str = f"{amount:.2f}" if amount and amount > 0 else ""
+    field54 = f"54{len(amount_str):02d}{amount_str}" if amount_str else ""
+
+    payload_no_crc = (
+        "000201"
+        f"26{len(field26):02d}{field26}"
+        "52040000"
+        "5303986"
+        f"{field54}"
+        "5802BR"
+        f"59{len(name_clean):02d}{name_clean}"
+        f"60{len(city_clean):02d}{city_clean}"
+        "62070503***"
+        "6304"
+    )
+    
+    crc = 0xFFFF
+    for char in payload_no_crc:
+        crc ^= ord(char) << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    crc_hex = f"{crc & 0xFFFF:04X}"
+    return payload_no_crc + crc_hex
+
+class SendPixPayload(BaseModel):
+    title: str
+    key_type: str
+    key: str
+    favorecido: str
+    cidade: str = "BRASILIA"
+    amount: Optional[float] = None
+
+@router.post("/{conversation_id}/send-pix", response_model=MessageResponse)
+async def send_pix_in_conversation(
+    conversation_id: int,
+    payload: SendPixPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generates official BACEN EMV Co payload & QR code image, sending it to the customer as a native WhatsApp IMAGE message with caption!
+    """
+    stmt = select(Conversation).options(
+        selectinload(Conversation.contact),
+        selectinload(Conversation.whatsapp_number)
+    ).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Generate BACEN EMV Co payload
+    bacen_payload = generate_bacen_pix_string(
+        key=payload.key,
+        merchant_name=payload.favorecido,
+        merchant_city=payload.cidade,
+        amount=payload.amount
+    )
+
+    # Fetch QR Code image bytes from qrserver API
+    qr_image_url = f"https://api.qrserver.com/v1/create-qr-code/?size=400x400&data={bacen_payload}"
+    file_bytes = None
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(qr_image_url, timeout=10.0)
+            if r.status_code == 200:
+                file_bytes = r.content
+    except Exception as e:
+        logger.error(f"Error fetching QR Code image: {e}")
+
+    if not file_bytes:
+        raise HTTPException(status_code=502, detail="Falha ao gerar a imagem do QR Code Pix")
+
+    # Format caption
+    amount_text = f"\n💵 *Valor a Pagar:* R$ {payload.amount:.2f}".replace('.', ',') if payload.amount and payload.amount > 0 else ""
+    caption_text = (
+        f"💸 *DADOS PARA PAGAMENTO VIA PIX SERVWELD*\n\n"
+        f"📌 *Identificador:* {payload.title}\n"
+        f"🏢 *Favorecido:* {payload.favorecido}"
+        f"{amount_text}\n"
+        f"🆔 *Chave Pix ({payload.key_type}):* {payload.key}\n\n"
+        f"📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n"
+        f"{bacen_payload}\n\n"
+        f"📲 *Escaneie o QR Code acima pelo app do seu Banco.*\n"
+        f"⚠️ *Importante:* Após realizar a transferência, envie o comprovante neste chat para validação."
+    )
+
+    base64_img = base64.b64encode(file_bytes).decode('utf-8')
+    agent_name = current_user.nome or "Atendente"
+    formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}"
+
+    # Failover instance try
+    wn_all_stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.tenant_id == current_user.tenant_id,
+        WhatsAppNumber.status == True
+    )
+    wn_all_res = await db.execute(wn_all_stmt)
+    all_wns = wn_all_res.scalars().all()
+
+    primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
+    instances_to_try = [primary_inst] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != primary_inst]
+
+    img_sent = False
+    for inst in instances_to_try:
+        if not inst:
+            continue
+        res_media = await evolution_service.send_media_message(
+            instance_name=inst,
+            number=conv.contact.telefone,
+            media_type="image",
+            media_base64=base64_img,
+            caption=formatted_caption,
+            filename="qrcode_pix.png"
+        )
+        if res_media.get("success"):
+            img_sent = True
+            break
+
+    if not img_sent:
+        raise HTTPException(status_code=502, detail="Falha ao enviar a imagem do Pix no WhatsApp. Verifique se a instância está conectada.")
+
+    # Record message in DB
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    # Save to uploads folder for web display
+    os.makedirs("uploads", exist_ok=True)
+    unique_fn = f"pix_{uuid.uuid4().hex}.png"
+    up_path = os.path.join("uploads", unique_fn)
+    with open(up_path, "wb") as f:
+        f.write(file_bytes)
+
+    msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=f"[/uploads/{unique_fn}]\n\n{caption_text}",
+        tipo=MessageType.IMAGEM,
+        timestamp=datetime.utcnow()
+    )
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "remetente": MessageSender.ATENDENTE.value,
+            "conteudo": msg.conteudo,
+            "timestamp": str(msg.timestamp),
+            "agent_name": current_user.nome
+        }
+    )
+
+    return msg
 
 @router.post("/{conversation_id}/media", response_model=MessageResponse)
 async def send_agent_media(

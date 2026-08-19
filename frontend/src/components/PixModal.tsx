@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { X, QrCode, Copy, Check, Send, ShieldCheck, ChevronDown } from 'lucide-react';
+import { X, QrCode, Copy, Check, Send, ShieldCheck, DollarSign, Loader2 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 
 interface PixModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSendPixToChat: (pixText: string) => void;
+  conversationId: number | null;
+  onPixSent?: () => void;
 }
 
 // Official Central Bank of Brazil (BACEN) EMV Co BR Code Generator
-function generateBacenPixPayload(key: string, merchantName: string, merchantCity: string): string {
+function generateBacenPixPayload(key: string, merchantName: string, merchantCity: string, amount?: number): string {
   const cleanKey = key.replace(/\D/g, '').length > 0 && !key.includes('@') ? key.replace(/\D/g, '') : key;
   const field26 = `0014br.gov.bcb.pix01${cleanKey.length.toString().padStart(2, '0')}${cleanKey}`;
   
@@ -17,11 +18,15 @@ function generateBacenPixPayload(key: string, merchantName: string, merchantCity
   const nameClean = merchantName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().slice(0, 25);
   const cityClean = merchantCity.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().slice(0, 15);
 
+  const amountStr = amount && amount > 0 ? amount.toFixed(2) : '';
+  const field54 = amountStr ? `54${amountStr.length.toString().padStart(2, '0')}${amountStr}` : '';
+
   const payloadNoCrc = 
     '000201' +
     `26${field26.length.toString().padStart(2, '0')}${field26}` +
     '52040000' +
     '5303986' +
+    field54 +
     '5802BR' +
     `59${nameClean.length.toString().padStart(2, '0')}${nameClean}` +
     `60${cityClean.length.toString().padStart(2, '0')}${cityClean}` +
@@ -47,19 +52,21 @@ function generateBacenPixPayload(key: string, merchantName: string, merchantCity
 export const PixModal: React.FC<PixModalProps> = ({
   isOpen,
   onClose,
-  onSendPixToChat
+  conversationId,
+  onPixSent
 }) => {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedPayload, setCopiedPayload] = useState(false);
   const [pixKeys, setPixKeys] = useState<any[]>([]);
   const [selectedKeyId, setSelectedKeyId] = useState<number | null>(null);
+  const [amountInput, setAmountInput] = useState<string>('');
+  const [sending, setSending] = useState(false);
 
   const defaultKey = {
     id: 0,
     titulo: "Pix Principal Servweld - CNPJ",
     tipo_chave: "CNPJ",
-    chave: "54.804.458/0001-22",
-    chave_limpa: "54804458000122",
+    chave: "54804458000122",
     favorecido: "Servweld / Servsolda Equipamentos e Serviços Ltda",
     cidade: "BRASILIA"
   };
@@ -83,7 +90,7 @@ export const PixModal: React.FC<PixModalProps> = ({
   const currentKey = pixKeys.find(k => k.id === selectedKeyId) || {
     titulo: defaultKey.titulo,
     tipo_chave: defaultKey.tipo_chave,
-    chave: defaultKey.chave_limpa,
+    chave: defaultKey.chave,
     favorecido: defaultKey.favorecido,
     cidade: defaultKey.cidade
   };
@@ -92,9 +99,10 @@ export const PixModal: React.FC<PixModalProps> = ({
   const fullName = currentKey.favorecido;
   const merchantName = fullName.slice(0, 20).toUpperCase();
   const city = currentKey.cidade || "BRASILIA";
+  const numAmount = parseFloat(amountInput.replace(',', '.')) || 0;
 
-  // Official BACEN EMV Co Pix Copia e Cola Payload
-  const bacenPixPayload = generateBacenPixPayload(rawKey, merchantName, city);
+  // Official BACEN EMV Co Pix Copia e Cola Payload with optional amount
+  const bacenPixPayload = generateBacenPixPayload(rawKey, merchantName, city, numAmount > 0 ? numAmount : undefined);
 
   // Generate QR Code from the official BACEN EMV Co string
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(bacenPixPayload)}`;
@@ -111,17 +119,33 @@ export const PixModal: React.FC<PixModalProps> = ({
     setTimeout(() => setCopiedPayload(false), 3000);
   };
 
-  const handleSendToChat = () => {
-    const message = `💸 *DADOS PARA PAGAMENTO VIA PIX SERVWELD*\n\n` +
-      `📌 *Chave:* ${currentKey.titulo}\n` +
-      `🏢 *Favorecido:* ${fullName}\n` +
-      `🆔 *Chave Pix (${currentKey.tipo_chave}):* ${rawKey}\n\n` +
-      `📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n${bacenPixPayload}\n\n` +
-      `📲 *QR Code para Leitura:* ${qrCodeUrl}\n\n` +
-      `⚠️ *Importante:* Após a transferência, envie o comprovante neste chat para validação do setor financeiro.`;
+  const handleSendToChat = async () => {
+    if (!conversationId) {
+      alert('Selecione uma conversa ativa para enviar o Pix.');
+      return;
+    }
 
-    onSendPixToChat(message);
-    onClose();
+    try {
+      setSending(true);
+      await apiFetch(`/conversations/${conversationId}/send-pix`, {
+        method: 'POST',
+        body: JSON.stringify({
+          title: currentKey.titulo,
+          key_type: currentKey.tipo_chave,
+          key: rawKey,
+          favorecido: fullName,
+          cidade: city,
+          amount: numAmount > 0 ? numAmount : null
+        })
+      });
+
+      if (onPixSent) onPixSent();
+      onClose();
+    } catch (err: any) {
+      alert('Erro ao enviar imagem do Pix no WhatsApp: ' + err.message);
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -138,7 +162,7 @@ export const PixModal: React.FC<PixModalProps> = ({
     }}>
       <div className="glass-panel animate-fade-in" style={{
         width: '100%',
-        maxWidth: '460px',
+        maxWidth: '480px',
         borderRadius: 'var(--radius-lg)',
         backgroundColor: '#0b0f19',
         border: '1px solid var(--border-color)',
@@ -169,7 +193,7 @@ export const PixModal: React.FC<PixModalProps> = ({
             </div>
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: '#fff' }}>Pagamento via Pix</h3>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Padrão Oficial Banco Central (EMV Co)</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Gerador de Cobrança com Valor e QR Code</span>
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -177,14 +201,14 @@ export const PixModal: React.FC<PixModalProps> = ({
           </button>
         </div>
 
-        {/* Selector Dropdown if tenant has multiple Pix keys */}
-        {pixKeys.length > 0 && (
-          <div style={{ padding: '12px 20px', backgroundColor: '#111827', borderBottom: '1px solid var(--border-color)' }}>
+        {/* 1. Selector Dropdown if tenant has Pix keys */}
+        <div style={{ padding: '14px 20px', backgroundColor: '#111827', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div>
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '700', textTransform: 'uppercase' }}>
-              Selecione a Chave Pix da Empresa ({pixKeys.length} disponíveis)
+              1. Selecione qual Chave Pix enviar
             </label>
             <select
-              value={selectedKeyId || pixKeys[0]?.id}
+              value={selectedKeyId || pixKeys[0]?.id || 0}
               onChange={(e) => setSelectedKeyId(Number(e.target.value))}
               style={{
                 width: '100%',
@@ -197,48 +221,83 @@ export const PixModal: React.FC<PixModalProps> = ({
                 fontWeight: '600'
               }}
             >
-              {pixKeys.map(k => (
-                <option key={k.id} value={k.id}>
-                  {k.titulo} ({k.tipo_chave}: {k.chave})
-                </option>
-              ))}
+              {pixKeys.length > 0 ? (
+                pixKeys.map(k => (
+                  <option key={k.id} value={k.id}>
+                    {k.titulo} ({k.tipo_chave}: {k.chave})
+                  </option>
+                ))
+              ) : (
+                <option value={0}>{defaultKey.titulo} ({defaultKey.tipo_chave}: {defaultKey.chave})</option>
+              )}
             </select>
           </div>
-        )}
+
+          {/* 2. Amount Input (Estilo Máquina de Cartão) */}
+          <div>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '700', textTransform: 'uppercase' }}>
+              2. Digite o Valor a Pagar R$ (Igual máquina de cartão)
+            </label>
+            <div style={{ position: 'relative' }}>
+              <DollarSign size={16} style={{ position: 'absolute', left: '12px', top: '10px', color: 'var(--accent-primary)' }} />
+              <input
+                type="text"
+                placeholder="Ex: 150.00 (Deixe em branco para valor livre)"
+                value={amountInput}
+                onChange={(e) => setAmountInput(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px 8px 36px',
+                  backgroundColor: '#1e293b',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-md)',
+                  color: '#fff',
+                  fontSize: '14px',
+                  fontWeight: '700'
+                }}
+              />
+            </div>
+            {numAmount > 0 && (
+              <span style={{ fontSize: '11px', color: '#34d399', fontWeight: '600', marginTop: '4px', display: 'block' }}>
+                ✓ QR Code pré-fixado no valor exato de: <strong>R$ {numAmount.toFixed(2).replace('.', ',')}</strong>
+              </span>
+            )}
+          </div>
+        </div>
 
         {/* Content */}
-        <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
-          {/* QR Code Container com Moldura de Leitura Garantida */}
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', maxHeight: '420px', overflowY: 'auto' }}>
+          {/* QR Code Container com Moldura */}
           <div style={{
-            padding: '16px',
+            padding: '14px',
             backgroundColor: '#fff',
             borderRadius: 'var(--radius-md)',
             boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: '8px'
+            gap: '6px'
           }}>
             <img
               src={qrCodeUrl}
               alt="QR Code Pix Oficial Banco Central"
-              style={{ width: '200px', height: '200px', objectFit: 'contain' }}
+              style={{ width: '180px', height: '180px', objectFit: 'contain' }}
             />
             <span style={{ fontSize: '11px', fontWeight: '700', color: '#0f172a' }}>
-              ✓ QR Code Oficial Leitura Garantida em Qualquer Banco
+              ✓ Imagem do QR Code enviada direto no WhatsApp
             </span>
           </div>
 
           {/* Details Card */}
           <div style={{
             width: '100%',
-            padding: '14px',
+            padding: '12px',
             backgroundColor: '#111827',
             border: '1px solid var(--border-color)',
             borderRadius: 'var(--radius-md)',
             display: 'flex',
             flexDirection: 'column',
-            gap: '10px'
+            gap: '8px'
           }}>
             <div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>
@@ -249,10 +308,10 @@ export const PixModal: React.FC<PixModalProps> = ({
               </div>
             </div>
 
-            {/* Chave CNPJ */}
+            {/* Chave Pix */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>
-                Chave CNPJ
+                Chave Pix ({currentKey.tipo_chave})
               </div>
               <div style={{
                 display: 'flex',
@@ -264,7 +323,7 @@ export const PixModal: React.FC<PixModalProps> = ({
                 marginTop: '4px'
               }}>
                 <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: '700', color: 'var(--accent-primary)' }}>
-                  {formattedCnpj}
+                  {rawKey}
                 </span>
                 <button
                   type="button"
@@ -282,7 +341,7 @@ export const PixModal: React.FC<PixModalProps> = ({
                   }}
                 >
                   {copiedKey ? <Check size={14} /> : <Copy size={14} />}
-                  {copiedKey ? 'Copiado!' : 'Copiar CNPJ'}
+                  {copiedKey ? 'Copiado!' : 'Copiar'}
                 </button>
               </div>
             </div>
@@ -290,7 +349,7 @@ export const PixModal: React.FC<PixModalProps> = ({
             {/* Pix Copia e Cola String */}
             <div>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: '700' }}>
-                Pix Copia e Cola (App Bancário)
+                Pix Copia e Cola
               </div>
               <div style={{
                 display: 'flex',
@@ -344,16 +403,18 @@ export const PixModal: React.FC<PixModalProps> = ({
               className="btn-secondary"
               style={{ flex: 1, padding: '10px' }}
             >
-              <Copy size={16} /> {copiedPayload ? 'Pix Copiado!' : 'Copiar Pix Copia e Cola'}
+              <Copy size={16} /> {copiedPayload ? 'Pix Copiado!' : 'Copiar Pix'}
             </button>
 
             <button
               type="button"
               onClick={handleSendToChat}
               className="btn-primary"
+              disabled={sending}
               style={{ flex: 1, padding: '10px' }}
             >
-              <Send size={16} /> Enviar no Chat
+              {sending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+              {sending ? 'Enviando...' : 'Enviar QR Code e Dados'}
             </button>
           </div>
         </div>

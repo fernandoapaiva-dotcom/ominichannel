@@ -1278,12 +1278,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
       />
 
-      {/* 3. Pix Generator Modal (Oficial Servweld 54.804.458/0001-22) */}
+      {/* 3. Pix Generator Modal (Oficial Servweld + Chaves Dinâmicas + Valor e Imagem do QR Code) */}
       <PixModal
         isOpen={showPixModal}
         onClose={() => setShowPixModal(false)}
-        onSendPixToChat={(pixText) => {
-          setInputText(prev => (prev ? prev + '\n' : '') + pixText);
+        conversationId={conversation?.id || null}
+        onPixSent={() => {
+          if (conversation?.id) {
+            apiFetch(`/conversations/${conversation.id}`).then(data => {
+              if (data && data.messages) {
+                conversation.messages = data.messages;
+              }
+            }).catch(() => {});
+          }
         }}
       />
     </div>
