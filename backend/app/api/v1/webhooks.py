@@ -530,6 +530,26 @@ async def receive_evolution_webhook(
         memory = mem_res.scalar_one_or_none()
         memory_summary = memory.resumo_estruturado if memory else ""
 
+        # Fallback: if memory_summary is empty, load last 10 messages from previous conversations of this contact
+        if not memory_summary:
+            past_msgs_stmt = (
+                select(Message)
+                .join(Conversation)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.contact_id == contact.id,
+                    Conversation.id != conversation.id
+                )
+                .order_by(Message.timestamp.desc())
+                .limit(10)
+            )
+            past_msgs_res = await db.execute(past_msgs_stmt)
+            past_msgs = list(reversed(past_msgs_res.scalars().all()))
+            if past_msgs:
+                memory_summary = "Histórico do atendimento anterior:\n" + "\n".join([
+                    f"[{getattr(m.remetente, 'value', str(m.remetente))}]: {m.conteudo}" for m in past_msgs if m.conteudo
+                ])
+
         # Fetch RAG Context
         rag_context = await rag_service.search_context(tenant_id=tenant_id, query=text_content)
 
