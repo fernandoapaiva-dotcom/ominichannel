@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
@@ -13,6 +13,8 @@ import { Conversation, User } from '../types';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
+  allConversations?: Conversation[];
+  onSelectConversation?: (conv: Conversation) => void;
   currentUser: User;
   onSendMessage: (text: string) => Promise<void>;
   onOpenTransferModal: () => void;
@@ -23,6 +25,8 @@ interface ChatAreaProps {
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
+  allConversations,
+  onSelectConversation,
   currentUser,
   onSendMessage,
   onOpenTransferModal,
@@ -30,6 +34,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onStatusToggle,
   onBack
 }) => {
+  const [showThreadDropdown, setShowThreadDropdown] = useState(false);
+
+  const contactConversations = useMemo(() => {
+    if (!conversation || !allConversations) return [];
+    const cid = conversation.contact_id || conversation.contact?.id;
+    return allConversations.filter(c => (c.contact_id || c.contact?.id) === cid);
+  }, [conversation, allConversations]);
   const [inputText, setInputText] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -800,13 +811,92 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', alignItems: 'center' }}>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
               {conversation.assigned_user_name && (
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#60a5fa', fontWeight: '600' }}>
                   <UserCheck size={13} /> Atendente: {conversation.assigned_user_name}
                 </span>
+              )}
+
+              {/* Thread Switcher Dropdown */}
+              {contactConversations.length > 1 && onSelectConversation && (
+                <div style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowThreadDropdown(!showThreadDropdown)}
+                    style={{
+                      background: 'rgba(0, 230, 153, 0.12)',
+                      border: '1px solid var(--accent-primary)',
+                      color: 'var(--accent-primary)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      fontWeight: '700',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                    title="Alternar entre conversas/histórico deste cliente"
+                  >
+                    <span>📁 Chamado #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
+                    <ChevronDown size={13} />
+                  </button>
+
+                  {showThreadDropdown && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '110%',
+                      left: 0,
+                      backgroundColor: '#0f172a',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-md)',
+                      boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
+                      zIndex: 500,
+                      minWidth: '280px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{ padding: '8px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
+                        Conversas do Cliente ({contactConversations.length}):
+                      </div>
+                      {contactConversations.map(c => {
+                        const isCurrent = c.id === conversation.id;
+                        return (
+                          <div
+                            key={c.id}
+                            onClick={() => {
+                              onSelectConversation(c);
+                              setShowThreadDropdown(false);
+                            }}
+                            style={{
+                              padding: '8px 12px',
+                              backgroundColor: isCurrent ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+                              borderBottom: '1px solid rgba(255,255,255,0.05)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              justify: 'space-between',
+                              alignItems: 'center'
+                            }}
+                          >
+                            <div>
+                              <div style={{ fontSize: '12px', fontWeight: '600', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-main)' }}>
+                                Chamado #{c.id} • {c.whatsapp_number?.nome_departamento || 'Geral'}
+                              </div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                {formatTime(c.ultima_interacao_em)}
+                              </div>
+                            </div>
+                            <span className={`badge badge-${c.status}`} style={{ fontSize: '9px', padding: '2px 6px' }}>
+                              {c.status.replace('_', ' ')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

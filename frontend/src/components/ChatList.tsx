@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, Filter, Phone, Bot, Headphones, User as UserIcon, Clock, Plus, MessageSquare } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Clock, Layers } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 
@@ -29,6 +29,16 @@ interface ChatListProps {
   onStatusToggle?: () => void;
 }
 
+interface ContactGroup {
+  contactId: number;
+  contactName: string;
+  contactPhone: string;
+  primaryConv: Conversation;
+  allConversations: Conversation[];
+  hasUnread: boolean;
+  activeCount: number;
+}
+
 export const ChatList: React.FC<ChatListProps> = ({
   conversations,
   activeConversation,
@@ -42,6 +52,14 @@ export const ChatList: React.FC<ChatListProps> = ({
   onStatusToggle
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
+
+  const toggleExpand = (e: React.MouseEvent, contactId: number) => {
+    e.stopPropagation();
+    setExpandedContactIds(prev =>
+      prev.includes(contactId) ? prev.filter(id => id !== contactId) : [...prev, contactId]
+    );
+  };
 
   const handleToggleStatus = async (e: React.MouseEvent, conv: Conversation) => {
     e.stopPropagation();
@@ -57,28 +75,64 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   };
 
-  // Helper to calculate unread/pending client conversations for each department
-  const getUnreadCount = (deptId: number | 'all') => {
-    return conversations.filter(conv => {
-      const matchesDept = deptId === 'all' || String(conv.whatsapp_number_id) === String(deptId);
-      if (!matchesDept) return false;
-      const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
-      const isUnreadClientMsg = lastMsg && lastMsg.remetente.toLowerCase() === 'cliente';
-      const isNotCurrentlyOpen = activeConversation?.id !== conv.id;
-      return isUnreadClientMsg && isNotCurrentlyOpen;
-    }).length;
-  };
+  // Group conversations by contact
+  const contactGroups = useMemo(() => {
+    const map = new Map<number, Conversation[]>();
 
-  const filteredConversations = conversations.filter(conv => {
-    const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
-    const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
-    const contactName = conv.contact?.nome || '';
-    const contactPhone = conv.contact?.telefone || '';
-    const matchesSearch = contactName.toLowerCase().includes(searchTerm.toLowerCase()) || contactPhone.includes(searchTerm);
-    return matchesDept && matchesStatus && matchesSearch;
-  });
+    conversations.forEach(conv => {
+      const cid = conv.contact_id || conv.contact?.id || 0;
+      if (!map.has(cid)) {
+        map.set(cid, []);
+      }
+      map.get(cid)!.push(conv);
+    });
 
-  const totalUnread = getUnreadCount('all');
+    const groups: ContactGroup[] = [];
+
+    map.forEach((convs, cid) => {
+      // Sort conversations by date desc
+      convs.sort((a, b) => new Date(b.ultima_interacao_em).getTime() - new Date(a.ultima_interacao_em).getTime());
+
+      // Filter by department & status if active
+      const matchingConvs = convs.filter(conv => {
+        const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
+        const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
+        const contactName = conv.contact?.nome || '';
+        const contactPhone = conv.contact?.telefone || '';
+        const matchesSearch = contactName.toLowerCase().includes(searchTerm.toLowerCase()) || contactPhone.includes(searchTerm);
+        return matchesDept && matchesStatus && matchesSearch;
+      });
+
+      if (matchingConvs.length === 0) return;
+
+      // Primary conversation is active conversation or most recent
+      const primary = matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
+      const contact = primary.contact;
+
+      const hasUnread = matchingConvs.some(conv => {
+        const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
+        return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+      });
+
+      groups.push({
+        contactId: cid,
+        contactName: contact?.nome || contact?.telefone || 'Cliente sem nome',
+        contactPhone: contact?.telefone || '',
+        primaryConv: primary,
+        allConversations: matchingConvs,
+        hasUnread,
+        activeCount: matchingConvs.filter(c => c.status === 'com_ia' || c.status === 'com_humano').length
+      });
+    });
+
+    // Sort groups by latest activity date
+    return groups.sort((a, b) => new Date(b.primaryConv.ultima_interacao_em).getTime() - new Date(a.primaryConv.ultima_interacao_em).getTime());
+  }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
+
+  const totalUnread = conversations.filter(conv => {
+    const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
+    return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+  }).length;
 
   return (
     <div style={{
@@ -93,7 +147,7 @@ export const ChatList: React.FC<ChatListProps> = ({
       <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
           <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            Conversas
+            Clientes & Chats
             {totalUnread > 0 && (
               <span style={{
                 backgroundColor: '#ef4444',
@@ -114,17 +168,17 @@ export const ChatList: React.FC<ChatListProps> = ({
               style={{ fontSize: '12px', padding: '6px 12px', borderRadius: 'var(--radius-md)' }}
               title="Iniciar nova conversa por telefone"
             >
-              <Plus size={15} /> Nova Conversa
+              <Plus size={15} /> Nova
             </button>
           )}
         </div>
 
         {/* Search Bar */}
-        <div style={{ position: 'relative', marginBottom: '12px' }}>
+        <div style={{ position: 'relative' }}>
           <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
           <input
             type="text"
-            placeholder="Buscar por nome ou telefone..."
+            placeholder="Buscar por cliente ou telefone..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -146,11 +200,12 @@ export const ChatList: React.FC<ChatListProps> = ({
         padding: '10px 16px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
-        gap: '8px',
+        justify: 'space-between',
+        alignItems: 'center',
         fontSize: '12px',
         color: 'var(--text-muted)'
       }}>
-        <span>Status:</span>
+        <span>Status da Conversa:</span>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as any)}
@@ -160,10 +215,11 @@ export const ChatList: React.FC<ChatListProps> = ({
             border: 'none',
             fontSize: '12px',
             cursor: 'pointer',
-            outline: 'none'
+            outline: 'none',
+            fontWeight: '600'
           }}
         >
-          <option value="all" style={{ background: '#131b2e' }}>Todos</option>
+          <option value="all" style={{ background: '#131b2e' }}>Todas ({contactGroups.length} clientes)</option>
           <option value="com_ia" style={{ background: '#131b2e' }}>Com IA Concierge</option>
           <option value="com_humano" style={{ background: '#131b2e' }}>Com Atendente Humano</option>
           <option value="encerrada" style={{ background: '#131b2e' }}>Encerradas</option>
@@ -171,80 +227,174 @@ export const ChatList: React.FC<ChatListProps> = ({
         </select>
       </div>
 
-      {/* List items */}
+      {/* List items (Grouped by Contact) */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {filteredConversations.length === 0 ? (
+        {contactGroups.length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-            Nenhuma conversa encontrada.
+            Nenhum cliente encontrado.
           </div>
         ) : (
-          filteredConversations.map(conv => {
-            const isSelected = activeConversation?.id === conv.id;
-            const lastMessage = conv.messages[conv.messages.length - 1];
-            const isUnreadClientMsg = lastMessage && lastMessage.remetente.toLowerCase() === 'cliente' && !isSelected;
+          contactGroups.map(group => {
+            const isGroupSelected = group.allConversations.some(c => c.id === activeConversation?.id);
+            const isExpanded = expandedContactIds.includes(group.contactId);
+            const primaryConv = group.primaryConv;
+            const isSelected = activeConversation?.id === primaryConv.id;
+            const lastMessage = primaryConv.messages[primaryConv.messages.length - 1];
 
             return (
               <div
-                key={conv.id}
-                onClick={() => onSelectConversation(conv)}
+                key={group.contactId}
                 style={{
-                  padding: '14px 16px',
                   borderBottom: '1px solid var(--border-color)',
-                  backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : (isUnreadClientMsg ? 'rgba(239, 68, 68, 0.05)' : 'transparent'),
-                  borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isUnreadClientMsg ? '3px solid #ef4444' : '3px solid transparent'),
-                  cursor: 'pointer',
+                  backgroundColor: isGroupSelected ? 'rgba(0, 230, 153, 0.04)' : 'transparent',
                   transition: 'var(--transition-fast)'
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {conv.contact?.nome || conv.contact?.telefone || 'Cliente sem nome'}
-                    {isUnreadClientMsg && (
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} title="Mensagem não lida do cliente" />
-                    )}
-                  </span>
-                  <span style={{ fontSize: '11px', color: isUnreadClientMsg ? '#ef4444' : 'var(--text-muted)', fontWeight: isUnreadClientMsg ? 'bold' : 'normal' }}>
-                    {formatTime(conv.ultima_interacao_em)}
-                  </span>
+                {/* Main Contact Card */}
+                <div
+                  onClick={() => onSelectConversation(primaryConv)}
+                  style={{
+                    padding: '14px 16px',
+                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'),
+                    cursor: 'pointer',
+                    backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent'
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: '700', fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      {group.contactName}
+                      {group.hasUnread && (
+                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} title="Mensagem não lida do cliente" />
+                      )}
+                    </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {formatTime(primaryConv.ultima_interacao_em)}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Phone size={12} /> {group.contactPhone}
+                    </span>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button
+                        onClick={(e) => handleToggleStatus(e, primaryConv)}
+                        title={primaryConv.status === 'com_ia' ? 'Alternar para Humano' : 'Alternar para IA'}
+                        className={`badge badge-${primaryConv.status}`}
+                        style={{ cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', fontSize: '10px' }}
+                      >
+                        {primaryConv.status === 'com_ia' ? <Bot size={10} /> : <Headphones size={10} />}
+                        {primaryConv.status.replace('_', ' ')}
+                      </button>
+
+                      {/* Expand Sub-threads Button */}
+                      {group.allConversations.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => toggleExpand(e, group.contactId)}
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.08)',
+                            border: '1px solid var(--border-color)',
+                            borderRadius: '4px',
+                            color: 'var(--accent-primary)',
+                            padding: '2px 6px',
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '3px'
+                          }}
+                          title="Ver todas as conversas/histórico deste cliente"
+                        >
+                          <Layers size={11} /> {group.allConversations.length}
+                          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Last Message Preview & Dept */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <p style={{
+                      fontSize: '12px',
+                      color: group.hasUnread ? 'var(--text-main)' : 'var(--text-dim)',
+                      fontWeight: group.hasUnread ? '600' : 'normal',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: '220px'
+                    }}>
+                      {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
+                    </p>
+                    <span style={{
+                      fontSize: '10px',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      color: 'var(--text-muted)'
+                    }}>
+                      {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
+                    </span>
+                  </div>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Phone size={12} /> {conv.contact?.telefone}
-                  </span>
-                  <button
-                    onClick={(e) => handleToggleStatus(e, conv)}
-                    title={conv.status === 'com_ia' ? 'Clique para alternar para Atendente Humano' : 'Clique para alternar para IA Concierge'}
-                    className={`badge badge-${conv.status}`}
-                    style={{ cursor: 'pointer', border: 'none', transition: 'transform 0.1s', display: 'flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    {conv.status === 'com_ia' ? <Bot size={10} /> : <Headphones size={10} />}
-                    {conv.status.replace('_', ' ')}
-                  </button>
-                </div>
+                {/* Sub-threads Accordion (Conversas do Cliente: Ativas, Expiradas, Encerradas) */}
+                {isExpanded && group.allConversations.length > 1 && (
+                  <div style={{
+                    backgroundColor: 'rgba(0,0,0,0.25)',
+                    padding: '8px 12px 10px 24px',
+                    borderTop: '1px dashed var(--border-color)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}>
+                    <div style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <History size={10} /> Histórico de Chamados do Cliente ({group.allConversations.length}):
+                    </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <p style={{
-                    fontSize: '12px',
-                    color: isUnreadClientMsg ? 'var(--text-main)' : 'var(--text-dim)',
-                    fontWeight: isUnreadClientMsg ? '600' : 'normal',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    maxWidth: '220px'
-                  }}>
-                    {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
-                  </p>
-                  <span style={{
-                    fontSize: '10px',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    color: 'var(--text-muted)'
-                  }}>
-                    {conv.whatsapp_number?.nome_departamento || 'Dept'}
-                  </span>
-                </div>
+                    {group.allConversations.map((subConv, idx) => {
+                      const isSubActive = activeConversation?.id === subConv.id;
+                      const subLastMsg = subConv.messages && subConv.messages.length > 0 ? subConv.messages[subConv.messages.length - 1] : null;
+
+                      return (
+                        <div
+                          key={subConv.id}
+                          onClick={() => onSelectConversation(subConv)}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: '6px',
+                            backgroundColor: isSubActive ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.03)',
+                            border: isSubActive ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justify: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: '11px', fontWeight: '600', color: isSubActive ? 'var(--accent-primary)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>#{subConv.id} • {subConv.whatsapp_number?.nome_departamento || 'Geral'}</span>
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>
+                              {subLastMsg ? subLastMsg.conteudo : 'Sem mensagens'}
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: 'right' }}>
+                            <span className={`badge badge-${subConv.status}`} style={{ fontSize: '9px', padding: '1px 5px' }}>
+                              {subConv.status.replace('_', ' ')}
+                            </span>
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              {formatTime(subConv.ultima_interacao_em)}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })

@@ -282,6 +282,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', display: 'flex' }}>
               <ChatArea
                 conversation={activeConversation}
+                allConversations={conversations}
+                onSelectConversation={(conv) => setActiveConversationId(conv.id)}
                 currentUser={user}
                 onSendMessage={handleSendMessage}
                 onOpenTransferModal={() => setIsTransferModalOpen(true)}
