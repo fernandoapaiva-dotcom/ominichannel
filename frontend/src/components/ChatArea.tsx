@@ -899,7 +899,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           position: 'relative'
         }}
       >
-        {conversation.messages.map((msg, idx) => {
+        {(conversation?.messages || []).map((msg, idx) => {
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
           const isSystem = msg.remetente === 'sistema';
