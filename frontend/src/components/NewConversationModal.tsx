@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Send, Phone, Building, User, MessageSquare } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Send, Phone, Building, User, MessageSquare, Search } from 'lucide-react';
 import { WhatsAppNumber, Conversation } from '../types';
 import { apiFetch } from '../services/api';
 
@@ -20,9 +20,28 @@ export const NewConversationModal: React.FC<NewConversationModalProps> = ({
   const [phone, setPhone] = useState('');
   const [contactName, setContactName] = useState('');
   const [initialMessage, setInitialMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [contacts, setContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (isOpen) {
+      // Load existing tenant contacts for quick selection
+      apiFetch('/contacts/')
+        .then(data => setContacts(data || []))
+        .catch(err => console.error('Error fetching contacts for modal:', err));
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
+
+  const filteredContacts = contacts.filter(c => {
+    if (!searchQuery.trim()) return false;
+    const q = searchQuery.toLowerCase();
+    const nameMatch = c.nome && c.nome.toLowerCase().includes(q);
+    const phoneMatch = c.telefone && c.telefone.includes(q);
+    return nameMatch || phoneMatch;
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,6 +152,94 @@ export const NewConversationModal: React.FC<NewConversationModalProps> = ({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Quick Contact Search / Autocomplete */}
+          <div>
+            <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>🔍 Buscar em Contatos Cadastrados</span>
+              {contacts.length > 0 && <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: '600' }}>{contacts.length} contato(s) na agenda</span>}
+            </label>
+            <div style={{ position: 'relative' }}>
+              <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
+              <input
+                type="text"
+                placeholder="Digite o nome ou telefone do cliente..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px 10px 38px',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-md)',
+                  color: 'var(--text-main)',
+                  fontSize: '14px'
+                }}
+              />
+            </div>
+
+            {/* Filtered Search Suggestions Dropdown */}
+            {filteredContacts.length > 0 && searchQuery.trim() !== '' && (
+              <div style={{
+                maxHeight: '160px',
+                overflowY: 'auto',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--accent-primary)',
+                borderRadius: 'var(--radius-md)',
+                marginTop: '6px',
+                display: 'flex',
+                flexDirection: 'column',
+                boxShadow: '0 8px 16px rgba(0,0,0,0.5)',
+                zIndex: 10
+              }}>
+                {filteredContacts.map(c => (
+                  <div
+                    key={c.id}
+                    onClick={() => {
+                      setPhone(c.telefone);
+                      setContactName(c.nome || '');
+                      setSearchQuery('');
+                    }}
+                    style={{
+                      padding: '10px 12px',
+                      borderBottom: '1px solid var(--border-color)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      backgroundColor: 'rgba(0, 230, 153, 0.05)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <div style={{
+                        width: '28px',
+                        height: '28px',
+                        borderRadius: '50%',
+                        backgroundColor: 'rgba(0, 230, 153, 0.2)',
+                        color: 'var(--accent-primary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: '700',
+                        fontSize: '12px'
+                      }}>
+                        {(c.nome || c.telefone).charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>
+                          {c.nome || 'Contato sem nome'}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          📞 {c.telefone}
+                        </div>
+                      </div>
+                    </div>
+                    <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: '700' }}>Selecionar ➔</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
