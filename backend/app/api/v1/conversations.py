@@ -100,14 +100,6 @@ async def list_conversations(
 
     response_list = []
     for c in conversations:
-        if c.contact and not c.contact.foto_perfil_url and c.whatsapp_number and c.whatsapp_number.instancia_evolution_api:
-            try:
-                pic = await evolution_service.fetch_profile_picture_url(c.whatsapp_number.instancia_evolution_api, c.contact.telefone)
-                if pic:
-                    c.contact.foto_perfil_url = pic
-            except Exception:
-                pass
-
         c_dict = ConversationResponse.model_validate(c).model_dump()
         c_dict["assigned_user_name"] = user_map.get(c.assigned_user_id)
         c_dict["resumo_ia"] = mem_map.get(c.contact_id)

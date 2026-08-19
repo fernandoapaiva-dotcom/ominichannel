@@ -448,7 +448,13 @@ async def receive_evolution_webhook(
     profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
 
     if not profile_pic_url and (not contact or not contact.foto_perfil_url) and whatsapp_number.instancia_evolution_api:
-        profile_pic_url = await evolution_service.fetch_profile_picture_url(whatsapp_number.instancia_evolution_api, phone_number)
+        try:
+            profile_pic_url = await asyncio.wait_for(
+                evolution_service.fetch_profile_picture_url(whatsapp_number.instancia_evolution_api, phone_number),
+                timeout=2.0
+            )
+        except Exception:
+            profile_pic_url = None
 
     if not contact:
         contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name, foto_perfil_url=profile_pic_url)
