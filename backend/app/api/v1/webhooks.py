@@ -444,7 +444,11 @@ async def receive_evolution_webhook(
         Contact.telefone.in_(phone_variants)
     )
     contact_res = await db.execute(contact_stmt)
+    contact = contact_res.scalars().first()
     profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
+
+    if not profile_pic_url and (not contact or not contact.foto_perfil_url) and whatsapp_number.instancia_evolution_api:
+        profile_pic_url = await evolution_service.fetch_profile_picture_url(whatsapp_number.instancia_evolution_api, phone_number)
 
     if not contact:
         contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name, foto_perfil_url=profile_pic_url)

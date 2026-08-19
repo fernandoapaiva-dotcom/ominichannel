@@ -728,31 +728,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       <div style={{
-        padding: '16px 24px',
+        padding: '0 20px',
+        height: '64px',
         borderBottom: '1px solid var(--border-color)',
         backgroundColor: 'var(--bg-primary)',
         display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
+        justify: 'space-between',
+        alignItems: 'center',
+        gap: '16px',
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        whiteSpace: 'nowrap'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {/* Left Section: Avatar & Customer Metadata */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
           {onToggleChatList && isChatListCollapsed && (
             <button
               onClick={onToggleChatList}
               className="btn-secondary"
               style={{
-                padding: '6px 12px',
-                fontSize: '12px',
-                display: 'flex',
+                height: '34px',
+                padding: '0 10px',
+                fontSize: '11px',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                marginRight: '4px'
+                gap: '6px'
               }}
               title="Expandir/Mostrar lista de conversas"
             >
-              <PanelLeftOpen size={16} /> Ver Conversas
+              <PanelLeftOpen size={15} /> Ver Conversas
             </button>
           )}
+
           {onBack && (
             <button
               onClick={onBack}
@@ -767,25 +774,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 alignItems: 'center'
               }}
             >
-              <ArrowLeft size={22} />
+              <ArrowLeft size={20} />
             </button>
           )}
+
           {/* WhatsApp Profile Avatar in Header */}
           {conversation.contact?.foto_perfil_url ? (
             <img
               src={conversation.contact.foto_perfil_url}
               alt={conversation.contact.nome || 'Cliente'}
-              style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0 }}
+              style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0 }}
             />
           ) : (
             <div style={{
-              width: '42px',
-              height: '42px',
+              width: '40px',
+              height: '40px',
               borderRadius: '50%',
               background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
               color: '#051a12',
               fontWeight: '700',
-              fontSize: '18px',
+              fontSize: '17px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -797,7 +805,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
 
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               {isEditingContact ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <input
@@ -810,33 +818,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     }}
                     autoFocus
                     style={{
-                      padding: '4px 8px',
+                      padding: '3px 8px',
                       borderRadius: 'var(--radius-sm)',
                       backgroundColor: 'var(--bg-secondary)',
                       border: '1px solid var(--border-active)',
                       color: 'var(--text-main)',
-                      fontSize: '14px'
+                      fontSize: '13px'
                     }}
                   />
                   <button
                     onClick={handleSaveContactName}
                     disabled={savingContact}
                     className="btn-primary"
-                    style={{ padding: '4px 10px', fontSize: '12px' }}
+                    style={{ padding: '3px 8px', fontSize: '11px' }}
                   >
                     Salvar
                   </button>
                   <button
                     onClick={() => setIsEditingContact(false)}
                     className="btn-secondary"
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                    style={{ padding: '3px 6px', fontSize: '11px' }}
                   >
-                    <X size={14} />
+                    <X size={13} />
                   </button>
                 </div>
               ) : (
                 <>
-                  <h3 style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-main)' }}>{conversation.contact?.nome || 'Cliente'}</h3>
+                  <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)', margin: 0 }}>
+                    {conversation.contact?.nome || 'Cliente'}
+                  </h3>
                   <button
                     onClick={() => {
                       setEditingContactName(conversation.contact?.nome || '');
@@ -853,111 +863,114 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       alignItems: 'center'
                     }}
                   >
-                    <Pencil size={14} />
+                    <Pencil size={13} />
                   </button>
                 </>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', alignItems: 'center' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Phone size={13} /> {conversation.contact?.telefone}</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Building size={13} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
+
+            <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Building size={11} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
               {conversation.assigned_user_name && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#60a5fa', fontWeight: '600' }}>
-                  <UserCheck size={13} /> Atendente: {conversation.assigned_user_name}
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
+                  <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
                 </span>
-              )}
-
-              {/* Thread Switcher Dropdown */}
-              {contactConversations.length > 1 && onSelectConversation && (
-                <div style={{ position: 'relative' }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowThreadDropdown(!showThreadDropdown)}
-                    style={{
-                      background: 'rgba(0, 230, 153, 0.12)',
-                      border: '1px solid var(--accent-primary)',
-                      color: 'var(--accent-primary)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: '3px 8px',
-                      fontSize: '11px',
-                      fontWeight: '700',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px'
-                    }}
-                    title="Alternar entre conversas/histórico deste cliente"
-                  >
-                    <span>📁 Chamado #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
-                    <ChevronDown size={13} />
-                  </button>
-
-                  {showThreadDropdown && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '110%',
-                      left: 0,
-                      backgroundColor: '#0f172a',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: 'var(--radius-md)',
-                      boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
-                      zIndex: 500,
-                      minWidth: '280px',
-                      overflow: 'hidden'
-                    }}>
-                      <div style={{ padding: '8px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
-                        Conversas do Cliente ({contactConversations.length}):
-                      </div>
-                      {contactConversations.map(c => {
-                        const isCurrent = c.id === conversation.id;
-                        return (
-                          <div
-                            key={c.id}
-                            onClick={() => {
-                              onSelectConversation(c);
-                              setShowThreadDropdown(false);
-                            }}
-                            style={{
-                              padding: '8px 12px',
-                              backgroundColor: isCurrent ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
-                              borderBottom: '1px solid rgba(255,255,255,0.05)',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              justify: 'space-between',
-                              alignItems: 'center'
-                            }}
-                          >
-                            <div>
-                              <div style={{ fontSize: '12px', fontWeight: '600', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-main)' }}>
-                                Chamado #{c.id} • {c.whatsapp_number?.nome_departamento || 'Geral'}
-                              </div>
-                              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                {formatTime(c.ultima_interacao_em)}
-                              </div>
-                            </div>
-                            <span className={`badge badge-${c.status}`} style={{ fontSize: '9px', padding: '2px 6px' }}>
-                              {c.status.replace('_', ' ')}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               )}
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* Right Section: Action Buttons Toolbar (All strictly 34px height on 1 single line!) */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+          {/* Thread Switcher Dropdown */}
+          {contactConversations.length > 1 && onSelectConversation && (
+            <div style={{ position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => setShowThreadDropdown(!showThreadDropdown)}
+                style={{
+                  height: '34px',
+                  padding: '0 10px',
+                  background: 'rgba(0, 230, 153, 0.12)',
+                  border: '1px solid var(--accent-primary)',
+                  color: 'var(--accent-primary)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+                title="Alternar entre chamados deste cliente"
+              >
+                <span>📁 Chamado #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
+                <ChevronDown size={13} />
+              </button>
+
+              {showThreadDropdown && (
+                <div style={{
+                  position: 'absolute',
+                  top: '110%',
+                  right: 0,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
+                  zIndex: 500,
+                  minWidth: '260px',
+                  overflow: 'hidden'
+                }}>
+                  <div style={{ padding: '8px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
+                    Conversas do Cliente ({contactConversations.length}):
+                  </div>
+                  {contactConversations.map(c => {
+                    const isCurrent = c.id === conversation.id;
+                    return (
+                      <div
+                        key={c.id}
+                        onClick={() => {
+                          onSelectConversation(c);
+                          setShowThreadDropdown(false);
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          backgroundColor: isCurrent ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+                          borderBottom: '1px solid rgba(255,255,255,0.05)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justify: 'space-between',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontSize: '11px', fontWeight: '600', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-main)' }}>
+                            Chamado #{c.id} • {c.whatsapp_number?.nome_departamento || 'Geral'}
+                          </div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                            {formatTime(c.ultima_interacao_em)}
+                          </div>
+                        </div>
+                        <span className={`badge badge-${c.status}`} style={{ fontSize: '9px', padding: '2px 6px' }}>
+                          {c.status.replace('_', ' ')}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           <button
             onClick={handleToggleStatus}
             disabled={isTogglingStatus}
             style={{
-              height: '36px',
+              height: '34px',
               padding: '0 12px',
               borderRadius: 'var(--radius-md)',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '700',
               border: '1px solid var(--border-color)',
               backgroundColor: conversation.status === 'com_ia' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)',
@@ -965,20 +978,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '5px',
               cursor: 'pointer'
             }}
           >
-            {conversation.status === 'com_ia' ? <><Bot size={15} /> COM IA</> : <><Headphones size={15} /> COM HUMANO</>}
+            {conversation.status === 'com_ia' ? <><Bot size={14} /> COM IA</> : <><Headphones size={14} /> COM HUMANO</>}
           </button>
 
           <button
             onClick={handleStartVideoCall}
             className="btn-secondary"
             style={{
-              height: '36px',
+              height: '34px',
               padding: '0 12px',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
               backgroundColor: 'rgba(0, 230, 153, 0.12)',
@@ -987,12 +1000,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '5px',
               cursor: 'pointer'
             }}
             title="Iniciar chamada de vídeo / voz WebRTC e enviar link para o cliente"
           >
-            <Video size={15} /> Chamada Vídeo/Voz
+            <Video size={14} /> Chamada Vídeo/Voz
           </button>
 
           {onOpenMediaGallery && (
@@ -1000,19 +1013,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={onOpenMediaGallery}
               className="btn-secondary"
               style={{
-                height: '36px',
+                height: '34px',
                 padding: '0 12px',
-                fontSize: '12px',
+                fontSize: '11px',
                 fontWeight: '600',
                 borderRadius: 'var(--radius-md)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
+                gap: '5px',
                 cursor: 'pointer'
               }}
             >
-              <Paperclip size={15} /> Arquivos ({conversationMedia.length})
+              <Paperclip size={14} /> Arquivos ({conversationMedia.length})
             </button>
           )}
 
@@ -1029,20 +1042,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             disabled={isImportingBackup}
             className="btn-secondary"
             style={{
-              height: '36px',
+              height: '34px',
               padding: '0 12px',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '5px',
               cursor: 'pointer'
             }}
             title="Importar arquivo de conversa exportado do WhatsApp (.txt ou .zip)"
           >
-            <Upload size={15} style={{ animation: isImportingBackup ? 'spin 1s linear infinite' : 'none' }} />
+            <Upload size={14} style={{ animation: isImportingBackup ? 'spin 1s linear infinite' : 'none' }} />
             {isImportingBackup ? 'Importando...' : 'Importar Backup'}
           </button>
 
@@ -1051,20 +1064,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             disabled={isSyncingHistory}
             className="btn-secondary"
             style={{
-              height: '36px',
+              height: '34px',
               padding: '0 12px',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '5px',
               cursor: 'pointer'
             }}
             title="Sincronizar mensagens anteriores do WhatsApp"
           >
-            <RefreshCw size={15} style={{ animation: isSyncingHistory ? 'spin 1s linear infinite' : 'none' }} />
+            <RefreshCw size={14} style={{ animation: isSyncingHistory ? 'spin 1s linear infinite' : 'none' }} />
             {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
           </button>
 
@@ -1072,19 +1085,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onClick={onOpenTransferModal}
             className="btn-secondary"
             style={{
-              height: '36px',
+              height: '34px',
               padding: '0 12px',
-              fontSize: '12px',
+              fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '6px',
+              gap: '5px',
               cursor: 'pointer'
             }}
           >
-            <ArrowRightLeft size={15} /> Transferir
+            <ArrowRightLeft size={14} /> Transferir
           </button>
         </div>
       </div>

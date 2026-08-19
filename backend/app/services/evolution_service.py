@@ -425,10 +425,33 @@ class EvolutionService:
                         return data
                     elif isinstance(data, dict):
                         return data.get("groups") or data.get("records") or data.get("data") or []
-                return []
             except Exception as e:
                 logger.error(f"Error fetching groups for instance {instance_name}: {e}")
                 return []
+    async def fetch_profile_picture_url(
+        self,
+        instance_name: str,
+        number: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Fetches contact profile picture URL from Evolution API endpoint /chat/fetchProfilePictureUrl/{instance}.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
+        clean_num = number.replace("+", "").replace("-", "").replace(" ", "").strip()
+        payload = {"number": clean_num}
+
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            try:
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code in [200, 201]:
+                    data = response.json()
+                    return data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+            except Exception as e:
+                logger.warning(f"Failed to fetch profile picture URL for {number}: {e}")
+        return None
 
 evolution_service = EvolutionService()
 
