@@ -29,6 +29,7 @@ class MessageType(str, enum.Enum):
     IMAGEM = "imagem"
     VIDEO = "video"
     ARQUIVO = "arquivo"
+    LOCALIZACAO = "localizacao"
 
 # N:N Join Table for User permissions to WhatsAppNumbers
 user_number_access = Table(

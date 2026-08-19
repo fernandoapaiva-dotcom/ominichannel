@@ -57,7 +57,8 @@ class GeminiService:
             "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final:\n"
             "   'Perfeito! Coletei todas as suas informações e seu chamado foi encaminhado para o atendente especialista do setor [Setor]. Ele responderá em breve por aqui com a solução. Obrigado!'\n"
             "   E defina obrigatoriamente 'ESCALAR_HUMANO: SIM'.\n"
-            "7. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n\n"
+            "7. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
+            "8. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço, localização ou como chegar à loja, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'. Caso contrário, defina 'ENVIAR_LOCALIZACAO: NAO'.\n\n"
             f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}\n\n"
             f"HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA:\n{memory_summary or 'Nenhum histórico anterior.'}\n\n"
             f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}"
@@ -75,12 +76,14 @@ class GeminiService:
             "Responda no seguinte formato exato:\n"
             "RESPOSTA: <sua resposta calorosa e conversacional ao cliente>\n"
             "TRANSFERIR_SETOR: <NomeExatoDoSetor ou NENHUM>\n"
+            "ENVIAR_LOCALIZACAO: <SIM ou NAO>\n"
             "ESCALAR_HUMANO: <SIM ou NAO>\n"
             "NOVA_MEMORIA: <resumo atualizado em 1 ou 2 frases curtas>"
         )
 
         if not client:
             needs_human = any(word in user_message.lower() for word in ["humano", "atendente", "falar com pessoa"])
+            wants_loc = any(word in user_message.lower() for word in ["localizacao", "localização", "endereco", "endereço", "onde fica", "como chegar"])
             target_dept = "NENHUM"
             if available_departments:
                 for d in available_departments:
@@ -91,6 +94,7 @@ class GeminiService:
             return {
                 "resposta": "Olá! Seja muito bem-vindo. Como posso te ajudar hoje?" if not needs_human else "Estou transferindo seu atendimento para um de nossos especialistas.",
                 "transferir_setor": target_dept,
+                "enviar_localizacao": wants_loc,
                 "escalar_humano": needs_human,
                 "nova_memoria": f"Cliente perguntou: '{user_message}'",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
@@ -112,6 +116,7 @@ class GeminiService:
 
             resposta = ""
             transferir_setor = "NENHUM"
+            enviar_localizacao = False
             escalar_humano = False
             nova_memoria = ""
 
@@ -120,6 +125,8 @@ class GeminiService:
                     resposta = line.replace("RESPOSTA:", "").strip()
                 elif line.startswith("TRANSFERIR_SETOR:"):
                     transferir_setor = line.replace("TRANSFERIR_SETOR:", "").strip()
+                elif line.startswith("ENVIAR_LOCALIZACAO:"):
+                    enviar_localizacao = "SIM" in line.upper()
                 elif line.startswith("ESCALAR_HUMANO:"):
                     escalar_humano = "SIM" in line.upper()
                 elif line.startswith("NOVA_MEMORIA:"):
@@ -131,6 +138,7 @@ class GeminiService:
             return {
                 "resposta": resposta,
                 "transferir_setor": transferir_setor,
+                "enviar_localizacao": enviar_localizacao,
                 "escalar_humano": escalar_humano,
                 "nova_memoria": nova_memoria or memory_summary or f"Cliente interagiu sobre: {user_message[:50]}",
                 "tokens": {
@@ -144,10 +152,49 @@ class GeminiService:
             return {
                 "resposta": "Recebi sua mensagem. Um momento por favor, vou direcionar para nossa equipe.",
                 "transferir_setor": "NENHUM",
+                "enviar_localizacao": False,
                 "escalar_humano": True,
                 "nova_memoria": "Erro na IA Concierge, escalado automaticamente para humano.",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
+
+    async def process_audio_message(
+        self,
+        audio_bytes: bytes,
+        mime_type: str = "audio/ogg",
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Transcribes and understands incoming voice audio messages from customers using Gemini Multimodal SDK.
+        Returns the exact transcribed spoken text.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+
+        if not client or not audio_bytes:
+            return ""
+
+        try:
+            import asyncio
+            from google.genai import types
+
+            prompt = "Ouça atentamente a esta mensagem de áudio em português enviada pelo cliente no WhatsApp e faça a transcrição exata e literal do texto falado, sem adicionar comentários ou introdução."
+
+            part = types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=mime_type or "audio/ogg"
+            )
+
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=model_name,
+                contents=[part, prompt]
+            )
+            return response.text.strip() if response and response.text else ""
+        except Exception as e:
+            logger.error(f"Error processing audio message with Gemini SDK: {e}")
+            return ""
 
     async def summarize_conversation_for_transfer(
         self,

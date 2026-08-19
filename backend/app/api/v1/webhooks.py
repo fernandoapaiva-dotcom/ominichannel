@@ -293,6 +293,16 @@ async def receive_evolution_webhook(
     msg_id = key.get("id", "") if isinstance(key, dict) else ""
     media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
 
+    # Check location payload
+    loc_msg = message_obj.get("locationMessage")
+    if loc_msg:
+        msg_type = MessageType.LOCALIZACAO
+        c_lat = loc_msg.get("degreesLatitude")
+        c_lng = loc_msg.get("degreesLongitude")
+        c_name = loc_msg.get("name") or loc_msg.get("address") or "Localização Compartilhada pelo Cliente"
+        c_addr = loc_msg.get("address") or ""
+        text_content = f"📍 *LOCALIZAÇÃO RECEBIDA DO CLIENTE*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
+
     if (img_msg or vid_msg or aud_msg or doc_msg) and not media_base64 and msg_id:
         try:
             media_base64 = await evolution_service.get_media_base64(instance_name, msg_id)
@@ -303,6 +313,17 @@ async def receive_evolution_webhook(
     if img_msg or vid_msg or aud_msg or doc_msg:
         caption = ""
         ext = ""
+        media_bytes = None
+        if media_base64:
+            try:
+                import base64
+                if "," in media_base64:
+                    media_bytes = base64.b64decode(media_base64.split(",")[1])
+                else:
+                    media_bytes = base64.b64decode(media_base64)
+            except Exception as e:
+                logger.error(f"Error decoding incoming media base64: {e}")
+
         if img_msg:
             msg_type = MessageType.IMAGEM
             caption = img_msg.get("caption") or ""
@@ -314,6 +335,22 @@ async def receive_evolution_webhook(
         elif aud_msg:
             msg_type = MessageType.AUDIO
             ext = ".ogg"
+            if media_bytes:
+                # Transcribe/understand voice audio note via Gemini Multimodal SDK
+                try:
+                    from app.services.settings_service import settings_service
+                    dec_sets = await settings_service.get_tenant_decrypted_settings(db, 1)
+                    audio_transcription = await gemini_service.process_audio_message(
+                        audio_bytes=media_bytes,
+                        mime_type="audio/ogg",
+                        tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
+                        tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+                    )
+                    if audio_transcription:
+                        logger.info(f"Successfully transcribed customer audio message: '{audio_transcription}'")
+                        text_content = f"🎙️ [Áudio Transcrito]: \"{audio_transcription}\""
+                except Exception as audio_err:
+                    logger.error(f"Error transcribing customer audio note: {audio_err}")
         elif doc_msg:
             msg_type = MessageType.ARQUIVO
             caption = doc_msg.get("caption") or ""
@@ -321,16 +358,11 @@ async def receive_evolution_webhook(
             ext = os.path.splitext(doc_filename)[1] or ".bin"
 
         # If base64 is present, save file to disk
-        if media_base64:
+        if media_bytes and not text_content:
             try:
-                import base64
                 import os
                 import uuid
                 os.makedirs("uploads", exist_ok=True)
-                if "," in media_base64:
-                    media_bytes = base64.b64decode(media_base64.split(",")[1])
-                else:
-                    media_bytes = base64.b64decode(media_base64)
                 unique_name = f"{uuid.uuid4().hex}{ext}"
                 media_path = os.path.join("uploads", unique_name)
                 with open(media_path, "wb") as f:
@@ -339,7 +371,7 @@ async def receive_evolution_webhook(
                 media_url = f"/uploads/{unique_name}"
                 text_content = f"{media_url}|{caption}" if caption else media_url
             except Exception as e:
-                logger.error(f"Error decoding incoming media base64: {e}")
+                logger.error(f"Error saving incoming media file: {e}")
 
         # Fallback to direct media URL if base64 decoding was not available
         if not text_content:
@@ -550,8 +582,12 @@ async def receive_evolution_webhook(
                     f"[{getattr(m.remetente, 'value', str(m.remetente))}]: {m.conteudo}" for m in past_msgs if m.conteudo
                 ])
 
-        # Fetch RAG Context
-        rag_context = await rag_service.search_context(tenant_id=tenant_id, query=text_content)
+        # Fetch RAG Context (Geral + Department Specific)
+        rag_context = await rag_service.search_context(
+            tenant_id=tenant_id,
+            query=text_content,
+            department_id=whatsapp_number.id
+        )
 
         # Fetch recent messages for AI context
         msg_stmt = select(Message).where(Message.conversation_id == conversation.id).order_by(Message.timestamp.desc()).limit(6)
@@ -590,6 +626,7 @@ async def receive_evolution_webhook(
 
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
+        enviar_localizacao = ai_output.get("enviar_localizacao", False)
         escalar_humano = ai_output["escalar_humano"]
         nova_memoria = ai_output["nova_memoria"]
 
@@ -630,7 +667,7 @@ async def receive_evolution_webhook(
                     }
                 )
 
-        # Save AI Response
+        # Save AI Response Text Message
         ai_msg = Message(
             conversation_id=conversation.id,
             remetente=MessageSender.IA,
@@ -638,6 +675,41 @@ async def receive_evolution_webhook(
             tipo=MessageType.TEXTO,
             timestamp=datetime.utcnow()
         )
+        db.add(ai_msg)
+
+        # Dispatch Text Response via WhatsApp
+        await evolution_service.send_text_message(
+            instance_name=whatsapp_number.instancia_evolution_api,
+            number=contact.telefone,
+            text=ai_reply
+        )
+
+        # Dispatch Native WhatsApp Location Message if requested by customer/IA
+        if enviar_localizacao:
+            # Default location coordinates (SOF Q 5 Lote 05 Loja 02 Conjunto A - Guará, Brasília - DF)
+            loc_name = "Servweld"
+            loc_addr = "SOF Q 5 Lote 05 Loja 02 Conjunto A - Guará, Brasília - DF, 71215-226"
+            loc_lat = -15.819305
+            loc_lng = -47.954784
+
+            await evolution_service.send_location_message(
+                instance_name=whatsapp_number.instancia_evolution_api,
+                number=contact.telefone,
+                latitude=loc_lat,
+                longitude=loc_lng,
+                name=loc_name,
+                address=loc_addr
+            )
+
+            # Record location message in conversation DB
+            loc_db_msg = Message(
+                conversation_id=conversation.id,
+                remetente=MessageSender.IA,
+                conteudo=f"📍 *LOCALIZAÇÃO ENVIADA*\n{loc_name}\n{loc_addr}\nhttps://maps.google.com/?q={loc_lat},{loc_lng}",
+                tipo=MessageType.LOCALIZACAO,
+                timestamp=datetime.utcnow()
+            )
+            db.add(loc_db_msg)
         db.add(ai_msg)
 
         # Update Conversation Memory

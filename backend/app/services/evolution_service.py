@@ -202,6 +202,43 @@ class EvolutionService:
                 logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_location_message(
+        self,
+        instance_name: str,
+        number: str,
+        latitude: float,
+        longitude: float,
+        name: str = "",
+        address: str = "",
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends a single native WhatsApp location message with interactive map thumbnail and red pin via Evolution API v2.
+        Endpoint: POST /message/sendLocation/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendLocation/{instance_name}"
+        clean_number = "".join(filter(str.isdigit, str(number)))
+        payload = {
+            "number": clean_number,
+            "name": name or "Localização da Loja",
+            "address": address or "",
+            "latitude": float(latitude),
+            "longitude": float(longitude)
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                res_data = response.json()
+                if response.status_code >= 400:
+                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                res_data["success"] = True
+                return res_data
+            except Exception as e:
+                logger.error(f"Error sending native location message to {number} via instance {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
     async def send_media_message(
         self,
         instance_name: str,

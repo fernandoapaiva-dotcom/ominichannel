@@ -40,9 +40,14 @@ export const AdminPanel: React.FC = () => {
   const [userRole, setUserRole] = useState<'admin' | 'atendente'>('atendente');
   const [selectedNumIds, setSelectedNumIds] = useState<number[]>([]);
 
-  // RAG Upload State
+  // RAG Upload & Segmented State
+  const [ragScope, setRagScope] = useState<'geral' | 'setor'>('geral');
+  const [ragDeptId, setRagDeptId] = useState<number | ''>('');
   const [ragTitle, setRagTitle] = useState('');
   const [ragContent, setRagContent] = useState('');
+  const [ragFiles, setRagFiles] = useState<FileList | null>(null);
+  const [ragDocuments, setRagDocuments] = useState<any[]>([]);
+  const [ragLoading, setRagLoading] = useState(false);
 
   // Integration Settings State
   const [maskedSettings, setMaskedSettings] = useState<any>(null);
@@ -152,6 +157,7 @@ export const AdminPanel: React.FC = () => {
     loadData();
     loadSettingsAndAudit();
     loadWhatsAppGroups();
+    loadRagDocuments();
 
 
     const interval = setInterval(() => {
@@ -424,23 +430,95 @@ export const AdminPanel: React.FC = () => {
     setSelectedNumIds([]);
   };
 
-  // --- RAG Upload Handler ---
+  // --- RAG Upload & Knowledge Management Handlers ---
+  const loadRagDocuments = async () => {
+    try {
+      setRagLoading(true);
+      const docs = await apiFetch('/rag/documents');
+      setRagDocuments(docs || []);
+    } catch (err) {
+      console.error('Error loading RAG documents:', err);
+    } finally {
+      setRagLoading(false);
+    }
+  };
+
   const handleUploadRAG = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const targetDept = numbers.find(n => n.id === Number(ragDeptId));
       await apiFetch('/rag/upload', {
         method: 'POST',
         body: JSON.stringify({
           doc_id: `doc_${Date.now()}`,
           titulo: ragTitle,
-          content: ragContent
+          content: ragContent,
+          scope: ragScope,
+          department_id: ragScope === 'setor' ? Number(ragDeptId) || undefined : undefined,
+          department_name: ragScope === 'setor' ? (targetDept?.nome_departamento || 'Setor') : 'Geral'
         })
       });
       setRagTitle('');
       setRagContent('');
-      alert('Conhecimento RAG adicionado à IA Concierge!');
+      await loadRagDocuments();
+      alert('Conhecimento RAG em texto cadastrado com sucesso!');
     } catch (err: any) {
       alert(err.message);
+    }
+  };
+
+  const handleUploadFilesRAG = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ragFiles || ragFiles.length === 0) {
+      alert('Selecione ao menos 1 arquivo (.pdf, .txt, .docx, .md) para enviar.');
+      return;
+    }
+    const targetDept = numbers.find(n => n.id === Number(ragDeptId));
+    const formData = new FormData();
+    for (let i = 0; i < ragFiles.length; i++) {
+      formData.append('files', ragFiles[i]);
+    }
+    formData.append('scope', ragScope);
+    if (ragScope === 'setor' && ragDeptId) {
+      formData.append('department_id', String(ragDeptId));
+      formData.append('department_name', targetDept?.nome_departamento || 'Setor');
+    } else {
+      formData.append('scope', 'geral');
+      formData.append('department_name', 'Geral');
+    }
+
+    try {
+      setRagLoading(true);
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/v1/rag/upload-files', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro ao enviar arquivos');
+      alert(`✅ ${data.message}`);
+      setRagFiles(null);
+      const fileInput = document.getElementById('rag-file-input') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+      await loadRagDocuments();
+    } catch (err: any) {
+      alert(`❌ Erro: ${err.message}`);
+    } finally {
+      setRagLoading(false);
+    }
+  };
+
+  const handleDeleteRAGDoc = async (docId: string, title: string) => {
+    if (!window.confirm(`Deseja realmente excluir o documento '${title}' da base RAG?`)) return;
+    try {
+      await apiFetch(`/rag/documents/${docId}`, { method: 'DELETE' });
+      await loadRagDocuments();
+      alert('Documento removido da base RAG com sucesso!');
+    } catch (err: any) {
+      alert(`Erro ao excluir documento: ${err.message}`);
     }
   };
 
@@ -1123,43 +1201,226 @@ export const AdminPanel: React.FC = () => {
           </div>
         )}
 
-        {/* 3. RAG Knowledge Upload Tab */}
+        {/* 3. RAG Knowledge Upload & Management Tab */}
         {activeSubTab === 'rag' && (
-          <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
-            <h3 style={{ fontSize: '18px', marginBottom: '12px' }}>Adicionar Conhecimento para RAG (Gemini)</h3>
-            <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>
-              Insira FAQs, tabelas de preços, regras de locação ou manuais técnicos para que a IA Concierge responda com precisão antes de transferir para atendente humano.
-            </p>
-
-            <form onSubmit={handleUploadRAG} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div>
-                <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Título do Documento</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: Tabela de Preços de Locação de Andaimes 2026"
-                  value={ragTitle}
-                  onChange={(e) => setRagTitle(e.target.value)}
-                  style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
-                />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '18px', margin: 0 }}>Ensino e Base de Conhecimento RAG (IA Concierge)</h3>
+                <button
+                  type="button"
+                  onClick={loadRagDocuments}
+                  className="btn-secondary"
+                  style={{ fontSize: '12px', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <RefreshCw size={14} className={ragLoading ? "spin" : ""} />
+                  Atualizar Lista
+                </button>
               </div>
 
-              <div>
-                <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Conteúdo do Documento (Texto corrido ou FAQ)</label>
-                <textarea
-                  required
-                  rows={8}
-                  placeholder="Ex: Pergunta: Qual o horário de atendimento? Resposta: Segunda a Sexta das 08h às 18h..."
-                  value={ragContent}
-                  onChange={(e) => setRagContent(e.target.value)}
-                  style={{ width: '100%', padding: '12px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', resize: 'vertical' }}
-                />
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '20px' }}>
+                Ensine a IA Concierge sobre a sua empresa! Escolha se o conhecimento é <strong>Geral (Todos os Setores)</strong> como horário de funcionamento e localização da loja, ou <strong>Específico do Setor</strong> (ex: preços de produtos para Vendas ou manuais de erro para Assistência).
+              </p>
+
+              {/* Scope & Department Selection Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+                <div
+                  onClick={() => { setRagScope('geral'); setRagDeptId(''); }}
+                  style={{
+                    padding: '16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: ragScope === 'geral' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                    backgroundColor: ragScope === 'geral' ? 'rgba(0, 230, 153, 0.08)' : 'var(--bg-secondary)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ fontWeight: '700', fontSize: '14px', marginBottom: '4px', color: 'var(--text-main)' }}>
+                    🌐 1. RAG Geral (Toda a Empresa)
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Aplicado a todos os atendimentos (ex: horário de funcionamento, localização/endereço da loja, política de trocas, formas de pagamento).
+                  </div>
+                </div>
+
+                <div
+                  onClick={() => { setRagScope('setor'); if (numbers.length > 0 && !ragDeptId) setRagDeptId(numbers[0].id); }}
+                  style={{
+                    padding: '16px',
+                    borderRadius: 'var(--radius-md)',
+                    border: ragScope === 'setor' ? '2px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                    backgroundColor: ragScope === 'setor' ? 'rgba(0, 230, 153, 0.08)' : 'var(--bg-secondary)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ fontWeight: '700', fontSize: '14px', marginBottom: '4px', color: 'var(--text-main)' }}>
+                    🎯 2. RAG Específica por Setor / Departamento
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Aplicado apenas ao setor selecionado (ex: tabela de cotações para Vendas, manuais técnicos para Assistência).
+                  </div>
+                </div>
               </div>
 
-              <button type="submit" className="btn-primary" style={{ alignSelf: 'flex-start' }}>
-                <Database size={16} /> Indexar no RAG Local (ChromaDB)
-              </button>
-            </form>
+              {/* Department Dropdown if Setor is selected */}
+              {ragScope === 'setor' && (
+                <div style={{ marginBottom: '20px', padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>
+                    Selecione o Setor / Departamento Alvo:
+                  </label>
+                  <select
+                    value={ragDeptId}
+                    onChange={(e) => setRagDeptId(Number(e.target.value))}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                  >
+                    {numbers.map(num => (
+                      <option key={num.id} value={num.id}>
+                        Setor: {num.nome_departamento} ({num.numero})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Forms Section: Multi-File Upload + Direct Text Upload */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                {/* 1. Multi-File Uploader Form */}
+                <form onSubmit={handleUploadFilesRAG} style={{ padding: '20px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <h4 style={{ margin: 0, fontSize: '15px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Plus size={18} color="var(--accent-primary)" /> Enviar Arquivos (.pdf, .txt, .docx, .md)
+                  </h4>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                    Selecione um ou múltiplos arquivos para aprendizado automático. O texto será extraído e indexado no ChromaDB.
+                  </p>
+
+                  <input
+                    id="rag-file-input"
+                    type="file"
+                    multiple
+                    accept=".pdf,.txt,.docx,.doc,.md"
+                    onChange={(e) => setRagFiles(e.target.files)}
+                    style={{ padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', cursor: 'pointer' }}
+                  />
+
+                  {ragFiles && ragFiles.length > 0 && (
+                    <div style={{ fontSize: '12px', color: 'var(--accent-primary)', fontWeight: '600' }}>
+                      📁 {ragFiles.length} arquivo(s) selecionado(s): {Array.from(ragFiles).map(f => f.name).join(', ')}
+                    </div>
+                  )}
+
+                  <button type="submit" className="btn-primary" disabled={ragLoading || !ragFiles || ragFiles.length === 0} style={{ fontSize: '13px', padding: '10px' }}>
+                    <Database size={16} /> {ragLoading ? 'Processando Arquivos...' : 'Indexar Arquivo(s) no RAG'}
+                  </button>
+                </form>
+
+                {/* 2. Direct Text Snippet Form */}
+                <form onSubmit={handleUploadRAG} style={{ padding: '20px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <h4 style={{ margin: 0, fontSize: '15px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Database size={18} color="var(--accent-primary)" /> Cadastrar Texto Direto / FAQ
+                  </h4>
+
+                  <div>
+                    <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Título da Regra ou Assunto</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: Endereço e Horário da Loja"
+                      value={ragTitle}
+                      onChange={(e) => setRagTitle(e.target.value)}
+                      style={{ width: '100%', padding: '8px 10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Instrução ou Conteúdo</label>
+                    <textarea
+                      required
+                      rows={4}
+                      placeholder="Ex: A Servweld fica na SOF Q 5 Lote 05 Loja 02 Conjunto A - Guará, Brasília - DF, 71215-226. Atendemos de Seg a Sex das 08h às 18h."
+                      value={ragContent}
+                      onChange={(e) => setRagContent(e.target.value)}
+                      style={{ width: '100%', padding: '8px 10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', resize: 'vertical' }}
+                    />
+                  </div>
+
+                  <button type="submit" className="btn-secondary" disabled={ragLoading} style={{ fontSize: '13px', padding: '10px' }}>
+                    Salvar Texto no RAG
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* List of Currently Indexed RAG Documents */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <h3 style={{ fontSize: '17px', marginBottom: '16px', color: 'var(--text-main)' }}>
+                Conhecimentos Cadastrados no RAG ({ragDocuments.length})
+              </h3>
+
+              {ragDocuments.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                  Nenhum documento ou texto cadastrado até o momento. Utilize o formulário acima para adicionar.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {ragDocuments.map((doc) => (
+                    <div
+                      key={doc.id}
+                      style={{
+                        padding: '14px 18px',
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ flex: 1, marginRight: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: '700', fontSize: '14px', color: 'var(--text-main)' }}>
+                            {doc.titulo}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '11px',
+                              padding: '2px 8px',
+                              borderRadius: '10px',
+                              backgroundColor: doc.scope === 'geral' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(168, 85, 247, 0.15)',
+                              color: doc.scope === 'geral' ? '#60a5fa' : '#c084fc',
+                              fontWeight: '600',
+                              border: doc.scope === 'geral' ? '1px solid rgba(59, 130, 246, 0.3)' : '1px solid rgba(168, 85, 247, 0.3)'
+                            }}
+                          >
+                            {doc.scope === 'geral' ? '🌐 RAG Geral (Todos)' : `🎯 Setor: ${doc.department_name}`}
+                          </span>
+                        </div>
+                        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                          {doc.snippet}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteRAGDoc(doc.id, doc.titulo)}
+                        style={{
+                          backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                          color: '#f87171',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          padding: '6px 12px',
+                          borderRadius: 'var(--radius-sm)',
+                          fontSize: '12px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                      >
+                        <Trash2 size={14} /> Excluir
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -353,6 +353,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         );
 
+      case 'localizacao':
+        const mapsLinkMatch = raw.match(/(https?:\/\/maps\.google\.com[^\s]+)/);
+        const mapsUrl = mapsLinkMatch ? mapsLinkMatch[0] : null;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', maxWidth: '320px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399', fontWeight: '700', fontSize: '13px' }}>
+              <MapPin size={18} /> Localização GPS (WhatsApp Map)
+            </div>
+            <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', margin: 0, whiteSpace: 'pre-wrap' }}>
+              {raw}
+            </p>
+            {mapsUrl && (
+              <a
+                href={mapsUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary"
+                style={{ fontSize: '12px', padding: '6px 12px', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '4px' }}
+              >
+                <MapPin size={14} /> Abrir no Google Maps / GPS
+              </a>
+            )}
+          </div>
+        );
+
       default:
         return (
           <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>
