@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, MapPin, Navigation, Send, Search, Loader2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, MapPin, Navigation, Send, Search, Loader2, Globe } from 'lucide-react';
 import { apiFetch } from '../services/api';
 
 interface LocationPickerModalProps {
@@ -17,8 +17,10 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [searchingGlobal, setSearchingGlobal] = useState(false);
+  const [globalResults, setGlobalResults] = useState<any[]>([]);
 
-  const places = [
+  const defaultPlaces = [
     {
       id: 'servweld_main',
       name: 'Servsolda Comercial / Servweld',
@@ -61,17 +63,53 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
     }
   ];
 
-  const [selectedPlace, setSelectedPlace] = useState(places[0]);
+  const [selectedPlace, setSelectedPlace] = useState(defaultPlaces[0]);
 
-  const filteredPlaces = places.filter(p => {
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return p.name.toLowerCase().includes(q) || p.address.toLowerCase().includes(q);
-  });
+  // Worldwide Places Search Engine (OpenStreetMap Nominatim Global Geocoding)
+  useEffect(() => {
+    if (!search.trim() || search.trim().length < 2) {
+      setGlobalResults([]);
+      setSearchingGlobal(false);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        setSearchingGlobal(true);
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(search)}&format=json&addressdetails=1&limit=15`;
+        const res = await fetch(url, {
+          headers: { 'User-Agent': 'OminiChannel/1.0' }
+        });
+        const data = await res.json();
+        const mapped = (data || []).map((item: any) => ({
+          id: `osm_${item.place_id}`,
+          name: item.display_name.split(',')[0] || item.display_name,
+          address: item.display_name,
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lon),
+          badge: item.type ? item.type.toUpperCase() : 'LOCAL GLOBAL'
+        }));
+        setGlobalResults(mapped);
+
+        // If results found, auto-select first search result for map preview
+        if (mapped.length > 0) {
+          setSelectedPlace(mapped[0]);
+        }
+      } catch (err) {
+        console.error('Error searching global places:', err);
+      } finally {
+        setSearchingGlobal(false);
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [search]);
 
   if (!isOpen) return null;
 
-  const handleSendLocation = async (place: typeof places[0]) => {
+  const displayPlaces = search.trim().length >= 2 ? globalResults : defaultPlaces;
+
+  const handleSendLocation = async (place: any) => {
     if (!conversationId) return;
 
     try {
@@ -111,7 +149,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
     }}>
       <div className="glass-panel animate-fade-in" style={{
         width: '100%',
-        maxWidth: '480px',
+        maxWidth: '500px',
         borderRadius: 'var(--radius-lg)',
         backgroundColor: '#0b0f19',
         border: '1px solid var(--border-color)',
@@ -138,11 +176,11 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <MapPin size={20} />
+              <Globe size={20} />
             </div>
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: '#fff' }}>Enviar localização</h3>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Card de mapa nativo interativo do WhatsApp</span>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Busca Global de Lugares (Estilo WhatsApp Mundial)</span>
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
@@ -159,7 +197,7 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
           borderBottom: '1px solid var(--border-color)'
         }}>
           <iframe
-            title="Mapa Servweld"
+            title="Mapa Mundial OpenStreetMap"
             src={mapIframeUrl}
             style={{
               width: '100%',
@@ -202,7 +240,10 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
               border: '1px solid #3b82f6',
               color: '#fff',
               boxShadow: '0 4px 14px rgba(0,0,0,0.7)',
-              whiteSpace: 'nowrap'
+              maxWidth: '300px',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
             }}>
               📍 {selectedPlace.name}
             </span>
@@ -228,24 +269,22 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
         {/* Action Button: Localização Atual da Loja */}
         <div
           onClick={() => {
-            setSelectedPlace(places[0]);
-            handleSendLocation(places[0]);
+            setSelectedPlace(defaultPlaces[0]);
+            handleSendLocation(defaultPlaces[0]);
           }}
           style={{
-            padding: '14px 20px',
+            padding: '12px 20px',
             backgroundColor: 'rgba(0, 230, 153, 0.08)',
             borderBottom: '1px solid var(--border-color)',
             display: 'flex',
             alignItems: 'center',
             gap: '14px',
-            cursor: 'pointer',
-            transition: 'background-color 0.2s'
+            cursor: 'pointer'
           }}
-          className="hover:bg-emerald-950/20"
         >
           <div style={{
-            width: '40px',
-            height: '40px',
+            width: '38px',
+            height: '38px',
             borderRadius: '50%',
             backgroundColor: 'var(--accent-primary)',
             color: '#000',
@@ -254,14 +293,14 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
             justifyContent: 'center',
             flexShrink: 0
           }}>
-            <Navigation size={20} />
+            <Navigation size={18} />
           </div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--accent-primary)' }}>
-              Localização atual da loja
+            <div style={{ fontSize: '13px', fontWeight: '700', color: 'var(--accent-primary)' }}>
+              Localização atual da loja Servweld
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Precisão GPS de 10 metros • SOF Sul Quadra 5
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              SOF Sul Quadra 5 • Guará, Brasília - DF
             </div>
           </div>
           <button
@@ -270,17 +309,17 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
             style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
           >
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-            {loading ? 'Enviando...' : 'Enviar Agora'}
+            {loading ? 'Enviando...' : 'Enviar'}
           </button>
         </div>
 
-        {/* Search Bar */}
+        {/* Search Bar Worldwide */}
         <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-color)' }}>
           <div style={{ position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '10px', color: 'var(--text-muted)' }} />
             <input
               type="text"
-              placeholder="Buscar estabelecimentos próximos..."
+              placeholder="Digite ferramentaria, rua, bairro, loja ou cidade..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={{
@@ -293,82 +332,99 @@ export const LocationPickerModal: React.FC<LocationPickerModalProps> = ({
                 fontSize: '13px'
               }}
             />
+            {searchingGlobal && (
+              <Loader2 size={16} className="animate-spin" style={{ position: 'absolute', right: '12px', top: '10px', color: 'var(--accent-primary)' }} />
+            )}
           </div>
         </div>
 
-        {/* Locais Próximos List */}
-        <div style={{ padding: '12px 20px', maxHeight: '200px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-            Locais Próximos ({filteredPlaces.length})
+        {/* Locais List (Mundial / Global) */}
+        <div style={{ padding: '12px 20px', maxHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+            <span>
+              {search.trim().length >= 2 ? `Resultados Globais (${displayPlaces.length})` : `Locais Sugeridos (${displayPlaces.length})`}
+            </span>
+            {searchingGlobal && <span style={{ color: 'var(--accent-primary)' }}>Buscando no mundo...</span>}
           </div>
 
-          {filteredPlaces.map(place => {
-            const isSelected = selectedPlace.id === place.id;
-            return (
-              <div
-                key={place.id}
-                onClick={() => setSelectedPlace(place)}
-                style={{
-                  padding: '10px 12px',
-                  backgroundColor: isSelected ? '#1e293b' : 'transparent',
-                  border: isSelected ? '1px solid var(--accent-primary)' : '1px solid transparent',
-                  borderRadius: 'var(--radius-md)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  cursor: 'pointer',
-                  gap: '12px'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, overflow: 'hidden' }}>
-                  <div style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                    color: isSelected ? 'var(--accent-primary)' : 'var(--text-muted)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0
-                  }}>
-                    <MapPin size={16} />
-                  </div>
-                  <div style={{ overflow: 'hidden' }}>
-                    <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {place.name}
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {place.address}
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedPlace(place);
-                    handleSendLocation(place);
-                  }}
+          {searchingGlobal && displayPlaces.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <Loader2 size={20} className="animate-spin" style={{ margin: '0 auto 8px', color: 'var(--accent-primary)' }} />
+              Buscando estabelecimentos em todo o mundo...
+            </div>
+          ) : displayPlaces.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              Nenhum local encontrado para "{search}". Tente buscar por outro termo, cidade ou endereço.
+            </div>
+          ) : (
+            displayPlaces.map(place => {
+              const isSelected = selectedPlace.id === place.id;
+              return (
+                <div
+                  key={place.id}
+                  onClick={() => setSelectedPlace(place)}
                   style={{
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    color: 'var(--accent-primary)',
-                    fontSize: '12px',
-                    fontWeight: '600',
-                    cursor: 'pointer',
+                    padding: '10px 12px',
+                    backgroundColor: isSelected ? '#1e293b' : 'transparent',
+                    border: isSelected ? '1px solid var(--accent-primary)' : '1px solid transparent',
+                    borderRadius: 'var(--radius-md)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '4px',
-                    whiteSpace: 'nowrap'
+                    justifyContent: 'space-between',
+                    cursor: 'pointer',
+                    gap: '12px'
                   }}
                 >
-                  Enviar <Send size={12} />
-                </button>
-              </div>
-            );
-          })}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, overflow: 'hidden' }}>
+                    <div style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      color: isSelected ? 'var(--accent-primary)' : 'var(--text-muted)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <MapPin size={16} />
+                    </div>
+                    <div style={{ overflow: 'hidden' }}>
+                      <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {place.name}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {place.address}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedPlace(place);
+                      handleSendLocation(place);
+                    }}
+                    style={{
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      color: 'var(--accent-primary)',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    Enviar <Send size={12} />
+                  </button>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
