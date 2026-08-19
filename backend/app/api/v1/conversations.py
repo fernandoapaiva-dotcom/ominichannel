@@ -6,6 +6,7 @@ import io
 import re
 from typing import List, Optional
 from datetime import datetime
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
@@ -574,6 +575,94 @@ async def send_agent_message(
             "conversation_id": conv.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": msg_in.conteudo,
+            "timestamp": str(message.timestamp),
+            "agent_name": current_user.nome
+        }
+    )
+
+    return message
+
+class LocationPayload(BaseModel):
+    name: str
+    address: str
+    latitude: float
+    longitude: float
+
+@router.post("/{conversation_id}/send-location", response_model=MessageResponse)
+async def send_location_in_conversation(
+    conversation_id: int,
+    payload: LocationPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Dispatches native WhatsApp Location Map Card to the customer with multi-instance failover.
+    """
+    stmt = select(Conversation).options(
+        selectinload(Conversation.contact),
+        selectinload(Conversation.whatsapp_number)
+    ).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Try primary department instance first, fallback to all active tenant instances
+    wn_all_stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.tenant_id == current_user.tenant_id,
+        WhatsAppNumber.status == True
+    )
+    wn_all_res = await db.execute(wn_all_stmt)
+    all_wns = wn_all_res.scalars().all()
+
+    primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
+    instances_to_try = [primary_inst] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != primary_inst]
+
+    loc_sent = False
+    for inst in instances_to_try:
+        if not inst:
+            continue
+        res_loc = await evolution_service.send_location_message(
+            instance_name=inst,
+            number=conv.contact.telefone,
+            latitude=payload.latitude,
+            longitude=payload.longitude,
+            name=payload.name,
+            address=payload.address
+        )
+        if res_loc.get("success"):
+            loc_sent = True
+            break
+
+    if not loc_sent:
+        raise HTTPException(status_code=502, detail="Falha ao enviar card de localização no WhatsApp. Verifique a conexão no Painel Admin.")
+
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    message = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=f"📍 *LOCALIZAÇÃO ENVIADA*\n{payload.name}\n{payload.address}\nhttps://maps.google.com/?q={payload.latitude},{payload.longitude}",
+        tipo=MessageType.LOCALIZACAO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "remetente": MessageSender.ATENDENTE.value,
+            "conteudo": message.conteudo,
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
         }

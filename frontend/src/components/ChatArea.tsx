@@ -6,6 +6,9 @@ import {
   QrCode, Share2, Zap, Plus
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
+import { LocationPickerModal } from './LocationPickerModal';
+import { ContactPickerModal } from './ContactPickerModal';
+import { PixModal } from './PixModal';
 import { Conversation, User } from '../types';
 
 interface ChatAreaProps {
@@ -38,6 +41,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [activeCallUrl, setActiveCallUrl] = useState<string | null>(null);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [showPixModal, setShowPixModal] = useState(false);
 
   // Edit Contact Name State
   const [isEditingContact, setIsEditingContact] = useState(false);
@@ -1082,7 +1088,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div
             onClick={() => {
               setShowAttachmentMenu(false);
-              setInputText(prev => (prev ? prev + '\n' : '') + '📍 *Localização da Loja Servweld / Servsolda:* SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226\nhttps://maps.google.com/?q=-15.820418,-47.956467');
+              setShowLocationModal(true);
             }}
             style={{
               display: 'flex',
@@ -1106,7 +1112,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div
             onClick={() => {
               setShowAttachmentMenu(false);
-              setInputText(prev => (prev ? prev + '\n' : '') + '💸 *Dados para Pagamento via Pix:* Servweld / Servsolda\nChave CNPJ / E-mail: (Solicite os dados ao especialista)');
+              setShowPixModal(true);
             }}
             style={{
               display: 'flex',
@@ -1130,9 +1136,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div
             onClick={() => {
               setShowAttachmentMenu(false);
-              if (conversation?.contact) {
-                setInputText(prev => (prev ? prev + '\n' : '') + `👤 *Cartão de Contato:* ${conversation.contact.nome || 'Cliente'} (Telefone: ${conversation.contact.telefone})`);
-              }
+              setShowContactModal(true);
             }}
             style={{
               display: 'flex',
@@ -1248,6 +1252,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
       )}
+
+      {/* 1. Location Picker Modal (Estilo WhatsApp Mapa) */}
+      <LocationPickerModal
+        isOpen={showLocationModal}
+        onClose={() => setShowLocationModal(false)}
+        conversationId={conversation?.id || null}
+        onLocationSent={() => {
+          if (conversation?.id) {
+            apiFetch(`/conversations/${conversation.id}`).then(data => {
+              if (data && data.messages) {
+                conversation.messages = data.messages;
+              }
+            }).catch(() => {});
+          }
+        }}
+      />
+
+      {/* 2. Contact Picker Modal (Estilo WhatsApp Agenda) */}
+      <ContactPickerModal
+        isOpen={showContactModal}
+        onClose={() => setShowContactModal(false)}
+        onSelectContact={(contact) => {
+          setInputText(prev => (prev ? prev + '\n' : '') + `👤 *Cartão de Contato Compartilhado:*\n• *Nome:* ${contact.nome}\n• *Telefone:* ${contact.telefone}`);
+        }}
+      />
+
+      {/* 3. Pix Generator Modal (Oficial Servweld 54.804.458/0001-22) */}
+      <PixModal
+        isOpen={showPixModal}
+        onClose={() => setShowPixModal(false)}
+        onSendPixToChat={(pixText) => {
+          setInputText(prev => (prev ? prev + '\n' : '') + pixText);
+        }}
+      />
     </div>
   );
 };
