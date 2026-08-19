@@ -270,7 +270,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             conversations={conversations}
           />
           <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-            <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', width: isChatListCollapsed ? '0px' : '340px', minWidth: isChatListCollapsed ? '0px' : '340px', maxWidth: isChatListCollapsed ? '0px' : '340px', flexShrink: 0, display: isChatListCollapsed ? 'none' : 'flex', boxSizing: 'border-box' }}>
+            <div
+              className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`}
+              style={{
+                height: '100%',
+                flex: isChatListCollapsed ? '0 0 0px' : '0 0 360px',
+                width: isChatListCollapsed ? '0px' : '360px',
+                minWidth: isChatListCollapsed ? '0px' : '360px',
+                maxWidth: isChatListCollapsed ? '0px' : '360px',
+                flexShrink: 0,
+                display: isChatListCollapsed ? 'none' : 'flex',
+                boxSizing: 'border-box',
+                overflow: 'hidden'
+              }}
+            >
               <ChatList
                 conversations={conversations}
                 activeConversation={activeConversation}
