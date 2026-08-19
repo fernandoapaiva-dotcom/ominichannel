@@ -379,7 +379,7 @@ async def receive_evolution_webhook(
                     )
                     if audio_transcription:
                         logger.info(f"Successfully transcribed customer audio message: '{audio_transcription}'")
-                        text_content = f"🎙️ [Áudio Transcrito]: \"{audio_transcription}\""
+                        caption = f"🎙️ [Áudio Transcrito]: \"{audio_transcription}\""
                 except Exception as audio_err:
                     logger.error(f"Error transcribing customer audio note: {audio_err}")
         elif doc_msg:
@@ -388,8 +388,9 @@ async def receive_evolution_webhook(
             doc_filename = doc_msg.get("fileName") or "documento.pdf"
             ext = os.path.splitext(doc_filename)[1] or ".bin"
 
-        # If base64 is present, save file to disk
-        if media_bytes and not text_content:
+        # If base64 is present, ALWAYS save file to disk
+        saved_media_url = None
+        if media_bytes:
             try:
                 os.makedirs("uploads", exist_ok=True)
                 unique_name = f"{uuid.uuid4().hex}{ext}"
@@ -397,13 +398,14 @@ async def receive_evolution_webhook(
                 with open(media_path, "wb") as f:
                     f.write(media_bytes)
 
-                media_url = f"/uploads/{unique_name}"
-                text_content = f"{media_url}|{caption}" if caption else media_url
+                saved_media_url = f"/uploads/{unique_name}"
             except Exception as e:
                 logger.error(f"Error saving incoming media file: {e}")
 
-        # Fallback to direct media URL if base64 decoding was not available
-        if not text_content:
+        if saved_media_url:
+            text_content = f"{saved_media_url}|{caption}" if caption else saved_media_url
+        else:
+            # Fallback to direct media URL if base64 decoding was not available
             target_obj = img_msg or vid_msg or aud_msg or doc_msg or {}
             fallback_url = target_obj.get("url") or ""
             if fallback_url:

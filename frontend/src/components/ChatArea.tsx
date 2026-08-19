@@ -340,8 +340,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       case 'audio':
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <audio src={fullUrl} controls style={{ width: '260px', height: '40px', outline: 'none' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '300px' }}>
+            <audio controls style={{ width: '100%', height: '40px', outline: 'none' }}>
+              <source src={fullUrl} type="audio/ogg" />
+              <source src={fullUrl} type="audio/mpeg" />
+              <source src={fullUrl} />
+              Seu navegador não suporta reprodução de áudio.
+            </audio>
             {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );

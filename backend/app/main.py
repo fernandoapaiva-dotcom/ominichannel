@@ -24,6 +24,12 @@ from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
 
+import mimetypes
+
+mimetypes.add_type('audio/ogg', '.ogg')
+mimetypes.add_type('audio/opus', '.opus')
+mimetypes.add_type('audio/mpeg', '.mp3')
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
