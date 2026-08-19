@@ -290,10 +290,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }
 
   const renderMediaContent = (msg: any) => {
-    const raw = msg.conteudo || '';
-    const parts = raw.split('|');
-    const mediaPath = parts[0];
-    const caption = parts.length > 1 ? parts.slice(1).join('|') : null;
+    let raw = msg.conteudo || '';
+    let mediaPath = '';
+    let caption: string | null = null;
+
+    if (raw.includes('|')) {
+      const parts = raw.split('|');
+      mediaPath = parts[0].trim();
+      caption = parts.slice(1).join('|').trim();
+    } else if (raw.startsWith('[') && raw.includes(']')) {
+      const match = raw.match(/^\[(.*?)\]\s*([\s\S]*)$/);
+      if (match) {
+        mediaPath = match[1].trim();
+        caption = match[2].trim() || null;
+      } else {
+        mediaPath = raw.trim();
+      }
+    } else {
+      mediaPath = raw.trim();
+    }
+
+    mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '');
     const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
     const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
 

@@ -798,9 +798,10 @@ async def send_pix_in_conversation(
             instance_name=inst,
             number=conv.contact.telefone,
             media_type="image",
-            media_base64=base64_img,
-            caption=formatted_caption,
-            filename="qrcode_pix.png"
+            mimetype="image/png",
+            media=base64_img,
+            file_name="qrcode_pix.png",
+            caption=formatted_caption
         )
         if res_media.get("success"):
             img_sent = True
@@ -824,7 +825,7 @@ async def send_pix_in_conversation(
     msg = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
-        conteudo=f"[/uploads/{unique_fn}]\n\n{caption_text}",
+        conteudo=f"/uploads/{unique_fn}|{caption_text}",
         tipo=MessageType.IMAGEM,
         timestamp=datetime.utcnow()
     )
