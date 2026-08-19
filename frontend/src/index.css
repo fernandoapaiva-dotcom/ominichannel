@@ -172,6 +172,22 @@ button {
   animation: pulseGlow 2s infinite;
 }
 
+.chat-list-column {
+  flex: 0 0 360px !important;
+  width: 360px !important;
+  min-width: 360px !important;
+  max-width: 360px !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+.chat-area-column {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
 /* Responsive Smartphone & Mobile Layout Rules */
 @media (max-width: 768px) {
   body, #root {
@@ -206,7 +222,10 @@ button {
   }
 
   .chat-list-column {
+    flex: 1 1 100% !important;
     width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
     border-right: none !important;
   }
 

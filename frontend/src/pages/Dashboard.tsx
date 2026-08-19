@@ -274,12 +274,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`}
               style={{
                 height: '100%',
-                flex: isChatListCollapsed ? '0 0 0px' : '0 0 360px',
-                width: isChatListCollapsed ? '0px' : '360px',
-                minWidth: isChatListCollapsed ? '0px' : '360px',
-                maxWidth: isChatListCollapsed ? '0px' : '360px',
+                flex: '0 0 360px',
+                width: '360px',
+                minWidth: '360px',
+                maxWidth: '360px',
                 flexShrink: 0,
-                display: isChatListCollapsed ? 'none' : 'flex',
+                display: 'flex',
                 boxSizing: 'border-box',
                 overflow: 'hidden'
               }}
@@ -295,8 +295,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 setStatusFilter={setStatusFilter}
                 onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
                 onStatusToggle={fetchConversations}
-                isCollapsed={isChatListCollapsed}
-                onToggleCollapse={() => setIsChatListCollapsed(true)}
               />
             </div>
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
