@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin,
+  QrCode, Share2, Zap, Plus
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
@@ -36,6 +37,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [activeCallUrl, setActiveCallUrl] = useState<string | null>(null);
+  const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
 
   // Edit Contact Name State
   const [isEditingContact, setIsEditingContact] = useState(false);
@@ -1008,10 +1010,178 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
+      {/* WhatsApp-Style Attachment & Quick Actions Popover Menu */}
+      {showAttachmentMenu && (
+        <div
+          className="animate-fade-in"
+          style={{
+            position: 'absolute',
+            bottom: '80px',
+            left: '24px',
+            zIndex: 100,
+            backgroundColor: 'var(--bg-secondary)',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '16px',
+            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.6)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '14px',
+            width: '340px'
+          }}
+        >
+          {/* 1. Galeria / Mídia */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              fileInputRef.current?.click();
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(59, 130, 246, 0.1)',
+              border: '1px solid rgba(59, 130, 246, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ImageIcon size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Galeria / Mídia</span>
+          </div>
+
+          {/* 2. Documento */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              fileInputRef.current?.click();
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(168, 85, 247, 0.1)',
+              border: '1px solid rgba(168, 85, 247, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#a855f7', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <FileText size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Documento</span>
+          </div>
+
+          {/* 3. Localização */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              setInputText(prev => (prev ? prev + '\n' : '') + '📍 *Localização da Loja Servweld / Servsolda:* SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226\nhttps://maps.google.com/?q=-15.820418,-47.956467');
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(0, 230, 153, 0.1)',
+              border: '1px solid rgba(0, 230, 153, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#00e699', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <MapPin size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Localização</span>
+          </div>
+
+          {/* 4. Dados Pix */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              setInputText(prev => (prev ? prev + '\n' : '') + '💸 *Dados para Pagamento via Pix:* Servweld / Servsolda\nChave CNPJ / E-mail: (Solicite os dados ao especialista)');
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(234, 179, 8, 0.1)',
+              border: '1px solid rgba(234, 179, 8, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#eab308', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <QrCode size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Dados Pix</span>
+          </div>
+
+          {/* 5. Contato */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              if (conversation?.contact) {
+                setInputText(prev => (prev ? prev + '\n' : '') + `👤 *Cartão de Contato:* ${conversation.contact.nome || 'Cliente'} (Telefone: ${conversation.contact.telefone})`);
+              }
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(14, 165, 233, 0.1)',
+              border: '1px solid rgba(14, 165, 233, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#0ea5e9', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Share2 size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Contato</span>
+          </div>
+
+          {/* 6. Horário Loja */}
+          <div
+            onClick={() => {
+              setShowAttachmentMenu(false);
+              setInputText(prev => (prev ? prev + '\n' : '') + '⏰ *Horário de Atendimento Servweld:* Segunda a Sexta-feira das 08h00 às 18h00.');
+            }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '12px 8px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(236, 72, 153, 0.1)',
+              border: '1px solid rgba(236, 72, 153, 0.25)',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#ec4899', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Zap size={20} />
+            </div>
+            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Horário Loja</span>
+          </div>
+        </div>
+      )}
+
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
       <form onSubmit={handleSend} style={{ padding: '16px 24px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center' }}>
-        <button type="button" onClick={() => fileInputRef.current?.click()} className="btn-secondary" disabled={conversation.status === 'expirada_por_inatividade'} style={{ padding: '10px 12px' }}><Paperclip size={18} /></button>
+        <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={conversation.status === 'expirada_por_inatividade'} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
         <input
           type="text"
           placeholder={conversation.status === 'expirada_por_inatividade' ? 'Conversa expirada...' : 'Digite sua mensagem...'}
