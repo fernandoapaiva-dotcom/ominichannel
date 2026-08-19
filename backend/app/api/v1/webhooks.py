@@ -682,13 +682,6 @@ async def receive_evolution_webhook(
         )
         db.add(ai_msg)
 
-        # Dispatch Text Response via WhatsApp
-        await evolution_service.send_text_message(
-            instance_name=whatsapp_number.instancia_evolution_api,
-            number=contact.telefone,
-            text=ai_reply
-        )
-
         # Dispatch Native WhatsApp Location Message if requested by customer/IA
         if enviar_localizacao:
             # Official Servweld location coordinates (SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF - 71215-226)
