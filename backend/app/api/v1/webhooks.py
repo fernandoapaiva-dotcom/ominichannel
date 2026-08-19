@@ -544,10 +544,10 @@ async def receive_evolution_webhook(
 
         # Check if message comes from a WhatsApp group and whether AI is explicitly allowed
         if is_group:
+            clean_jid = remote_jid.split("@")[0] if "@" in str(remote_jid) else str(remote_jid)
             g_stmt = select(WhatsAppGroup).where(
                 WhatsAppGroup.tenant_id == tenant_id,
-                WhatsAppGroup.whatsapp_number_id == whatsapp_number.id,
-                WhatsAppGroup.group_jid == remote_jid
+                WhatsAppGroup.group_jid.like(f"%{clean_jid}%")
             )
             g_res = await db.execute(g_stmt)
             group_obj = g_res.scalar_one_or_none()

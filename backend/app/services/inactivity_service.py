@@ -121,6 +121,28 @@ class InactivityService:
 
                     last_remetente = getattr(last_msg.remetente, 'value', last_msg.remetente)
                     if last_remetente == "cliente":
+                        # Check if conversation belongs to a WhatsApp group and whether AI is allowed
+                        is_group_conv = (
+                            "@g.us" in str(conv.contact.telefone).lower() or
+                            "@temp" in str(conv.contact.telefone).lower() or
+                            "120363" in str(conv.contact.telefone)
+                        )
+
+                        if is_group_conv:
+                            from app.models.models import WhatsAppGroup
+                            raw_jid = conv.contact.telefone.split("@")[0]
+                            g_stmt = select(WhatsAppGroup).where(
+                                WhatsAppGroup.tenant_id == conv.tenant_id,
+                                WhatsAppGroup.group_jid.like(f"%{raw_jid}%")
+                            )
+                            g_res = await db.execute(g_stmt)
+                            group_obj = g_res.scalar_one_or_none()
+
+                            if not group_obj or not group_obj.ia_ativa:
+                                # Group AI interaction is disabled (ia_ativa = False)! Skip auto-response!
+                                logger.info(f"[VARREDURA IA] Ignorando resposta automática no grupo '{conv.contact.telefone}' pois a IA está desativada para este grupo.")
+                                continue
+
                         # Check if customer has been waiting for at least 10 seconds without reply
                         time_waiting_sec = (now - last_msg.timestamp).total_seconds()
                         if time_waiting_sec >= 10.0:
