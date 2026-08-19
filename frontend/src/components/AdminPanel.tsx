@@ -40,7 +40,7 @@ export const AdminPanel: React.FC = () => {
   const [userRole, setUserRole] = useState<'admin' | 'atendente'>('atendente');
   const [selectedNumIds, setSelectedNumIds] = useState<number[]>([]);
 
-  // RAG Upload & Segmented State
+  // RAG Upload & Progress State
   const [ragScope, setRagScope] = useState<'geral' | 'setor'>('geral');
   const [ragDeptId, setRagDeptId] = useState<number | ''>('');
   const [ragTitle, setRagTitle] = useState('');
@@ -48,6 +48,15 @@ export const AdminPanel: React.FC = () => {
   const [ragFiles, setRagFiles] = useState<FileList | null>(null);
   const [ragDocuments, setRagDocuments] = useState<any[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
+
+  // Progress Bar State
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+  const [uploadProgressPercent, setUploadProgressPercent] = useState(0);
+  const [uploadProgressIndex, setUploadProgressIndex] = useState(0);
+  const [uploadProgressTotal, setUploadProgressTotal] = useState(0);
+  const [uploadCurrentFileName, setUploadCurrentFileName] = useState('');
+  const [uploadCompletedCount, setUploadCompletedCount] = useState(0);
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
 
   // Integration Settings State
   const [maskedSettings, setMaskedSettings] = useState<any>(null);
@@ -473,41 +482,76 @@ export const AdminPanel: React.FC = () => {
       alert('Selecione ao menos 1 arquivo (.pdf, .txt, .docx, .md) para enviar.');
       return;
     }
+
+    const total = ragFiles.length;
     const targetDept = numbers.find(n => n.id === Number(ragDeptId));
-    const formData = new FormData();
-    for (let i = 0; i < ragFiles.length; i++) {
-      formData.append('files', ragFiles[i]);
-    }
-    formData.append('scope', ragScope);
-    if (ragScope === 'setor' && ragDeptId) {
-      formData.append('department_id', String(ragDeptId));
-      formData.append('department_name', targetDept?.nome_departamento || 'Setor');
-    } else {
-      formData.append('scope', 'geral');
-      formData.append('department_name', 'Geral');
+    const token = localStorage.getItem('token');
+
+    setIsUploadingFiles(true);
+    setRagLoading(true);
+    setUploadProgressTotal(total);
+    setUploadProgressIndex(0);
+    setUploadProgressPercent(0);
+    setUploadCompletedCount(0);
+    setUploadErrors([]);
+
+    let successCount = 0;
+    const errList: string[] = [];
+
+    for (let i = 0; i < total; i++) {
+      const file = ragFiles[i];
+      setUploadProgressIndex(i + 1);
+      setUploadCurrentFileName(file.name);
+      const currentPercent = Math.round((i / total) * 100);
+      setUploadProgressPercent(currentPercent);
+
+      const formData = new FormData();
+      formData.append('files', file);
+      formData.append('scope', ragScope);
+      if (ragScope === 'setor' && ragDeptId) {
+        formData.append('department_id', String(ragDeptId));
+        formData.append('department_name', targetDept?.nome_departamento || 'Setor');
+      } else {
+        formData.append('scope', 'geral');
+        formData.append('department_name', 'Geral');
+      }
+
+      try {
+        const res = await fetch('/api/v1/rag/upload-files', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          body: formData
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Erro ao enviar ${file.name}`);
+        successCount++;
+        setUploadCompletedCount(successCount);
+
+        // Real-time table refresh after each file completion!
+        await loadRagDocuments();
+      } catch (err: any) {
+        console.error(`Error uploading ${file.name}:`, err);
+        errList.push(`${file.name}: ${err.message}`);
+        setUploadErrors(prev => [...prev, `${file.name}: ${err.message}`]);
+      }
+
+      const completedPercent = Math.round(((i + 1) / total) * 100);
+      setUploadProgressPercent(completedPercent);
     }
 
-    try {
-      setRagLoading(true);
-      const token = localStorage.getItem('token');
-      const res = await fetch('/api/v1/rag/upload-files', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro ao enviar arquivos');
-      alert(`✅ ${data.message}`);
-      setRagFiles(null);
-      const fileInput = document.getElementById('rag-file-input') as HTMLInputElement;
-      if (fileInput) fileInput.value = '';
-      await loadRagDocuments();
-    } catch (err: any) {
-      alert(`❌ Erro: ${err.message}`);
-    } finally {
-      setRagLoading(false);
+    setIsUploadingFiles(false);
+    setRagLoading(false);
+    setRagFiles(null);
+    const fileInput = document.getElementById('rag-file-input') as HTMLInputElement;
+    if (fileInput) fileInput.value = '';
+
+    if (errList.length === 0) {
+      alert(`🎉 Processamento Concluído! Todos os ${successCount} arquivo(s) foram extraídos e indexados com sucesso no ChromaDB.`);
+    } else {
+      alert(`⚠️ Processamento Finalizado!\n- ${successCount} arquivo(s) indexado(s) com sucesso.\n- ${errList.length} falha(s):\n${errList.slice(0, 3).join('\n')}`);
     }
   };
 
@@ -1301,14 +1345,66 @@ export const AdminPanel: React.FC = () => {
                     style={{ padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', cursor: 'pointer' }}
                   />
 
-                  {ragFiles && ragFiles.length > 0 && (
-                    <div style={{ fontSize: '12px', color: 'var(--accent-primary)', fontWeight: '600' }}>
-                      📁 {ragFiles.length} arquivo(s) selecionado(s): {Array.from(ragFiles).map(f => f.name).join(', ')}
+                  {/* Real-Time Upload Progress Bar & Status */}
+                  {isUploadingFiles && (
+                    <div style={{
+                      marginTop: '10px',
+                      padding: '14px',
+                      backgroundColor: 'rgba(0, 230, 153, 0.06)',
+                      border: '1px solid rgba(0, 230, 153, 0.3)',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px', fontWeight: '600' }}>
+                        <span style={{ color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} />
+                          Processando {uploadProgressIndex} de {uploadProgressTotal} arquivo(s)...
+                        </span>
+                        <span style={{ color: '#fff', fontWeight: '700', fontSize: '14px' }}>
+                          {uploadProgressPercent}%
+                        </span>
+                      </div>
+
+                      {/* Outer Bar Track */}
+                      <div style={{
+                        width: '100%',
+                        height: '10px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                        borderRadius: 'var(--radius-full)',
+                        overflow: 'hidden'
+                      }}>
+                        {/* Animated Progress Fill */}
+                        <div style={{
+                          width: `${uploadProgressPercent}%`,
+                          height: '100%',
+                          background: 'var(--accent-gradient)',
+                          borderRadius: 'var(--radius-full)',
+                          transition: 'width 0.3s ease-in-out'
+                        }} />
+                      </div>
+
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                        📄 Extraindo texto e indexando no ChromaDB: <strong>{uploadCurrentFileName}</strong>
+                      </div>
+
+                      {uploadCompletedCount > 0 && (
+                        <div style={{ fontSize: '11px', color: '#34d399', fontWeight: '600' }}>
+                          ✅ {uploadCompletedCount} de {uploadProgressTotal} concluído(s) e já visíveis na tabela abaixo!
+                        </div>
+                      )}
+
+                      {uploadErrors.length > 0 && (
+                        <div style={{ fontSize: '11px', color: '#ef4444', fontWeight: '500' }}>
+                          ⚠️ {uploadErrors.length} alerta(s) de processamento (verifique arquivos em branco/protegidos).
+                        </div>
+                      )}
                     </div>
                   )}
 
                   <button type="submit" className="btn-primary" disabled={ragLoading || !ragFiles || ragFiles.length === 0} style={{ fontSize: '13px', padding: '10px' }}>
-                    <Database size={16} /> {ragLoading ? 'Processando Arquivos...' : 'Indexar Arquivo(s) no RAG'}
+                    <Database size={16} /> {ragLoading ? `Processando (${uploadProgressPercent}%)...` : 'Indexar Arquivo(s) no RAG'}
                   </button>
                 </form>
 
