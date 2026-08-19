@@ -221,6 +221,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   };
   const [isChatListCollapsed, setIsChatListCollapsed] = useState(false);
 
+  const [isMainSidebarCollapsed, setIsMainSidebarCollapsed] = useState(false);
+
   return (
     <div className="dashboard-layout" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
       {notificationAlert && (
@@ -255,6 +257,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onLogout={onLogout}
+        isCollapsed={isMainSidebarCollapsed}
+        onToggleCollapse={() => setIsMainSidebarCollapsed(!isMainSidebarCollapsed)}
       />
 
       {activeTab === 'chats' && (
