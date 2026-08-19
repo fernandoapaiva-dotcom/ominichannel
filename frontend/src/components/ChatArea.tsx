@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { Conversation, User } from '../types';
