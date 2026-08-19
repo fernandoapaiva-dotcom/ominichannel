@@ -59,7 +59,7 @@ class GeminiService:
             "   E defina obrigatoriamente 'ESCALAR_HUMANO: SIM'.\n"
             "7. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
             "8. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço, localização ou como chegar à loja, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'. Caso contrário, defina 'ENVIAR_LOCALIZACAO: NAO'.\n"
-            "9. ENDEREÇO OFICIAL DA SERVWELD: O único endereço oficial da empresa Servweld é 'SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF - CEP 71215-226'. É PROIBIDO inventar ou citar qualquer outro nome de rua ou endereço hipotético.\n\n"
+            "9. ENDEREÇO OFICIAL DA SERVWELD: O único endereço oficial da empresa Servweld / Servsolda é 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS exatas: Latitude -15.820418, Longitude -47.956467. É PROIBIDO inventar ou citar qualquer outro nome de rua ou endereço hipotético.\n\n"
             f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}\n\n"
             f"HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA:\n{memory_summary or 'Nenhum histórico anterior.'}\n\n"
             f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}"

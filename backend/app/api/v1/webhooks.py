@@ -684,11 +684,11 @@ async def receive_evolution_webhook(
 
         # Dispatch Native WhatsApp Location Message if requested by customer/IA
         if enviar_localizacao:
-            # Official Servweld location coordinates (SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF - 71215-226)
-            loc_name = "Servweld"
-            loc_addr = "SQPS 104 QUADRA 05 CONJUNTO A LOTE 05 LOJA 02 - ZONA INDUSTRIAL (GUARÁ) - BRASÍLIA - DF, 71215-226"
-            loc_lat = -15.819305
-            loc_lng = -47.954784
+            # Official Servweld location coordinates: SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF (-15.820418, -47.956467)
+            loc_name = "Servweld / Servsolda"
+            loc_addr = "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
+            loc_lat = -15.820418
+            loc_lng = -47.956467
 
             # Try sending via current instance first, fallback to all tenant instances if needed
             instances_to_try = [whatsapp_number.instancia_evolution_api] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != whatsapp_number.instancia_evolution_api]
