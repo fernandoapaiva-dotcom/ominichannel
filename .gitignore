@@ -25,6 +25,7 @@ backups_json/
 node_modules/
 dist/
 build/
+.vite/
 .npm
 *.log
 
