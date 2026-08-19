@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Clock, Layers } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 
@@ -27,6 +27,8 @@ interface ChatListProps {
   setStatusFilter: (status: ConversationStatus | 'all') => void;
   onOpenNewConversationModal?: () => void;
   onStatusToggle?: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 interface ContactGroup {
@@ -49,7 +51,9 @@ export const ChatList: React.FC<ChatListProps> = ({
   statusFilter,
   setStatusFilter,
   onOpenNewConversationModal,
-  onStatusToggle
+  onStatusToggle,
+  isCollapsed = false,
+  onToggleCollapse
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
@@ -90,10 +94,8 @@ export const ChatList: React.FC<ChatListProps> = ({
     const groups: ContactGroup[] = [];
 
     map.forEach((convs, cid) => {
-      // Sort conversations by date desc
       convs.sort((a, b) => new Date(b.ultima_interacao_em).getTime() - new Date(a.ultima_interacao_em).getTime());
 
-      // Filter by department & status if active
       const matchingConvs = convs.filter(conv => {
         const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
         const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
@@ -105,7 +107,6 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       if (matchingConvs.length === 0) return;
 
-      // Primary conversation is active conversation or most recent
       const primary = matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
       const contact = primary.contact;
 
@@ -125,7 +126,6 @@ export const ChatList: React.FC<ChatListProps> = ({
       });
     });
 
-    // Sort groups by latest activity date
     return groups.sort((a, b) => new Date(b.primaryConv.ultima_interacao_em).getTime() - new Date(a.primaryConv.ultima_interacao_em).getTime());
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
 
@@ -134,48 +134,75 @@ export const ChatList: React.FC<ChatListProps> = ({
     return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
   }).length;
 
+  if (isCollapsed) return null;
+
   return (
     <div style={{
-      width: '360px',
+      width: '340px',
+      minWidth: '320px',
       height: '100%',
       backgroundColor: 'var(--bg-primary)',
       borderRight: '1px solid var(--border-color)',
       display: 'flex',
-      flexDirection: 'column'
+      flexDirection: 'column',
+      boxSizing: 'border-box'
     }}>
       {/* Header & Search */}
-      <div style={{ padding: '20px 16px', borderBottom: '1px solid var(--border-color)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ padding: '16px', borderBottom: '1px solid var(--border-color)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
             Clientes & Chats
             {totalUnread > 0 && (
               <span style={{
                 backgroundColor: '#ef4444',
                 color: '#fff',
                 borderRadius: '12px',
-                padding: '2px 8px',
-                fontSize: '11px',
+                padding: '2px 6px',
+                fontSize: '10px',
                 fontWeight: '700'
               }}>
-                {totalUnread} pendentes
+                {totalUnread}
               </span>
             )}
           </h2>
-          {onOpenNewConversationModal && (
-            <button
-              onClick={onOpenNewConversationModal}
-              className="btn-primary"
-              style={{ fontSize: '12px', padding: '6px 12px', borderRadius: 'var(--radius-md)' }}
-              title="Iniciar nova conversa por telefone"
-            >
-              <Plus size={15} /> Nova
-            </button>
-          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {onOpenNewConversationModal && (
+              <button
+                onClick={onOpenNewConversationModal}
+                className="btn-primary"
+                style={{ fontSize: '12px', padding: '5px 10px', borderRadius: 'var(--radius-md)' }}
+                title="Nova conversa"
+              >
+                <Plus size={14} /> Nova
+              </button>
+            )}
+
+            {onToggleCollapse && (
+              <button
+                onClick={onToggleCollapse}
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-muted)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                title="Retrair/Recolher painel de conversas"
+              >
+                <PanelLeftClose size={16} />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Search Bar */}
         <div style={{ position: 'relative' }}>
-          <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
+          <Search size={15} style={{ position: 'absolute', left: '10px', top: '10px', color: 'var(--text-muted)' }} />
           <input
             type="text"
             placeholder="Buscar por cliente ou telefone..."
@@ -183,13 +210,14 @@ export const ChatList: React.FC<ChatListProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
               width: '100%',
-              padding: '10px 12px 10px 36px',
+              padding: '8px 10px 8px 32px',
               backgroundColor: 'var(--bg-secondary)',
               border: '1px solid var(--border-color)',
               borderRadius: 'var(--radius-md)',
               color: 'var(--text-main)',
-              fontSize: '13px',
-              outline: 'none'
+              fontSize: '12px',
+              outline: 'none',
+              boxSizing: 'border-box'
             }}
           />
         </div>
@@ -197,15 +225,15 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       {/* Status Filter Sub-Bar */}
       <div style={{
-        padding: '10px 16px',
+        padding: '8px 16px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
         justify: 'space-between',
         alignItems: 'center',
-        fontSize: '12px',
+        fontSize: '11px',
         color: 'var(--text-muted)'
       }}>
-        <span>Status da Conversa:</span>
+        <span>Status:</span>
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as any)}
@@ -213,13 +241,13 @@ export const ChatList: React.FC<ChatListProps> = ({
             background: 'transparent',
             color: 'var(--text-main)',
             border: 'none',
-            fontSize: '12px',
+            fontSize: '11px',
             cursor: 'pointer',
             outline: 'none',
             fontWeight: '600'
           }}
         >
-          <option value="all" style={{ background: '#131b2e' }}>Todas ({contactGroups.length} clientes)</option>
+          <option value="all" style={{ background: '#131b2e' }}>Todos ({contactGroups.length} clientes)</option>
           <option value="com_ia" style={{ background: '#131b2e' }}>Com IA Concierge</option>
           <option value="com_humano" style={{ background: '#131b2e' }}>Com Atendente Humano</option>
           <option value="encerrada" style={{ background: '#131b2e' }}>Encerradas</option>
@@ -254,37 +282,48 @@ export const ChatList: React.FC<ChatListProps> = ({
                 <div
                   onClick={() => onSelectConversation(primaryConv)}
                   style={{
-                    padding: '14px 16px',
+                    padding: '12px 14px',
                     borderLeft: isSelected ? '3px solid var(--accent-primary)' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'),
                     cursor: 'pointer',
                     backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent'
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontWeight: '700', fontSize: '14px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{
+                      fontWeight: '700',
+                      fontSize: '13px',
+                      color: 'var(--text-main)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      maxWidth: '180px'
+                    }}>
                       {group.contactName}
                       {group.hasUnread && (
-                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444', display: 'inline-block' }} title="Mensagem não lida do cliente" />
+                        <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} title="Mensagem não lida do cliente" />
                       )}
                     </span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
                       {formatTime(primaryConv.ultima_interacao_em)}
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Phone size={12} /> {group.contactPhone}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Phone size={11} /> {group.contactPhone}
                     </span>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <button
                         onClick={(e) => handleToggleStatus(e, primaryConv)}
                         title={primaryConv.status === 'com_ia' ? 'Alternar para Humano' : 'Alternar para IA'}
                         className={`badge badge-${primaryConv.status}`}
-                        style={{ cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', gap: '4px', padding: '3px 8px', fontSize: '10px' }}
+                        style={{ cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', gap: '3px', padding: '2px 6px', fontSize: '9px', whiteSpace: 'nowrap' }}
                       >
-                        {primaryConv.status === 'com_ia' ? <Bot size={10} /> : <Headphones size={10} />}
+                        {primaryConv.status === 'com_ia' ? <Bot size={9} /> : <Headphones size={9} />}
                         {primaryConv.status.replace('_', ' ')}
                       </button>
 
@@ -298,18 +337,18 @@ export const ChatList: React.FC<ChatListProps> = ({
                             border: '1px solid var(--border-color)',
                             borderRadius: '4px',
                             color: 'var(--accent-primary)',
-                            padding: '2px 6px',
-                            fontSize: '10px',
+                            padding: '1px 5px',
+                            fontSize: '9px',
                             fontWeight: '600',
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '3px'
+                            gap: '2px'
                           }}
                           title="Ver todas as conversas/histórico deste cliente"
                         >
-                          <Layers size={11} /> {group.allConversations.length}
-                          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                          <Layers size={10} /> {group.allConversations.length}
+                          {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                         </button>
                       )}
                     </div>
@@ -318,22 +357,25 @@ export const ChatList: React.FC<ChatListProps> = ({
                   {/* Last Message Preview & Dept */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <p style={{
-                      fontSize: '12px',
+                      fontSize: '11px',
                       color: group.hasUnread ? 'var(--text-main)' : 'var(--text-dim)',
                       fontWeight: group.hasUnread ? '600' : 'normal',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      maxWidth: '220px'
+                      maxWidth: '200px',
+                      margin: 0
                     }}>
                       {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
                     </p>
                     <span style={{
-                      fontSize: '10px',
-                      padding: '2px 6px',
+                      fontSize: '9px',
+                      padding: '1px 5px',
                       borderRadius: '4px',
                       backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                      color: 'var(--text-muted)'
+                      color: 'var(--text-muted)',
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0
                     }}>
                       {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
                     </span>
@@ -344,17 +386,17 @@ export const ChatList: React.FC<ChatListProps> = ({
                 {isExpanded && group.allConversations.length > 1 && (
                   <div style={{
                     backgroundColor: 'rgba(0,0,0,0.25)',
-                    padding: '8px 12px 10px 24px',
+                    padding: '8px 12px 10px 20px',
                     borderTop: '1px dashed var(--border-color)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '6px'
                   }}>
                     <div style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <History size={10} /> Histórico de Chamados do Cliente ({group.allConversations.length}):
+                      <History size={10} /> Histórico de Chamados ({group.allConversations.length}):
                     </div>
 
-                    {group.allConversations.map((subConv, idx) => {
+                    {group.allConversations.map((subConv) => {
                       const isSubActive = activeConversation?.id === subConv.id;
                       const subLastMsg = subConv.messages && subConv.messages.length > 0 ? subConv.messages[subConv.messages.length - 1] : null;
 
@@ -377,7 +419,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                             <div style={{ fontSize: '11px', fontWeight: '600', color: isSubActive ? 'var(--accent-primary)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                               <span>#{subConv.id} • {subConv.whatsapp_number?.nome_departamento || 'Geral'}</span>
                             </div>
-                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>
                               {subLastMsg ? subLastMsg.conteudo : 'Sem mensagens'}
                             </div>
                           </div>

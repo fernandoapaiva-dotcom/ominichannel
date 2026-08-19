@@ -3,7 +3,7 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -21,6 +21,8 @@ interface ChatAreaProps {
   onOpenMediaGallery?: () => void;
   onStatusToggle?: () => void;
   onBack?: () => void;
+  isChatListCollapsed?: boolean;
+  onToggleChatList?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -32,7 +34,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenTransferModal,
   onOpenMediaGallery,
   onStatusToggle,
-  onBack
+  onBack,
+  isChatListCollapsed = false,
+  onToggleChatList
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
 
@@ -732,6 +736,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         alignItems: 'center'
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          {onToggleChatList && isChatListCollapsed && (
+            <button
+              onClick={onToggleChatList}
+              className="btn-secondary"
+              style={{
+                padding: '6px 12px',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                marginRight: '4px'
+              }}
+              title="Expandir/Mostrar lista de conversas"
+            >
+              <PanelLeftOpen size={16} /> Ver Conversas
+            </button>
+          )}
           {onBack && (
             <button
               onClick={onBack}
