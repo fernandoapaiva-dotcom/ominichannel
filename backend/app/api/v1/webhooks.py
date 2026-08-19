@@ -753,6 +753,16 @@ async def receive_evolution_webhook(
 
             logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least busy operator).")
 
+            # Create pinned system transfer card
+            sys_escalate_msg = Message(
+                conversation_id=conversation.id,
+                remetente="sistema",
+                conteudo=f"📌 *RESUMO DA TRANSFERÊNCIA DA IA:*\n{nova_memoria or memory_summary or 'Cliente solicita atendimento com operador.'}",
+                tipo=MessageType.TEXTO,
+                timestamp=datetime.utcnow()
+            )
+            db.add(sys_escalate_msg)
+
             # Broadcast high-priority escalation alert with summary & assigned operator!
             await ws_manager.broadcast_to_department(
                 tenant_id=tenant_id,
