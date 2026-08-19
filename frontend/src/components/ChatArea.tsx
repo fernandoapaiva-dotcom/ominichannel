@@ -876,6 +876,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         {conversation.messages.map((msg) => {
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
+          const isSystem = msg.remetente === 'sistema';
+
+          if (isSystem) {
+            return (
+              <div key={msg.id} className="animate-fade-in" style={{
+                alignSelf: 'center',
+                margin: '8px 0',
+                padding: '6px 14px',
+                borderRadius: 'var(--radius-full)',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                border: '1px solid rgba(59, 130, 246, 0.25)',
+                color: '#60a5fa',
+                fontSize: '12px',
+                fontWeight: '500',
+                textAlign: 'center',
+                maxWidth: '85%'
+              }}>
+                {renderMediaContent(msg)}
+              </div>
+            );
+          }
+
           const bubbleBg = isCustomer ? '#1c283e' : isAI ? 'rgba(168, 85, 247, 0.12)' : 'rgba(0, 230, 153, 0.15)';
           const border = isCustomer ? '1px solid var(--border-color)' : isAI ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(0, 230, 153, 0.3)';
 
