@@ -21,6 +21,8 @@ from app.models.models import (
 from app.services.evolution_service import evolution_service
 from app.services.gemini_service import gemini_service
 from app.services.rag_service import rag_service
+from app.services.settings_service import settings_service
+from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("webhooks")
@@ -347,7 +349,6 @@ async def receive_evolution_webhook(
         media_bytes = None
         if media_base64:
             try:
-                import base64
                 if "," in media_base64:
                     media_bytes = base64.b64decode(media_base64.split(",")[1])
                 else:
@@ -369,7 +370,6 @@ async def receive_evolution_webhook(
             if media_bytes:
                 # Transcribe/understand voice audio note via Gemini Multimodal SDK
                 try:
-                    from app.services.settings_service import settings_service
                     dec_sets = await settings_service.get_tenant_decrypted_settings(db, 1)
                     audio_transcription = await gemini_service.process_audio_message(
                         audio_bytes=media_bytes,
@@ -391,8 +391,6 @@ async def receive_evolution_webhook(
         # If base64 is present, save file to disk
         if media_bytes and not text_content:
             try:
-                import os
-                import uuid
                 os.makedirs("uploads", exist_ok=True)
                 unique_name = f"{uuid.uuid4().hex}{ext}"
                 media_path = os.path.join("uploads", unique_name)
@@ -640,7 +638,6 @@ async def receive_evolution_webhook(
         all_wns = dept_res.scalars().all()
         available_dept_names = [wn_item.nome_departamento for wn_item in all_wns if wn_item.nome_departamento]
 
-        from app.services.settings_service import settings_service
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
 
         ai_output = await gemini_service.generate_concierge_response(
@@ -779,7 +776,6 @@ async def receive_evolution_webhook(
                 extract_amount_from_text(ai_reply)
             )
 
-            from app.api.v1.conversations import generate_bacen_pix_string
             bacen_payload = generate_bacen_pix_string(
                 key="54804458000122",
                 merchant_name="SERVWELD SOLDA",
