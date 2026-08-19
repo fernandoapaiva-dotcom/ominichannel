@@ -252,3 +252,35 @@ class AuditLogResponse(BaseModel):
     detalhes: str
     timestamp: datetime
     model_config = ConfigDict(from_attributes=True)
+
+# Pix Key Schemas
+class PixKeyCreate(BaseModel):
+    titulo: str
+    tipo_chave: str # CNPJ, CPF, EMAIL, TELEFONE, EVP
+    chave: str
+    favorecido: str
+    cidade: str = "BRASILIA"
+    descricao: Optional[str] = None
+    ativo: bool = True
+
+class PixKeyUpdate(BaseModel):
+    titulo: Optional[str] = None
+    tipo_chave: Optional[str] = None
+    chave: Optional[str] = None
+    favorecido: Optional[str] = None
+    cidade: Optional[str] = None
+    descricao: Optional[str] = None
+    ativo: Optional[bool] = None
+
+class PixKeyResponse(BaseModel):
+    id: int
+    tenant_id: int
+    titulo: str
+    tipo_chave: str
+    chave: str
+    favorecido: str
+    cidade: str
+    descricao: Optional[str] = None
+    ativo: bool
+    criado_em: datetime
+    model_config = ConfigDict(from_attributes=True)

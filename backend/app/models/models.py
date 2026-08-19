@@ -214,3 +214,19 @@ class WhatsAppGroup(Base):
 
     whatsapp_number: Mapped["WhatsAppNumber"] = relationship("WhatsAppNumber")
 
+# Dynamic Scalable Pix Key Registry
+class TenantPixKey(Base):
+    __tablename__ = "tenant_pix_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    titulo: Mapped[str] = mapped_column(String(100), nullable=False)
+    tipo_chave: Mapped[str] = mapped_column(String(50), nullable=False) # CNPJ, CPF, EMAIL, TELEFONE, EVP
+    chave: Mapped[str] = mapped_column(String(255), nullable=False)
+    favorecido: Mapped[str] = mapped_column(String(150), nullable=False)
+    cidade: Mapped[str] = mapped_column(String(100), default="BRASILIA")
+    descricao: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

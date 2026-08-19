@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { X, QrCode, Copy, Check, Send, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, QrCode, Copy, Check, Send, ShieldCheck, ChevronDown } from 'lucide-react';
+import { apiFetch } from '../services/api';
 
 interface PixModalProps {
   isOpen: boolean;
@@ -8,9 +9,9 @@ interface PixModalProps {
 }
 
 // Official Central Bank of Brazil (BACEN) EMV Co BR Code Generator
-function generateBacenPixPayload(cnpj: string, merchantName: string, merchantCity: string): string {
-  const cleanCnpj = cnpj.replace(/\D/g, '');
-  const field26 = `0014br.gov.bcb.pix01${cleanCnpj.length.toString().padStart(2, '0')}${cleanCnpj}`;
+function generateBacenPixPayload(key: string, merchantName: string, merchantCity: string): string {
+  const cleanKey = key.replace(/\D/g, '').length > 0 && !key.includes('@') ? key.replace(/\D/g, '') : key;
+  const field26 = `0014br.gov.bcb.pix01${cleanKey.length.toString().padStart(2, '0')}${cleanKey}`;
   
   // BACEN standard formatting (no accents, uppercase)
   const nameClean = merchantName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().slice(0, 25);
@@ -50,23 +51,56 @@ export const PixModal: React.FC<PixModalProps> = ({
 }) => {
   const [copiedKey, setCopiedKey] = useState(false);
   const [copiedPayload, setCopiedPayload] = useState(false);
+  const [pixKeys, setPixKeys] = useState<any[]>([]);
+  const [selectedKeyId, setSelectedKeyId] = useState<number | null>(null);
 
-  const cnpjKey = "54804458000122";
-  const formattedCnpj = "54.804.458/0001-22";
-  const companyName = "SERVWELD SOLDA";
-  const fullName = "Servweld / Servsolda Equipamentos e Serviços Ltda";
-  const city = "BRASILIA";
+  const defaultKey = {
+    id: 0,
+    titulo: "Pix Principal Servweld - CNPJ",
+    tipo_chave: "CNPJ",
+    chave: "54.804.458/0001-22",
+    chave_limpa: "54804458000122",
+    favorecido: "Servweld / Servsolda Equipamentos e Serviços Ltda",
+    cidade: "BRASILIA"
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      apiFetch('/pix-keys/')
+        .then(data => {
+          const activeKeys = (data || []).filter((k: any) => k.ativo !== false);
+          setPixKeys(activeKeys);
+          if (activeKeys.length > 0) {
+            setSelectedKeyId(activeKeys[0].id);
+          }
+        })
+        .catch(err => console.error('Error fetching tenant pix keys:', err));
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const currentKey = pixKeys.find(k => k.id === selectedKeyId) || {
+    titulo: defaultKey.titulo,
+    tipo_chave: defaultKey.tipo_chave,
+    chave: defaultKey.chave_limpa,
+    favorecido: defaultKey.favorecido,
+    cidade: defaultKey.cidade
+  };
+
+  const rawKey = currentKey.chave;
+  const fullName = currentKey.favorecido;
+  const merchantName = fullName.slice(0, 20).toUpperCase();
+  const city = currentKey.cidade || "BRASILIA";
 
   // Official BACEN EMV Co Pix Copia e Cola Payload
-  const bacenPixPayload = generateBacenPixPayload(cnpjKey, companyName, city);
+  const bacenPixPayload = generateBacenPixPayload(rawKey, merchantName, city);
 
   // Generate QR Code from the official BACEN EMV Co string
   const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(bacenPixPayload)}`;
 
-  if (!isOpen) return null;
-
   const handleCopyKey = () => {
-    navigator.clipboard.writeText(cnpjKey);
+    navigator.clipboard.writeText(rawKey);
     setCopiedKey(true);
     setTimeout(() => setCopiedKey(false), 3000);
   };
@@ -79,8 +113,9 @@ export const PixModal: React.FC<PixModalProps> = ({
 
   const handleSendToChat = () => {
     const message = `💸 *DADOS PARA PAGAMENTO VIA PIX SERVWELD*\n\n` +
+      `📌 *Chave:* ${currentKey.titulo}\n` +
       `🏢 *Favorecido:* ${fullName}\n` +
-      `🆔 *Chave CNPJ:* ${formattedCnpj}\n\n` +
+      `🆔 *Chave Pix (${currentKey.tipo_chave}):* ${rawKey}\n\n` +
       `📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n${bacenPixPayload}\n\n` +
       `📲 *QR Code para Leitura:* ${qrCodeUrl}\n\n` +
       `⚠️ *Importante:* Após a transferência, envie o comprovante neste chat para validação do setor financeiro.`;
@@ -141,6 +176,35 @@ export const PixModal: React.FC<PixModalProps> = ({
             <X size={20} />
           </button>
         </div>
+
+        {/* Selector Dropdown if tenant has multiple Pix keys */}
+        {pixKeys.length > 0 && (
+          <div style={{ padding: '12px 20px', backgroundColor: '#111827', borderBottom: '1px solid var(--border-color)' }}>
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '700', textTransform: 'uppercase' }}>
+              Selecione a Chave Pix da Empresa ({pixKeys.length} disponíveis)
+            </label>
+            <select
+              value={selectedKeyId || pixKeys[0]?.id}
+              onChange={(e) => setSelectedKeyId(Number(e.target.value))}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                backgroundColor: '#1e293b',
+                border: '1px solid var(--accent-primary)',
+                borderRadius: 'var(--radius-md)',
+                color: '#fff',
+                fontSize: '13px',
+                fontWeight: '600'
+              }}
+            >
+              {pixKeys.map(k => (
+                <option key={k.id} value={k.id}>
+                  {k.titulo} ({k.tipo_chave}: {k.chave})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Content */}
         <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>

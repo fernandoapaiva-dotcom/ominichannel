@@ -4,7 +4,7 @@ import { WhatsAppNumber, User, WhatsAppGroup } from '../types';
 import { apiFetch } from '../services/api';
 
 export const AdminPanel: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations' | 'groups'>('numbers');
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations' | 'groups' | 'pix'>('numbers');
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
@@ -76,6 +76,104 @@ export const AdminPanel: React.FC = () => {
 
   // Audit Logs State
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
+
+  // Pix Keys State
+  const [pixKeys, setPixKeys] = useState<any[]>([]);
+  const [pixLoading, setPixLoading] = useState(false);
+  const [editingPixId, setEditingPixId] = useState<number | null>(null);
+  const [pixTitle, setPixTitle] = useState('');
+  const [pixKeyType, setPixKeyType] = useState<string>('CNPJ');
+  const [pixKeyVal, setPixKeyVal] = useState('');
+  const [pixFavorecido, setPixFavorecido] = useState('');
+  const [pixCidade, setPixCidade] = useState('BRASILIA');
+  const [pixDescricao, setPixDescricao] = useState('');
+  const [pixAtivo, setPixAtivo] = useState(true);
+
+  const loadPixKeys = async () => {
+    try {
+      setPixLoading(true);
+      const data = await apiFetch('/pix-keys/');
+      setPixKeys(data || []);
+    } catch (err) {
+      console.error('Error loading pix keys:', err);
+    } finally {
+      setPixLoading(false);
+    }
+  };
+
+  const resetPixForm = () => {
+    setEditingPixId(null);
+    setPixTitle('');
+    setPixKeyType('CNPJ');
+    setPixKeyVal('');
+    setPixFavorecido('');
+    setPixCidade('BRASILIA');
+    setPixDescricao('');
+    setPixAtivo(true);
+  };
+
+  const handleSavePixKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pixTitle.trim() || !pixKeyVal.trim() || !pixFavorecido.trim()) {
+      alert('Por favor, preencha Título, Chave Pix e Favorecido.');
+      return;
+    }
+
+    try {
+      if (editingPixId) {
+        await apiFetch(`/pix-keys/${editingPixId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            titulo: pixTitle,
+            tipo_chave: pixKeyType,
+            chave: pixKeyVal,
+            favorecido: pixFavorecido,
+            cidade: pixCidade,
+            descricao: pixDescricao || null,
+            ativo: pixAtivo
+          })
+        });
+      } else {
+        await apiFetch('/pix-keys/', {
+          method: 'POST',
+          body: JSON.stringify({
+            titulo: pixTitle,
+            tipo_chave: pixKeyType,
+            chave: pixKeyVal,
+            favorecido: pixFavorecido,
+            cidade: pixCidade,
+            descricao: pixDescricao || null,
+            ativo: pixAtivo
+          })
+        });
+      }
+      resetPixForm();
+      await loadPixKeys();
+    } catch (err: any) {
+      alert('Erro ao salvar chave Pix: ' + err.message);
+    }
+  };
+
+  const handleDeletePixKey = async (id: number) => {
+    if (!confirm('Deseja realmente excluir esta chave Pix?')) return;
+    try {
+      await apiFetch(`/pix-keys/${id}`, { method: 'DELETE' });
+      await loadPixKeys();
+    } catch (err: any) {
+      alert('Erro ao excluir chave Pix: ' + err.message);
+    }
+  };
+
+  const handleEditPixKey = (item: any) => {
+    setEditingPixId(item.id);
+    setPixTitle(item.titulo);
+    setPixKeyType(item.tipo_chave);
+    setPixKeyVal(item.chave);
+    setPixFavorecido(item.favorecido);
+    setPixCidade(item.cidade || 'BRASILIA');
+    setPixDescricao(item.descricao || '');
+    setPixAtivo(item.ativo);
+  };
 
   const fetchAllStatuses = async (numList: WhatsAppNumber[]) => {
     const statuses: { [id: number]: { connected: boolean; state: string } } = {};
@@ -697,6 +795,12 @@ export const AdminPanel: React.FC = () => {
             className={activeSubTab === 'groups' ? 'btn-primary' : 'btn-secondary'}
           >
             <MessageSquare size={16} /> Grupos do WhatsApp
+          </button>
+          <button
+            onClick={() => { setActiveSubTab('pix'); loadPixKeys(); }}
+            className={activeSubTab === 'pix' ? 'btn-primary' : 'btn-secondary'}
+          >
+            <QrCode size={16} /> Chaves Pix & QR Code
           </button>
         </div>
 
@@ -1931,6 +2035,209 @@ export const AdminPanel: React.FC = () => {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 6. Pix Keys Management Tab */}
+        {activeSubTab === 'pix' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+            {/* Form */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700' }}>
+                  {editingPixId ? 'Editar Chave Pix' : 'Cadastrar Nova Chave Pix'}
+                </h3>
+                {editingPixId && (
+                  <button onClick={resetPixForm} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', border: 'none', cursor: 'pointer' }}>
+                    <X size={14} /> Cancelar
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleSavePixKey} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
+                    Título / Identificador da Chave
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Pix Principal Servweld - CNPJ"
+                    value={pixTitle}
+                    onChange={(e) => setPixTitle(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Tipo</label>
+                    <select
+                      value={pixKeyType}
+                      onChange={(e) => setPixKeyType(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    >
+                      <option value="CNPJ">CNPJ</option>
+                      <option value="CPF">CPF</option>
+                      <option value="EMAIL">E-mail</option>
+                      <option value="TELEFONE">Telefone</option>
+                      <option value="EVP">Aleatória (EVP)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Chave Pix</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ex: 54804458000122 ou e-mail"
+                      value={pixKeyVal}
+                      onChange={(e) => setPixKeyVal(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
+                    Favorecido / Razão Social ou Nome
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Servweld Equipamentos e Serviços Ltda"
+                    value={pixFavorecido}
+                    onChange={(e) => setPixFavorecido(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Cidade</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: BRASILIA"
+                      value={pixCidade}
+                      onChange={(e) => setPixCidade(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Descrição / Instruções (Opcional)</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Usar para vendas à vista da Loja SOF Sul"
+                      value={pixDescricao}
+                      onChange={(e) => setPixDescricao(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                  <input
+                    type="checkbox"
+                    id="pixAtivo"
+                    checked={pixAtivo}
+                    onChange={(e) => setPixAtivo(e.target.checked)}
+                  />
+                  <label htmlFor="pixAtivo" style={{ fontSize: '13px', color: 'var(--text-main)', cursor: 'pointer' }}>
+                    Chave Ativa para uso nos chats
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                  <button type="submit" className="btn-primary" style={{ flex: 1 }}>
+                    <Check size={16} /> {editingPixId ? 'Atualizar Chave Pix' : 'Salvar Chave Pix'}
+                  </button>
+                  {editingPixId && (
+                    <button type="button" onClick={resetPixForm} className="btn-secondary">
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* List */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <h3 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '16px' }}>
+                Chaves Pix Cadastradas ({pixKeys.length})
+              </h3>
+              {pixLoading ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando chaves...</div>
+              ) : pixKeys.length === 0 ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  Nenhuma chave Pix cadastrada ainda. Preencha o formulário para adicionar a chave da sua empresa!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '500px', overflowY: 'auto' }}>
+                  {pixKeys.map(item => (
+                    <div
+                      key={item.id}
+                      style={{
+                        padding: '14px 16px',
+                        backgroundColor: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-md)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: '50%',
+                          backgroundColor: 'rgba(234, 179, 8, 0.15)',
+                          color: '#eab308',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          <QrCode size={20} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)' }}>
+                            {item.titulo} <span style={{ fontSize: '11px', color: 'var(--accent-primary)', marginLeft: '6px' }}>[{item.tipo_chave}]</span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            🔑 <strong>Chave:</strong> {item.chave} • 🏢 <strong>Favorecido:</strong> {item.favorecido}
+                          </div>
+                          {item.descricao && (
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              📝 {item.descricao}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleEditPixKey(item)}
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px' }}
+                          title="Editar Chave"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePixKey(item.id)}
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px', color: '#f87171' }}
+                          title="Excluir Chave"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
