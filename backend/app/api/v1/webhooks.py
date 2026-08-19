@@ -545,6 +545,15 @@ async def receive_evolution_webhook(
         ]
 
 
+        # Fetch all available departments/numbers for this tenant
+        dept_stmt = select(WhatsAppNumber).where(
+            WhatsAppNumber.tenant_id == tenant_id,
+            WhatsAppNumber.status == True
+        )
+        dept_res = await db.execute(dept_stmt)
+        all_wns = dept_res.scalars().all()
+        available_dept_names = [wn_item.nome_departamento for wn_item in all_wns if wn_item.nome_departamento]
+
         from app.services.settings_service import settings_service
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
 
@@ -555,13 +564,52 @@ async def receive_evolution_webhook(
             conversation_history=history,
             memory_summary=memory_summary,
             rag_context=rag_context,
+            available_departments=available_dept_names,
             tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
             tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
         )
 
         ai_reply = ai_output["resposta"]
+        transferir_setor = ai_output.get("transferir_setor", "NENHUM")
         escalar_humano = ai_output["escalar_humano"]
         nova_memoria = ai_output["nova_memoria"]
+
+        # Check Sector Transfer by AI Concierge
+        if transferir_setor and transferir_setor.strip().upper() != "NENHUM":
+            target_wn = None
+            for wn_item in all_wns:
+                if wn_item.nome_departamento and wn_item.nome_departamento.strip().lower() == transferir_setor.strip().lower():
+                    target_wn = wn_item
+                    break
+            
+            if target_wn and target_wn.id != whatsapp_number.id:
+                logger.info(f"AI requested sector transfer for conversation {conversation.id} from {whatsapp_number.nome_departamento} to {target_wn.nome_departamento}")
+                old_dept_name = whatsapp_number.nome_departamento
+                conversation.whatsapp_number_id = target_wn.id
+                whatsapp_number = target_wn
+
+                # Insert system message logging the sector transfer
+                sys_transfer_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente="sistema",
+                    conteudo=f"🔀 *TRANSFERÊNCIA DE SETOR PELA IA*\nAtendimento redirecionado do setor '{old_dept_name}' para '{target_wn.nome_departamento}'.",
+                    tipo=MessageType.TEXTO,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(sys_transfer_msg)
+
+                # Broadcast update event to frontend
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=target_wn.id,
+                    message_data={
+                        "type": "CONVERSATION_UPDATED",
+                        "conversation_id": conversation.id,
+                        "whatsapp_number_id": target_wn.id,
+                        "department": target_wn.nome_departamento,
+                        "status": getattr(conversation.status, 'value', str(conversation.status))
+                    }
+                )
 
         # Save AI Response
         ai_msg = Message(
