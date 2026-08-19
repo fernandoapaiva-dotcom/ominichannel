@@ -690,8 +690,8 @@ async def receive_evolution_webhook(
             loc_lat = -15.820418
             loc_lng = -47.956467
 
-            # Try sending via current instance first, fallback to all tenant instances if needed
-            instances_to_try = [whatsapp_number.instancia_evolution_api] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != whatsapp_number.instancia_evolution_api]
+            # Try sending via incoming instance first (the exact line customer contacted), fallback to all tenant instances if needed
+            instances_to_try = [instance_name] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != instance_name]
             
             loc_sent = False
             for inst in instances_to_try:
