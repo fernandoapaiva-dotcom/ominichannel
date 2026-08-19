@@ -270,7 +270,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             conversations={conversations}
           />
           <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-            <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', display: isChatListCollapsed ? 'none' : 'flex' }}>
+            <div className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`} style={{ height: '100%', width: isChatListCollapsed ? '0px' : '340px', flexShrink: 0, display: isChatListCollapsed ? 'none' : 'flex' }}>
               <ChatList
                 conversations={conversations}
                 activeConversation={activeConversation}
@@ -286,7 +286,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onToggleCollapse={() => setIsChatListCollapsed(true)}
               />
             </div>
-            <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', display: 'flex' }}>
+            <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
               <ChatArea
                 conversation={activeConversation}
                 allConversations={conversations}

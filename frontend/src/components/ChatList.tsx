@@ -138,8 +138,7 @@ export const ChatList: React.FC<ChatListProps> = ({
 
   return (
     <div style={{
-      width: '340px',
-      minWidth: '320px',
+      width: '100%',
       height: '100%',
       backgroundColor: 'var(--bg-primary)',
       borderRight: '1px solid var(--border-color)',
