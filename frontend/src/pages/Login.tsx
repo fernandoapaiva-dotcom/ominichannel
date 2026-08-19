@@ -22,11 +22,16 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       formData.append('username', username);
       formData.append('password', password);
 
-      const res = await fetch('http://localhost:8000/api/v1/auth/login', {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
+        body: formData,
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -35,9 +40,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       const data = await res.json();
       localStorage.setItem('token', data.access_token);
-      onLoginSuccess();
+      await onLoginSuccess();
     } catch (err: any) {
-      setErrorMsg(err.message);
+      if (err.name === 'AbortError') {
+        setErrorMsg('Servidor não respondeu a tempo. Verifique se o backend está rodando.');
+      } else {
+        setErrorMsg(err.message || 'Erro ao realizar login.');
+      }
     } finally {
       setLoading(false);
     }
