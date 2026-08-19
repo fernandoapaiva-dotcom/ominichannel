@@ -81,8 +81,10 @@ class SettingsService:
         # 1. Update Gemini
         if "gemini_api_key" in payload or "gemini_model_name" in payload:
             existing = await self.get_tenant_decrypted_settings(db, tenant_id)
+            new_gemini_key = payload.get("gemini_api_key")
+            final_gemini_key = new_gemini_key.strip() if (new_gemini_key and str(new_gemini_key).strip()) else existing["gemini_api_key"]
             raw_gemini = {
-                "gemini_api_key": payload.get("gemini_api_key") or existing["gemini_api_key"],
+                "gemini_api_key": final_gemini_key,
                 "gemini_model_name": payload.get("gemini_model_name") or existing["gemini_model_name"]
             }
             enc_gemini = encrypt_data(json.dumps(raw_gemini))
@@ -91,9 +93,11 @@ class SettingsService:
         # 2. Update Evolution API
         if "evolution_api_url" in payload or "evolution_api_key" in payload:
             existing = await self.get_tenant_decrypted_settings(db, tenant_id)
+            new_evo_key = payload.get("evolution_api_key")
+            final_evo_key = new_evo_key.strip() if (new_evo_key and str(new_evo_key).strip()) else existing["evolution_api_key"]
             raw_evo = {
                 "evolution_api_url": payload.get("evolution_api_url") or existing["evolution_api_url"],
-                "evolution_api_key": payload.get("evolution_api_key") or existing["evolution_api_key"]
+                "evolution_api_key": final_evo_key
             }
             enc_evo = encrypt_data(json.dumps(raw_evo))
             await self._upsert_setting(db, tenant_id, "evolution", enc_evo)

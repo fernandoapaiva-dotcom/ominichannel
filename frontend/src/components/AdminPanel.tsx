@@ -1219,15 +1219,22 @@ export const AdminPanel: React.FC = () => {
                 {/* Gemini Integration */}
                 <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-secondary)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <label style={{ fontWeight: '600', fontSize: '14px' }}>Google Gemini API Key</label>
+                    <label style={{ fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      Google Gemini API Key
+                      {maskedSettings?.gemini_configured && (
+                        <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '12px', backgroundColor: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)', fontWeight: '600' }}>
+                          🟢 Ativa & Salva no Banco
+                        </span>
+                      )}
+                    </label>
                     <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      Valor Salvo no Banco: <code style={{ color: 'var(--accent-primary)' }}>{maskedSettings?.gemini_api_key_masked}</code>
+                      Chave Criptografada: <code style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>{maskedSettings?.gemini_api_key_masked}</code>
                     </span>
                   </div>
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
                     <input
                       type="password"
-                      placeholder="Digite a nova chave para salvar (ex: AIzaSy...)"
+                      placeholder={maskedSettings?.gemini_configured ? "•••••••••••••••• (Chave salva e ativa no banco. Digite apenas se desejar alterar)" : "Digite sua API Key do Gemini (ex: AIzaSy...)"}
                       value={geminiKeyInput}
                       onChange={(e) => setGeminiKeyInput(e.target.value)}
                       style={{ flex: 1, padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
@@ -1241,6 +1248,9 @@ export const AdminPanel: React.FC = () => {
                       Testar Conexão Gemini
                     </button>
                   </div>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 12px 0' }}>
+                    💡 <strong>Sua chave já está gravada de forma permanente e segura no banco de dados</strong> (criptografada via Fernet). Você não precisa reescrevê-la a cada login.
+                  </p>
 
                   {/* Configurable Gemini Model Select Dropdown */}
                   <div style={{ marginBottom: '12px' }}>
