@@ -94,6 +94,7 @@ class GeminiService:
             "RESPOSTA: <sua resposta calorosa e conversacional ao cliente>\n"
             "TRANSFERIR_SETOR: <NomeExatoDoSetor ou NENHUM>\n"
             "ENVIAR_LOCALIZACAO: <SIM ou NAO>\n"
+            "ENVIAR_PIX: <SIM ou NAO>\n"
             "ESCALAR_HUMANO: <SIM ou NAO>\n"
             "NOVA_MEMORIA: <resumo atualizado em 1 ou 2 frases curtas>"
         )
@@ -101,6 +102,7 @@ class GeminiService:
         if not client:
             needs_human = any(word in user_message.lower() for word in ["humano", "atendente", "falar com pessoa"])
             wants_loc = any(word in user_message.lower() for word in ["localizacao", "localização", "endereco", "endereço", "onde fica", "como chegar"])
+            wants_pix = any(word in user_message.lower() for word in ["pix", "chave pix", "pode enviar"])
             target_dept = "NENHUM"
             if available_departments:
                 for d in available_departments:
@@ -112,6 +114,7 @@ class GeminiService:
                 "resposta": "Olá! Seja muito bem-vindo. Como posso te ajudar hoje?" if not needs_human else "Estou transferindo seu atendimento para um de nossos especialistas.",
                 "transferir_setor": target_dept,
                 "enviar_localizacao": wants_loc,
+                "enviar_pix": wants_pix,
                 "escalar_humano": needs_human,
                 "nova_memoria": f"Cliente perguntou: '{user_message}'",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
@@ -134,6 +137,7 @@ class GeminiService:
             resposta = ""
             transferir_setor = "NENHUM"
             enviar_localizacao = False
+            enviar_pix = False
             escalar_humano = False
             nova_memoria = ""
 
@@ -144,6 +148,8 @@ class GeminiService:
                     transferir_setor = line.replace("TRANSFERIR_SETOR:", "").strip()
                 elif line.startswith("ENVIAR_LOCALIZACAO:"):
                     enviar_localizacao = "SIM" in line.upper()
+                elif line.startswith("ENVIAR_PIX:"):
+                    enviar_pix = "SIM" in line.upper()
                 elif line.startswith("ESCALAR_HUMANO:"):
                     escalar_humano = "SIM" in line.upper()
                 elif line.startswith("NOVA_MEMORIA:"):
@@ -156,6 +162,7 @@ class GeminiService:
                 "resposta": resposta,
                 "transferir_setor": transferir_setor,
                 "enviar_localizacao": enviar_localizacao,
+                "enviar_pix": enviar_pix,
                 "escalar_humano": escalar_humano,
                 "nova_memoria": nova_memoria or memory_summary or f"Cliente interagiu sobre: {user_message[:50]}",
                 "tokens": {

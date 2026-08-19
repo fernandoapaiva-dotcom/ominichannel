@@ -632,8 +632,25 @@ async def receive_evolution_webhook(
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
         enviar_localizacao = ai_output.get("enviar_localizacao", False)
+        enviar_pix = ai_output.get("enviar_pix", False)
         escalar_humano = ai_output["escalar_humano"]
         nova_memoria = ai_output["nova_memoria"]
+
+        # Enforce Pix Payload Appending if AI or customer requested Pix data and details are present
+        msg_lower = text_content.lower()
+        wants_pix = enviar_pix or any(k in msg_lower for k in ["pix", "chave pix", "pode enviar", "manda o pix", "envia o pix"])
+
+        if wants_pix and "54804458000122" not in ai_reply and "00020126" not in ai_reply:
+            has_details = any(k in (memory_summary or "").lower() or k in msg_lower for k in ["nota", "serviço", "servico", "orcamento", "orçamento", "pedido", "150", "valor", "pode enviar", "enviar pix", "dados"])
+            if has_details:
+                ai_reply += (
+                    "\n\n💸 *DADOS OFICIAIS PARA PAGAMENTO VIA PIX SERVWELD*\n\n"
+                    "🏢 *Favorecido:* Servweld / Servsolda Equipamentos e Serviços Ltda\n"
+                    "🆔 *Chave Pix CNPJ:* 54.804.458/0001-22 (Chave Limpa: 54804458000122)\n\n"
+                    "📋 *PIX COPIA E COLA (Copie e cole no App do Banco):*\n"
+                    "00020126360014br.gov.bcb.pix0114548044580001225204000053039865802BR5914SERVWELD SOLDA6008BRASILIA62070503***6304E6FC\n\n"
+                    "⚠️ *Importante:* Após realizar a transferência, por favor envie o comprovante neste chat para validação do setor Financeiro."
+                )
 
         # Check Sector Transfer by AI Concierge
         if transferir_setor and transferir_setor.strip().upper() != "NENHUM":
