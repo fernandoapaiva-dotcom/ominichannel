@@ -390,13 +390,12 @@ async def receive_evolution_webhook(
     elif push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente"):
         contact.nome = push_name
 
-    # 3. Get or Create Conversation (Always reuse open/existing active conversation for this contact and department)
+    # 3. Get or Create Conversation (Always reuse single active conversation for this contact across tenant)
     conv_stmt = (
         select(Conversation)
         .options(selectinload(Conversation.messages))
         .where(
             Conversation.tenant_id == tenant_id,
-            Conversation.whatsapp_number_id == whatsapp_number.id,
             Conversation.contact_id == contact.id,
             Conversation.status.in_([ConversationStatus.COM_IA, ConversationStatus.COM_HUMANO])
         )
@@ -406,13 +405,12 @@ async def receive_evolution_webhook(
     conversation = conv_res.scalars().first()
 
     if not conversation:
-        # Also check if there is ANY conversation for this contact to reopen instead of duplicating
+        # Also check if there is ANY conversation for this contact in tenant to reopen instead of duplicating
         any_conv_stmt = (
             select(Conversation)
             .options(selectinload(Conversation.messages))
             .where(
                 Conversation.tenant_id == tenant_id,
-                Conversation.whatsapp_number_id == whatsapp_number.id,
                 Conversation.contact_id == contact.id
             )
             .order_by(Conversation.ultima_interacao_em.desc())
@@ -422,6 +420,7 @@ async def receive_evolution_webhook(
 
         if conversation:
             conversation.status = ConversationStatus.COM_IA
+            conversation.whatsapp_number_id = whatsapp_number.id
         else:
             conversation = Conversation(
                 tenant_id=tenant_id,
