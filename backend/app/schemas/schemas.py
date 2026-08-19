@@ -101,6 +101,7 @@ class UserLogin(BaseModel):
 class ContactBase(BaseModel):
     telefone: str
     nome: Optional[str] = None
+    foto_perfil_url: Optional[str] = None
     dados_adicionais: Optional[Dict[str, Any]] = None
 
 class ContactResponse(ContactBase):

@@ -770,6 +770,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <ArrowLeft size={22} />
             </button>
           )}
+          {/* WhatsApp Profile Avatar in Header */}
+          {conversation.contact?.foto_perfil_url ? (
+            <img
+              src={conversation.contact.foto_perfil_url}
+              alt={conversation.contact.nome || 'Cliente'}
+              style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0 }}
+            />
+          ) : (
+            <div style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+              color: '#051a12',
+              fontWeight: '700',
+              fontSize: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              boxShadow: '0 2px 8px rgba(0, 230, 153, 0.3)'
+            }}>
+              {(conversation.contact?.nome || conversation.contact?.telefone || 'U').charAt(0).toUpperCase()}
+            </div>
+          )}
+
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               {isEditingContact ? (
@@ -923,39 +949,46 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             onClick={handleToggleStatus}
             disabled={isTogglingStatus}
             style={{
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 14px',
-              borderRadius: 'var(--radius-full)',
+              height: '36px',
+              padding: '0 12px',
+              borderRadius: 'var(--radius-md)',
               fontSize: '12px',
-              fontWeight: '600',
+              fontWeight: '700',
               border: '1px solid var(--border-color)',
               backgroundColor: conversation.status === 'com_ia' ? 'rgba(168, 85, 247, 0.2)' : 'rgba(59, 130, 246, 0.2)',
-              color: conversation.status === 'com_ia' ? '#c084fc' : '#60a5fa'
+              color: conversation.status === 'com_ia' ? '#c084fc' : '#60a5fa',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer'
             }}
           >
-            {conversation.status === 'com_ia' ? <><Bot size={14} /> COM IA</> : <><Headphones size={14} /> COM HUMANO</>}
+            {conversation.status === 'com_ia' ? <><Bot size={15} /> COM IA</> : <><Headphones size={15} /> COM HUMANO</>}
           </button>
 
           <button
             onClick={handleStartVideoCall}
             className="btn-secondary"
             style={{
-              fontSize: '13px',
-              padding: '8px 14px',
+              height: '36px',
+              padding: '0 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: 'var(--radius-md)',
               backgroundColor: 'rgba(0, 230, 153, 0.12)',
               color: 'var(--accent-primary)',
               border: '1px solid var(--accent-primary)',
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
-              gap: '6px'
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer'
             }}
             title="Iniciar chamada de vídeo / voz WebRTC e enviar link para o cliente"
           >
@@ -963,7 +996,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
 
           {onOpenMediaGallery && (
-            <button onClick={onOpenMediaGallery} className="btn-secondary" style={{ fontSize: '13px', padding: '8px 14px' }}>
+            <button
+              onClick={onOpenMediaGallery}
+              className="btn-secondary"
+              style={{
+                height: '36px',
+                padding: '0 12px',
+                fontSize: '12px',
+                fontWeight: '600',
+                borderRadius: 'var(--radius-md)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+            >
               <Paperclip size={15} /> Arquivos ({conversationMedia.length})
             </button>
           )}
@@ -980,26 +1028,62 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onClick={() => backupFileInputRef.current?.click()}
             disabled={isImportingBackup}
             className="btn-secondary"
-            style={{ fontSize: '13px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            style={{
+              height: '36px',
+              padding: '0 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: 'var(--radius-md)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer'
+            }}
             title="Importar arquivo de conversa exportado do WhatsApp (.txt ou .zip)"
           >
             <Upload size={15} style={{ animation: isImportingBackup ? 'spin 1s linear infinite' : 'none' }} />
             {isImportingBackup ? 'Importando...' : 'Importar Backup'}
           </button>
 
-
           <button
             onClick={handleSyncHistory}
             disabled={isSyncingHistory}
             className="btn-secondary"
-            style={{ fontSize: '13px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            style={{
+              height: '36px',
+              padding: '0 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: 'var(--radius-md)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer'
+            }}
             title="Sincronizar mensagens anteriores do WhatsApp"
           >
             <RefreshCw size={15} style={{ animation: isSyncingHistory ? 'spin 1s linear infinite' : 'none' }} />
             {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
           </button>
 
-          <button onClick={onOpenTransferModal} className="btn-secondary" style={{ fontSize: '13px', padding: '8px 14px' }}>
+          <button
+            onClick={onOpenTransferModal}
+            className="btn-secondary"
+            style={{
+              height: '36px',
+              padding: '0 12px',
+              fontSize: '12px',
+              fontWeight: '600',
+              borderRadius: 'var(--radius-md)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              cursor: 'pointer'
+            }}
+          >
             <ArrowRightLeft size={15} /> Transferir
           </button>
         </div>

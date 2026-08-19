@@ -31,6 +31,7 @@ export interface Contact {
   tenant_id: number;
   telefone: string;
   nome?: string;
+  foto_perfil_url?: string | null;
   dados_adicionais?: Record<string, any>;
 }
 

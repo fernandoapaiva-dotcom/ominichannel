@@ -444,14 +444,17 @@ async def receive_evolution_webhook(
         Contact.telefone.in_(phone_variants)
     )
     contact_res = await db.execute(contact_stmt)
-    contact = contact_res.scalars().first()
+    profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
 
     if not contact:
-        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name)
+        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name, foto_perfil_url=profile_pic_url)
         db.add(contact)
         await db.flush()
-    elif push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente"):
-        contact.nome = push_name
+    else:
+        if push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente"):
+            contact.nome = push_name
+        if profile_pic_url and contact.foto_perfil_url != profile_pic_url:
+            contact.foto_perfil_url = profile_pic_url
 
     # 3. Get or Create Conversation (Always reuse single active conversation for this contact across tenant)
     conv_stmt = (

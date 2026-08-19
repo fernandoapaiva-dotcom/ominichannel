@@ -119,6 +119,7 @@ class Contact(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     telefone: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     nome: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    foto_perfil_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     dados_adicionais: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=dict)
 
     conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="contact")

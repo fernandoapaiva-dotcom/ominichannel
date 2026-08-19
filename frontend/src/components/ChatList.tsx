@@ -285,36 +285,66 @@ export const ChatList: React.FC<ChatListProps> = ({
                     padding: '12px 14px',
                     borderLeft: isSelected ? '3px solid var(--accent-primary)' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'),
                     cursor: 'pointer',
-                    backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent'
+                    backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px'
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{
+                  {/* WhatsApp Profile Avatar */}
+                  {primaryConv.contact?.foto_perfil_url ? (
+                    <img
+                      src={primaryConv.contact.foto_perfil_url}
+                      alt={group.contactName}
+                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--accent-primary)', flexShrink: 0 }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                      color: '#051a12',
                       fontWeight: '700',
-                      fontSize: '13px',
-                      color: 'var(--text-main)',
+                      fontSize: '15px',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '4px',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      maxWidth: '180px'
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                      boxShadow: '0 2px 6px rgba(0, 230, 153, 0.25)'
                     }}>
-                      {group.contactName}
-                      {group.hasUnread && (
-                        <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} title="Mensagem não lida do cliente" />
-                      )}
-                    </span>
-                    <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
-                      {formatTime(primaryConv.ultima_interacao_em)}
-                    </span>
-                  </div>
+                      {group.contactName.charAt(0).toUpperCase()}
+                    </div>
+                  )}
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Phone size={11} /> {group.contactPhone}
-                    </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                      <span style={{
+                        fontWeight: '700',
+                        fontSize: '13px',
+                        color: 'var(--text-main)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        maxWidth: '150px'
+                      }}>
+                        {group.contactName}
+                        {group.hasUnread && (
+                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} title="Mensagem não lida do cliente" />
+                        )}
+                      </span>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
+                        {formatTime(primaryConv.ultima_interacao_em)}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Phone size={11} /> {group.contactPhone}
+                      </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <button
@@ -379,6 +409,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     }}>
                       {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
                     </span>
+                  </div>
                   </div>
                 </div>
 
