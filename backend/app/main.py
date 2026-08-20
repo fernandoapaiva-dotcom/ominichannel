@@ -23,6 +23,7 @@ from app.api.v1.pix_keys import router as pix_keys_router
 from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
+from app.services.evolution_service import start_profile_picture_syncer_loop
 
 import mimetypes
 
@@ -43,11 +44,15 @@ async def lifespan(app: FastAPI):
     inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=15))
     logger.info("Inactivity and unreplied customer sweeper background loop started.")
 
+    # Start WhatsApp profile picture background syncer
+    profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=60))
+    logger.info("WhatsApp profile picture automatic syncer background loop started.")
     
     yield
     
     # Shutdown actions
     inactivity_task.cancel()
+    profile_pic_task.cancel()
     logger.info("Application shutdown completed.")
 
 app = FastAPI(

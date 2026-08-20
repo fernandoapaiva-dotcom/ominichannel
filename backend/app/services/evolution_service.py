@@ -430,28 +430,100 @@ class EvolutionService:
                 return []
     async def fetch_profile_picture_url(
         self,
-        instance_name: str,
+        instance_name: Optional[str],
         number: str,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Optional[str]:
         """
         Fetches contact profile picture URL from Evolution API endpoint /chat/fetchProfilePictureUrl/{instance}.
+        Falls back automatically to any open connected instance if the specified instance fails.
         """
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
-        url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
         clean_num = number.replace("+", "").replace("-", "").replace(" ", "").strip()
         payload = {"number": clean_num}
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
+            # 1. Try provided instance first
+            if instance_name:
+                url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                    if response.status_code in [200, 201]:
+                        data = response.json()
+                        pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                        if pic:
+                            return pic
+                except Exception as e:
+                    logger.debug(f"Failed to fetch profile picture on {instance_name} for {number}: {e}")
+
+            # 2. Fallback: Query all open connected instances
             try:
-                response = await client.post(url, headers=headers, json=payload)
-                if response.status_code in [200, 201]:
-                    data = response.json()
-                    return data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
+                if inst_res.status_code == 200:
+                    instances = [
+                        i.get("name") for i in inst_res.json()
+                        if isinstance(i, dict) and i.get("connectionStatus") == "open" and i.get("name") != instance_name
+                    ]
+                    for inst in instances:
+                        if not inst:
+                            continue
+                        fallback_url = f"{base_url}/chat/fetchProfilePictureUrl/{inst}"
+                        try:
+                            res = await client.post(fallback_url, headers=headers, json=payload)
+                            if res.status_code in [200, 201]:
+                                data = res.json()
+                                pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                                if pic:
+                                    return pic
+                        except Exception:
+                            continue
             except Exception as e:
-                logger.warning(f"Failed to fetch profile picture URL for {number}: {e}")
+                logger.warning(f"Error checking connected instances for profile pic: {e}")
+
         return None
 
 evolution_service = EvolutionService()
+
+
+async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
+    """
+    Background loop that continuously ensures all contacts have their official WhatsApp profile pictures.
+    """
+    await asyncio.sleep(3)
+    while True:
+        try:
+            from app.core.database import AsyncSessionLocal
+            from app.models.models import Contact
+            from sqlalchemy import select
+
+            base_url, headers = evolution_service._get_headers_and_url()
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                r = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
+                if r.status_code == 200:
+                    instances = [i.get("name") for i in r.json() if isinstance(i, dict) and i.get("connectionStatus") == "open"]
+                    if instances:
+                        async with AsyncSessionLocal() as db:
+                            c_res = await db.execute(select(Contact).where(Contact.foto_perfil_url.is_(None)))
+                            contacts = c_res.scalars().all()
+                            updated = False
+                            for c in contacts:
+                                clean_num = c.telefone.replace("+", "").replace("-", "").replace(" ", "").strip()
+                                for inst in instances:
+                                    try:
+                                        res = await client.post(f"{base_url}/chat/fetchProfilePictureUrl/{inst}", headers=headers, json={"number": clean_num})
+                                        if res.status_code in [200, 201]:
+                                            pic = res.json().get("profilePictureUrl")
+                                            if pic:
+                                                c.foto_perfil_url = pic
+                                                updated = True
+                                                break
+                                    except Exception:
+                                        continue
+                            if updated:
+                                await db.commit()
+        except Exception as e:
+            logger.debug(f"Profile picture sync loop error: {e}")
+
+        await asyncio.sleep(interval_seconds)
 
