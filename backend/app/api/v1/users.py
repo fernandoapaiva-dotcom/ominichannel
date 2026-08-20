@@ -40,6 +40,7 @@ async def create_user(
         nome=user_in.nome,
         login=user_in.login,
         senha_hash=get_password_hash(user_in.senha),
+        foto_perfil_url=user_in.foto_perfil_url,
         role=user_in.role,
         status=user_in.status
     )
@@ -86,6 +87,8 @@ async def update_user(
         user.nome = user_in.nome
     if user_in.senha and user_in.senha.strip() != "":
         user.senha_hash = get_password_hash(user_in.senha)
+    if user_in.foto_perfil_url is not None:
+        user.foto_perfil_url = user_in.foto_perfil_url
     if user_in.role:
         user.role = user_in.role
     if user_in.status is not None:

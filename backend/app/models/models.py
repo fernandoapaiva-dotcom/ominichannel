@@ -75,9 +75,10 @@ class User(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
-    nome: Mapped[str] = mapped_column(String(150), nullable=False)
-    login: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    nome: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     senha_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    foto_perfil_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.ATENDENTE)
     status: Mapped[bool] = mapped_column(Boolean, default=True)
     

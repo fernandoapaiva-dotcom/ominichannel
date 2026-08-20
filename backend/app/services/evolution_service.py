@@ -547,6 +547,29 @@ class EvolutionService:
                     pass
         return []
 
+    async def update_instance_profile_picture(
+        self,
+        instance_name: str,
+        picture_url_or_base64: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Updates the WhatsApp instance profile picture dynamically via Evolution API.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/chat/updateProfilePicture/{instance_name}"
+        payload = {"picture": picture_url_or_base64}
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, headers=headers, json=payload, timeout=15.0)
+                if response.status_code in [200, 201]:
+                    return {"success": True, "data": response.json()}
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text}"}
+            except Exception as e:
+                logger.error(f"Failed to update instance profile picture for {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
 evolution_service = EvolutionService()
 
 

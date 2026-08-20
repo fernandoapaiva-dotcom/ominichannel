@@ -72,6 +72,7 @@ class WhatsAppNumberResponse(BaseModel):
 class UserBase(BaseModel):
     nome: str
     login: str
+    foto_perfil_url: Optional[str] = None
     role: UserRole = UserRole.ATENDENTE
     status: bool = True
 
@@ -83,6 +84,7 @@ class UserUpdate(BaseModel):
     nome: Optional[str] = None
     login: Optional[str] = None
     senha: Optional[str] = None
+    foto_perfil_url: Optional[str] = None
     role: Optional[UserRole] = None
     status: Optional[bool] = None
     whatsapp_number_ids: Optional[List[int]] = None

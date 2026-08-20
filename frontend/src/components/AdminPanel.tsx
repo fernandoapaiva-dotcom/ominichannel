@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera } from 'lucide-react';
 import { WhatsAppNumber, User, WhatsAppGroup } from '../types';
 import { apiFetch } from '../services/api';
+import { AvatarCropModal } from './AvatarCropModal';
 
 export const AdminPanel: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations' | 'groups' | 'pix'>('numbers');
@@ -10,7 +11,6 @@ export const AdminPanel: React.FC = () => {
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [syncingGroups, setSyncingGroups] = useState(false);
-
 
   // QR Code Modal & Connection Status State
   const [qrModalNumber, setQrModalNumber] = useState<WhatsAppNumber | null>(null);
@@ -37,6 +37,8 @@ export const AdminPanel: React.FC = () => {
   const [userName, setUserName] = useState('');
   const [userLogin, setUserLogin] = useState('');
   const [userPassword, setUserPassword] = useState('');
+  const [userAvatar, setUserAvatar] = useState<string | null>(null);
+  const [isAvatarCropOpen, setIsAvatarCropOpen] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'atendente'>('atendente');
   const [selectedNumIds, setSelectedNumIds] = useState<number[]>([]);
 
@@ -474,6 +476,7 @@ export const AdminPanel: React.FC = () => {
           nome: userName,
           login: userLogin,
           role: userRole,
+          foto_perfil_url: userAvatar,
           status: true,
           whatsapp_number_ids: selectedNumIds
         };
@@ -493,6 +496,7 @@ export const AdminPanel: React.FC = () => {
             nome: userName,
             login: userLogin,
             senha: userPassword,
+            foto_perfil_url: userAvatar,
             role: userRole,
             status: true,
             whatsapp_number_ids: selectedNumIds
@@ -513,6 +517,7 @@ export const AdminPanel: React.FC = () => {
     setUserName(u.nome);
     setUserLogin(u.login);
     setUserPassword('');
+    setUserAvatar(u.foto_perfil_url || null);
     setUserRole(u.role);
     setSelectedNumIds(u.whatsapp_numbers.map(n => n.id));
   };
@@ -533,6 +538,7 @@ export const AdminPanel: React.FC = () => {
     setUserName('');
     setUserLogin('');
     setUserPassword('');
+    setUserAvatar(null);
     setUserRole('atendente');
     setSelectedNumIds([]);
   };
@@ -1216,7 +1222,8 @@ export const AdminPanel: React.FC = () => {
 
         {/* 2. Users & Permissions Tab */}
         {activeSubTab === 'users' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px' }}>
@@ -1230,6 +1237,78 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               <form onSubmit={handleSaveUser} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                {/* User Avatar Upload & Crop Section */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  {userAvatar ? (
+                    <img
+                      src={userAvatar}
+                      alt="Foto de Perfil"
+                      style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', boxShadow: '0 4px 10px rgba(0,0,0,0.3)', flexShrink: 0 }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '56px',
+                      height: '56px',
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                      color: '#051a12',
+                      fontWeight: '700',
+                      fontSize: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      {(userName || 'U').charAt(0).toUpperCase()}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>
+                      Foto de Perfil do Atendente
+                    </span>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setIsAvatarCropOpen(true)}
+                        style={{
+                          background: 'rgba(0, 230, 153, 0.15)',
+                          border: '1px solid rgba(0, 230, 153, 0.3)',
+                          borderRadius: '6px',
+                          padding: '5px 10px',
+                          color: 'var(--accent-primary)',
+                          fontSize: '11px',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                      >
+                        <Camera size={13} /> {userAvatar ? 'Alterar / Enquadrar' : 'Adicionar Foto'}
+                      </button>
+
+                      {userAvatar && (
+                        <button
+                          type="button"
+                          onClick={() => setUserAvatar(null)}
+                          style={{
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: '6px',
+                            padding: '5px 8px',
+                            color: '#f87171',
+                            fontSize: '11px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div>
                   <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nome Completo</label>
                   <input
@@ -1316,37 +1395,72 @@ export const AdminPanel: React.FC = () => {
               <h3 style={{ fontSize: '18px', marginBottom: '16px' }}>Usuários Cadastrados ({users.length})</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {users.map(u => (
-                  <div key={u.id} style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(255, 255, 255, 0.02)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div>
-                        <span style={{ fontWeight: '600', fontSize: '15px' }}>{u.nome} ({u.login})</span>
-                        <span className="badge badge-com_humano" style={{ marginLeft: '8px' }}>{u.role}</span>
+                  <div key={u.id} style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(255, 255, 255, 0.02)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {u.foto_perfil_url ? (
+                      <img
+                        src={u.foto_perfil_url}
+                        alt={u.nome}
+                        style={{ width: '42px', height: '42px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--accent-primary)', flexShrink: 0 }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: '42px',
+                        height: '42px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                        color: '#051a12',
+                        fontWeight: '700',
+                        fontSize: '16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0
+                      }}>
+                        {u.nome.charAt(0).toUpperCase()}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <button
-                          onClick={() => handleEditUser(u)}
-                          title="Editar Usuário"
-                          style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-main)', padding: '6px', borderRadius: 'var(--radius-sm)' }}
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(u)}
-                          title="Excluir Usuário"
-                          style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', padding: '6px', borderRadius: 'var(--radius-sm)' }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                    )}
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <span style={{ fontWeight: '600', fontSize: '14px', color: 'var(--text-main)' }}>{u.nome}</span>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: '6px' }}>({u.login})</span>
+                          <span className="badge badge-com_humano" style={{ marginLeft: '8px' }}>{u.role}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <button
+                            onClick={() => handleEditUser(u)}
+                            title="Editar Usuário"
+                            style={{ background: 'rgba(255, 255, 255, 0.08)', color: 'var(--text-main)', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteUser(u)}
+                            title="Excluir Usuário"
+                            style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#f87171', padding: '6px', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
+                      <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+                        Departamentos: {u.whatsapp_numbers.map(n => n.nome_departamento).join(', ') || 'Todos (Admin)'}
+                      </p>
                     </div>
-                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>
-                      Departamentos autorizados: {u.whatsapp_numbers.map(n => n.nome_departamento).join(', ') || 'Nenhum (ou Admin Total)'}
-                    </p>
                   </div>
                 ))}
               </div>
             </div>
           </div>
+
+          <AvatarCropModal
+            isOpen={isAvatarCropOpen}
+            onClose={() => setIsAvatarCropOpen(false)}
+            onSave={(croppedUrl) => setUserAvatar(croppedUrl)}
+            initialImageUrl={userAvatar}
+          />
+          </>
         )}
 
         {/* 3. RAG Knowledge Upload & Management Tab */}

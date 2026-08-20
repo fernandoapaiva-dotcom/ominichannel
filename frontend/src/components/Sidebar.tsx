@@ -1,5 +1,5 @@
-import React from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter, ChevronLeft, ChevronRight, Menu, Contact as ContactIcon } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter, ChevronLeft, ChevronRight, Menu, Contact as ContactIcon, Sun, Moon } from 'lucide-react';
 import { User } from '../types';
 
 interface SidebarProps {
@@ -19,6 +19,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed = false,
   onToggleCollapse
 }) => {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    return (localStorage.getItem('omni_theme') as 'dark' | 'light') || 'dark';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('omni_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+  };
   if (isCollapsed) {
     return (
       <aside style={{
@@ -160,25 +172,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </nav>
 
-        {/* Compact User / Logout */}
-        <button
-          onClick={onLogout}
-          title="Sair da Conta"
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: 'var(--radius-md)',
-            background: 'transparent',
-            color: '#ef4444',
-            border: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer'
-          }}
-        >
-          <LogOut size={16} />
-        </button>
+        {/* Compact Theme Toggle & Logout */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Mudar para Modo Dia (Claro)' : 'Mudar para Modo Noite (Escuro)'}
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(255, 255, 255, 0.06)',
+              color: theme === 'dark' ? '#fbbf24' : '#6366f1',
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer'
+            }}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+
+          <button
+            onClick={onLogout}
+            title="Sair da Conta"
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-md)',
+              background: 'transparent',
+              color: '#ef4444',
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer'
+            }}
+          >
+            <LogOut size={16} />
+          </button>
+        </div>
       </aside>
     );
   }
@@ -344,23 +377,63 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </nav>
 
-      {/* User Avatar / Role & Logout */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
-        <div style={{
-          width: '38px',
-          height: '38px',
-          borderRadius: '50%',
-          backgroundColor: 'rgba(255,255,255,0.08)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--text-main)',
-          fontSize: '14px',
-          fontWeight: '700',
-          border: '1px solid var(--border-color)'
-        }} title={`${user.nome} (${user.role})`}>
-          {user.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
-        </div>
+      {/* User Avatar / Role, Theme Switcher & Logout */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+        <button
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Mudar para Modo Dia (Claro)' : 'Mudar para Modo Noite (Escuro)'}
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(255, 255, 255, 0.06)',
+            color: theme === 'dark' ? '#fbbf24' : '#6366f1',
+            border: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'transform 0.15s ease'
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.1)')}
+          onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+        >
+          {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+        </button>
+
+        {user.foto_perfil_url ? (
+          <img
+            src={user.foto_perfil_url}
+            alt={user.nome}
+            style={{
+              width: '40px',
+              height: '40px',
+              borderRadius: '50%',
+              objectFit: 'cover',
+              border: '2px solid var(--accent-primary)',
+              boxShadow: '0 2px 8px rgba(0, 230, 153, 0.25)',
+              cursor: 'pointer'
+            }}
+            title={`${user.nome} (${user.role})`}
+          />
+        ) : (
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '50%',
+            background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#051a12',
+            fontSize: '15px',
+            fontWeight: '700',
+            border: '1px solid var(--border-color)',
+            boxShadow: '0 2px 8px rgba(0, 230, 153, 0.25)'
+          }} title={`${user.nome} (${user.role})`}>
+            {user.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
+          </div>
+        )}
 
         <button
           onClick={onLogout}

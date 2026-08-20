@@ -21,6 +21,7 @@ export interface User {
   tenant_id: number;
   nome: string;
   login: string;
+  foto_perfil_url?: string | null;
   role: UserRole;
   status: boolean;
   whatsapp_numbers: WhatsAppNumber[];
