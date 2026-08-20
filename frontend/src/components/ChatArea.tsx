@@ -3,7 +3,7 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -11,6 +11,7 @@ import { ContactPickerModal } from './ContactPickerModal';
 import { PixModal } from './PixModal';
 import { AvatarModal } from './AvatarModal';
 import { ForwardModal } from './ForwardModal';
+import { MessageInfoModal } from './MessageInfoModal';
 import { Conversation, User, Message } from '../types';
 
 interface ChatAreaProps {
@@ -43,9 +44,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
-  // WhatsApp-style Message Actions & Forwarding State
+  // WhatsApp-style Message Actions, Info & Forwarding State
   const [activeActionMenuMsgId, setActiveActionMenuMsgId] = useState<number | null>(null);
   const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [selectedMessageForInfo, setSelectedMessageForInfo] = useState<Message | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [messageReactions, setMessageReactions] = useState<{ [msgId: number]: string }>({});
 
@@ -1576,6 +1578,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                       <button
                         type="button"
+                        onClick={() => {
+                          setSelectedMessageForInfo(msg);
+                          setActiveActionMenuMsgId(null);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--radius-sm)'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <Info size={15} style={{ color: 'var(--accent-primary)' }} />
+                        <span>Dados da mensagem</span>
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => handleCopyMessage(msg)}
                         style={{
                           display: 'flex',
@@ -2002,6 +2031,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         name={conversation.contact?.nome || 'Cliente'}
         phone={conversation.contact?.telefone}
         avatarUrl={conversation.contact?.foto_perfil_url}
+      />
+
+      {/* 6. Message Info Modal (Dados da Mensagem / Quem leu no grupo) */}
+      <MessageInfoModal
+        isOpen={Boolean(selectedMessageForInfo)}
+        onClose={() => setSelectedMessageForInfo(null)}
+        message={selectedMessageForInfo}
+        conversation={conversation}
       />
     </div>
   );

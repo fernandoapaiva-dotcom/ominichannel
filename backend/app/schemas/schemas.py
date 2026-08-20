@@ -126,6 +126,7 @@ class MessageResponse(MessageBase):
     remetente: str
     status: Optional[str] = "delivered"
     whatsapp_msg_id: Optional[str] = None
+    dados_adicionais: Optional[Dict[str, Any]] = None
     timestamp: datetime
     model_config = ConfigDict(from_attributes=True)
 

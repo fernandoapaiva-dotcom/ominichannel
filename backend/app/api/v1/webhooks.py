@@ -283,7 +283,7 @@ async def receive_evolution_webhook(
 
         return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
 
-    # Handle WhatsApp Message Status Updates (Delivered, Read / Played, Sent)
+    # Handle WhatsApp Message Status Updates (Delivered, Read / Played, Sent & Group Receipts)
     norm_event = str(event_type or "").lower().replace("_", ".")
     if norm_event in ["messages.update", "messages_update", "message.update"]:
         updates_list = data if isinstance(data, list) else [data]
@@ -293,19 +293,23 @@ async def receive_evolution_webhook(
             if not isinstance(item, dict):
                 continue
             key_id = item.get("keyId") or item.get("id") or (item.get("key") or {}).get("id")
-            raw_status = str(item.get("status", "")).upper()
+            raw_val = item.get("status") if item.get("status") is not None else (item.get("update") or {}).get("status")
+            raw_status = str(raw_val or "").upper()
             
             mapped_status = "sent"
-            if raw_status in ["READ", "PLAYED", "VIEWED"]:
+            if raw_status in ["READ", "PLAYED", "VIEWED", "4", "5"]:
                 mapped_status = "read"
-            elif raw_status in ["DELIVERY_ACK", "DELIVERED"]:
+            elif raw_status in ["DELIVERY_ACK", "DELIVERED", "3"]:
                 mapped_status = "delivered"
-            elif raw_status in ["SERVER_ACK", "SENT"]:
+            elif raw_status in ["SERVER_ACK", "SENT", "2"]:
                 mapped_status = "sent"
-            elif raw_status in ["PENDING"]:
+            elif raw_status in ["PENDING", "1"]:
                 mapped_status = "pending"
             else:
                 continue
+
+            participant_jid = item.get("participant") or (item.get("key") or {}).get("participant")
+            participant_phone = "".join(filter(str.isdigit, str(participant_jid))) if participant_jid else None
 
             msg_to_update = None
             if key_id:
@@ -334,9 +338,44 @@ async def receive_evolution_webhook(
                             msg_to_update = ml_res.scalars().first()
 
             if msg_to_update:
-                msg_to_update.status = mapped_status
+                now_str = datetime.utcnow().strftime("%d/%m/%Y às %H:%M")
+                msg_extra = dict(msg_to_update.dados_adicionais or {})
+                read_by_list = list(msg_extra.get("read_by", []))
+                delivered_to_list = list(msg_extra.get("delivered_to", []))
+
+                # Track group participant details if available
+                if participant_phone:
+                    part_contact_res = await db.execute(select(Contact).where(Contact.telefone.like(f"%{participant_phone[-8:]}%")))
+                    part_contact = part_contact_res.scalars().first()
+                    part_name = part_contact.nome if part_contact else f"Participante ({participant_phone})"
+                    part_avatar = part_contact.foto_perfil_url if part_contact else None
+
+                    entry = {
+                        "phone": participant_phone,
+                        "name": part_name,
+                        "avatar": part_avatar,
+                        "time": now_str
+                    }
+
+                    if mapped_status == "read":
+                        if not any(r.get("phone") == participant_phone for r in read_by_list):
+                            read_by_list.append(entry)
+                    elif mapped_status == "delivered":
+                        if not any(d.get("phone") == participant_phone for d in delivered_to_list):
+                            delivered_to_list.append(entry)
+
+                msg_extra["read_by"] = read_by_list
+                msg_extra["delivered_to"] = delivered_to_list
+                msg_to_update.dados_adicionais = msg_extra
+
+                if mapped_status == "read" or len(read_by_list) > 0:
+                    msg_to_update.status = "read"
+                elif mapped_status == "delivered" and msg_to_update.status != "read":
+                    msg_to_update.status = "delivered"
+
                 if key_id and not msg_to_update.whatsapp_msg_id:
                     msg_to_update.whatsapp_msg_id = key_id
+
                 await db.commit()
                 updated_any = True
 
@@ -345,7 +384,8 @@ async def receive_evolution_webhook(
                         "type": "MESSAGE_STATUS_UPDATE",
                         "conversation_id": msg_to_update.conversation_id,
                         "message_id": msg_to_update.id,
-                        "status": mapped_status,
+                        "status": msg_to_update.status,
+                        "dados_adicionais": msg_extra,
                         "whatsapp_msg_id": key_id
                     })
                 except Exception as err:
