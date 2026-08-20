@@ -33,6 +33,7 @@ from app.services.gemini_service import gemini_service
 from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
 from app.services.distribution_service import distribution_service
+from app.services.gdrive_service import gdrive_service
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
@@ -1222,9 +1223,17 @@ async def update_conversation_status(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Conversation).where(
-        Conversation.id == conversation_id,
-        Conversation.tenant_id == current_user.tenant_id
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
     )
     res = await db.execute(stmt)
     conv = res.scalar_one_or_none()
@@ -1232,16 +1241,86 @@ async def update_conversation_status(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
+    old_status = conv.status
     conv.status = payload.status
     conv.ultima_interacao_em = datetime.utcnow()
+
+    # If finalized (ENCERRADA), record system audit message and send optional CSAT survey
+    if payload.status == ConversationStatus.ENCERRADA:
+        # Pinned system message in timeline
+        sys_msg = Message(
+            conversation_id=conv.id,
+            remetente="sistema",
+            conteudo=f"🔒 Atendimento finalizado com sucesso por {current_user.nome or 'Atendente'}.",
+            tipo=MessageType.TEXTO,
+            timestamp=datetime.utcnow()
+        )
+        db.add(sys_msg)
+
+        # Dispatch CSAT closing survey to customer on WhatsApp
+        if conv.contact and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+            # Don't send CSAT to groups or temporary numbers
+            is_group = "@g.us" in str(conv.contact.telefone) or len(str(conv.contact.telefone)) > 15
+            if not is_group:
+                csat_text = (
+                    f"✅ *Atendimento Finalizado*\n"
+                    f"Protocolo: {conv.protocol_number or 'S/N'}\n\n"
+                    f"Agradecemos o contato com a Servweld! Como você avalia o atendimento recebido?\n\n"
+                    f"Por favor, responda com uma nota de 1 a 5:\n"
+                    f"⭐ 1 - Muito Ruim\n"
+                    f"⭐ 2 - Ruim\n"
+                    f"⭐ 3 - Regular\n"
+                    f"⭐ 4 - Bom\n"
+                    f"⭐ 5 - Excelente"
+                )
+                try:
+                    await evolution_service.send_text_message(
+                        instance_name=conv.whatsapp_number.instancia_evolution_api,
+                        number=conv.contact.telefone,
+                        text=csat_text
+                    )
+                except Exception as send_err:
+                    logger.warning(f"Failed to dispatch CSAT survey on finalization: {send_err}")
+
     await db.commit()
 
-    # If conversation was finished or closed, auto-assign any pending conversations in queue
+    # Auto-export conversation JSON backup
     if payload.status in [ConversationStatus.ENCERRADA, ConversationStatus.EXPIRADA_POR_INATIVIDADE]:
+        try:
+            conv_export = {
+                "conversation_id": conv.id,
+                "tenant_id": conv.tenant_id,
+                "contact_phone": conv.contact.telefone if conv.contact else "",
+                "contact_name": conv.contact.nome if conv.contact else "",
+                "protocol_number": conv.protocol_number,
+                "status": getattr(conv.status, 'value', str(conv.status)),
+                "criado_em": conv.criado_em,
+                "ultima_interacao_em": conv.ultima_interacao_em,
+                "messages": [
+                    {
+                        "id": m.id,
+                        "remetente": getattr(m.remetente, 'value', str(m.remetente)),
+                        "conteudo": m.conteudo,
+                        "tipo": getattr(m.tipo, 'value', str(m.tipo)),
+                        "timestamp": m.timestamp.isoformat() if m.timestamp else None
+                    }
+                    for m in (conv.messages or [])
+                ]
+            }
+            await gdrive_service.sync_conversation_to_drive(
+                tenant_drive_folder_id=None,
+                conversation_id=conv.id,
+                contact_phone=conv_export["contact_phone"],
+                conversation_data=conv_export
+            )
+        except Exception as b_err:
+            logger.warning(f"Error exporting backup on finalization: {b_err}")
+
+        # Automatically re-balance and assign any waiting conversations in queue to newly freed attendant
         try:
             await distribution_service.process_pending_queue(db, current_user.tenant_id, conv.whatsapp_number_id)
         except Exception as q_err:
-            logger.warning(f"Error processing pending queue after status update: {q_err}")
+            logger.warning(f"Error processing pending queue after finalization: {q_err}")
 
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
