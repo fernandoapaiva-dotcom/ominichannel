@@ -257,10 +257,14 @@ class GeminiService:
             f"Atenda o cliente '{customer_name or 'Cliente'}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
-            "2. ANÁLISE DE HISTÓRICO ANTERIOR E MESMO ASSUNTO (LEITURA NOS BASTIDORES):\n"
+            "2. ANÁLISE DE HISTÓRICO ANTERIOR E REABERTURA EM ATÉ 5 DIAS (OBRIGATÓRIO NA RESPOSTA):\n"
             "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' fornecido abaixo.\n"
-            "   - MESMO ASSUNTO: Se a nova mensagem do cliente indicar continuidade do MESMO assunto ou problema tratado na conversa anterior (ex: citar a mesma nota, contrato, produto ou chamado), RECONHEÇA IMEDIATAMENTE O HISTÓRICO ANTERIOR sem pedir para ele repetir tudo.\n"
-            "   - NOVO ASSUNTO OU SAUDAÇÃO GERAL: Se a nova mensagem for sobre um assunto DIFERENTE ou uma nova saudação geral (ex: 'Bom dia'), faça a recepção inicial normal e solicite as informações necessárias em bloco de uma só vez.\n"
+            "   - SE HOUVER HISTÓRICO ANTERIOR RECENTE E A MENSAGEM DO CLIENTE FOR APENAS UMA SAUDAÇÃO VAGA (ex: 'Oi', 'Olá', 'Bom dia', 'Tudo bem?'):\n"
+            "     * SUA RESPOSTA AO CLIENTE DEVE OBRIGATORIAMENTE CITAR O ASSUNTO ANTERIOR E FAZER A PERGUNTA DE RETOMADA!\n"
+            "     * Formato obrigatório: 'Olá, [Nome]! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
+            "     * NUNCA envie apenas uma saudação vazia se houver histórico anterior recente!\n"
+            "   - CONTINUIDADE DIRETA: Se o cliente já indicar continuidade explícita daquele assunto, reconheça imediatamente sem pedir para repetir.\n"
+            "   - NOVO ASSUNTO: Se o cliente indicar um novo tema, faça a recepção do novo assunto normalmente.\n"
             "3. FORA DO ESCOPO: Se o cliente fizer perguntas totalmente desconexas com a empresa (ex: 'Vocês vendem pizza?'), esclareça gentilmente os serviços e produtos que a Servweld atende (equipamentos de solda, corte, assistência, locação e financeiro).\n"
             "4. TROCA DE SETOR: Se o cliente necessitar de outro setor com base nas fronteiras (ex: problema em máquina alugada -> Locação; dúvida de boleto -> Financeiro), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeExatoDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
             "5. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano, PERGUNTE PRIMEIRO:\n"
@@ -315,10 +319,9 @@ class GeminiService:
             }
 
         models_to_try = [primary_model]
-        if "gemini-2.5-flash" not in models_to_try:
-            models_to_try.append("gemini-2.5-flash")
-        if "gemini-1.5-flash" not in models_to_try:
-            models_to_try.append("gemini-1.5-flash")
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
 
         last_error = None
         for m_name in models_to_try:
