@@ -14,7 +14,9 @@ class UserRole(str, enum.Enum):
 class ConversationStatus(str, enum.Enum):
     COM_IA = "com_ia"
     COM_HUMANO = "com_humano"
+    AGUARDANDO_ATENDENTE = "aguardando_atendente"
     ENCERRADA = "encerrada"
+    ENCERRADA_FORA_EXPEDIENTE = "encerrada_fora_expediente"
     EXPIRADA_POR_INATIVIDADE = "expirada_por_inatividade"
 
 class MessageSender(str, enum.Enum):
@@ -60,6 +62,7 @@ class WhatsAppNumber(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     numero: Mapped[str] = mapped_column(String(50), nullable=False)
     nome_departamento: Mapped[str] = mapped_column(String(100), nullable=False)
+    descricao_roteamento: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     provider_type: Mapped[str] = mapped_column(String(20), default="evolution", nullable=False)
     instancia_evolution_api: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
     meta_phone_number_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -133,6 +136,7 @@ class Conversation(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     whatsapp_number_id: Mapped[int] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="CASCADE"), index=True)
     contact_id: Mapped[int] = mapped_column(Integer, ForeignKey("contacts.id", ondelete="CASCADE"), index=True)
+    protocol_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     status: Mapped[ConversationStatus] = mapped_column(Enum(ConversationStatus), default=ConversationStatus.COM_IA, index=True)
     assigned_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     assunto_atual: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -174,8 +178,31 @@ class TransferLog(Base):
     conversation_id: Mapped[int] = mapped_column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
     de_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     para_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    de_whatsapp_number_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="SET NULL"), nullable=True)
+    para_whatsapp_number_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="SET NULL"), nullable=True)
     motivo: Mapped[str] = mapped_column(String(255), nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    de_whatsapp_number: Mapped[Optional["WhatsAppNumber"]] = relationship("WhatsAppNumber", foreign_keys=[de_whatsapp_number_id])
+    para_whatsapp_number: Mapped[Optional["WhatsAppNumber"]] = relationship("WhatsAppNumber", foreign_keys=[para_whatsapp_number_id])
+
+# Business Hours / Expediente Configuration
+class BusinessHours(Base):
+    __tablename__ = "business_hours"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    dias_uteis: Mapped[List[int]] = mapped_column(JSON, default=lambda: [0, 1, 2, 3, 4]) # 0=Segunda ... 4=Sexta (Sábado NÃO é útil)
+    horario_abertura: Mapped[str] = mapped_column(String(10), default="08:00")
+    horario_fechamento: Mapped[str] = mapped_column(String(10), default="18:00")
+    fuso_horario: Mapped[str] = mapped_column(String(50), default="America/Sao_Paulo")
+    feriados_nacionais: Mapped[List[str]] = mapped_column(JSON, default=list) # Formato ['2026-01-01', '2026-04-21', ...]
+    mensagem_fora_expediente: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mensagem_encerramento_dia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    tenant: Mapped["Tenant"] = relationship("Tenant")
 
 # Dynamic Encrypted Integration Settings
 class IntegrationSettings(Base):
@@ -234,4 +261,3 @@ class TenantPixKey(Base):
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-

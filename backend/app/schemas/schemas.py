@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from app.models.models import UserRole, ConversationStatus, MessageSender, MessageType
 
 # Token schemas
@@ -27,12 +27,11 @@ class TenantResponse(TenantBase):
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 class WhatsAppNumberBase(BaseModel):
     provider_type: str = "evolution"
     numero: str
     nome_departamento: str
+    descricao_roteamento: Optional[str] = None
     instancia_evolution_api: Optional[str] = None
     meta_phone_number_id: Optional[str] = None
     meta_waba_id: Optional[str] = None
@@ -55,12 +54,24 @@ class WhatsAppNumberBase(BaseModel):
 class WhatsAppNumberCreate(WhatsAppNumberBase):
     pass
 
+class WhatsAppNumberUpdate(BaseModel):
+    numero: Optional[str] = None
+    nome_departamento: Optional[str] = None
+    descricao_roteamento: Optional[str] = None
+    provider_type: Optional[str] = None
+    instancia_evolution_api: Optional[str] = None
+    meta_phone_number_id: Optional[str] = None
+    meta_waba_id: Optional[str] = None
+    meta_access_token: Optional[str] = None
+    status: Optional[bool] = None
+
 class WhatsAppNumberResponse(BaseModel):
     id: int
     tenant_id: int
     provider_type: str = "evolution"
     numero: str
     nome_departamento: str
+    descricao_roteamento: Optional[str] = None
     instancia_evolution_api: Optional[str] = None
     meta_phone_number_id: Optional[str] = None
     meta_waba_id: Optional[str] = None
@@ -118,7 +129,7 @@ class MessageBase(BaseModel):
 
 class MessageCreate(MessageBase):
     conversation_id: Optional[int] = None
-    remetente: Optional[MessageSender] = MessageSender.ATENDENTE
+    remetente: Optional[str] = "atendente"
 
 class MessageResponse(MessageBase):
     id: int
@@ -145,6 +156,7 @@ class ConversationResponse(BaseModel):
     tenant_id: int
     whatsapp_number_id: int
     contact_id: int
+    protocol_number: Optional[str] = None
     status: ConversationStatus
     assigned_user_id: Optional[int] = None
     assigned_user_name: Optional[str] = None
@@ -156,7 +168,6 @@ class ConversationResponse(BaseModel):
     whatsapp_number: Optional[WhatsAppNumberResponse] = None
     messages: List[MessageResponse] = []
     model_config = ConfigDict(from_attributes=True)
-
 
 class ConversationTransfer(BaseModel):
     para_user_id: Optional[int] = None
@@ -216,11 +227,30 @@ class SegmentPreviewRequest(BaseModel):
     dias_inativo: Optional[int] = None
     tag_ids: List[int] = []
 
+# Business Hours Schemas
+class BusinessHoursBase(BaseModel):
+    dias_uteis: List[int] = [0, 1, 2, 3, 4] # 0=Segunda ... 4=Sexta (Sábado NÃO é dia útil)
+    horario_abertura: str = "08:00"
+    horario_fechamento: str = "18:00"
+    fuso_horario: str = "America/Sao_Paulo"
+    feriados_nacionais: List[str] = []
+    mensagem_fora_expediente: Optional[str] = None
+    mensagem_encerramento_dia: Optional[str] = None
+
+class BusinessHoursUpdate(BusinessHoursBase):
+    pass
+
+class BusinessHoursResponse(BusinessHoursBase):
+    id: int
+    tenant_id: int
+    criado_em: datetime
+    atualizado_em: datetime
+    model_config = ConfigDict(from_attributes=True)
+
 # Integration Settings Schemas
 class SaveIntegrationSettingsPayload(BaseModel):
     gemini_api_key: Optional[str] = None
     gemini_model_name: Optional[str] = "gemini-2.5-flash"
-
     evolution_api_url: Optional[str] = None
     evolution_api_key: Optional[str] = None
     inatividade_minutos: Optional[int] = 30
