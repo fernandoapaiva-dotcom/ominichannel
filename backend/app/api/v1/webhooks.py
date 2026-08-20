@@ -785,6 +785,11 @@ async def receive_evolution_webhook(
     if not conversation.protocol_number:
         conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
 
+    # Reset inactivity warning flags and restart timer
+    extra = dict(conversation.dados_adicionais or {})
+    extra["inactivity_warning_10m_sent"] = False
+    extra["inactivity_warning_5m_sent"] = False
+    conversation.dados_adicionais = extra
     conversation.ultima_interacao_em = datetime.utcnow()
 
     # 4. Save Customer Message with WhatsApp Message ID
