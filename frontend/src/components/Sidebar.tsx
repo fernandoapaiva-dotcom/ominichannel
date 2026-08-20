@@ -1,11 +1,11 @@
 import React from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter, ChevronLeft, ChevronRight, Menu } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter, ChevronLeft, ChevronRight, Menu, Contact as ContactIcon } from 'lucide-react';
 import { User } from '../types';
 
 interface SidebarProps {
   user: User;
-  activeTab: 'chats' | 'contacts' | 'segmentation' | 'admin';
-  setActiveTab: (tab: 'chats' | 'contacts' | 'segmentation' | 'admin') => void;
+  activeTab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin';
+  setActiveTab: (tab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin') => void;
   onLogout: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -83,7 +83,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <button
             onClick={() => setActiveTab('chats')}
-            title="Conversas WhatsApp"
+            title="Conversas com Clientes"
             style={{
               width: '32px',
               height: '32px',
@@ -98,6 +98,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <MessageSquare size={16} />
+          </button>
+
+          <button
+            onClick={() => setActiveTab('groups')}
+            title="Grupos & Comunidades WhatsApp"
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-md)',
+              background: activeTab === 'groups' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+              color: activeTab === 'groups' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              border: activeTab === 'groups' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer'
+            }}
+          >
+            <Users size={16} />
           </button>
 
           <button
@@ -116,7 +135,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               cursor: 'pointer'
             }}
           >
-            <Users size={16} />
+            <ContactIcon size={16} />
           </button>
 
           {user.role === 'admin' && (
@@ -229,7 +248,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <button
           onClick={() => setActiveTab('chats')}
-          title="Conversas WhatsApp"
+          title="Conversas com Clientes"
           style={{
             width: '48px',
             height: '48px',
@@ -244,6 +263,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
         >
           <MessageSquare size={22} />
+        </button>
+
+        <button
+          onClick={() => setActiveTab('groups')}
+          title="Grupos & Comunidades WhatsApp"
+          style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: 'var(--radius-md)',
+            background: activeTab === 'groups' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+            color: activeTab === 'groups' ? 'var(--accent-primary)' : 'var(--text-muted)',
+            border: activeTab === 'groups' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer'
+          }}
+        >
+          <Users size={22} />
         </button>
 
         <button
@@ -262,7 +300,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             cursor: 'pointer'
           }}
         >
-          <Users size={22} />
+          <ContactIcon size={22} />
         </button>
 
         <button

@@ -47,9 +47,9 @@ class InactivityService:
                     if not tenant:
                         continue
                     
-                    config = tenant.config_geral or {}
-                    inactivity_minutes = config.get("inatividade_minutos", 30)
-                    threshold_time = now - timedelta(minutes=inactivity_minutes)
+                    # NEVER expire WhatsApp groups or communities
+                    if conv.contact and (conv.contact.telefone.startswith("120363") or "@g.us" in conv.contact.telefone or len(conv.contact.telefone) > 15):
+                        continue
 
                     if conv.ultima_interacao_em and conv.ultima_interacao_em < threshold_time:
                         conv.status = ConversationStatus.EXPIRADA_POR_INATIVIDADE

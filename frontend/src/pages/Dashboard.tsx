@@ -19,14 +19,32 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'contacts' | 'segmentation' | 'admin'>('chats');
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin'>('chats');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all'>('all');
+
+  const displayedConversations = React.useMemo(() => {
+    return conversations.filter(c => {
+      const isGroup = Boolean(
+        c.contact?.telefone?.startsWith('120363') ||
+        (c.contact?.telefone && c.contact.telefone.length > 15) ||
+        c.contact?.nome?.includes('Servweld/Servsolda')
+      );
+
+      if (activeTab === 'groups') {
+        return isGroup;
+      }
+      if (activeTab === 'chats') {
+        return !isGroup;
+      }
+      return true;
+    });
+  }, [conversations, activeTab]);
   
-  const activeConversation = conversations.find(c => c.id === activeConversationId) || (conversations.length > 0 ? conversations[0] : null);
+  const activeConversation = displayedConversations.find(c => c.id === activeConversationId) || (displayedConversations.length > 0 ? displayedConversations[0] : null);
 
   // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -261,13 +279,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         onToggleCollapse={() => setIsMainSidebarCollapsed(!isMainSidebarCollapsed)}
       />
 
-      {activeTab === 'chats' && (
+      {(activeTab === 'chats' || activeTab === 'groups') && (
         <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
           <DepartmentBar
             whatsappNumbers={whatsappNumbers}
             selectedDepartmentId={selectedDeptId}
             onSelectDepartment={(id) => setSelectedDeptId(id)}
-            conversations={conversations}
+            conversations={displayedConversations}
           />
           <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', overflow: 'hidden', boxSizing: 'border-box' }}>
             <div
@@ -285,7 +303,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }}
             >
               <ChatList
-                conversations={conversations}
+                conversations={displayedConversations}
                 activeConversation={activeConversation}
                 onSelectConversation={(conv) => setActiveConversationId(conv.id)}
                 whatsappNumbers={whatsappNumbers}

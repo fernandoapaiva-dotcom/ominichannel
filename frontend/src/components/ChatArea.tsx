@@ -1503,20 +1503,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
-      <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
-        <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={conversation.status === 'expirada_por_inatividade'} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
-        <input
-          type="text"
-          placeholder={conversation.status === 'expirada_por_inatividade' ? 'Conversa expirada...' : 'Digite sua mensagem...'}
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          disabled={conversation.status === 'expirada_por_inatividade'}
-          style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
-        />
-        <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending || conversation.status === 'expirada_por_inatividade'}>
-          <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
-        </button>
-      </form>
+      {(() => {
+        const isGroupChat = Boolean(
+          conversation.contact?.telefone?.startsWith('120363') ||
+          (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
+          conversation.contact?.nome?.includes('Servweld/Servsolda')
+        );
+        const isExpired = conversation.status === 'expirada_por_inatividade' && !isGroupChat;
+
+        return (
+          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
+            <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={isExpired} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
+            <input
+              type="text"
+              placeholder={isExpired ? 'Conversa expirada...' : (isGroupChat ? 'Enviar mensagem no grupo...' : 'Digite sua mensagem...')}
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              disabled={isExpired}
+              style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+            />
+            <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending || isExpired}>
+              <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
+            </button>
+          </form>
+        );
+      })()}
 
       {/* WebRTC Live Video / Audio Call Modal */}
       {isVideoModalOpen && activeCallUrl && (
