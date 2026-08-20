@@ -160,16 +160,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     };
   }, [fetchConversations]);
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, tipo: string = 'texto') => {
     if (!activeConversation) return;
 
+    const isMedia = tipo !== 'texto' || text.endsWith('.webp') || text.endsWith('.gif') || text.includes('/uploads/');
+    const actualTipo = isMedia ? (text.endsWith('.gif') ? 'video' : 'imagem') : (tipo || 'texto');
     const tempId = -Date.now();
     const optimisticMsg: Message = {
       id: tempId,
       conversation_id: activeConversation.id,
       remetente: 'atendente',
       conteudo: text,
-      tipo: 'texto',
+      tipo: actualTipo as any,
       timestamp: new Date().toISOString(),
       status: 'sending'
     };
@@ -197,7 +199,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           conversation_id: activeConversation.id,
           remetente: 'atendente',
           conteudo: text,
-          tipo: 'texto'
+          tipo: actualTipo
         })
       });
 

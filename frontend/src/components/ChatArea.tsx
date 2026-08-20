@@ -20,7 +20,7 @@ interface ChatAreaProps {
   allConversations?: Conversation[];
   onSelectConversation?: (conv: Conversation) => void;
   currentUser: User;
-  onSendMessage: (text: string) => Promise<void>;
+  onSendMessage: (text: string, tipo?: string) => Promise<void>;
   onOpenTransferModal: () => void;
   onOpenMediaGallery?: () => void;
   onStatusToggle?: () => void;
@@ -2488,43 +2488,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             setInputText(prev => prev + emoji);
           }
         }}
-        onSelectGif={async (gifUrl) => {
+        onSelectGif={(gifUrl) => {
           setShowEmojiPicker(false);
-          if (conversation?.id) {
-            try {
-              await apiFetch(`/conversations/${conversation.id}/messages`, {
-                method: 'POST',
-                body: JSON.stringify({
-                  conversation_id: conversation.id,
-                  conteudo: gifUrl,
-                  tipo: 'video',
-                  remetente: 'atendente'
-                })
-              });
-              if (onStatusToggle) onStatusToggle();
-            } catch (err) {
-              console.error('Error sending gif:', err);
-            }
-          }
+          onSendMessage(gifUrl, 'video');
         }}
-        onSelectSticker={async (stickerUrl) => {
+        onSelectSticker={(stickerUrl) => {
           setShowEmojiPicker(false);
-          if (conversation?.id) {
-            try {
-              await apiFetch(`/conversations/${conversation.id}/messages`, {
-                method: 'POST',
-                body: JSON.stringify({
-                  conversation_id: conversation.id,
-                  conteudo: stickerUrl,
-                  tipo: 'imagem',
-                  remetente: 'atendente'
-                })
-              });
-              if (onStatusToggle) onStatusToggle();
-            } catch (err) {
-              console.error('Error sending sticker:', err);
-            }
-          }
+          onSendMessage(stickerUrl, 'imagem');
         }}
       />
     </div>
