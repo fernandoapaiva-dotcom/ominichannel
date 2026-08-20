@@ -102,6 +102,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
+  const [showPixModal, setShowPixModal] = useState(false);
   const [showAvatarZoom, setShowAvatarZoom] = useState(false);
   const [isConsultingIA, setIsConsultingIA] = useState(false);
 
