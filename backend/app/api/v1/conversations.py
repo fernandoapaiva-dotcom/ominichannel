@@ -32,6 +32,7 @@ from app.services.settings_service import settings_service
 from app.services.gemini_service import gemini_service
 from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
+from app.services.distribution_service import distribution_service
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
@@ -1234,6 +1235,13 @@ async def update_conversation_status(
     conv.status = payload.status
     conv.ultima_interacao_em = datetime.utcnow()
     await db.commit()
+
+    # If conversation was finished or closed, auto-assign any pending conversations in queue
+    if payload.status in [ConversationStatus.ENCERRADA, ConversationStatus.EXPIRADA_POR_INATIVIDADE]:
+        try:
+            await distribution_service.process_pending_queue(db, current_user.tenant_id, conv.whatsapp_number_id)
+        except Exception as q_err:
+            logger.warning(f"Error processing pending queue after status update: {q_err}")
 
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
