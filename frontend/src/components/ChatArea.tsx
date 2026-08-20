@@ -315,6 +315,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const formatDateDivider = (timestampStr: string): string => {
+    try {
+      const msgDate = new Date(timestampStr);
+      const today = new Date();
+      const yesterday = new Date();
+      yesterday.setDate(today.getDate() - 1);
+
+      const isToday = msgDate.toDateString() === today.toDateString();
+      const isYesterday = msgDate.toDateString() === yesterday.toDateString();
+
+      if (isToday) return 'Hoje';
+      if (isYesterday) return 'Ontem';
+
+      const diffTime = today.getTime() - msgDate.getTime();
+      const diffDays = Math.floor(diffTime / (1000 * 3600 * 24));
+      
+      if (diffDays < 7 && diffDays >= 2) {
+        const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+        return weekdays[msgDate.getDay()];
+      }
+
+      return msgDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    } catch {
+      return 'Hoje';
+    }
+  };
+
+  const getMessageDateKey = (timestampStr: string): string => {
+    try {
+      const d = new Date(timestampStr);
+      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    } catch {
+      return '';
+    }
+  };
+
   const handleCopyMessage = (msg: Message) => {
     let text = msg.conteudo || '';
     if (text.includes('|')) text = text.split('|')[1] || text;
@@ -1292,41 +1328,66 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           backgroundColor: 'var(--chat-bg)'
         }}
       >
-        {(conversation?.messages || []).map((msg, idx) => {
+        {(conversation?.messages || []).map((msg, idx, arr) => {
+          const prevMsg = idx > 0 ? arr[idx - 1] : null;
+          const showDateDivider = !prevMsg || (msg.timestamp && prevMsg.timestamp && getMessageDateKey(msg.timestamp) !== getMessageDateKey(prevMsg.timestamp));
+          const dateLabel = showDateDivider && msg.timestamp ? formatDateDivider(msg.timestamp) : null;
+
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
           const isSystem = msg.remetente === 'sistema';
           const msgKey = msg.id ? `msg_${msg.id}_${idx}` : `msg_${idx}`;
 
-          if (isSystem) {
-            return (
-              <div key={msgKey} className="animate-fade-in" style={{
-                alignSelf: 'center',
-                margin: '8px 0',
-                padding: '6px 14px',
-                borderRadius: 'var(--radius-full)',
-                backgroundColor: 'rgba(59, 130, 246, 0.12)',
-                border: '1px solid rgba(59, 130, 246, 0.25)',
-                color: '#3b82f6',
-                fontSize: '12px',
-                fontWeight: '600',
-                textAlign: 'center',
-                maxWidth: '85%'
-              }}>
-                {renderMediaContent(msg)}
-              </div>
-            );
-          }
-
-          const bubbleBg = isCustomer ? 'var(--bubble-incoming)' : isAI ? 'var(--bubble-ai)' : 'var(--bubble-outgoing)';
-          const bubbleColor = isCustomer ? 'var(--bubble-incoming-text)' : isAI ? 'var(--bubble-ai-text)' : 'var(--bubble-outgoing-text)';
-          const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
-
-          const isMediaMsg = ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo);
-          const reaction = (msg.id ? messageReactions[msg.id] : null) || (msg as any).dados_adicionais?.reaction;
-          const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
-
           return (
+            <React.Fragment key={msgKey}>
+              {showDateDivider && dateLabel && (
+                <div style={{
+                  alignSelf: 'center',
+                  margin: '14px 0 6px 0',
+                  padding: '5px 14px',
+                  borderRadius: '8px',
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  boxShadow: '0 1px 4px rgba(0, 0, 0, 0.1)',
+                  color: 'var(--text-muted)',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 2,
+                  userSelect: 'none'
+                }}>
+                  {dateLabel}
+                </div>
+              )}
+
+              {isSystem ? (
+                <div className="animate-fade-in" style={{
+                  alignSelf: 'center',
+                  margin: '8px 0',
+                  padding: '6px 14px',
+                  borderRadius: 'var(--radius-full)',
+                  backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  color: '#3b82f6',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  textAlign: 'center',
+                  maxWidth: '85%'
+                }}>
+                  {renderMediaContent(msg)}
+                </div>
+              ) : (() => {
+                const bubbleBg = isCustomer ? 'var(--bubble-incoming)' : isAI ? 'var(--bubble-ai)' : 'var(--bubble-outgoing)';
+                const bubbleColor = isCustomer ? 'var(--bubble-incoming-text)' : isAI ? 'var(--bubble-ai-text)' : 'var(--bubble-outgoing-text)';
+                const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
+
+                const isMediaMsg = ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo);
+                const reaction = (msg.id ? messageReactions[msg.id] : null) || (msg as any).dados_adicionais?.reaction;
+                const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
+
+                return (
             <div
               key={msgKey}
               className="animate-fade-in msg-row-container"
@@ -1675,7 +1736,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </div>
             </div>
           );
-        })}
+        })()}
+      </React.Fragment>
+    );
+  })}
         <div ref={messagesEndRef} />
         {isUserScrolledUp && (
           <button
