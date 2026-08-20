@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
+import { AvatarModal } from './AvatarModal';
 
 const formatTime = (ts: string | Date | undefined) => {
   if (!ts) return '';
@@ -57,6 +58,7 @@ export const ChatList: React.FC<ChatListProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
+  const [avatarModalData, setAvatarModalData] = useState<{ name: string; phone?: string; avatarUrl?: string | null } | null>(null);
 
   const toggleExpand = (e: React.MouseEvent, contactId: number) => {
     e.stopPropagation();
@@ -294,28 +296,51 @@ export const ChatList: React.FC<ChatListProps> = ({
                     gap: '12px'
                   }}
                 >
-                  {/* WhatsApp Profile Avatar */}
+                  {/* WhatsApp Profile Avatar with Click-to-Zoom */}
                   {primaryConv.contact?.foto_perfil_url ? (
                     <img
                       src={primaryConv.contact.foto_perfil_url}
                       alt={group.contactName}
-                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--accent-primary)', flexShrink: 0 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAvatarModalData({
+                          name: group.contactName,
+                          phone: group.contactPhone,
+                          avatarUrl: primaryConv.contact?.foto_perfil_url
+                        });
+                      }}
+                      title="Clique para expandir a foto de perfil"
+                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                     />
                   ) : (
-                    <div style={{
-                      width: '38px',
-                      height: '38px',
-                      borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
-                      color: '#051a12',
-                      fontWeight: '700',
-                      fontSize: '15px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      boxShadow: '0 2px 6px rgba(0, 230, 153, 0.25)'
-                    }}>
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAvatarModalData({
+                          name: group.contactName,
+                          phone: group.contactPhone,
+                          avatarUrl: null
+                        });
+                      }}
+                      title="Clique para expandir a foto de perfil"
+                      style={{
+                        width: '38px',
+                        height: '38px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                        color: '#051a12',
+                        fontWeight: '700',
+                        fontSize: '15px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        boxShadow: '0 2px 6px rgba(0, 230, 153, 0.25)',
+                        cursor: 'pointer'
+                      }}
+                    >
                       {group.contactName.charAt(0).toUpperCase()}
                     </div>
                   )}
@@ -476,6 +501,14 @@ export const ChatList: React.FC<ChatListProps> = ({
           })
         )}
       </div>
+
+      <AvatarModal
+        isOpen={!!avatarModalData}
+        onClose={() => setAvatarModalData(null)}
+        name={avatarModalData?.name || ''}
+        phone={avatarModalData?.phone}
+        avatarUrl={avatarModalData?.avatarUrl}
+      />
     </div>
   );
 };

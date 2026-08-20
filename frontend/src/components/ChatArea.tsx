@@ -9,6 +9,7 @@ import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
 import { PixModal } from './PixModal';
+import { AvatarModal } from './AvatarModal';
 import { Conversation, User } from '../types';
 
 interface ChatAreaProps {
@@ -60,6 +61,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showPixModal, setShowPixModal] = useState(false);
+  const [showAvatarZoom, setShowAvatarZoom] = useState(false);
 
   // Edit Contact Name State
   const [isEditingContact, setIsEditingContact] = useState(false);
@@ -788,28 +790,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
 
-          {/* WhatsApp Profile Avatar in Header */}
+          {/* WhatsApp Profile Avatar in Header with Click-to-Zoom */}
           {conversation.contact?.foto_perfil_url ? (
             <img
               src={conversation.contact.foto_perfil_url}
               alt={conversation.contact.nome || 'Cliente'}
-              style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0 }}
+              onClick={() => setShowAvatarZoom(true)}
+              title="Clique para expandir a foto de perfil"
+              style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
             />
           ) : (
-            <div style={{
-              width: '40px',
-              height: '40px',
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
-              color: '#051a12',
-              fontWeight: '700',
-              fontSize: '17px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              boxShadow: '0 2px 8px rgba(0, 230, 153, 0.3)'
-            }}>
+            <div
+              onClick={() => setShowAvatarZoom(true)}
+              title="Clique para expandir a foto de perfil"
+              style={{
+                width: '40px',
+                height: '40px',
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                color: '#051a12',
+                fontWeight: '700',
+                fontSize: '17px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                boxShadow: '0 2px 8px rgba(0, 230, 153, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
               {(conversation.contact?.nome || conversation.contact?.telefone || 'U').charAt(0).toUpperCase()}
             </div>
           )}
@@ -1600,6 +1611,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             }).catch(() => {});
           }
         }}
+      />
+
+      {/* 4. Contact / Group Avatar Fullscreen Lightbox Modal */}
+      <AvatarModal
+        isOpen={showAvatarZoom}
+        onClose={() => setShowAvatarZoom(false)}
+        name={conversation.contact?.nome || 'Cliente'}
+        phone={conversation.contact?.telefone}
+        avatarUrl={conversation.contact?.foto_perfil_url}
       />
     </div>
   );
