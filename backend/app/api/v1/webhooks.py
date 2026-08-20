@@ -907,50 +907,69 @@ async def receive_evolution_webhook(
 
         # Check if conversation was waiting for customer confirmation on sector transfer
         is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
-        affirmative_words = ["sim", "isso", "correto", "pode", "ok", "positivo", "claro", "por favor", "transfere", "quero", "exato", "com certeza", "manda"]
-        customer_confirmed = any(w in text_content.strip().lower() for w in affirmative_words)
+        text_clean = text_content.strip().lower()
+        
+        has_negative = bool(re.search(r'\b(n[ãa]o|outro|errad[oa]|nenhum|talvez|n[ãa]o sei|nada a ver)\b', text_clean))
+        has_affirmative = bool(re.search(r'\b(sim|isso|correto|pode|ok|positivo|claro|por favor|com certeza|exato)\b', text_clean))
+        
+        customer_confirmed = has_affirmative and not has_negative
+        customer_declined = has_negative or (not has_affirmative and bool(re.search(r'\b(talvez|espera|quem sabe)\b', text_clean)))
 
         transfer_executed = False
         ai_output = None
 
-        if is_pending_transfer and customer_confirmed:
-            parts = conversation.assunto_atual.split(":", 2)
-            target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-            intent_sum = parts[2] if len(parts) > 2 else "Assunto confirmado pelo cliente"
+        if is_pending_transfer:
+            if customer_confirmed:
+                parts = conversation.assunto_atual.split(":", 2)
+                target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                intent_sum = parts[2] if len(parts) > 2 else "Assunto confirmado pelo cliente"
 
-            target_wn = next((w for w in all_wns if w.id == target_id), None)
-            if target_wn and target_wn.id != whatsapp_number.id:
-                old_dept_name = whatsapp_number.nome_departamento
-                old_dept_id = whatsapp_number.id
-                conversation.whatsapp_number_id = target_wn.id
-                whatsapp_number = target_wn
-                conversation.assunto_atual = intent_sum
+                target_wn = next((w for w in all_wns if w.id == target_id), None)
+                if target_wn and target_wn.id != whatsapp_number.id:
+                    old_dept_name = whatsapp_number.nome_departamento
+                    old_dept_id = whatsapp_number.id
+                    conversation.whatsapp_number_id = target_wn.id
+                    whatsapp_number = target_wn
+                    conversation.assunto_atual = intent_sum
 
-                tlog = TransferLog(
-                    conversation_id=conversation.id,
-                    de_whatsapp_number_id=old_dept_id,
-                    para_whatsapp_number_id=target_wn.id,
-                    motivo=f"Roteamento IA confirmado pelo cliente: {intent_sum}",
-                    timestamp=datetime.utcnow()
-                )
-                db.add(tlog)
+                    tlog = TransferLog(
+                        conversation_id=conversation.id,
+                        de_whatsapp_number_id=old_dept_id,
+                        para_whatsapp_number_id=target_wn.id,
+                        motivo=f"Roteamento IA confirmado pelo cliente: {intent_sum}",
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(tlog)
 
-                sys_transfer_msg = Message(
-                    conversation_id=conversation.id,
-                    remetente="sistema",
-                    conteudo=f"🔀 *TRANSFERÊNCIA DE SETOR PELA IA*\nAtendimento redirecionado do setor '{old_dept_name}' para '{target_wn.nome_departamento}'.\nMotivo: {intent_sum} (Confirmado pelo cliente)",
-                    tipo=MessageType.TEXTO,
-                    timestamp=datetime.utcnow()
-                )
-                db.add(sys_transfer_msg)
+                    sys_transfer_msg = Message(
+                        conversation_id=conversation.id,
+                        remetente="sistema",
+                        conteudo=f"🔀 *TRANSFERÊNCIA DE SETOR PELA IA*\nAtendimento redirecionado do setor '{old_dept_name}' para '{target_wn.nome_departamento}'.\nMotivo: {intent_sum} (Confirmado pelo cliente)",
+                        tipo=MessageType.TEXTO,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(sys_transfer_msg)
 
+                    ai_output = {
+                        "resposta": f"Perfeito! Já encaminhei o seu chamado para a nossa equipe de *{target_wn.nome_departamento}*. Um de nossos especialistas dará continuidade em instantes!",
+                        "transferir_setor": "NENHUM",
+                        "enviar_localizacao": False,
+                        "enviar_pix": False,
+                        "escalar_humano": True,
+                        "nova_memoria": f"Cliente confirmou transferência para {target_wn.nome_departamento} | Assunto: {intent_sum}"
+                    }
+                    transfer_executed = True
+            elif customer_declined:
+                # Customer declined or gave ambiguous reply -> Do not transfer, clear pending state and ask for details
+                logger.info(f"Customer declined sector transfer confirmation for conversation {conversation.id}")
+                conversation.assunto_atual = "Atendimento Concierge"
                 ai_output = {
-                    "resposta": f"Perfeito! Já encaminhei o seu chamado para a nossa equipe de *{target_wn.nome_departamento}*. Um de nossos especialistas dará continuidade em instantes!",
+                    "resposta": "Sem problemas! Para que eu possa te ajudar e direcionar corretamente, por favor me informe com mais detalhes: o que exatamente você precisa ou qual é a sua dúvida?",
                     "transferir_setor": "NENHUM",
                     "enviar_localizacao": False,
                     "enviar_pix": False,
-                    "escalar_humano": True,
-                    "nova_memoria": f"Cliente confirmou transferência para {target_wn.nome_departamento} | Assunto: {intent_sum}"
+                    "escalar_humano": False,
+                    "nova_memoria": "Cliente recusou ou corrigiu a sugestão de setor; solicitando mais detalhes."
                 }
                 transfer_executed = True
 
