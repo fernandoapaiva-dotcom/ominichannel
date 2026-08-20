@@ -710,12 +710,14 @@ async def receive_evolution_webhook(
 
     conversation.ultima_interacao_em = datetime.utcnow()
 
-    # 4. Save Customer Message
+    # 4. Save Customer Message with WhatsApp Message ID
     user_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
         conteudo=text_content,
         tipo=msg_type,
+        status="read",
+        whatsapp_msg_id=msg_id if msg_id else None,
         timestamp=datetime.utcnow()
     )
     db.add(user_msg)

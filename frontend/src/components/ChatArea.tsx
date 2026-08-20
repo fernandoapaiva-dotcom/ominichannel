@@ -12,6 +12,7 @@ import { PixModal } from './PixModal';
 import { AvatarModal } from './AvatarModal';
 import { ForwardModal } from './ForwardModal';
 import { MessageInfoModal } from './MessageInfoModal';
+import { EmojiGifStickerPicker } from './EmojiGifStickerPicker';
 import { Conversation, User, Message } from '../types';
 
 interface ChatAreaProps {
@@ -50,6 +51,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [selectedMessageForInfo, setSelectedMessageForInfo] = useState<Message | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [messageReactions, setMessageReactions] = useState<{ [msgId: number]: string }>({});
+
+  // WhatsApp Full Emoji, GIF & Sticker Picker State
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [reactingMsgForPicker, setReactingMsgForPicker] = useState<number | null>(null);
 
   const contactConversations = useMemo(() => {
     if (!conversation || !allConversations) return [];
@@ -1479,6 +1484,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'center',
+                        gap: '2px',
                         padding: '6px 8px',
                         backgroundColor: 'var(--bg-primary)',
                         borderRadius: 'var(--radius-sm)',
@@ -1505,6 +1511,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                             {emoji}
                           </button>
                         ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReactingMsgForPicker(msg.id);
+                            setShowEmojiPicker(true);
+                            setActiveActionMenuMsgId(null);
+                          }}
+                          title="Mais emojis..."
+                          style={{
+                            background: 'rgba(255, 255, 255, 0.08)',
+                            border: 'none',
+                            borderRadius: '50%',
+                            width: '24px',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            color: 'var(--text-muted)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--accent-primary)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
 
                       {/* Menu Actions */}
@@ -1913,7 +1944,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const isExpired = conversation.status === 'expirada_por_inatividade' && !isGroupChat;
 
         return (
-          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '12px', alignItems: 'center', flexShrink: 0 }}>
+          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, position: 'relative' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setReactingMsgForPicker(null);
+                setShowEmojiPicker(!showEmojiPicker);
+              }}
+              className="btn-secondary"
+              disabled={isExpired}
+              style={{
+                padding: '10px 12px',
+                color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)'
+              }}
+              title="Emojis, GIFs e Figurinhas do WhatsApp"
+            >
+              <Smile size={18} />
+            </button>
             <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={isExpired} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
             <input
               type="text"
@@ -2051,6 +2098,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onClose={() => setSelectedMessageForInfo(null)}
         message={selectedMessageForInfo}
         conversation={conversation}
+      />
+
+      {/* 7. Complete WhatsApp Emojis, Animated GIFs & Stickers Picker Drawer */}
+      <EmojiGifStickerPicker
+        isOpen={showEmojiPicker}
+        onClose={() => {
+          setShowEmojiPicker(false);
+          setReactingMsgForPicker(null);
+        }}
+        onSelectEmoji={(emoji) => {
+          if (reactingMsgForPicker) {
+            handleReact(reactingMsgForPicker, emoji);
+            setReactingMsgForPicker(null);
+            setShowEmojiPicker(false);
+          } else {
+            setInputText(prev => prev + emoji);
+          }
+        }}
+        onSelectGif={(gifUrl) => {
+          onSendMessage(gifUrl);
+          setShowEmojiPicker(false);
+        }}
+        onSelectSticker={(stickerUrl) => {
+          onSendMessage(stickerUrl);
+          setShowEmojiPicker(false);
+        }}
       />
     </div>
   );
