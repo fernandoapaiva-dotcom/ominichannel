@@ -107,7 +107,7 @@ class InactivityService:
                         selectinload(Conversation.contact),
                         selectinload(Conversation.whatsapp_number)
                     )
-                    .where(Conversation.status.in_([ConversationStatus.COM_IA, ConversationStatus.COM_HUMANO]))
+                    .where(Conversation.status == ConversationStatus.COM_IA)
                 )
                 conv_res = await db.execute(conv_stmt)
                 conversations = conv_res.scalars().all()
