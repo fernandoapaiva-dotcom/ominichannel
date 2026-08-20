@@ -24,6 +24,7 @@ from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol
 from app.services.distribution_service import distribution_service
+from app.services.business_hours_service import business_hours_service
 from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
 
@@ -1321,18 +1322,29 @@ async def receive_evolution_webhook(
 
         # Check Human Escalation
         if escalar_humano:
-            # Find and assign the least loaded eligible operator in this department
-            assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
-            if assigned_user:
-                conversation.status = ConversationStatus.COM_HUMANO
-                conversation.assigned_user_id = assigned_user.id
-                assigned_user_name = assigned_user.nome
+            is_open = business_hours_service.is_within_business_hours()
+            if is_open:
+                # Find and assign the least loaded eligible operator in this department
+                assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
+                if assigned_user:
+                    conversation.status = ConversationStatus.COM_HUMANO
+                    conversation.assigned_user_id = assigned_user.id
+                    assigned_user_name = assigned_user.nome
+                else:
+                    conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
+                    conversation.assigned_user_id = None
+                    assigned_user_name = "Fila Geral (Aguardando Atendente)"
             else:
+                # Outside business hours (after 18:00 or weekends)
                 conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
                 conversation.assigned_user_id = None
-                assigned_user_name = "Fila Geral (Aguardando Atendente)"
+                assigned_user_name = "Fila Matutina (Fora do Expediente)"
+                ai_reply += (
+                    f"\n\n⏰ *Aviso de Expediente:* Informamos que nosso expediente comercial é de Segunda a Sexta das 08:00 às 18:00. "
+                    f"Seu chamado foi registrado com prioridade sob o protocolo *{conversation.protocol_number}* e será atendido pela nossa equipe no próximo dia útil a partir das 08:00!"
+                )
 
-            logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least loaded operator).")
+            logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (business_hours={is_open}).")
 
             # Generate structured Onboarding Summary (Resumo Onde Parou - Seção 2)
             onboarding_summary = await gemini_service.generate_onboarding_summary(

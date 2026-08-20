@@ -24,6 +24,7 @@ from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
 from app.services.evolution_service import start_profile_picture_syncer_loop
+from app.services.business_hours_service import start_business_hours_scheduler_loop
 
 import mimetypes
 
@@ -47,12 +48,17 @@ async def lifespan(app: FastAPI):
     # Start WhatsApp profile picture background syncer
     profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=60))
     logger.info("WhatsApp profile picture automatic syncer background loop started.")
+
+    # Start Business Hours 18:00 Shift Closing Scheduler
+    business_hours_task = asyncio.create_task(start_business_hours_scheduler_loop(check_interval_seconds=30))
+    logger.info("Business hours 18:00 shift closing scheduler loop started.")
     
     yield
     
     # Shutdown actions
     inactivity_task.cancel()
     profile_pic_task.cancel()
+    business_hours_task.cancel()
     logger.info("Application shutdown completed.")
 
 app = FastAPI(
