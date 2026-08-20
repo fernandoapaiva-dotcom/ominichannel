@@ -347,6 +347,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     e.preventDefault();
     if (!inputText.trim() && pendingFiles.length === 0) return;
 
+    // Validation for unfulfilled placeholder brackets [...]
+    const placeholderMatch = inputText.match(/\[(.*?)\]/);
+    if (placeholderMatch) {
+      alert(`⚠️ Você esqueceu de preencher um campo na mensagem:\n"${placeholderMatch[0]}"\n\nPor favor, substitua ou remova os colchetes antes de enviar ao cliente.`);
+      return;
+    }
+
     let textToSend = inputText.trim();
     if (replyingToMessage) {
       const quoteSender = replyingToMessage.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : 'Atendente';
