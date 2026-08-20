@@ -23,6 +23,7 @@ from app.services.gemini_service import gemini_service
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol
+from app.services.distribution_service import distribution_service
 from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
 
@@ -53,45 +54,7 @@ def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
     return None
 
 async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
-    try:
-        users_stmt = (
-            select(User)
-            .options(selectinload(User.whatsapp_numbers))
-            .where(User.tenant_id == tenant_id, User.status == True)
-        )
-        users_res = await db.execute(users_stmt)
-        users = users_res.scalars().all()
-
-        eligible_users = []
-        for u in users:
-            role_str = getattr(u.role, 'value', str(u.role)).lower()
-            if role_str == "admin":
-                eligible_users.append(u)
-            elif any(wn.id == whatsapp_number_id for wn in u.whatsapp_numbers):
-                eligible_users.append(u)
-
-        if not eligible_users:
-            eligible_users = users
-
-        if not eligible_users:
-            return None
-
-        user_workloads = {}
-        for u in eligible_users:
-            count_stmt = select(func.count(Conversation.id)).where(
-                Conversation.tenant_id == tenant_id,
-                Conversation.assigned_user_id == u.id,
-                Conversation.status == ConversationStatus.COM_HUMANO
-            )
-            count_res = await db.execute(count_stmt)
-            active_count = count_res.scalar() or 0
-            user_workloads[u] = active_count
-
-        best_user = min(eligible_users, key=lambda u: user_workloads.get(u, 0))
-        return best_user
-    except Exception as err:
-        logger.error(f"Error in assign_least_busy_attendant: {err}")
-        return None
+    return await distribution_service.assign_least_loaded_attendant(db, tenant_id, whatsapp_number_id)
 
 
 @router.post("/evolution")
@@ -1293,16 +1256,18 @@ async def receive_evolution_webhook(
 
         # Check Human Escalation
         if escalar_humano:
-            conversation.status = ConversationStatus.COM_HUMANO
-            
-            # Find and assign the least busy eligible operator
+            # Find and assign the least loaded eligible operator in this department
             assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
-            assigned_user_name = "Equipe"
             if assigned_user:
+                conversation.status = ConversationStatus.COM_HUMANO
                 conversation.assigned_user_id = assigned_user.id
                 assigned_user_name = assigned_user.nome
+            else:
+                conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
+                conversation.assigned_user_id = None
+                assigned_user_name = "Fila Geral (Aguardando Atendente)"
 
-            logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least busy operator).")
+            logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least loaded operator).")
 
             # Create pinned system transfer card
             sys_escalate_msg = Message(
