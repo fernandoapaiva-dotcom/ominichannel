@@ -56,6 +56,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [reactingMsgForPicker, setReactingMsgForPicker] = useState<number | null>(null);
 
+  // WhatsApp Floating Sticky Date Timeline State (shows when scrolling, fades when stopped)
+  const [floatingDate, setFloatingDate] = useState<string>('Hoje');
+  const [isFloatingDateVisible, setIsFloatingDateVisible] = useState<boolean>(false);
+  const scrollDateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const contactConversations = useMemo(() => {
     if (!conversation || !allConversations) return [];
     const cid = conversation.contact_id || conversation.contact?.id;
@@ -209,6 +214,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     // Mark as scrolled up if distance to bottom > 120px
     const isFar = scrollHeight - scrollTop - clientHeight > 120;
     setIsUserScrolledUp(isFar);
+
+    // Calculate current visible date at top of viewport
+    const containerTop = scrollContainerRef.current.getBoundingClientRect().top;
+    const messageElements = scrollContainerRef.current.querySelectorAll('[data-msg-time]');
+    let currentDate = 'Hoje';
+
+    for (let i = 0; i < messageElements.length; i++) {
+      const el = messageElements[i] as HTMLElement;
+      const rect = el.getBoundingClientRect();
+      const msgTimestamp = el.getAttribute('data-msg-time');
+      if (rect.top <= containerTop + 100 && msgTimestamp) {
+        currentDate = formatDateDivider(msgTimestamp);
+      }
+    }
+
+    setFloatingDate(currentDate);
+    setIsFloatingDateVisible(true);
+
+    if (scrollDateTimeoutRef.current) {
+      clearTimeout(scrollDateTimeoutRef.current);
+    }
+    scrollDateTimeoutRef.current = setTimeout(() => {
+      setIsFloatingDateVisible(false);
+    }, 1500);
   };
 
   useEffect(() => {
@@ -1328,6 +1357,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           backgroundColor: 'var(--chat-bg)'
         }}
       >
+        {/* WhatsApp Web Floating Sticky Date Header Badge (appears on scroll, fades when stopped) */}
+        <div
+          style={{
+            position: 'sticky',
+            top: '8px',
+            alignSelf: 'center',
+            zIndex: 100,
+            pointerEvents: 'none',
+            transition: 'opacity 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+            opacity: isFloatingDateVisible ? 1 : 0,
+            transform: isFloatingDateVisible ? 'translateY(0)' : 'translateY(-8px)'
+          }}
+        >
+          <div
+            style={{
+              padding: '5px 14px',
+              borderRadius: '8px',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              boxShadow: '0 4px 16px rgba(0, 0, 0, 0.25)',
+              color: 'var(--text-main)',
+              fontSize: '12px',
+              fontWeight: '700',
+              letterSpacing: '0.3px',
+              textTransform: 'uppercase',
+              userSelect: 'none',
+              backdropFilter: 'blur(12px)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            {floatingDate}
+          </div>
+        </div>
+
         {(conversation?.messages || []).map((msg, idx, arr) => {
           const prevMsg = idx > 0 ? arr[idx - 1] : null;
           const showDateDivider = !prevMsg || (msg.timestamp && prevMsg.timestamp && getMessageDateKey(msg.timestamp) !== getMessageDateKey(prevMsg.timestamp));
@@ -1363,7 +1428,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
 
               {isSystem ? (
-                <div className="animate-fade-in" style={{
+                <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
                   alignSelf: 'center',
                   margin: '8px 0',
                   padding: '6px 14px',
@@ -1390,6 +1455,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 return (
             <div
               key={msgKey}
+              data-msg-time={msg.timestamp}
               className="animate-fade-in msg-row-container"
               style={{
                 alignSelf: isCustomer ? 'flex-start' : 'flex-end',
