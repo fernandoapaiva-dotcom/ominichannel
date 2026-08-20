@@ -579,11 +579,27 @@ async def send_agent_message(
             for alt_wn in all_wns:
                 if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
                     continue
-                alt_res = await evolution_service.send_text_message(
-                    instance_name=alt_wn.instancia_evolution_api,
-                    number=conv.contact.telefone,
-                    text=formatted_whatsapp_text
-                )
+                if is_sticker:
+                    alt_res = await evolution_service.send_sticker(
+                        instance_name=alt_wn.instancia_evolution_api,
+                        number=conv.contact.telefone,
+                        sticker_media=sticker_media
+                    )
+                elif is_gif:
+                    alt_res = await evolution_service.send_media_message(
+                        instance_name=alt_wn.instancia_evolution_api,
+                        number=conv.contact.telefone,
+                        media_type="video",
+                        mimetype="video/mp4",
+                        media=raw_content,
+                        file_name="animacao.mp4"
+                    )
+                else:
+                    alt_res = await evolution_service.send_text_message(
+                        instance_name=alt_wn.instancia_evolution_api,
+                        number=conv.contact.telefone,
+                        text=formatted_whatsapp_text
+                    )
                 if alt_res.get("success"):
                     logger.info(f"Agent message delivered to {conv.contact.telefone} via failover instance '{alt_wn.instancia_evolution_api}'")
                     send_res = alt_res
