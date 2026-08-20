@@ -45,12 +45,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
 
-  // WhatsApp-style Message Actions, Info & Forwarding State
+  // WhatsApp-style Message Actions, Multi-Select & Forwarding State
   const [activeActionMenuMsgId, setActiveActionMenuMsgId] = useState<number | null>(null);
-  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedMessagesForForward, setSelectedMessagesForForward] = useState<Message[]>([]);
+  const [showForwardModal, setShowForwardModal] = useState(false);
   const [selectedMessageForInfo, setSelectedMessageForInfo] = useState<Message | null>(null);
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [messageReactions, setMessageReactions] = useState<{ [msgId: number]: string }>({});
+
+  const handleStartForwardSelection = (msg: Message) => {
+    setIsSelectionMode(true);
+    setSelectedMessagesForForward([msg]);
+    setActiveActionMenuMsgId(null);
+  };
+
+  const toggleMessageSelection = (msg: Message) => {
+    setSelectedMessagesForForward(prev => {
+      const exists = prev.some(m => (m.id && m.id === msg.id) || m === msg);
+      if (exists) {
+        const next = prev.filter(m => (m.id && m.id !== msg.id) || (!m.id && m !== msg));
+        if (next.length === 0) {
+          setIsSelectionMode(false);
+        }
+        return next;
+      } else {
+        return [...prev, msg];
+      }
+    });
+  };
 
   // WhatsApp Full Emoji, GIF & Sticker Picker State
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -1451,6 +1474,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 const isMediaMsg = ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo);
                 const reaction = (msg.id ? messageReactions[msg.id] : null) || (msg as any).dados_adicionais?.reaction;
                 const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
+                const isMsgSelected = selectedMessagesForForward.some(m => (m.id && m.id === msg.id) || m === msg);
 
                 return (
             <div
@@ -1467,52 +1491,88 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 position: 'relative'
               }}
             >
-              {/* Quick Forward Button (Always accessible like WhatsApp Web) */}
-              <button
-                type="button"
-                onClick={() => setForwardingMessage(msg)}
-                title="Encaminhar / Compartilhar esta mensagem"
-                style={{
-                  background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '50%',
-                  width: '30px',
-                  height: '30px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: 'var(--text-muted)',
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.12)',
-                  flexShrink: 0,
-                  transition: 'transform 0.15s ease, color 0.15s ease'
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = 'var(--accent-primary)';
-                  e.currentTarget.style.transform = 'scale(1.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = 'var(--text-muted)';
-                  e.currentTarget.style.transform = 'scale(1)';
-                }}
-              >
-                <CornerUpRight size={15} />
-              </button>
+              {/* WhatsApp Multi-Select Checkbox or Quick Forward Button */}
+              {isSelectionMode ? (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleMessageSelection(msg);
+                  }}
+                  title={isMsgSelected ? "Desmarcar mensagem" : "Selecionar para encaminhar"}
+                  style={{
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '50%',
+                    border: isMsgSelected ? 'none' : '2px solid var(--border-color)',
+                    backgroundColor: isMsgSelected ? 'var(--accent-primary)' : 'var(--bg-secondary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#051a12',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  {isMsgSelected && <Check size={16} strokeWidth={3} />}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleStartForwardSelection(msg)}
+                  title="Encaminhar / Compartilhar esta mensagem"
+                  style={{
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '50%',
+                    width: '30px',
+                    height: '30px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.12)',
+                    flexShrink: 0,
+                    transition: 'transform 0.15s ease, color 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--accent-primary)';
+                    e.currentTarget.style.transform = 'scale(1.1)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-muted)';
+                    e.currentTarget.style.transform = 'scale(1)';
+                  }}
+                >
+                  <CornerUpRight size={15} />
+                </button>
+              )}
 
               {/* Main Message Bubble */}
-              <div style={{
-                position: 'relative',
-                padding: '12px 16px',
-                borderRadius: 'var(--radius-md)',
-                backgroundColor: bubbleBg,
-                color: bubbleColor,
-                border,
-                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '6px',
-                minWidth: '160px'
-              }}>
+              <div
+                onClick={() => {
+                  if (isSelectionMode) {
+                    toggleMessageSelection(msg);
+                  }
+                }}
+                style={{
+                  position: 'relative',
+                  padding: '12px 16px',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: bubbleBg,
+                  color: bubbleColor,
+                  border: isMsgSelected ? '2px solid var(--accent-primary)' : border,
+                  boxShadow: isMsgSelected ? '0 0 12px rgba(0, 230, 153, 0.35)' : '0 1px 4px rgba(0, 0, 0, 0.08)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '6px',
+                  minWidth: '160px',
+                  cursor: isSelectionMode ? 'pointer' : 'default',
+                  transition: 'border 0.15s ease, box-shadow 0.15s ease'
+                }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? 'var(--text-muted)' : 'var(--accent-primary)' }}>
                     {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
@@ -1695,10 +1755,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                       <button
                         type="button"
-                        onClick={() => {
-                          setForwardingMessage(msg);
-                          setActiveActionMenuMsgId(null);
-                        }}
+                        onClick={() => handleStartForwardSelection(msg)}
                         style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -2065,7 +2122,80 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {(() => {
+      {/* WhatsApp-Style Multi-Select Forwarding Bottom Action Bar or Normal Chat Input */}
+      {isSelectionMode ? (
+        <div style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '14px 24px',
+          backgroundColor: 'var(--bg-secondary)',
+          borderTop: '2px solid var(--accent-primary)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexShrink: 0,
+          boxShadow: '0 -10px 30px rgba(0, 0, 0, 0.4)',
+          zIndex: 100
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setIsSelectionMode(false);
+                setSelectedMessagesForForward([]);
+              }}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '34px',
+                height: '34px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-main)',
+                cursor: 'pointer'
+              }}
+              title="Cancelar seleção"
+            >
+              <X size={18} />
+            </button>
+            <div>
+              <span style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)' }}>
+                {selectedMessagesForForward.length} {selectedMessagesForForward.length === 1 ? 'mensagem selecionada' : 'mensagens selecionadas'}
+              </span>
+              <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: 'var(--text-muted)' }}>
+                Clique em outras mensagens para selecionar mais ou desmarcar
+              </p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedMessagesForForward.length > 0) {
+                  setShowForwardModal(true);
+                }
+              }}
+              disabled={selectedMessagesForForward.length === 0}
+              className="btn-primary"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '10px 22px',
+                fontSize: '13px',
+                fontWeight: '700',
+                boxShadow: '0 4px 15px rgba(0, 230, 153, 0.35)'
+              }}
+            >
+              <CornerUpRight size={16} />
+              <span>Encaminhar ({selectedMessagesForForward.length})</span>
+            </button>
+          </div>
+        </div>
+      ) : (() => {
         const isGroupChat = Boolean(
           conversation.contact?.telefone?.startsWith('120363') ||
           (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
@@ -2139,7 +2269,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontWeight: '600', color: 'var(--accent-primary)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', color: 'var(--accent-primary)' }}>
                 <Video size={20} />
                 <span>Chamada de Vídeo/Voz ao Vivo com {conversation.contact?.nome || 'Cliente'}</span>
               </div>
@@ -2161,13 +2291,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* 1. Forward & Share Modal (Estilo WhatsApp Web Oficial) */}
+      {/* 1. Forward & Share Modal (Estilo WhatsApp Web Oficial com Multi-Seleção) */}
       <ForwardModal
-        isOpen={Boolean(forwardingMessage)}
-        onClose={() => setForwardingMessage(null)}
-        messageToForward={forwardingMessage}
+        isOpen={showForwardModal}
+        onClose={() => {
+          setShowForwardModal(false);
+          setIsSelectionMode(false);
+          setSelectedMessagesForForward([]);
+        }}
+        messagesToForward={selectedMessagesForForward}
         conversations={allConversations || []}
         onForwardSuccess={() => {
+          setIsSelectionMode(false);
+          setSelectedMessagesForForward([]);
           if (onStatusToggle) onStatusToggle();
         }}
       />

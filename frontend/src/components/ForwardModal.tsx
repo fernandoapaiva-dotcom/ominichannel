@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { X, Search, Check, Send, Users, CornerUpRight, Image, FileText, Video, Music } from 'lucide-react';
+import { X, Search, Check, Send, Users, CornerUpRight, Image, FileText, Video, Music, Layers } from 'lucide-react';
 import { Conversation, Message } from '../types';
 import { apiFetch } from '../services/api';
 
 interface ForwardModalProps {
   isOpen: boolean;
   onClose: () => void;
-  messageToForward: Message | null;
+  messagesToForward: Message[] | Message | null;
   conversations: Conversation[];
   onForwardSuccess?: () => void;
 }
@@ -14,13 +14,18 @@ interface ForwardModalProps {
 export const ForwardModal: React.FC<ForwardModalProps> = ({
   isOpen,
   onClose,
-  messageToForward,
+  messagesToForward,
   conversations,
   onForwardSuccess
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedConvIds, setSelectedConvIds] = useState<number[]>([]);
   const [isForwarding, setIsForwarding] = useState(false);
+
+  const msgsList = useMemo(() => {
+    if (!messagesToForward) return [];
+    return Array.isArray(messagesToForward) ? messagesToForward : [messagesToForward];
+  }, [messagesToForward]);
 
   // Filter conversations matching search
   const filteredConversations = useMemo(() => {
@@ -41,48 +46,43 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
   };
 
   const handleForward = async () => {
-    if (!messageToForward || selectedConvIds.length === 0) return;
+    if (msgsList.length === 0 || selectedConvIds.length === 0) return;
 
     try {
       setIsForwarding(true);
 
       for (const convId of selectedConvIds) {
-        await apiFetch(`/conversations/${convId}/messages`, {
-          method: 'POST',
-          body: JSON.stringify({
-            conversation_id: convId,
-            conteudo: messageToForward.conteudo,
-            tipo: messageToForward.tipo || 'texto',
-            remetente: 'atendente'
-          })
-        });
+        for (const msg of msgsList) {
+          await apiFetch(`/conversations/${convId}/messages`, {
+            method: 'POST',
+            body: JSON.stringify({
+              conversation_id: convId,
+              conteudo: msg.conteudo,
+              tipo: msg.tipo || 'texto',
+              remetente: 'atendente'
+            })
+          });
+        }
       }
 
-      if (onForwardSuccess) onForwardSuccess();
       setSelectedConvIds([]);
+      setSearchTerm('');
+      if (onForwardSuccess) onForwardSuccess();
       onClose();
-      alert(`Mensagem encaminhada para ${selectedConvIds.length} conversa(s) com sucesso!`);
-    } catch (err: any) {
-      alert(`Erro ao encaminhar mensagem: ${err.message}`);
+    } catch (err) {
+      console.error('Error forwarding messages:', err);
+      alert('Erro ao encaminhar mensagens. Verifique os logs.');
     } finally {
       setIsForwarding(false);
     }
   };
 
-  if (!isOpen || !messageToForward) return null;
-
-  const isMedia = ['imagem', 'video', 'audio', 'arquivo'].includes(messageToForward.tipo);
-  const mediaRaw = messageToForward.conteudo || '';
-  const mediaParts = mediaRaw.split('|');
-  const mediaCaption = mediaParts.length > 1 ? mediaParts.slice(1).join('|') : null;
+  if (!isOpen || msgsList.length === 0) return null;
 
   return (
     <div style={{
       position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
+      top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: 'rgba(0, 0, 0, 0.75)',
       backdropFilter: 'blur(8px)',
       display: 'flex',
@@ -105,7 +105,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
       }}>
         {/* Header */}
         <div style={{
-          padding: '18px 22px',
+          padding: '16px 20px',
           borderBottom: '1px solid var(--border-color)',
           display: 'flex',
           justifyContent: 'space-between',
@@ -126,7 +126,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
             </div>
             <div>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: 'var(--text-main)' }}>
-                Encaminhar mensagem para...
+                Encaminhar {msgsList.length > 1 ? `${msgsList.length} mensagens` : 'mensagem'} para...
               </h3>
               <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
                 Selecione as conversas ou grupos de destino
@@ -249,13 +249,13 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
                         backgroundColor: isGroup ? '#0284c7' : '#00e699',
                         color: isGroup ? '#fff' : '#051a12',
                         fontWeight: '700',
-                        fontSize: '16px',
+                        fontSize: '15px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         flexShrink: 0
                       }}>
-                        {isGroup ? <Users size={20} /> : name.charAt(0).toUpperCase()}
+                        {isGroup ? <Users size={18} /> : name.charAt(0).toUpperCase()}
                       </div>
                     )}
 
@@ -315,20 +315,32 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
           gap: '12px'
         }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-primary)', textTransform: 'uppercase', marginBottom: '2px' }}>
-              Mensagem a ser encaminhada:
+            <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-primary)', textTransform: 'uppercase', marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Layers size={13} />
+              {msgsList.length > 1 ? `${msgsList.length} mensagens selecionadas para encaminhar:` : 'Mensagem selecionada:'}
             </div>
-            {isMedia ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-main)' }}>
-                {messageToForward.tipo === 'imagem' ? <Image size={16} /> : messageToForward.tipo === 'video' ? <Video size={16} /> : messageToForward.tipo === 'audio' ? <Music size={16} /> : <FileText size={16} />}
-                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {mediaCaption || `[Arquivo de ${messageToForward.tipo}]`}
-                </span>
+            {msgsList.length > 1 ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {msgsList.map(m => (m.tipo === 'texto' ? m.conteudo : `[${m.tipo}]`)).join(' • ')}
               </div>
             ) : (
-              <div style={{ fontSize: '12px', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {messageToForward.conteudo}
-              </div>
+              (() => {
+                const single = msgsList[0];
+                const isMedia = ['imagem', 'video', 'audio', 'arquivo'].includes(single.tipo);
+                const mediaCaption = single.conteudo?.includes('|') ? single.conteudo.split('|')[1] : '';
+                return isMedia ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-main)' }}>
+                    {single.tipo === 'imagem' ? <Image size={16} /> : single.tipo === 'video' ? <Video size={16} /> : single.tipo === 'audio' ? <Music size={16} /> : <FileText size={16} />}
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {mediaCaption || `[Arquivo de ${single.tipo}]`}
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '12px', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {single.conteudo}
+                  </div>
+                );
+              })()
             )}
           </div>
 
@@ -346,7 +358,7 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
             }}
           >
             <Send size={15} />
-            {isForwarding ? 'Encaminhando...' : `Encaminhar (${selectedConvIds.length})`}
+            {isForwarding ? 'Encaminhando...' : `Encaminhar para (${selectedConvIds.length})`}
           </button>
         </div>
       </div>
