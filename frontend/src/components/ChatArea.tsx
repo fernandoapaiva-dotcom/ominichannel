@@ -488,13 +488,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     switch (msg.tipo) {
       case 'imagem':
+      case 'sticker':
+      case 'figurinha':
+        const isSticker = fullUrl.toLowerCase().endsWith('.webp') || fullUrl.toLowerCase().includes('sticker') || msg.tipo === 'sticker' || msg.tipo === 'figurinha';
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px', border: '1px solid rgba(255,255,255,0.1)' }} onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}>
-              <img src={fullUrl} alt="Imagem" style={{ width: '100%', maxHeight: '300px', objectFit: 'cover', display: 'block' }} />
-              <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Eye size={12} /> Ampliar
-              </div>
+            <div
+              style={{
+                position: 'relative',
+                cursor: 'pointer',
+                borderRadius: isSticker ? '0' : '8px',
+                overflow: 'hidden',
+                maxWidth: isSticker ? '170px' : '320px',
+                border: isSticker ? 'none' : '1px solid rgba(255,255,255,0.1)',
+                backgroundColor: 'transparent'
+              }}
+              onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}
+            >
+              <img
+                src={fullUrl}
+                alt={isSticker ? "Figurinha do WhatsApp" : "Imagem"}
+                style={{
+                  width: isSticker ? '150px' : '100%',
+                  maxHeight: isSticker ? '150px' : '300px',
+                  objectFit: isSticker ? 'contain' : 'cover',
+                  display: 'block'
+                }}
+              />
+              {!isSticker && (
+                <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Eye size={12} /> Ampliar
+                </div>
+              )}
             </div>
             {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>

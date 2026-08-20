@@ -517,12 +517,14 @@ async def receive_evolution_webhook(
     )
 
     msg_type = MessageType.TEXTO
-
     # Check media payloads
     img_msg = message_obj.get("imageMessage")
     vid_msg = message_obj.get("videoMessage")
     aud_msg = message_obj.get("audioMessage")
     doc_msg = message_obj.get("documentMessage")
+    stk_msg = message_obj.get("stickerMessage") or (message_obj.get("sticker") if isinstance(message_obj.get("sticker"), dict) else None)
+    if not stk_msg and data.get("messageType") == "stickerMessage":
+        stk_msg = message_obj
 
     msg_id = key.get("id", "") if isinstance(key, dict) else ""
     media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
@@ -537,14 +539,13 @@ async def receive_evolution_webhook(
         c_addr = loc_msg.get("address") or ""
         text_content = f"📍 *LOCALIZAÇÃO RECEBIDA DO CLIENTE*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
 
-    if (img_msg or vid_msg or aud_msg or doc_msg) and not media_base64 and msg_id:
+    if (img_msg or vid_msg or aud_msg or doc_msg or stk_msg) and not media_base64 and msg_id:
         try:
             media_base64 = await evolution_service.get_media_base64(instance_name, msg_id)
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
-
-    if img_msg or vid_msg or aud_msg or doc_msg:
+    if img_msg or vid_msg or aud_msg or doc_msg or stk_msg:
         caption = ""
         ext = ""
         media_bytes = None
@@ -557,7 +558,11 @@ async def receive_evolution_webhook(
             except Exception as e:
                 logger.error(f"Error decoding incoming media base64: {e}")
 
-        if img_msg:
+        if stk_msg:
+            msg_type = MessageType.IMAGEM
+            caption = ""
+            ext = ".webp"
+        elif img_msg:
             msg_type = MessageType.IMAGEM
             caption = img_msg.get("caption") or ""
             ext = ".png"
@@ -579,8 +584,7 @@ async def receive_evolution_webhook(
                         tenant_gemini_model_name=dec_sets.get("gemini_model_name")
                     )
                     if audio_transcription:
-                        logger.info(f"Successfully transcribed customer audio message: '{audio_transcription}'")
-                        caption = f"🎙️ [Áudio Transcrito]: \"{audio_transcription}\""
+                        caption = f"🎙️ *Transcrição do Áudio:*\n_{audio_transcription}_"
                 except Exception as audio_err:
                     logger.error(f"Error transcribing customer audio note: {audio_err}")
         elif doc_msg:
@@ -607,12 +611,14 @@ async def receive_evolution_webhook(
             text_content = f"{saved_media_url}|{caption}" if caption else saved_media_url
         else:
             # Fallback to direct media URL if base64 decoding was not available
-            target_obj = img_msg or vid_msg or aud_msg or doc_msg or {}
-            fallback_url = target_obj.get("url") or ""
+            target_obj = stk_msg or img_msg or vid_msg or aud_msg or doc_msg or {}
+            fallback_url = target_obj.get("url") or target_obj.get("directPath") or ""
             if fallback_url:
                 text_content = f"{fallback_url}|{caption}" if caption else fallback_url
             elif caption:
                 text_content = caption
+            elif stk_msg:
+                text_content = "[Figurinha do WhatsApp]"
 
     if not text_content:
         return {"status": "ignored", "reason": "Non-text or empty message payload"}
