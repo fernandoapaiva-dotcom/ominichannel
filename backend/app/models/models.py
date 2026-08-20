@@ -151,6 +151,8 @@ class Message(Base):
     remetente: Mapped[str] = mapped_column(String(50), nullable=False)
     conteudo: Mapped[str] = mapped_column(Text, nullable=False)
     tipo: Mapped[MessageType] = mapped_column(Enum(MessageType), default=MessageType.TEXTO)
+    status: Mapped[Optional[str]] = mapped_column(String(50), default="delivered", nullable=True)
+    whatsapp_msg_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
-  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin,
+  ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
@@ -1374,12 +1374,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>{formatTime(msg.timestamp)}</span>
                     {!isCustomer && (
-                      msg.status === 'sending' ? (
+                      msg.status === 'sending' || msg.status === 'pending' ? (
                         <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
                       ) : msg.status === 'failed' ? (
                         <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
+                      ) : msg.status === 'sent' ? (
+                        <Check size={14} style={{ color: 'var(--text-muted)' }} title="Enviada ao servidor" />
+                      ) : msg.status === 'delivered' ? (
+                        <CheckCheck size={15} style={{ color: 'var(--text-muted)' }} title="Entregue no WhatsApp" />
                       ) : (
-                        <Check size={12} style={{ color: 'var(--accent-primary)' }} title="Enviado" />
+                        <CheckCheck size={15} style={{ color: '#53bdeb' }} title="Lida / Visualizada pelo cliente" />
                       )
                     )}
 

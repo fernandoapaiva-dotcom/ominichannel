@@ -42,8 +42,8 @@ export interface Message {
   remetente: MessageSender;
   conteudo: string;
   tipo: MessageType;
-  timestamp: string;
-  status?: 'sending' | 'sent' | 'failed';
+  status?: 'sending' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
+  whatsapp_msg_id?: string;
 }
 
 export interface Conversation {

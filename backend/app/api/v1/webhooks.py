@@ -283,8 +283,77 @@ async def receive_evolution_webhook(
 
         return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
 
-    # Filter non-message events (send.message, messages.update, chats.upsert, etc.)
+    # Handle WhatsApp Message Status Updates (Delivered, Read / Played, Sent)
     norm_event = str(event_type or "").lower().replace("_", ".")
+    if norm_event in ["messages.update", "messages_update", "message.update"]:
+        updates_list = data if isinstance(data, list) else [data]
+        updated_any = False
+        
+        for item in updates_list:
+            if not isinstance(item, dict):
+                continue
+            key_id = item.get("keyId") or item.get("id") or (item.get("key") or {}).get("id")
+            raw_status = str(item.get("status", "")).upper()
+            
+            mapped_status = "sent"
+            if raw_status in ["READ", "PLAYED", "VIEWED"]:
+                mapped_status = "read"
+            elif raw_status in ["DELIVERY_ACK", "DELIVERED"]:
+                mapped_status = "delivered"
+            elif raw_status in ["SERVER_ACK", "SENT"]:
+                mapped_status = "sent"
+            elif raw_status in ["PENDING"]:
+                mapped_status = "pending"
+            else:
+                continue
+
+            msg_to_update = None
+            if key_id:
+                m_stmt = select(Message).where(Message.whatsapp_msg_id == key_id)
+                m_res = await db.execute(m_stmt)
+                msg_to_update = m_res.scalar_one_or_none()
+
+            # Fallback by remoteJid
+            if not msg_to_update and (item.get("remoteJid") or (item.get("key") or {}).get("remoteJid")):
+                r_jid = item.get("remoteJid") or (item.get("key") or {}).get("remoteJid")
+                r_phone = "".join(filter(str.isdigit, str(r_jid)))
+                if r_phone and len(r_phone) >= 8:
+                    c_stmt = select(Contact).where(Contact.telefone.like(f"%{r_phone[-8:]}%"))
+                    c_res = await db.execute(c_stmt)
+                    c_obj = c_res.scalars().first()
+                    if c_obj:
+                        latest_conv = select(Conversation).where(Conversation.contact_id == c_obj.id).order_by(Conversation.ultima_interacao_em.desc())
+                        lc_res = await db.execute(latest_conv)
+                        cv_obj = lc_res.scalars().first()
+                        if cv_obj:
+                            m_last_stmt = select(Message).where(
+                                Message.conversation_id == cv_obj.id,
+                                Message.remetente.in_(["atendente", "ia"])
+                            ).order_by(Message.id.desc())
+                            ml_res = await db.execute(m_last_stmt)
+                            msg_to_update = ml_res.scalars().first()
+
+            if msg_to_update:
+                msg_to_update.status = mapped_status
+                if key_id and not msg_to_update.whatsapp_msg_id:
+                    msg_to_update.whatsapp_msg_id = key_id
+                await db.commit()
+                updated_any = True
+
+                try:
+                    await ws_manager.broadcast({
+                        "type": "MESSAGE_STATUS_UPDATE",
+                        "conversation_id": msg_to_update.conversation_id,
+                        "message_id": msg_to_update.id,
+                        "status": mapped_status,
+                        "whatsapp_msg_id": key_id
+                    })
+                except Exception as err:
+                    logger.error(f"Error broadcasting message status update: {err}")
+
+        return {"status": "success", "event": "messages.update", "updated": updated_any}
+
+    # Filter non-message events (send.message, chats.upsert, etc.)
     if norm_event not in ["messages.upsert", "messages_upsert"]:
         return {"status": "ignored", "reason": f"Event '{event_type}' is not a new incoming message"}
 

@@ -136,6 +136,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             if (payload.remetente === 'cliente') {
               playNotificationSound();
             }
+          } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
+            fetchConversations();
           }
         } catch (err) {
           console.error('WebSocket parse error:', err);

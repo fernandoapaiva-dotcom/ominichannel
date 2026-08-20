@@ -555,16 +555,19 @@ async def send_agent_message(
             detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}. Verifique se a instância de WhatsApp do setor está conectada (QR Code) no Painel Admin."
         )
 
-    # 3. Save Message only after successful delivery confirmation
     conv.status = ConversationStatus.COM_HUMANO
     conv.assigned_user_id = current_user.id
     conv.ultima_interacao_em = datetime.utcnow()
+
+    wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
 
     message = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
         conteudo=msg_in.conteudo,
         tipo=msg_in.tipo,
+        status="sent",
+        whatsapp_msg_id=wa_key_id,
         timestamp=datetime.utcnow()
     )
     db.add(message)
@@ -578,8 +581,11 @@ async def send_agent_message(
         message_data={
             "type": "NEW_MESSAGE",
             "conversation_id": conv.id,
+            "id": message.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": msg_in.conteudo,
+            "status": message.status,
+            "whatsapp_msg_id": message.whatsapp_msg_id,
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
         }
