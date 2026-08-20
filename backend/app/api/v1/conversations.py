@@ -1094,6 +1094,7 @@ async def transfer_conversation(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     old_user_id = conv.assigned_user_id
+    old_wn_id = conv.whatsapp_number_id
     target_desc = ""
 
     # 1. Update Department/Sector if provided
@@ -1137,6 +1138,8 @@ async def transfer_conversation(
         conversation_id=conv.id,
         de_user_id=old_user_id,
         para_user_id=transfer_in.para_user_id,
+        de_whatsapp_number_id=old_wn_id,
+        para_whatsapp_number_id=conv.whatsapp_number_id,
         motivo=transfer_in.motivo or "Transferência de Atendimento",
         timestamp=datetime.utcnow()
     )

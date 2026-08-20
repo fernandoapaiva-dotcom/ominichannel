@@ -1,4 +1,7 @@
 import logging
+import json
+import re
+import asyncio
 from typing import Dict, Any, List, Optional
 from google import genai
 from app.core.config import settings
@@ -17,6 +20,137 @@ class GeminiService:
             return genai.Client(api_key=api_key)
         return self.client
 
+    async def evaluate_department_routing(
+        self,
+        customer_name: str,
+        current_department_name: str,
+        user_message: str,
+        conversation_history: List[Dict[str, str]],
+        departments: List[Dict[str, Any]],
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Evaluates the customer intent against explicit department boundaries defined in Seção 0.
+        Resolves boundary ambiguities (e.g. rented machine defect -> Locação, bought machine defect -> Assistência Técnica,
+        rental payment/extension -> Locação, overdue general invoice -> Financeiro, new product purchase -> Vendas).
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+
+        dept_descriptions_text = "\n".join([
+            f"• SETOR: '{d.get('nome_departamento') or d.get('nome')}' (ID: {d.get('id')}):\n  {d.get('descricao_roteamento') or d.get('descricao')}"
+            for d in departments
+        ])
+
+        system_instruction = (
+            "Você é o Especialista de Triagem e Roteamento de Atendimento da empresa Servweld.\n"
+            "Sua única função é classificar a real necessidade do cliente e determinar com máxima precisão o departamento correto.\n\n"
+            "DIRETRIZES DE FRONTEIRA ENTRE DEPARTAMENTOS (SEÇÃO 0 - REGRAS DE NEGÓCIO GLOBAIS):\n\n"
+            f"{dept_descriptions_text}\n\n"
+            "REGRAS CRÍTICAS DE DESAMBIGUAÇÃO DE FRONTEIRA:\n"
+            "1. LOCAÇÃO vs ASSISTÊNCIA TÉCNICA:\n"
+            "   - Se o problema/defeito for em uma máquina ou item ALUGADO ('aluguei', 'máquina alugada', 'equipamento da locação', 'aluguel') -> Destino OBRIGATÓRIO: 'Locação'.\n"
+            "   - Se o problema/defeito for em um produto COMPRADO pelo cliente (propriedade dele, garantia de compra, reparo de item próprio) -> Destino OBRIGATÓRIO: 'Assistência Técnica'.\n"
+            "2. LOCAÇÃO vs FINANCEIRO:\n"
+            "   - Se o cliente perguntar sobre valor de aluguel, prorrogação/renovação de contrato de locação ou parcelas do aluguel -> Destino OBRIGATÓRIO: 'Locação'.\n"
+            "   - Se o cliente tratar de boletos bancários vencidos, notas fiscais, cobrança de dívidas gerais, estorno ou comprovante de pagamento de compras -> Destino OBRIGATÓRIO: 'Financeiro'.\n"
+            "3. VENDAS vs OUTROS:\n"
+            "   - Orçamentos de produtos novos, cotação de preços de venda, estoque de itens novos, compra de novos equipamentos -> Destino OBRIGATÓRIO: 'Vendas e E-commerce'.\n"
+            "4. MANUTENÇÃO NO SETOR ATUAL:\n"
+            "   - Se o cliente já estiver no setor correto para a sua dúvida, mantenha 'needs_transfer': false."
+        )
+
+        messages_text = []
+        for msg in conversation_history[-4:]:
+            role = "Cliente" if msg.get("remetente") == "cliente" else "Atendente/IA"
+            messages_text.append(f"{role}: {msg.get('conteudo', '')}")
+
+        full_prompt = (
+            f"{system_instruction}\n\n"
+            f"Setor Atual da Conversa: '{current_department_name}'\n"
+            f"Cliente: '{customer_name or 'Cliente'}'\n"
+            f"Histórico Recente:\n" + ("\n".join(messages_text) if messages_text else "Sem histórico anterior.") + "\n\n"
+            f"Mensagem Atual do Cliente: \"{user_message}\"\n\n"
+            "Responda ESTRITAMENTE em formato JSON com o seguinte schema:\n"
+            "```json\n"
+            "{\n"
+            '  "target_department_id": <int>,\n'
+            '  "target_department_name": "<NomeExatoDoSetor>",\n'
+            '  "needs_transfer": <true ou false>,\n'
+            '  "confidence": <float de 0.0 a 1.0>,\n'
+            '  "reason": "<justificativa concisa da fronteira de regras de negocio>",\n'
+            '  "customer_intent_summary": "<resumo da necessidade do cliente em 1 frase>"\n'
+            "}\n"
+            "```"
+        )
+
+        if not client:
+            return {
+                "target_department_id": None,
+                "target_department_name": current_department_name,
+                "needs_transfer": False,
+                "confidence": 0.0,
+                "reason": "Sem cliente Gemini configurado.",
+                "customer_intent_summary": user_message
+            }
+
+        models_to_try = [primary_model]
+        if "gemini-2.5-flash" not in models_to_try:
+            models_to_try.append("gemini-2.5-flash")
+        if "gemini-1.5-flash" not in models_to_try:
+            models_to_try.append("gemini-1.5-flash")
+
+        last_error = None
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=full_prompt
+                )
+                raw_text = response.text.strip()
+                
+                # Extract JSON block
+                json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+                if json_match:
+                    parsed = json.loads(json_match.group(1))
+                else:
+                    json_start = raw_text.find("{")
+                    json_end = raw_text.rfind("}")
+                    if json_start != -1 and json_end != -1:
+                        parsed = json.loads(raw_text[json_start:json_end+1])
+                    else:
+                        raise ValueError(f"No JSON found in response: {raw_text}")
+
+                # Match target department ID if not exact
+                t_name = parsed.get("target_department_name", "").lower()
+                for d in departments:
+                    d_name = (d.get("nome_departamento") or d.get("nome") or "").lower()
+                    if d_name in t_name or t_name in d_name:
+                        parsed["target_department_id"] = d.get("id")
+                        parsed["target_department_name"] = d.get("nome_departamento") or d.get("nome")
+                        break
+
+                if current_department_name.lower() in parsed.get("target_department_name", "").lower():
+                    parsed["needs_transfer"] = False
+
+                return parsed
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Model '{m_name}' error: {e}. Trying fallback if available...")
+                await asyncio.sleep(0.5)
+
+        logger.error(f"All Gemini models failed for department routing: {last_error}")
+        return {
+            "target_department_id": None,
+            "target_department_name": current_department_name,
+            "needs_transfer": False,
+            "confidence": 0.0,
+            "reason": f"Erro de roteamento: {last_error}",
+            "customer_intent_summary": user_message
+        }
+
     async def generate_concierge_response(
         self,
         customer_name: str,
@@ -27,22 +161,29 @@ class GeminiService:
         rag_context: Optional[str] = None,
         tenant_prompt: Optional[str] = None,
         available_departments: Optional[List[str]] = None,
+        department_descriptions: Optional[Dict[str, str]] = None,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Generates concierge response using tenant's dynamically configured Gemini API key and Model Name from DB.
-        Zero hardcoded model strings. Supports fluid conversational initial reception without rigid menus
-        and smart automatic sector/department redirection.
+        Zero hardcoded model strings. Injects department boundaries from Seção 0.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+
+        dept_desc_prompt = ""
+        if department_descriptions:
+            dept_desc_prompt = "\nFRONTEIRAS DOS DEPARTAMENTOS (SEÇÃO 0):\n" + "\n".join([
+                f"- '{k}': {v}" for k, v in department_descriptions.items()
+            ]) + "\n"
 
         dept_list_str = ", ".join(available_departments) if available_departments else department_name
 
         system_instruction = (
-            f"Você é a IA Concierge de atendimento da empresa.\n"
+            f"Você é a IA Concierge de atendimento da empresa Servweld.\n"
             f"Setor atual do atendimento: '{department_name}'. Setores ativos na empresa: [{dept_list_str}].\n"
+            f"{dept_desc_prompt}"
             f"Atenda o cliente '{customer_name or 'Cliente'}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
@@ -51,7 +192,7 @@ class GeminiService:
             "   - MESMO ASSUNTO: Se a nova mensagem do cliente indicar continuidade do MESMO assunto ou problema tratado na conversa anterior (ex: citar a mesma nota, contrato, produto ou chamado), RECONHEÇA IMEDIATAMENTE O HISTÓRICO ANTERIOR sem pedir para ele repetir tudo (ex: 'Olá novamente, Sr. Fernando! Vejo que você quer dar continuidade ao assunto sobre a nota X. Como posso te ajudar a resolver isso agora?').\n"
             "   - NOVO ASSUNTO OU SAUDAÇÃO GERAL: Se a nova mensagem for sobre um assunto DIFERENTE ou uma nova saudação geral (ex: 'Bom dia'), faça a recepção inicial normal e solicite as informações necessárias em bloco de uma só vez.\n"
             "3. COLETA DE INFORMAÇÕES EM BLOCO: Para novos assuntos, solicite as informações chaves de uma só vez para não fazer micro-perguntas em loop.\n"
-            "4. TROCA DE SETOR SEM ENCERRAMENTO PRECIPITADO: Se o cliente solicitar mudança de setor (ex: 'Quero falar no financeiro'), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
+            "4. TROCA DE SETOR SEM ENCERRAMENTO PRECIPITADO: Se o cliente necessitar de outro setor com base nas fronteiras (ex: problema em máquina alugada -> Locação; dúvida de boleto -> Financeiro), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeExatoDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
             "5. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano, PERGUNTE PRIMEIRO:\n"
             "   'Antes de te encaminhar para o especialista humano do setor, teria mais alguma informação ou detalhe que você gostaria de acrescentar ao seu chamado?'\n"
             "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final:\n"
@@ -120,67 +261,78 @@ class GeminiService:
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
 
-        try:
-            import asyncio
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=model_name,
-                contents=full_prompt
-            )
-            text_out = response.text.strip()
-            
-            usage = getattr(response, "usage_metadata", None)
-            prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-            response_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-            total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+        models_to_try = [primary_model]
+        if "gemini-2.5-flash" not in models_to_try:
+            models_to_try.append("gemini-2.5-flash")
+        if "gemini-1.5-flash" not in models_to_try:
+            models_to_try.append("gemini-1.5-flash")
 
-            resposta = ""
-            transferir_setor = "NENHUM"
-            enviar_localizacao = False
-            enviar_pix = False
-            escalar_humano = False
-            nova_memoria = ""
+        last_error = None
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=full_prompt
+                )
+                text_out = response.text.strip()
+                
+                usage = getattr(response, "usage_metadata", None)
+                prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+                response_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+                total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
 
-            for line in text_out.split("\n"):
-                if line.startswith("RESPOSTA:"):
-                    resposta = line.replace("RESPOSTA:", "").strip()
-                elif line.startswith("TRANSFERIR_SETOR:"):
-                    transferir_setor = line.replace("TRANSFERIR_SETOR:", "").strip()
-                elif line.startswith("ENVIAR_LOCALIZACAO:"):
-                    enviar_localizacao = "SIM" in line.upper()
-                elif line.startswith("ENVIAR_PIX:"):
-                    enviar_pix = "SIM" in line.upper()
-                elif line.startswith("ESCALAR_HUMANO:"):
-                    escalar_humano = "SIM" in line.upper()
-                elif line.startswith("NOVA_MEMORIA:"):
-                    nova_memoria = line.replace("NOVA_MEMORIA:", "").strip()
+                resposta = ""
+                transferir_setor = "NENHUM"
+                enviar_localizacao = False
+                enviar_pix = False
+                escalar_humano = False
+                nova_memoria = ""
 
-            if not resposta:
-                resposta = text_out
+                for line in text_out.split("\n"):
+                    if line.startswith("RESPOSTA:"):
+                        resposta = line.replace("RESPOSTA:", "").strip()
+                    elif line.startswith("TRANSFERIR_SETOR:"):
+                        transferir_setor = line.replace("TRANSFERIR_SETOR:", "").strip()
+                    elif line.startswith("ENVIAR_LOCALIZACAO:"):
+                        enviar_localizacao = "SIM" in line.upper()
+                    elif line.startswith("ENVIAR_PIX:"):
+                        enviar_pix = "SIM" in line.upper()
+                    elif line.startswith("ESCALAR_HUMANO:"):
+                        escalar_humano = "SIM" in line.upper()
+                    elif line.startswith("NOVA_MEMORIA:"):
+                        nova_memoria = line.replace("NOVA_MEMORIA:", "").strip()
 
-            return {
-                "resposta": resposta,
-                "transferir_setor": transferir_setor,
-                "enviar_localizacao": enviar_localizacao,
-                "enviar_pix": enviar_pix,
-                "escalar_humano": escalar_humano,
-                "nova_memoria": nova_memoria or memory_summary or f"Cliente interagiu sobre: {user_message[:50]}",
-                "tokens": {
-                    "prompt_tokens": prompt_tokens,
-                    "response_tokens": response_tokens,
-                    "total_tokens": total_tokens
+                if not resposta:
+                    resposta = text_out
+
+                return {
+                    "resposta": resposta,
+                    "transferir_setor": transferir_setor,
+                    "enviar_localizacao": enviar_localizacao,
+                    "enviar_pix": enviar_pix,
+                    "escalar_humano": escalar_humano,
+                    "nova_memoria": nova_memoria or memory_summary or f"Cliente interagiu sobre: {user_message[:50]}",
+                    "tokens": {
+                        "prompt_tokens": prompt_tokens,
+                        "response_tokens": response_tokens,
+                        "total_tokens": total_tokens
+                    }
                 }
-            }
-        except Exception as e:
-            logger.error(f"Error calling Gemini API using model '{model_name}': {e}")
-            return {
-                "resposta": "Recebi sua mensagem. Um momento por favor, vou direcionar para nossa equipe.",
-                "transferir_setor": "NENHUM",
-                "enviar_localizacao": False,
-                "escalar_humano": True,
-                "nova_memoria": "Erro na IA Concierge, escalado automaticamente para humano.",
-                "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
-            }
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Model '{m_name}' error: {e}. Trying fallback if available...")
+                await asyncio.sleep(0.5)
+
+        logger.error(f"All Gemini models failed for concierge: {last_error}")
+        return {
+            "resposta": "Recebi sua mensagem. Um momento por favor, vou direcionar para nossa equipe.",
+            "transferir_setor": "NENHUM",
+            "enviar_localizacao": False,
+            "escalar_humano": True,
+            "nova_memoria": "Erro na IA Concierge, escalado automaticamente para humano.",
+            "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+        }
 
     async def process_audio_message(
         self,
@@ -194,31 +346,37 @@ class GeminiService:
         Returns the exact transcribed spoken text.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
 
         if not client or not audio_bytes:
             return ""
 
-        try:
-            import asyncio
-            from google.genai import types
+        from google.genai import types
 
-            prompt = "Ouça atentamente a esta mensagem de áudio em português enviada pelo cliente no WhatsApp e faça a transcrição exata e literal do texto falado, sem adicionar comentários ou introdução."
+        prompt = "Ouça atentamente a esta mensagem de áudio em português enviada pelo cliente no WhatsApp e faça a transcrição exata e literal do texto falado, sem adicionar comentários ou introdução."
 
-            part = types.Part.from_bytes(
-                data=audio_bytes,
-                mime_type=mime_type or "audio/ogg"
-            )
+        part = types.Part.from_bytes(
+            data=audio_bytes,
+            mime_type=mime_type or "audio/ogg"
+        )
 
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=model_name,
-                contents=[part, prompt]
-            )
-            return response.text.strip() if response and response.text else ""
-        except Exception as e:
-            logger.error(f"Error processing audio message with Gemini SDK: {e}")
-            return ""
+        models_to_try = [primary_model]
+        if "gemini-2.5-flash" not in models_to_try:
+            models_to_try.append("gemini-2.5-flash")
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=[part, prompt]
+                )
+                return response.text.strip() if response and response.text else ""
+            except Exception as e:
+                logger.warning(f"Error processing audio with '{m_name}': {e}")
+                await asyncio.sleep(0.5)
+
+        return ""
 
     async def summarize_conversation_for_transfer(
         self,
@@ -232,7 +390,7 @@ class GeminiService:
         to a new attendant or department.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
 
         if not messages_history:
             return "Nenhum histórico prévio de mensagens para resumir."
@@ -274,20 +432,26 @@ class GeminiService:
                 f"• ⚡ **Próximo Passo**: Verifique a última mensagem enviada."
             )
 
-        try:
-            import asyncio
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=model_name,
-                contents=full_prompt
-            )
-            return response.text.strip() or "Resumo não gerado devido ao formato de saída da IA."
-        except Exception as e:
-            logger.error(f"Error generating transfer summary using model '{model_name}': {e}")
-            return (
-                f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
-                f"• 📝 **Histórico**: Conversa transferida com histórico disponível.\n"
-                f"• ⚡ **Próximo Passo**: Analise as mensagens anteriores."
-            )
+        models_to_try = [primary_model]
+        if "gemini-2.5-flash" not in models_to_try:
+            models_to_try.append("gemini-2.5-flash")
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=full_prompt
+                )
+                return response.text.strip() or "Resumo não gerado devido ao formato de saída da IA."
+            except Exception as e:
+                logger.warning(f"Error generating transfer summary with '{m_name}': {e}")
+                await asyncio.sleep(0.5)
+
+        return (
+            f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
+            f"• 📝 **Histórico**: Conversa transferida com histórico disponível.\n"
+            f"• ⚡ **Próximo Passo**: Analise as mensagens anteriores."
+        )
 
 gemini_service = GeminiService()
