@@ -285,6 +285,62 @@ async def receive_evolution_webhook(
 
     # Handle WhatsApp Message Status Updates (Delivered, Read / Played, Sent & Group Receipts)
     norm_event = str(event_type or "").lower().replace("_", ".")
+
+    # 1. Handle Chat Read Receipt Event (chats.upsert / chats.update with unreadMessages: 0)
+    if norm_event in ["chats.upsert", "chats.update", "chat.update", "chats_upsert", "chats_update"]:
+        chat_list = data if isinstance(data, list) else [data]
+        updated_any = False
+        for c_item in chat_list:
+            if not isinstance(c_item, dict):
+                continue
+            unread = c_item.get("unreadMessages")
+            r_jid = c_item.get("remoteJid") or c_item.get("id") or ""
+            if unread == 0 or "unread" in str(c_item).lower():
+                r_phone = "".join(filter(str.isdigit, str(r_jid)))
+                conv_to_read = None
+                if r_phone and len(r_phone) >= 8:
+                    c_stmt = select(Contact).where(Contact.telefone.like(f"%{r_phone[-8:]}%"))
+                    c_res = await db.execute(c_stmt)
+                    c_obj = c_res.scalars().first()
+                    if c_obj:
+                        latest_conv = select(Conversation).where(Conversation.contact_id == c_obj.id).order_by(Conversation.ultima_interacao_em.desc())
+                        lc_res = await db.execute(latest_conv)
+                        conv_to_read = lc_res.scalars().first()
+
+                if not conv_to_read and instance_name:
+                    # Fallback to latest active conversation on this WhatsApp number
+                    wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+                    wn_res = await db.execute(wn_stmt)
+                    wn_obj = wn_res.scalar_one_or_none()
+                    if wn_obj:
+                        latest_conv = select(Conversation).where(Conversation.whatsapp_number_id == wn_obj.id).order_by(Conversation.ultima_interacao_em.desc())
+                        lc_res = await db.execute(latest_conv)
+                        conv_to_read = lc_res.scalars().first()
+
+                if conv_to_read:
+                    await db.execute(
+                        update(Message)
+                        .where(
+                            Message.conversation_id == conv_to_read.id,
+                            Message.remetente.in_(["atendente", "ia"]),
+                            Message.status != "read"
+                        )
+                        .values(status="read")
+                    )
+                    await db.commit()
+                    updated_any = True
+                    try:
+                        await ws_manager.broadcast({
+                            "type": "MESSAGE_STATUS_UPDATE",
+                            "conversation_id": conv_to_read.id,
+                            "status": "read"
+                        })
+                    except Exception as err:
+                        logger.error(f"Error broadcasting chat read update: {err}")
+
+        return {"status": "success", "event": "chats.update", "updated": updated_any}
+
+    # 2. Handle Message Update Event (messages.update)
     if norm_event in ["messages.update", "messages_update", "message.update"]:
         updates_list = data if isinstance(data, list) else [data]
         updated_any = False
@@ -297,7 +353,7 @@ async def receive_evolution_webhook(
             raw_status = str(raw_val or "").upper()
             
             mapped_status = "sent"
-            if raw_status in ["READ", "PLAYED", "VIEWED", "4", "5"]:
+            if raw_status in ["READ", "PLAYED", "VIEWED", "4", "5", "READ_ACK"]:
                 mapped_status = "read"
             elif raw_status in ["DELIVERY_ACK", "DELIVERED", "3"]:
                 mapped_status = "delivered"
@@ -370,6 +426,16 @@ async def receive_evolution_webhook(
 
                 if mapped_status == "read" or len(read_by_list) > 0:
                     msg_to_update.status = "read"
+                    # Also mark all previous messages in this conversation as read
+                    await db.execute(
+                        update(Message)
+                        .where(
+                            Message.conversation_id == msg_to_update.conversation_id,
+                            Message.id <= msg_to_update.id,
+                            Message.remetente.in_(["atendente", "ia"])
+                        )
+                        .values(status="read")
+                    )
                 elif mapped_status == "delivered" and msg_to_update.status != "read":
                     msg_to_update.status = "delivered"
 
