@@ -3,7 +3,7 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -423,6 +423,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setActiveActionMenuMsgId(null);
   };
 
+  const handleSaveSticker = (stickerUrl: string) => {
+    try {
+      const existing: string[] = JSON.parse(localStorage.getItem('saved_stickers_bank') || '[]');
+      if (!existing.includes(stickerUrl)) {
+        existing.unshift(stickerUrl);
+        localStorage.setItem('saved_stickers_bank', JSON.stringify(existing));
+        window.dispatchEvent(new Event('saved_stickers_updated'));
+        alert('⭐ Figurinha adicionada ao seu Banco de Figurinhas com sucesso!');
+      } else {
+        alert('Esta figurinha já está salva no seu Banco de Figurinhas!');
+      }
+    } catch (e) {
+      console.error('Error saving sticker:', e);
+    }
+  };
+
   const handleReact = async (msgId: number, emoji: string) => {
     const newEmoji = messageReactions[msgId] === emoji ? '' : emoji;
     setMessageReactions(prev => ({
@@ -496,14 +512,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <div
               style={{
                 position: 'relative',
-                cursor: 'pointer',
+                cursor: isSticker ? 'default' : 'pointer',
                 borderRadius: isSticker ? '0' : '8px',
                 overflow: 'hidden',
                 maxWidth: isSticker ? '170px' : '320px',
                 border: isSticker ? 'none' : '1px solid rgba(255,255,255,0.1)',
                 backgroundColor: 'transparent'
               }}
-              onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}
+              onClick={() => {
+                if (!isSticker) {
+                  setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0);
+                }
+              }}
             >
               <img
                 src={fullUrl}
@@ -515,7 +535,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   display: 'block'
                 }}
               />
-              {!isSticker && (
+              {isSticker ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSaveSticker(fullUrl);
+                  }}
+                  title="⭐ Salvar no Banco de Figurinhas"
+                  style={{
+                    position: 'absolute',
+                    top: '4px',
+                    right: '4px',
+                    background: 'rgba(0, 0, 0, 0.75)',
+                    border: '1px solid rgba(255, 255, 255, 0.25)',
+                    borderRadius: '50%',
+                    width: '28px',
+                    height: '28px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#f59e0b',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                    transition: 'transform 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.15)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                >
+                  <Star size={14} fill="#f59e0b" />
+                </button>
+              ) : (
                 <div style={{ position: 'absolute', bottom: '8px', right: '8px', background: 'rgba(0,0,0,0.6)', padding: '4px 8px', borderRadius: '4px', color: '#fff', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Eye size={12} /> Ampliar
                 </div>
@@ -1825,6 +1875,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         >
                           <Download size={15} style={{ color: 'var(--accent-primary)' }} />
                           <span>Baixar Arquivo</span>
+                        </button>
+                      )}
+
+                      {isMediaMsg && ((msg.conteudo || '').toLowerCase().includes('.webp') || msg.tipo === 'sticker' || msg.tipo === 'figurinha') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const parts = (msg.conteudo || '').split('|');
+                            const url = parts[0].startsWith('http') ? parts[0] : `http://localhost:8000${parts[0]}`;
+                            handleSaveSticker(url);
+                            setActiveActionMenuMsgId(null);
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(245, 158, 11, 0.15)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <Star size={15} style={{ color: '#f59e0b' }} />
+                          <span>Salvar no Banco de Figurinhas</span>
                         </button>
                       )}
 

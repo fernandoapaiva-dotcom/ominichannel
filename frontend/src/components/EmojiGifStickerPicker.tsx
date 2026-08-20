@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Smile, Image as ImageIcon, Sparkles, X, Plus, Upload, Heart, ThumbsUp, Zap, Clock } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Search, Smile, Image as ImageIcon, Sparkles, X, Plus, Upload, Heart, ThumbsUp, Zap, Clock, Star } from 'lucide-react';
 
 interface EmojiGifStickerPickerProps {
   isOpen: boolean;
@@ -98,34 +98,24 @@ const EMOJI_CATEGORIES = [
       '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯',
       '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐',
       '♑', '♒', '♓', '🆔', '⚛️', '🉑', '☢️', '☣️', '📴', '📳', '🈶', '🈚', '🈸', '🈺',
-      '🈵', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪', '🟤', '🟥', '🟧', '🟨', '🟩',
-      '🟦', '🟪', '⬛', '⬜', '🟫', '⭐', '🌟', '✨', '⚡', '💥', '💯', '✅', '✔️', '❌', '❎'
+      '🉐', '🉑', '㊙️', '㊗️', '🈴', '🈵', '🈲', '🈹', '🈲', '🔞', '📵', '🔕', '📶', '📳'
     ]
   }
 ];
 
-// Curated GIF Library for Business, WhatsApp & Support
+// Curated WhatsApp GIFs
 const GIF_COLLECTIONS = [
   {
-    category: 'Saudações / Bom Dia',
+    category: 'Reações & Respostas Rápidas',
     gifs: [
-      { url: 'https://media.giphy.com/media/ICOgUNjpvO0PC/giphy.gif', title: 'Gatinho Acenando Olá' },
-      { url: 'https://media.giphy.com/media/3o7TKtnuHOHHUjR38Y/giphy.gif', title: 'Bom Dia com Café' },
-      { url: 'https://media.giphy.com/media/dzaUX7CAG0Ihi/giphy.gif', title: 'Ursinho Olá' },
-      { url: 'https://media.giphy.com/media/ASd0Ukj0y3qMM/giphy.gif', title: 'Minions Olá' }
+      { url: 'https://media.giphy.com/media/11ISw6cx8oTaDe/giphy.gif', title: 'Joinha / Positivo' },
+      { url: 'https://media.giphy.com/media/3oz8xAFtqoOUUrsh7W/giphy.gif', title: 'Muito Obrigado' },
+      { url: 'https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif', title: 'Palmas / Parabéns' },
+      { url: 'https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif', title: 'Olá / Bem-vindo' }
     ]
   },
   {
-    category: 'Agradecimento / Sucesso',
-    gifs: [
-      { url: 'https://media.giphy.com/media/26gsjCZpPolPr3sBy/giphy.gif', title: 'Muito Obrigado' },
-      { url: 'https://media.giphy.com/media/osjgQPWRx3cac/giphy.gif', title: 'Joinha e Sucesso' },
-      { url: 'https://media.giphy.com/media/xT5LMHxhOfscxPfIfm/giphy.gif', title: 'Tudo Certo' },
-      { url: 'https://media.giphy.com/media/3oEjI5VtIhHvmmY8ZE/giphy.gif', title: 'Aplausos' }
-    ]
-  },
-  {
-    category: 'Trabalho / Em Atendimento',
+    category: 'Trabalho & Atendimento',
     gifs: [
       { url: 'https://media.giphy.com/media/unQ3IJU2RG7DO/giphy.gif', title: 'Digitando Rápido' },
       { url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif', title: 'Gato no Computador' },
@@ -178,6 +168,32 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
   const [activeCategory, setActiveCategory] = useState<string>('smileys');
   const [searchTerm, setSearchTerm] = useState('');
 
+  // User's custom saved stickers bank (stored in localStorage)
+  const [savedStickers, setSavedStickers] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('saved_stickers_bank') || '[]');
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      try {
+        setSavedStickers(JSON.parse(localStorage.getItem('saved_stickers_bank') || '[]'));
+      } catch {}
+    };
+    window.addEventListener('saved_stickers_updated', handleUpdate);
+    return () => window.removeEventListener('saved_stickers_updated', handleUpdate);
+  }, []);
+
+  const handleRemoveSavedSticker = (e: React.MouseEvent, stickerUrl: string) => {
+    e.stopPropagation();
+    const updated = savedStickers.filter(s => s !== stickerUrl);
+    setSavedStickers(updated);
+    localStorage.setItem('saved_stickers_bank', JSON.stringify(updated));
+  };
+
   // Filter emojis based on search
   const filteredCategoryEmojis = useMemo(() => {
     if (!searchTerm.trim()) {
@@ -219,7 +235,7 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
       zIndex: 1000,
       overflow: 'hidden'
     }}>
-      {/* Top Tabs: Emoji | GIF | Figurinhas */}
+      {/* Top Navigation Tabs */}
       <div style={{
         display: 'flex',
         borderBottom: '1px solid var(--border-color)',
@@ -227,15 +243,15 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
       }}>
         <button
           type="button"
-          onClick={() => { setActiveTab('emoji'); setSearchTerm(''); }}
+          onClick={() => setActiveTab('emoji')}
           style={{
             flex: 1,
-            padding: '10px 0',
+            padding: '12px 0',
             background: 'none',
             border: 'none',
-            borderBottom: activeTab === 'emoji' ? '3px solid var(--accent-primary)' : '3px solid transparent',
+            borderBottom: activeTab === 'emoji' ? '2px solid var(--accent-primary)' : '2px solid transparent',
             color: activeTab === 'emoji' ? 'var(--accent-primary)' : 'var(--text-muted)',
-            fontWeight: '700',
+            fontWeight: activeTab === 'emoji' ? '700' : '500',
             fontSize: '13px',
             cursor: 'pointer',
             display: 'flex',
@@ -244,20 +260,21 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
             gap: '6px'
           }}
         >
-          <Smile size={16} /> Emojis
+          <Smile size={16} />
+          <span>Emojis</span>
         </button>
 
         <button
           type="button"
-          onClick={() => { setActiveTab('gif'); setSearchTerm(''); }}
+          onClick={() => setActiveTab('gif')}
           style={{
             flex: 1,
-            padding: '10px 0',
+            padding: '12px 0',
             background: 'none',
             border: 'none',
-            borderBottom: activeTab === 'gif' ? '3px solid var(--accent-primary)' : '3px solid transparent',
+            borderBottom: activeTab === 'gif' ? '2px solid var(--accent-primary)' : '2px solid transparent',
             color: activeTab === 'gif' ? 'var(--accent-primary)' : 'var(--text-muted)',
-            fontWeight: '700',
+            fontWeight: activeTab === 'gif' ? '700' : '500',
             fontSize: '13px',
             cursor: 'pointer',
             display: 'flex',
@@ -266,20 +283,21 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
             gap: '6px'
           }}
         >
-          <ImageIcon size={16} /> GIFs
+          <Sparkles size={16} />
+          <span>GIFs</span>
         </button>
 
         <button
           type="button"
-          onClick={() => { setActiveTab('sticker'); setSearchTerm(''); }}
+          onClick={() => setActiveTab('sticker')}
           style={{
             flex: 1,
-            padding: '10px 0',
+            padding: '12px 0',
             background: 'none',
             border: 'none',
-            borderBottom: activeTab === 'sticker' ? '3px solid var(--accent-primary)' : '3px solid transparent',
+            borderBottom: activeTab === 'sticker' ? '2px solid var(--accent-primary)' : '2px solid transparent',
             color: activeTab === 'sticker' ? 'var(--accent-primary)' : 'var(--text-muted)',
-            fontWeight: '700',
+            fontWeight: activeTab === 'sticker' ? '700' : '500',
             fontSize: '13px',
             cursor: 'pointer',
             display: 'flex',
@@ -288,17 +306,30 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
             gap: '6px'
           }}
         >
-          <Sparkles size={16} /> Figurinhas
+          <ImageIcon size={16} />
+          <span>Figurinhas</span>
+          {savedStickers.length > 0 && (
+            <span style={{
+              fontSize: '10px',
+              padding: '1px 5px',
+              borderRadius: '10px',
+              backgroundColor: '#f59e0b',
+              color: '#051a12',
+              fontWeight: '800'
+            }}>
+              {savedStickers.length}
+            </span>
+          )}
         </button>
 
         <button
           type="button"
           onClick={onClose}
           style={{
+            padding: '0 12px',
             background: 'none',
             border: 'none',
             color: 'var(--text-muted)',
-            padding: '0 12px',
             cursor: 'pointer'
           }}
         >
@@ -307,24 +338,24 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
       </div>
 
       {/* Search Bar */}
-      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)' }}>
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          backgroundColor: 'var(--bg-secondary)',
-          borderRadius: 'var(--radius-md)',
+          backgroundColor: 'var(--bg-primary)',
+          borderRadius: '8px',
           padding: '0 10px',
           border: '1px solid var(--border-color)'
         }}>
           <Search size={14} style={{ color: 'var(--text-muted)', marginRight: '6px' }} />
           <input
             type="text"
-            placeholder={activeTab === 'emoji' ? 'Pesquisar emoji...' : activeTab === 'gif' ? 'Pesquisar GIFs animados...' : 'Pesquisar figurinhas...'}
+            placeholder={activeTab === 'emoji' ? 'Pesquisar emojis...' : activeTab === 'gif' ? 'Pesquisar GIFs animados...' : 'Pesquisar figurinhas...'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
               flex: 1,
-              padding: '6px 0',
+              padding: '8px 0',
               backgroundColor: 'transparent',
               border: 'none',
               color: 'var(--text-main)',
@@ -343,10 +374,10 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
         </div>
       </div>
 
-      {/* Content Area */}
+      {/* TAB CONTENT */}
       {activeTab === 'emoji' && (
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-          {/* Category Bar */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Categories Selector Bar */}
           {!searchTerm && (
             <div style={{
               display: 'flex',
@@ -354,7 +385,7 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
               padding: '6px 8px',
               borderBottom: '1px solid var(--border-color)',
               overflowX: 'auto',
-              backgroundColor: 'var(--bg-secondary)'
+              backgroundColor: 'var(--bg-primary)'
             }}>
               {EMOJI_CATEGORIES.map(cat => (
                 <button
@@ -363,14 +394,12 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
                   onClick={() => setActiveCategory(cat.id)}
                   title={cat.name}
                   style={{
-                    background: activeCategory === cat.id ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
-                    border: 'none',
+                    padding: '6px 8px',
+                    background: activeCategory === cat.id ? 'var(--bg-secondary)' : 'transparent',
+                    border: activeCategory === cat.id ? '1px solid var(--border-active)' : '1px solid transparent',
                     borderRadius: '6px',
                     fontSize: '16px',
-                    padding: '4px 6px',
-                    cursor: 'pointer',
-                    opacity: activeCategory === cat.id ? 1 : 0.65,
-                    transition: 'all 0.1s ease'
+                    cursor: 'pointer'
                   }}
                 >
                   {cat.icon}
@@ -379,14 +408,14 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
             </div>
           )}
 
-          {/* Emoji Grid */}
+          {/* Emojis Grid */}
           <div style={{
             flex: 1,
             overflowY: 'auto',
             padding: '10px',
             display: 'grid',
-            gridTemplateColumns: 'repeat(8, 1fr)',
-            gap: '4px',
+            gridTemplateColumns: 'repeat(7, 1fr)',
+            gap: '6px',
             alignContent: 'start'
           }}>
             {filteredCategoryEmojis.map((emoji, idx) => (
@@ -395,25 +424,19 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
                 type="button"
                 onClick={() => onSelectEmoji(emoji)}
                 style={{
-                  background: 'none',
-                  border: 'none',
                   fontSize: '22px',
-                  padding: '6px 0',
-                  cursor: 'pointer',
+                  background: 'transparent',
+                  border: 'none',
                   borderRadius: '6px',
+                  cursor: 'pointer',
+                  padding: '4px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  transition: 'transform 0.1s ease, background-color 0.1s ease'
+                  transition: 'transform 0.1s ease'
                 }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.15)';
-                  e.currentTarget.style.transform = 'scale(1.25)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                  e.currentTarget.style.transform = 'scale(1)';
-                }}
+                onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.25)')}
+                onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
               >
                 {emoji}
               </button>
@@ -476,7 +499,82 @@ export const EmojiGifStickerPicker: React.FC<EmojiGifStickerPickerProps> = ({
       )}
 
       {activeTab === 'sticker' && (
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* 1. Minhas Figurinhas Salvas (Banco) */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: '#f59e0b', textTransform: 'uppercase', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Star size={13} fill="#f59e0b" />
+              <span>Minhas Figurinhas Salvas ({savedStickers.length})</span>
+            </div>
+            {savedStickers.length === 0 ? (
+              <div style={{
+                padding: '14px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px dashed var(--border-color)',
+                textAlign: 'center',
+                color: 'var(--text-muted)',
+                fontSize: '12px',
+                lineHeight: '1.4'
+              }}>
+                ⭐ Nenhuma figurinha salva ainda. Passe o mouse sobre qualquer figurinha no chat e clique na estrela ⭐ para adicioná-la aqui!
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+                {savedStickers.map((url, sIdx) => (
+                  <div
+                    key={sIdx}
+                    onClick={() => {
+                      if (onSelectSticker) onSelectSticker(url);
+                      onClose();
+                    }}
+                    title="Clique para enviar figurinha salva"
+                    style={{
+                      position: 'relative',
+                      padding: '6px',
+                      borderRadius: '8px',
+                      backgroundColor: 'var(--bg-primary)',
+                      border: '1px solid rgba(245, 158, 11, 0.3)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'transform 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.15)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <img src={url} alt="Figurinha Salva" style={{ width: '56px', height: '56px', objectFit: 'contain' }} />
+                    <button
+                      type="button"
+                      onClick={(e) => handleRemoveSavedSticker(e, url)}
+                      title="Remover do banco"
+                      style={{
+                        position: 'absolute',
+                        top: '2px',
+                        right: '2px',
+                        background: 'rgba(239, 68, 68, 0.85)',
+                        border: 'none',
+                        borderRadius: '50%',
+                        width: '16px',
+                        height: '16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        padding: 0
+                      }}
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 2. Pacotes Padrão */}
           {STICKER_COLLECTIONS.map((pack, idx) => (
             <div key={idx}>
               <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-primary)', textTransform: 'uppercase', marginBottom: '8px' }}>
