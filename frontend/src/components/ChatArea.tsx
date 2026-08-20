@@ -198,7 +198,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   useEffect(() => {
-    // Only auto-scroll if user is NOT manually reading past chat history!
+    setIsUserScrolledUp(false);
+    scrollToBottom();
+  }, [conversation?.id]);
+
+  useEffect(() => {
     if (!isUserScrolledUp) {
       scrollToBottom();
     }
@@ -342,7 +346,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 <Eye size={12} /> Ampliar
               </div>
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );
 
@@ -352,7 +356,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px' }} onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}>
               <video src={fullUrl} controls style={{ width: '100%', maxWidth: '320px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }} />
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );
 
@@ -365,7 +369,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <source src={fullUrl} />
               Seu navegador não suporta reprodução de áudio.
             </audio>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );
 
@@ -379,9 +383,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 alignItems: 'center',
                 gap: '12px',
                 padding: '10px 14px',
-                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                backgroundColor: 'rgba(0, 0, 0, 0.05)',
                 borderRadius: '8px',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                border: '1px solid var(--border-color)',
                 maxWidth: '300px',
                 cursor: 'pointer'
               }}
@@ -389,7 +393,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               <FileText size={28} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {fileName}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -397,7 +401,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               </div>
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
           </div>
         );
 
@@ -407,10 +411,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const mapsUrl = mapsLinkMatch ? mapsLinkMatch[0] : null;
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', maxWidth: '320px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399', fontWeight: '700', fontSize: '13px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981', fontWeight: '700', fontSize: '13px' }}>
               <MapPin size={18} /> Localização GPS (WhatsApp Map)
             </div>
-            <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'var(--text-main)', margin: 0, whiteSpace: 'pre-wrap' }}>
+            <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', margin: 0, whiteSpace: 'pre-wrap' }}>
               {safeRawLoc}
             </p>
             {mapsUrl && (
@@ -429,7 +433,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       default:
         return (
-          <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'var(--text-main)', whiteSpace: 'pre-wrap' }}>
+          <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'inherit', whiteSpace: 'pre-wrap' }}>
             {raw}
           </p>
         );
@@ -1223,7 +1227,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           display: 'flex',
           flexDirection: 'column',
           gap: '12px',
-          position: 'relative'
+          position: 'relative',
+          backgroundColor: 'var(--chat-bg)'
         }}
       >
         {(conversation?.messages || []).map((msg, idx) => {
@@ -1239,11 +1244,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 margin: '8px 0',
                 padding: '6px 14px',
                 borderRadius: 'var(--radius-full)',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                backgroundColor: 'rgba(59, 130, 246, 0.12)',
                 border: '1px solid rgba(59, 130, 246, 0.25)',
-                color: '#60a5fa',
+                color: '#3b82f6',
                 fontSize: '12px',
-                fontWeight: '500',
+                fontWeight: '600',
                 textAlign: 'center',
                 maxWidth: '85%'
               }}>
@@ -1252,8 +1257,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             );
           }
 
-          const bubbleBg = isCustomer ? '#1c283e' : isAI ? 'rgba(168, 85, 247, 0.12)' : 'rgba(0, 230, 153, 0.15)';
-          const border = isCustomer ? '1px solid var(--border-color)' : isAI ? '1px solid rgba(168, 85, 247, 0.3)' : '1px solid rgba(0, 230, 153, 0.3)';
+          const bubbleBg = isCustomer ? 'var(--bubble-incoming)' : isAI ? 'var(--bubble-ai)' : 'var(--bubble-outgoing)';
+          const bubbleColor = isCustomer ? 'var(--bubble-incoming-text)' : isAI ? 'var(--bubble-ai-text)' : 'var(--bubble-outgoing-text)';
+          const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
 
           return (
             <div key={msgKey} className="animate-fade-in" style={{
@@ -1262,13 +1268,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               padding: '12px 16px',
               borderRadius: 'var(--radius-md)',
               backgroundColor: bubbleBg,
+              color: bubbleColor,
               border,
+              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
               display: 'flex',
               flexDirection: 'column',
               gap: '6px'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                <span style={{ fontWeight: '600', color: isAI ? '#c084fc' : isCustomer ? '#94a3b8' : 'var(--accent-primary)' }}>
+                <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? 'var(--text-muted)' : 'var(--accent-primary)' }}>
                   {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                 </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

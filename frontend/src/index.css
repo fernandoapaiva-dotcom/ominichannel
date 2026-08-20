@@ -1,7 +1,7 @@
 :root, [data-theme="dark"] {
   --bg-primary: #0b0f19;
   --bg-secondary: #131b2e;
-  --bg-glass: rgba(19, 27, 46, 0.75);
+  --bg-glass: rgba(19, 27, 46, 0.85);
   --bg-card: rgba(255, 255, 255, 0.03);
   --border-color: rgba(255, 255, 255, 0.08);
   --border-active: rgba(0, 230, 153, 0.4);
@@ -13,6 +13,18 @@
   --text-main: #f0f4f8;
   --text-muted: #8a99ad;
   --text-dim: #5c6b7e;
+
+  --chat-bg: #070c14;
+  --bubble-incoming: #182234;
+  --bubble-incoming-text: #f0f4f8;
+  --bubble-incoming-border: rgba(255, 255, 255, 0.08);
+  --bubble-outgoing: #064e3b;
+  --bubble-outgoing-text: #ecfdf5;
+  --bubble-outgoing-border: rgba(0, 230, 153, 0.3);
+  --bubble-ai: #3b1d5a;
+  --bubble-ai-text: #f3e8ff;
+  --bubble-ai-border: rgba(168, 85, 247, 0.3);
+  --input-bg: #131b2e;
 
   --status-ia: #a855f7;
   --status-humano: #3b82f6;
@@ -32,25 +44,37 @@
 }
 
 [data-theme="light"] {
-  --bg-primary: #f1f5f9;
+  --bg-primary: #f0f2f5;
   --bg-secondary: #ffffff;
-  --bg-glass: rgba(255, 255, 255, 0.9);
-  --bg-card: rgba(0, 0, 0, 0.04);
-  --border-color: rgba(0, 0, 0, 0.1);
-  --border-active: rgba(0, 179, 119, 0.5);
+  --bg-glass: rgba(255, 255, 255, 0.95);
+  --bg-card: #ffffff;
+  --border-color: #e2e8f0;
+  --border-active: #00b377;
 
-  --accent-primary: #00b377;
-  --accent-gradient: linear-gradient(135deg, #00b377 0%, #008f5d 100%);
-  --accent-glow: 0 0 15px rgba(0, 179, 119, 0.25);
+  --accent-primary: #00a86b;
+  --accent-gradient: linear-gradient(135deg, #00a86b 0%, #008554 100%);
+  --accent-glow: 0 0 15px rgba(0, 168, 107, 0.25);
 
   --text-main: #0f172a;
   --text-muted: #475569;
   --text-dim: #64748b;
 
-  --status-ia: #9333ea;
-  --status-humano: #2563eb;
-  --status-encerrada: #059669;
-  --status-expirada: #dc2626;
+  --chat-bg: #eae6df;
+  --bubble-incoming: #ffffff;
+  --bubble-incoming-text: #111b21;
+  --bubble-incoming-border: #e2e8f0;
+  --bubble-outgoing: #d9fdd3;
+  --bubble-outgoing-text: #111b21;
+  --bubble-outgoing-border: #bbf7d0;
+  --bubble-ai: #ede9fe;
+  --bubble-ai-text: #4c1d95;
+  --bubble-ai-border: #ddd6fe;
+  --input-bg: #ffffff;
+
+  --status-ia: #7e22ce;
+  --status-humano: #1d4ed8;
+  --status-encerrada: #047857;
+  --status-expirada: #b91c1c;
 }
 
 * {
