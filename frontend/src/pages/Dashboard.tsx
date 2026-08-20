@@ -136,7 +136,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             if (payload.remetente === 'cliente') {
               playNotificationSound();
             }
-          } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
+          } else if (payload.type === 'MESSAGE_STATUS_UPDATE' || payload.type === 'MESSAGE_REACTION_UPDATE') {
             fetchConversations();
           }
         } catch (err) {

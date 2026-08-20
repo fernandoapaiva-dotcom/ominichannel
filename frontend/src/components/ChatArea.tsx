@@ -330,12 +330,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setActiveActionMenuMsgId(null);
   };
 
-  const handleReact = (msgId: number, emoji: string) => {
+  const handleReact = async (msgId: number, emoji: string) => {
+    const newEmoji = messageReactions[msgId] === emoji ? '' : emoji;
     setMessageReactions(prev => ({
       ...prev,
-      [msgId]: prev[msgId] === emoji ? '' : emoji
+      [msgId]: newEmoji
     }));
     setActiveActionMenuMsgId(null);
+
+    if (conversation?.id && msgId > 0) {
+      try {
+        await apiFetch(`/conversations/${conversation.id}/messages/${msgId}/reaction`, {
+          method: 'POST',
+          body: JSON.stringify({ reaction: newEmoji })
+        });
+      } catch (err) {
+        console.error('Error dispatching reaction to WhatsApp:', err);
+      }
+    }
   };
 
   if (!conversation) {
@@ -1306,7 +1318,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
 
           const isMediaMsg = ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo);
-          const reaction = msg.id ? messageReactions[msg.id] : null;
+          const reaction = (msg.id ? messageReactions[msg.id] : null) || (msg as any).dados_adicionais?.reaction;
           const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
 
           return (

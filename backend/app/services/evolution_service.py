@@ -202,6 +202,45 @@ class EvolutionService:
                 logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_reaction(
+        self,
+        instance_name: str,
+        number: str,
+        message_id: str,
+        reaction_emoji: str,
+        from_me: bool = True,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends a native WhatsApp emoji reaction to a message via Evolution API v2.
+        Endpoint: POST /message/sendReaction/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendReaction/{instance_name}"
+        clean_number = "".join(filter(str.isdigit, str(number)))
+        remote_jid = f"{clean_number}@g.us" if (number.startswith("120363") or "@g.us" in str(number) or len(clean_number) > 15) else f"{clean_number}@s.whatsapp.net"
+        
+        payload = {
+            "key": {
+                "remoteJid": remote_jid,
+                "fromMe": from_me,
+                "id": message_id
+            },
+            "reaction": reaction_emoji
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                res_data = response.json()
+                if response.status_code >= 400:
+                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                res_data["success"] = True
+                return res_data
+            except Exception as e:
+                logger.error(f"Error sending reaction to message {message_id} via instance {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
     async def send_location_message(
         self,
         instance_name: str,

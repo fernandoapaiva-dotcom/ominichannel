@@ -593,6 +593,63 @@ async def send_agent_message(
 
     return message
 
+class ReactionPayload(BaseModel):
+    reaction: str
+
+@router.post("/{conversation_id}/messages/{message_id}/reaction")
+async def react_to_message(
+    conversation_id: int,
+    message_id: int,
+    payload: ReactionPayload,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Dispatches a native WhatsApp emoji reaction to a message.
+    """
+    stmt = select(Conversation).options(
+        selectinload(Conversation.contact),
+        selectinload(Conversation.whatsapp_number)
+    ).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    m_stmt = select(Message).where(Message.id == message_id, Message.conversation_id == conversation_id)
+    m_res = await db.execute(m_stmt)
+    msg = m_res.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+
+    wa_msg_id = msg.whatsapp_msg_id
+    if wa_msg_id and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+        from_me = (msg.remetente == MessageSender.ATENDENTE.value or msg.remetente == "atendente" or msg.remetente == "ia")
+        await evolution_service.send_reaction(
+            instance_name=conv.whatsapp_number.instancia_evolution_api,
+            number=conv.contact.telefone,
+            message_id=wa_msg_id,
+            reaction_emoji=payload.reaction,
+            from_me=from_me
+        )
+
+    msg_extra = dict(msg.dados_adicionais or {})
+    msg_extra["reaction"] = payload.reaction
+    msg.dados_adicionais = msg_extra
+    await db.commit()
+
+    await ws_manager.broadcast({
+        "type": "MESSAGE_REACTION_UPDATE",
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "reaction": payload.reaction
+    })
+
+    return {"status": "success", "reaction": payload.reaction}
+
 class LocationPayload(BaseModel):
     name: str
     address: str
