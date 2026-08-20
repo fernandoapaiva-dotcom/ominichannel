@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
@@ -385,27 +385,35 @@ export const ChatList: React.FC<ChatListProps> = ({
                         {primaryConv.status.replace('_', ' ')}
                       </button>
 
-                      {/* Expand Sub-threads Button */}
-                      {group.allConversations.length > 1 && (
+                      {/* Expand Sub-threads or Community Groups Button */}
+                      {(group.allConversations.length > 1 || (group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda'))) && (
                         <button
                           type="button"
                           onClick={(e) => toggleExpand(e, group.contactId)}
                           style={{
-                            background: 'rgba(255, 255, 255, 0.08)',
-                            border: '1px solid var(--border-color)',
+                            background: 'rgba(0, 230, 153, 0.12)',
+                            border: '1px solid rgba(0, 230, 153, 0.3)',
                             borderRadius: '4px',
                             color: 'var(--accent-primary)',
-                            padding: '1px 5px',
+                            padding: '1px 6px',
                             fontSize: '9px',
-                            fontWeight: '600',
+                            fontWeight: '700',
                             cursor: 'pointer',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: '2px'
+                            gap: '3px'
                           }}
-                          title="Ver todas as conversas/histórico deste cliente"
+                          title="Ver grupos desta comunidade / chamados deste cliente"
                         >
-                          <Layers size={10} /> {group.allConversations.length}
+                          {(group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda')) ? (
+                            <>
+                              <Users size={11} /> Grupos
+                            </>
+                          ) : (
+                            <>
+                              <Layers size={10} /> {group.allConversations.length}
+                            </>
+                          )}
                           {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                         </button>
                       )}
@@ -441,8 +449,74 @@ export const ChatList: React.FC<ChatListProps> = ({
                   </div>
                 </div>
 
+                {/* WhatsApp Community Sub-Groups (Identical to WhatsApp Web 'Grupos em Comum') */}
+                {(group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda')) && isExpanded && (
+                  <div style={{
+                    backgroundColor: 'rgba(0,0,0,0.3)',
+                    padding: '8px 12px 10px 16px',
+                    borderTop: '1px solid rgba(0, 230, 153, 0.2)',
+                    borderLeft: '3px solid var(--accent-primary)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px'
+                  }}>
+                    <div style={{ fontSize: '10px', fontWeight: '700', color: 'var(--accent-primary)', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '2px' }}>
+                      <Users size={11} /> Grupos da Comunidade:
+                    </div>
+
+                    {conversations
+                      .filter(c => c.contact?.telefone === '120363421689967835' || c.contact?.telefone === '120363405705656894')
+                      .map(subGroupConv => {
+                        const isSubSelected = activeConversation?.id === subGroupConv.id;
+                        const subLastMsg = subGroupConv.messages && subGroupConv.messages.length > 0 ? subGroupConv.messages[subGroupConv.messages.length - 1] : null;
+
+                        return (
+                          <div
+                            key={`subgroup_${subGroupConv.id}`}
+                            onClick={() => onSelectConversation(subGroupConv)}
+                            style={{
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              backgroundColor: isSubSelected ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                              border: isSubSelected ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px'
+                            }}
+                          >
+                            {subGroupConv.contact?.foto_perfil_url ? (
+                              <img
+                                src={subGroupConv.contact.foto_perfil_url}
+                                alt={subGroupConv.contact.nome}
+                                style={{ width: '26px', height: '26px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                              />
+                            ) : (
+                              <div style={{ width: '26px', height: '26px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', color: '#000', fontWeight: '700', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                G
+                              </div>
+                            )}
+
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '11px', fontWeight: '700', color: isSubSelected ? 'var(--accent-primary)' : 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {subGroupConv.contact?.nome || 'Grupo'}
+                              </div>
+                              <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {subLastMsg ? subLastMsg.conteudo : 'Conversa iniciada'}
+                              </div>
+                            </div>
+
+                            <span className={`badge badge-${subGroupConv.status}`} style={{ fontSize: '8px', padding: '1px 4px' }}>
+                              {subGroupConv.status.replace('_', ' ')}
+                            </span>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+
                 {/* Sub-threads Accordion (Conversas do Cliente: Ativas, Expiradas, Encerradas) */}
-                {isExpanded && group.allConversations.length > 1 && (
+                {isExpanded && group.allConversations.length > 1 && !(group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda')) && (
                   <div style={{
                     backgroundColor: 'rgba(0,0,0,0.25)',
                     padding: '8px 12px 10px 20px',

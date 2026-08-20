@@ -149,7 +149,7 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
               justifyContent: 'center',
               boxShadow: '0 10px 30px rgba(0, 230, 153, 0.3)'
             }}>
-              {(name || 'U').charAt(0).toUpperCase()}
+              {(name || '').replace(/[\[\]]/g, '').trim().charAt(0).toUpperCase() || 'U'}
             </div>
           )}
         </div>
