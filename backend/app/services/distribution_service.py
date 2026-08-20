@@ -121,6 +121,7 @@ class DistributionService:
                 conv.assigned_user_id = attendant.id
                 conv.status = ConversationStatus.COM_HUMANO
                 conv.ultima_interacao_em = datetime.utcnow()
+                await db.flush()  # Immediately flush state so next iteration calculates re-balanced load accurately!
                 assigned_convs.append(conv)
                 logger.info(f"Auto-assigned pending conversation #{conv.id} to Attendant #{attendant.id} ({attendant.nome}).")
 
