@@ -32,7 +32,15 @@ export async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.detail || 'Erro ao comunicar com o servidor');
+    let errMsg = 'Erro ao comunicar com o servidor';
+    if (typeof errData.detail === 'string') {
+      errMsg = errData.detail;
+    } else if (Array.isArray(errData.detail)) {
+      errMsg = errData.detail.map((e: any) => e.msg || JSON.stringify(e)).join(', ');
+    } else if (errData.detail) {
+      errMsg = JSON.stringify(errData.detail);
+    }
+    throw new Error(errMsg);
   }
 
   return response.json();

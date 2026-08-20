@@ -117,8 +117,8 @@ class MessageBase(BaseModel):
     tipo: MessageType = MessageType.TEXTO
 
 class MessageCreate(MessageBase):
-    conversation_id: int
-    remetente: MessageSender
+    conversation_id: Optional[int] = None
+    remetente: Optional[MessageSender] = MessageSender.ATENDENTE
 
 class MessageResponse(MessageBase):
     id: int

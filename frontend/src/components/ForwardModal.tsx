@@ -50,8 +50,10 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
         await apiFetch(`/conversations/${convId}/messages`, {
           method: 'POST',
           body: JSON.stringify({
+            conversation_id: convId,
             conteudo: messageToForward.conteudo,
-            tipo: messageToForward.tipo || 'texto'
+            tipo: messageToForward.tipo || 'texto',
+            remetente: 'atendente'
           })
         });
       }
