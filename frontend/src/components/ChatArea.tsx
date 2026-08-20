@@ -3,14 +3,15 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
 import { PixModal } from './PixModal';
 import { AvatarModal } from './AvatarModal';
-import { Conversation, User } from '../types';
+import { ForwardModal } from './ForwardModal';
+import { Conversation, User, Message } from '../types';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -41,6 +42,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+
+  // WhatsApp-style Message Actions & Forwarding State
+  const [activeActionMenuMsgId, setActiveActionMenuMsgId] = useState<number | null>(null);
+  const [forwardingMessage, setForwardingMessage] = useState<Message | null>(null);
+  const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
+  const [messageReactions, setMessageReactions] = useState<{ [msgId: number]: string }>({});
 
   const contactConversations = useMemo(() => {
     if (!conversation || !allConversations) return [];
@@ -263,7 +270,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     e.preventDefault();
     if (!inputText.trim() && pendingFiles.length === 0) return;
 
-    const textToSend = inputText.trim();
+    let textToSend = inputText.trim();
+    if (replyingToMessage) {
+      const quoteSender = replyingToMessage.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : 'Atendente';
+      let quoteSnippet = (replyingToMessage.conteudo || '').split('|')[0];
+      if (quoteSnippet.length > 50) quoteSnippet = quoteSnippet.slice(0, 50) + '...';
+      textToSend = `> *${quoteSender}:* ${quoteSnippet}\n\n` + textToSend;
+      setReplyingToMessage(null);
+    }
+
     setSendError(null);
 
     try {
@@ -291,6 +306,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setSendError(err.message || 'Falha ao enviar arquivo ou mensagem.');
       setIsSending(false);
     }
+  };
+
+  const handleCopyMessage = (msg: Message) => {
+    let text = msg.conteudo || '';
+    if (text.includes('|')) text = text.split('|')[1] || text;
+    navigator.clipboard.writeText(text);
+    setActiveActionMenuMsgId(null);
+  };
+
+  const handleDownloadMedia = (msg: Message) => {
+    let path = (msg.conteudo || '').split('|')[0];
+    const url = path.startsWith('http') ? path : `http://localhost:8000${path}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = path.split('/').pop() || 'arquivo';
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setActiveActionMenuMsgId(null);
+  };
+
+  const handleReact = (msgId: number, emoji: string) => {
+    setMessageReactions(prev => ({
+      ...prev,
+      [msgId]: prev[msgId] === emoji ? '' : emoji
+    }));
+    setActiveActionMenuMsgId(null);
   };
 
   if (!conversation) {
@@ -1260,38 +1303,300 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           const bubbleColor = isCustomer ? 'var(--bubble-incoming-text)' : isAI ? 'var(--bubble-ai-text)' : 'var(--bubble-outgoing-text)';
           const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
 
+          const isMediaMsg = ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo);
+          const reaction = msg.id ? messageReactions[msg.id] : null;
+          const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
+
           return (
-            <div key={msgKey} className="animate-fade-in" style={{
-              alignSelf: isCustomer ? 'flex-start' : 'flex-end',
-              maxWidth: '65%',
-              padding: '12px 16px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: bubbleBg,
-              color: bubbleColor,
-              border,
-              boxShadow: '0 1px 3px rgba(0, 0, 0, 0.08)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '6px'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? 'var(--text-muted)' : 'var(--accent-primary)' }}>
-                  {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
-                </span>
-                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  {formatTime(msg.timestamp)}
-                  {!isCustomer && (
-                    msg.status === 'sending' ? (
-                      <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
-                    ) : msg.status === 'failed' ? (
-                      <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
-                    ) : (
-                      <Check size={12} style={{ color: 'var(--accent-primary)' }} title="Enviado" />
-                    )
-                  )}
-                </span>
+            <div
+              key={msgKey}
+              className="animate-fade-in msg-row-container"
+              style={{
+                alignSelf: isCustomer ? 'flex-start' : 'flex-end',
+                maxWidth: '70%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                flexDirection: isCustomer ? 'row' : 'row-reverse',
+                position: 'relative'
+              }}
+            >
+              {/* Quick Forward Button (Always accessible like WhatsApp Web) */}
+              <button
+                type="button"
+                onClick={() => setForwardingMessage(msg)}
+                title="Encaminhar / Compartilhar esta mensagem"
+                style={{
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: '50%',
+                  width: '30px',
+                  height: '30px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.12)',
+                  flexShrink: 0,
+                  transition: 'transform 0.15s ease, color 0.15s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--accent-primary)';
+                  e.currentTarget.style.transform = 'scale(1.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+              >
+                <CornerUpRight size={15} />
+              </button>
+
+              {/* Main Message Bubble */}
+              <div style={{
+                position: 'relative',
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: bubbleBg,
+                color: bubbleColor,
+                border,
+                boxShadow: '0 1px 4px rgba(0, 0, 0, 0.08)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                minWidth: '160px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? 'var(--text-muted)' : 'var(--accent-primary)' }}>
+                    {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>{formatTime(msg.timestamp)}</span>
+                    {!isCustomer && (
+                      msg.status === 'sending' ? (
+                        <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
+                      ) : msg.status === 'failed' ? (
+                        <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
+                      ) : (
+                        <Check size={12} style={{ color: 'var(--accent-primary)' }} title="Enviado" />
+                      )
+                    )}
+
+                    {/* WhatsApp Action Menu Chevron Button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveActionMenuMsgId(isMenuOpen ? null : (msg.id || idx));
+                      }}
+                      title="Mais opções da mensagem"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-muted)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: '4px'
+                      }}
+                    >
+                      <ChevronDown size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {renderMediaContent(msg)}
+
+                {/* Reaction Emoji Badge on Bubble Bottom */}
+                {reaction && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: '-10px',
+                    right: isCustomer ? '10px' : 'auto',
+                    left: isCustomer ? 'auto' : '10px',
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '12px',
+                    padding: '2px 6px',
+                    fontSize: '13px',
+                    boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    zIndex: 10
+                  }} onClick={() => handleReact(msg.id, reaction)}>
+                    {reaction}
+                  </div>
+                )}
+
+                {/* WhatsApp Web Context Popover Menu */}
+                {isMenuOpen && (
+                  <>
+                    <div
+                      onClick={() => setActiveActionMenuMsgId(null)}
+                      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 1000 }}
+                    />
+                    <div className="glass-panel" style={{
+                      position: 'absolute',
+                      top: '28px',
+                      right: isCustomer ? 'auto' : '0',
+                      left: isCustomer ? '0' : 'auto',
+                      zIndex: 1001,
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: 'var(--radius-md)',
+                      boxShadow: '0 10px 30px rgba(0, 0, 0, 0.4)',
+                      padding: '6px',
+                      minWidth: '210px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
+                    }}>
+                      {/* Top Reaction Emojis Bar */}
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '6px 8px',
+                        backgroundColor: 'var(--bg-primary)',
+                        borderRadius: 'var(--radius-sm)',
+                        borderBottom: '1px solid var(--border-color)',
+                        marginBottom: '4px'
+                      }}>
+                        {['👍', '❤️', '😂', '😮', '😢', '🙏'].map(emoji => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => handleReact(msg.id, emoji)}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              fontSize: '17px',
+                              cursor: 'pointer',
+                              padding: '2px 4px',
+                              borderRadius: '4px',
+                              transition: 'transform 0.1s ease'
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.25)')}
+                            onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Menu Actions */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReplyingToMessage(msg);
+                          setActiveActionMenuMsgId(null);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--radius-sm)'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <Reply size={15} style={{ color: 'var(--accent-primary)' }} />
+                        <span>Responder</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForwardingMessage(msg);
+                          setActiveActionMenuMsgId(null);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--radius-sm)'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <CornerUpRight size={15} style={{ color: 'var(--accent-primary)' }} />
+                        <span>Encaminhar / Compartilhar</span>
+                      </button>
+
+                      {isMediaMsg && (
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadMedia(msg)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <Download size={15} style={{ color: 'var(--accent-primary)' }} />
+                          <span>Baixar Arquivo</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => handleCopyMessage(msg)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--radius-sm)'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <Copy size={15} style={{ color: 'var(--accent-primary)' }} />
+                        <span>Copiar Texto</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
-              {renderMediaContent(msg)}
             </div>
           );
         })}
@@ -1510,6 +1815,50 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
+      {/* WhatsApp-Style Quoted Reply Preview Bar */}
+      {replyingToMessage && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 18px',
+          backgroundColor: 'var(--bg-secondary)',
+          borderTop: '1px solid var(--border-color)',
+          borderLeft: '4px solid var(--accent-primary)',
+          boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
+          flexShrink: 0
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Reply size={13} />
+              <span>Respondendo a {replyingToMessage.remetente === 'cliente' ? (conversation.contact?.nome || 'Cliente') : 'Atendente'}:</span>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {replyingToMessage.conteudo}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setReplyingToMessage(null)}
+            title="Cancelar resposta"
+            style={{
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: 'none',
+              borderRadius: '50%',
+              width: '24px',
+              height: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'var(--text-muted)',
+              cursor: 'pointer'
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {(() => {
         const isGroupChat = Boolean(
           conversation.contact?.telefone?.startsWith('120363') ||
@@ -1590,7 +1939,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* 1. Location Picker Modal (Estilo WhatsApp Mapa) */}
+      {/* 1. Forward & Share Modal (Estilo WhatsApp Web Oficial) */}
+      <ForwardModal
+        isOpen={Boolean(forwardingMessage)}
+        onClose={() => setForwardingMessage(null)}
+        messageToForward={forwardingMessage}
+        conversations={allConversations || []}
+        onForwardSuccess={() => {
+          if (onStatusToggle) onStatusToggle();
+        }}
+      />
+
+      {/* 2. Location Picker Modal (Estilo WhatsApp Mapa) */}
       <LocationPickerModal
         isOpen={showLocationModal}
         onClose={() => setShowLocationModal(false)}
@@ -1606,7 +1966,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
       />
 
-      {/* 2. Contact Picker Modal (Estilo WhatsApp Agenda) */}
+      {/* 3. Contact Picker Modal (Estilo WhatsApp Agenda) */}
       <ContactPickerModal
         isOpen={showContactModal}
         onClose={() => setShowContactModal(false)}
@@ -1615,7 +1975,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
       />
 
-      {/* 3. Pix Generator Modal (Oficial Servweld + Chaves Dinâmicas + Valor e Imagem do QR Code) */}
+      {/* 4. Pix Generator Modal (Oficial Servweld + Chaves Dinâmicas + Valor e Imagem do QR Code) */}
       <PixModal
         isOpen={showPixModal}
         onClose={() => setShowPixModal(false)}
@@ -1631,7 +1991,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
       />
 
-      {/* 4. Contact / Group Avatar Fullscreen Lightbox Modal */}
+      {/* 5. Contact / Group Avatar Fullscreen Lightbox Modal */}
       <AvatarModal
         isOpen={showAvatarZoom}
         onClose={() => setShowAvatarZoom(false)}
