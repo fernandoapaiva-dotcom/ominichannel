@@ -2488,13 +2488,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             setInputText(prev => prev + emoji);
           }
         }}
-        onSelectGif={(gifUrl) => {
-          onSendMessage(gifUrl);
+        onSelectGif={async (gifUrl) => {
           setShowEmojiPicker(false);
+          if (conversation?.id) {
+            try {
+              await apiFetch(`/conversations/${conversation.id}/messages`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  conversation_id: conversation.id,
+                  conteudo: gifUrl,
+                  tipo: 'video',
+                  remetente: 'atendente'
+                })
+              });
+              if (onStatusToggle) onStatusToggle();
+            } catch (err) {
+              console.error('Error sending gif:', err);
+            }
+          }
         }}
-        onSelectSticker={(stickerUrl) => {
-          onSendMessage(stickerUrl);
+        onSelectSticker={async (stickerUrl) => {
           setShowEmojiPicker(false);
+          if (conversation?.id) {
+            try {
+              await apiFetch(`/conversations/${conversation.id}/messages`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  conversation_id: conversation.id,
+                  conteudo: stickerUrl,
+                  tipo: 'imagem',
+                  remetente: 'atendente'
+                })
+              });
+              if (onStatusToggle) onStatusToggle();
+            } catch (err) {
+              console.error('Error sending sticker:', err);
+            }
+          }
         }}
       />
     </div>

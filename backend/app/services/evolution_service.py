@@ -315,6 +315,37 @@ class EvolutionService:
                 logger.error(f"Error sending media message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_sticker(
+        self,
+        instance_name: str,
+        number: str,
+        sticker_media: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends a native WhatsApp sticker (.webp) via Evolution API v2.
+        Endpoint: POST /message/sendSticker/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendSticker/{instance_name}"
+        clean_number = "".join(filter(str.isdigit, str(number)))
+        payload = {
+            "number": clean_number,
+            "sticker": sticker_media
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                res_data = response.json()
+                if response.status_code >= 400:
+                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                res_data["success"] = True
+                return res_data
+            except Exception as e:
+                logger.error(f"Error sending sticker to {number} via instance {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
     async def get_media_base64(
         self,
         instance_name: str,

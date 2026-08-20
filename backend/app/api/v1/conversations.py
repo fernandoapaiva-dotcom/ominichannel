@@ -515,37 +515,79 @@ async def send_agent_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    # 1. Dispatch via provider factory (Evolution API or Meta Cloud API)
-    provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
-    agent_name = current_user.nome or "Atendente"
-    formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
-
-    send_res = await provider.send_text_message(
-        number=conv.contact.telefone,
-        text=formatted_whatsapp_text
+    raw_content = (msg_in.conteudo or "").strip()
+    is_sticker = (
+        msg_in.tipo in (MessageType.IMAGEM, "sticker", "figurinha") or
+        raw_content.lower().endswith(".webp") or
+        ("/uploads/" in raw_content and raw_content.lower().endswith(".webp"))
+    )
+    is_gif = (
+        raw_content.lower().endswith(".gif") or
+        "giphy.com" in raw_content.lower() or
+        "tenor.com" in raw_content.lower()
     )
 
-    # If delivery failed and provider is Evolution, attempt failover to other active connected instances of the tenant
-    if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
-        wn_all_stmt = select(WhatsAppNumber).where(
-            WhatsAppNumber.tenant_id == current_user.tenant_id,
-            WhatsAppNumber.status == True
-        )
-        wn_all_res = await db.execute(wn_all_stmt)
-        all_wns = wn_all_res.scalars().all()
+    actual_tipo = MessageType.IMAGEM if (is_sticker or is_gif) else msg_in.tipo
+    clean_db_content = raw_content
+    if "/uploads/" in raw_content:
+        clean_db_content = "/uploads/" + raw_content.split("/uploads/")[-1]
 
-        for alt_wn in all_wns:
-            if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
-                continue
-            alt_res = await evolution_service.send_text_message(
-                instance_name=alt_wn.instancia_evolution_api,
-                number=conv.contact.telefone,
-                text=formatted_whatsapp_text
+    # 1. Dispatch via provider factory
+    send_res = {"success": False}
+    if is_sticker and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+        sticker_media = raw_content
+        if "/uploads/" in raw_content:
+            fname = raw_content.split("/uploads/")[-1]
+            lpath = os.path.join("uploads", fname)
+            if os.path.exists(lpath):
+                with open(lpath, "rb") as f:
+                    sticker_media = base64.b64encode(f.read()).decode("utf-8")
+
+        send_res = await evolution_service.send_sticker(
+            instance_name=conv.whatsapp_number.instancia_evolution_api,
+            number=conv.contact.telefone,
+            sticker_media=sticker_media
+        )
+    elif is_gif and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+        send_res = await evolution_service.send_media_message(
+            instance_name=conv.whatsapp_number.instancia_evolution_api,
+            number=conv.contact.telefone,
+            media_type="video",
+            mimetype="video/mp4",
+            media=raw_content,
+            file_name="animacao.mp4"
+        )
+    else:
+        provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+        agent_name = current_user.nome or "Atendente"
+        formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+
+        send_res = await provider.send_text_message(
+            number=conv.contact.telefone,
+            text=formatted_whatsapp_text
+        )
+
+        # If delivery failed and provider is Evolution, attempt failover to other active connected instances of the tenant
+        if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
+            wn_all_stmt = select(WhatsAppNumber).where(
+                WhatsAppNumber.tenant_id == current_user.tenant_id,
+                WhatsAppNumber.status == True
             )
-            if alt_res.get("success"):
-                logger.info(f"Agent message delivered to {conv.contact.telefone} via failover instance '{alt_wn.instancia_evolution_api}'")
-                send_res = alt_res
-                break
+            wn_all_res = await db.execute(wn_all_stmt)
+            all_wns = wn_all_res.scalars().all()
+
+            for alt_wn in all_wns:
+                if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
+                    continue
+                alt_res = await evolution_service.send_text_message(
+                    instance_name=alt_wn.instancia_evolution_api,
+                    number=conv.contact.telefone,
+                    text=formatted_whatsapp_text
+                )
+                if alt_res.get("success"):
+                    logger.info(f"Agent message delivered to {conv.contact.telefone} via failover instance '{alt_wn.instancia_evolution_api}'")
+                    send_res = alt_res
+                    break
 
     # 2. If delivery failed across all instances, raise HTTP error and do not commit message
     if not send_res.get("success", False):
@@ -564,8 +606,8 @@ async def send_agent_message(
     message = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
-        conteudo=msg_in.conteudo,
-        tipo=msg_in.tipo,
+        conteudo=clean_db_content,
+        tipo=actual_tipo,
         status="sent",
         whatsapp_msg_id=wa_key_id,
         timestamp=datetime.utcnow()
