@@ -15,13 +15,14 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
-    ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole
+    ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog
 )
 
 from app.services.evolution_service import evolution_service
 from app.services.gemini_service import gemini_service
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
+from app.services.protocol_service import generate_daily_protocol
 from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
 
@@ -731,19 +732,29 @@ async def receive_evolution_webhook(
         conversation = any_conv_res.scalars().first()
 
         if conversation:
-            if conversation.status == ConversationStatus.EXPIRADA_POR_INATIVIDADE:
+            if conversation.status in [
+                ConversationStatus.ENCERRADA,
+                ConversationStatus.EXPIRADA_POR_INATIVIDADE,
+                ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
+            ]:
                 conversation.status = ConversationStatus.COM_IA
+                conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
             conversation.whatsapp_number_id = whatsapp_number.id
         else:
+            proto = await generate_daily_protocol(db, tenant_id)
             conversation = Conversation(
                 tenant_id=tenant_id,
                 whatsapp_number_id=whatsapp_number.id,
                 contact_id=contact.id,
+                protocol_number=proto,
                 status=ConversationStatus.COM_IA,
                 assunto_atual="Atendimento Concierge"
             )
             db.add(conversation)
             await db.flush()
+
+    if not conversation.protocol_number:
+        conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
 
     conversation.ultima_interacao_em = datetime.utcnow()
 
@@ -894,24 +905,159 @@ async def receive_evolution_webhook(
 
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
 
-        ai_output = await gemini_service.generate_concierge_response(
-            customer_name=contact.nome or "Cliente",
-            department_name=whatsapp_number.nome_departamento,
-            user_message=text_content,
-            conversation_history=history,
-            memory_summary=memory_summary,
-            rag_context=rag_context,
-            available_departments=available_dept_names,
-            tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
-            tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
-        )
+        # Check if conversation was waiting for customer confirmation on sector transfer
+        is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
+        affirmative_words = ["sim", "isso", "correto", "pode", "ok", "positivo", "claro", "por favor", "transfere", "quero", "exato", "com certeza", "manda"]
+        customer_confirmed = any(w in text_content.strip().lower() for w in affirmative_words)
+
+        transfer_executed = False
+        ai_output = None
+
+        if is_pending_transfer and customer_confirmed:
+            parts = conversation.assunto_atual.split(":", 2)
+            target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            intent_sum = parts[2] if len(parts) > 2 else "Assunto confirmado pelo cliente"
+
+            target_wn = next((w for w in all_wns if w.id == target_id), None)
+            if target_wn and target_wn.id != whatsapp_number.id:
+                old_dept_name = whatsapp_number.nome_departamento
+                old_dept_id = whatsapp_number.id
+                conversation.whatsapp_number_id = target_wn.id
+                whatsapp_number = target_wn
+                conversation.assunto_atual = intent_sum
+
+                tlog = TransferLog(
+                    conversation_id=conversation.id,
+                    de_whatsapp_number_id=old_dept_id,
+                    para_whatsapp_number_id=target_wn.id,
+                    motivo=f"Roteamento IA confirmado pelo cliente: {intent_sum}",
+                    timestamp=datetime.utcnow()
+                )
+                db.add(tlog)
+
+                sys_transfer_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente="sistema",
+                    conteudo=f"🔀 *TRANSFERÊNCIA DE SETOR PELA IA*\nAtendimento redirecionado do setor '{old_dept_name}' para '{target_wn.nome_departamento}'.\nMotivo: {intent_sum} (Confirmado pelo cliente)",
+                    tipo=MessageType.TEXTO,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(sys_transfer_msg)
+
+                ai_output = {
+                    "resposta": f"Perfeito! Já encaminhei o seu chamado para a nossa equipe de *{target_wn.nome_departamento}*. Um de nossos especialistas dará continuidade em instantes!",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": True,
+                    "nova_memoria": f"Cliente confirmou transferência para {target_wn.nome_departamento} | Assunto: {intent_sum}"
+                }
+                transfer_executed = True
+
+        if not transfer_executed:
+            dept_dicts = [
+                {
+                    "id": wn_item.id,
+                    "nome": wn_item.nome_departamento,
+                    "descricao": wn_item.descricao_roteamento or ""
+                }
+                for wn_item in all_wns
+            ]
+
+            routing_decision = await gemini_service.evaluate_department_routing(
+                customer_name=contact.nome or "Cliente",
+                current_department_name=whatsapp_number.nome_departamento,
+                user_message=text_content,
+                conversation_history=history,
+                departments=dept_dicts,
+                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+            )
+
+            needs_tr = routing_decision.get("needs_transfer", False)
+            target_dept_id = routing_decision.get("target_department_id")
+            conf_score = float(routing_decision.get("confidence", 0.0))
+            intent_summary = routing_decision.get("customer_intent_summary", "")
+
+            target_wn = next((w for w in all_wns if w.id == target_dept_id), None) if target_dept_id else None
+
+            if needs_tr and target_wn and target_wn.id != whatsapp_number.id:
+                if conf_score >= 0.85:
+                    logger.info(f"High confidence routing ({conf_score:.2f}) -> Direct transfer to {target_wn.nome_departamento}")
+                    old_dept_name = whatsapp_number.nome_departamento
+                    old_dept_id = whatsapp_number.id
+                    conversation.whatsapp_number_id = target_wn.id
+                    whatsapp_number = target_wn
+                    conversation.assunto_atual = intent_summary
+
+                    tlog = TransferLog(
+                        conversation_id=conversation.id,
+                        de_whatsapp_number_id=old_dept_id,
+                        para_whatsapp_number_id=target_wn.id,
+                        motivo=f"Roteamento automático IA (Confiança {conf_score:.2f}): {intent_summary}",
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(tlog)
+
+                    sys_transfer_msg = Message(
+                        conversation_id=conversation.id,
+                        remetente="sistema",
+                        conteudo=f"🔀 *TRANSFERÊNCIA DE SETOR PELA IA*\nAtendimento redirecionado do setor '{old_dept_name}' para '{target_wn.nome_departamento}'.\nMotivo: {intent_summary}",
+                        tipo=MessageType.TEXTO,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(sys_transfer_msg)
+
+                    ai_output = {
+                        "resposta": f"Com certeza! Identifiquei que a sua solicitação é sobre *{intent_summary}*. Estou transferindo seu atendimento para a nossa equipe de *{target_wn.nome_departamento}*, que já vai te atender.",
+                        "transferir_setor": "NENHUM",
+                        "enviar_localizacao": False,
+                        "enviar_pix": False,
+                        "escalar_humano": True,
+                        "nova_memoria": f"Transferência automática para {target_wn.nome_departamento} | Assunto: {intent_summary}"
+                    }
+                elif conf_score >= 0.40:
+                    logger.info(f"Medium confidence routing ({conf_score:.2f}) -> Asking customer confirmation before transfer to {target_wn.nome_departamento}")
+                    ai_output = {
+                        "resposta": f"Entendi que o seu assunto é sobre *{intent_summary}*, correto? Posso te encaminhar para a nossa equipe de *{target_wn.nome_departamento}*?",
+                        "transferir_setor": "NENHUM",
+                        "enviar_localizacao": False,
+                        "enviar_pix": False,
+                        "escalar_humano": False,
+                        "nova_memoria": f"Aguardando confirmação do cliente para transferir para {target_wn.nome_departamento}"
+                    }
+                    conversation.assunto_atual = f"CONFIRM_TRANSFER:{target_wn.id}:{intent_summary}"
+                else:
+                    ai_output = await gemini_service.generate_concierge_response(
+                        customer_name=contact.nome or "Cliente",
+                        department_name=whatsapp_number.nome_departamento,
+                        user_message=text_content,
+                        conversation_history=history,
+                        memory_summary=memory_summary,
+                        rag_context=rag_context,
+                        available_departments=available_dept_names,
+                        tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                        tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+                    )
+            else:
+                ai_output = await gemini_service.generate_concierge_response(
+                    customer_name=contact.nome or "Cliente",
+                    department_name=whatsapp_number.nome_departamento,
+                    user_message=text_content,
+                    conversation_history=history,
+                    memory_summary=memory_summary,
+                    rag_context=rag_context,
+                    available_departments=available_dept_names,
+                    tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                    tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+                )
 
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
         enviar_localizacao = ai_output.get("enviar_localizacao", False)
         enviar_pix = ai_output.get("enviar_pix", False)
-        escalar_humano = ai_output["escalar_humano"]
-        nova_memoria = ai_output["nova_memoria"]
+        escalar_humano = ai_output.get("escalar_humano", False)
+        nova_memoria = ai_output.get("nova_memoria", "")
 
         # Enforce Pix Payload Appending if AI or customer requested Pix data and details are present
         msg_lower = text_content.lower()

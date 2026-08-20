@@ -31,6 +31,7 @@ from app.services.whatsapp_provider_service import WhatsAppProviderFactory
 from app.services.settings_service import settings_service
 from app.services.gemini_service import gemini_service
 from app.services.evolution_service import evolution_service
+from app.services.protocol_service import generate_daily_protocol
 from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
@@ -179,10 +180,12 @@ async def start_new_conversation(
 
     now = datetime.utcnow()
     if not conv:
+        proto = await generate_daily_protocol(db, current_user.tenant_id)
         conv = Conversation(
             tenant_id=current_user.tenant_id,
             whatsapp_number_id=wn.id,
             contact_id=contact.id,
+            protocol_number=proto,
             status=ConversationStatus.COM_HUMANO,
             assigned_user_id=current_user.id,
             criado_em=now,
@@ -192,6 +195,8 @@ async def start_new_conversation(
         await db.commit()
         await db.refresh(conv)
     else:
+        if not conv.protocol_number or conv.status in [ConversationStatus.ENCERRADA, ConversationStatus.EXPIRADA_POR_INATIVIDADE, ConversationStatus.ENCERRADA_FORA_EXPEDIENTE]:
+            conv.protocol_number = await generate_daily_protocol(db, current_user.tenant_id)
         conv.status = ConversationStatus.COM_HUMANO
         conv.assigned_user_id = current_user.id
         conv.ultima_interacao_em = now
