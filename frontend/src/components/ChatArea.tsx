@@ -744,8 +744,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         justifyContent: 'space-between',
         alignItems: 'center',
         gap: '12px',
-        overflowX: 'auto',
-        overflowY: 'hidden',
+        position: 'relative',
+        zIndex: 100,
+        overflow: 'visible',
         whiteSpace: 'nowrap',
         flexShrink: 0
       }}>
@@ -919,55 +920,68 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </button>
 
               {showThreadDropdown && (
-                <div style={{
-                  position: 'absolute',
-                  top: '110%',
-                  right: 0,
-                  backgroundColor: '#0f172a',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
-                  zIndex: 500,
-                  minWidth: '260px',
-                  overflow: 'hidden'
-                }}>
-                  <div style={{ padding: '8px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
-                    Conversas do Cliente ({contactConversations.length}):
-                  </div>
-                  {contactConversations.map(c => {
-                    const isCurrent = c.id === conversation.id;
-                    return (
-                      <div
-                        key={c.id}
-                        onClick={() => {
-                          onSelectConversation(c);
-                          setShowThreadDropdown(false);
-                        }}
-                        style={{
-                          padding: '8px 12px',
-                          backgroundColor: isCurrent ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
-                          borderBottom: '1px solid rgba(255,255,255,0.05)',
-                          cursor: 'pointer',
-                          display: 'flex',
-                          justify: 'space-between',
-                          alignItems: 'center'
-                        }}
-                      >
-                        <div>
-                          <div style={{ fontSize: '11px', fontWeight: '600', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-main)' }}>
-                            Chamado #{c.id} • {c.whatsapp_number?.nome_departamento || 'Geral'}
+                <>
+                  <div
+                    onClick={() => setShowThreadDropdown(false)}
+                    style={{
+                      position: 'fixed',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      zIndex: 999
+                    }}
+                  />
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    backgroundColor: '#0f172a',
+                    border: '1px solid rgba(0, 230, 153, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
+                    zIndex: 1000,
+                    minWidth: '260px',
+                    overflow: 'hidden'
+                  }}>
+                    <div style={{ padding: '8px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
+                      Conversas do Cliente ({contactConversations.length}):
+                    </div>
+                    {contactConversations.map(c => {
+                      const isCurrent = c.id === conversation.id;
+                      return (
+                        <div
+                          key={c.id}
+                          onClick={() => {
+                            onSelectConversation(c);
+                            setShowThreadDropdown(false);
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            backgroundColor: isCurrent ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+                            borderBottom: '1px solid rgba(255,255,255,0.05)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontSize: '11px', fontWeight: '600', color: isCurrent ? 'var(--accent-primary)' : 'var(--text-main)' }}>
+                              Chamado #{c.id} • {c.whatsapp_number?.nome_departamento || 'Geral'}
+                            </div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                              {formatTime(c.ultima_interacao_em)}
+                            </div>
                           </div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                            {formatTime(c.ultima_interacao_em)}
-                          </div>
+                          <span className={`badge badge-${c.status}`} style={{ fontSize: '9px', padding: '2px 6px' }}>
+                            {c.status.replace('_', ' ')}
+                          </span>
                         </div>
-                        <span className={`badge badge-${c.status}`} style={{ fontSize: '9px', padding: '2px 6px' }}>
-                          {c.status.replace('_', ' ')}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1063,87 +1077,100 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
 
             {showMoreMenu && (
-              <div style={{
-                position: 'absolute',
-                top: '110%',
-                right: 0,
-                backgroundColor: '#0f172a',
-                border: '1px solid var(--border-color)',
-                borderRadius: 'var(--radius-md)',
-                boxShadow: '0 12px 28px rgba(0,0,0,0.7)',
-                zIndex: 500,
-                minWidth: '200px',
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-                padding: '4px 0'
-              }}>
-                <button
-                  onClick={() => {
-                    backupFileInputRef.current?.click();
-                    setShowMoreMenu(false);
-                  }}
-                  disabled={isImportingBackup}
+              <>
+                <div
+                  onClick={() => setShowMoreMenu(false)}
                   style={{
-                    padding: '8px 12px',
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-main)',
-                    fontSize: '12px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 999
                   }}
-                >
-                  <Upload size={14} /> {isImportingBackup ? 'Importando...' : 'Importar Backup'}
-                </button>
+                />
+                <div style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 6px)',
+                  right: 0,
+                  backgroundColor: '#0f172a',
+                  border: '1px solid rgba(0, 230, 153, 0.3)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
+                  zIndex: 1000,
+                  minWidth: '200px',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '4px 0'
+                }}>
+                  <button
+                    onClick={() => {
+                      backupFileInputRef.current?.click();
+                      setShowMoreMenu(false);
+                    }}
+                    disabled={isImportingBackup}
+                    style={{
+                      padding: '8px 12px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-main)',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <Upload size={14} /> {isImportingBackup ? 'Importando...' : 'Importar Backup'}
+                  </button>
 
-                <button
-                  onClick={() => {
-                    handleSyncHistory();
-                    setShowMoreMenu(false);
-                  }}
-                  disabled={isSyncingHistory}
-                  style={{
-                    padding: '8px 12px',
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-main)',
-                    fontSize: '12px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px'
-                  }}
-                >
-                  <RefreshCw size={14} /> {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
-                </button>
+                  <button
+                    onClick={() => {
+                      handleSyncHistory();
+                      setShowMoreMenu(false);
+                    }}
+                    disabled={isSyncingHistory}
+                    style={{
+                      padding: '8px 12px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-main)',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}
+                  >
+                    <RefreshCw size={14} /> {isSyncingHistory ? 'Sincronizando...' : 'Histórico WA'}
+                  </button>
 
-                <button
-                  onClick={() => {
-                    onOpenTransferModal();
-                    setShowMoreMenu(false);
-                  }}
-                  style={{
-                    padding: '8px 12px',
-                    background: 'none',
-                    border: 'none',
-                    color: 'var(--text-main)',
-                    fontSize: '12px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    borderTop: '1px solid rgba(255,255,255,0.05)'
-                  }}
-                >
-                  <ArrowRightLeft size={14} /> Transferir
-                </button>
-              </div>
+                  <button
+                    onClick={() => {
+                      onOpenTransferModal();
+                      setShowMoreMenu(false);
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      background: 'none',
+                      border: 'none',
+                      color: 'var(--text-main)',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      borderTop: '1px solid rgba(255,255,255,0.05)'
+                    }}
+                  >
+                    <ArrowRightLeft size={14} /> Transferir
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
