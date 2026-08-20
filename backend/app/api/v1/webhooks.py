@@ -124,15 +124,16 @@ async def receive_evolution_webhook(
     
     # Deduplicate incoming webhooks (Evolution API sends duplicate events for same msg_id)
     if msg_id:
+        dedup_key = f"{event_type}_{msg_id}"
         now_ts = datetime.utcnow().timestamp()
         # Clean cache older than 60s
         to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if now_ts - ts > 60]
         for k in to_del:
             del SEEN_WEBHOOK_KEYS[k]
-        if msg_id in SEEN_WEBHOOK_KEYS:
-            logger.info(f"Ignoring duplicate webhook for msg_id '{msg_id}'")
+        if dedup_key in SEEN_WEBHOOK_KEYS:
+            logger.info(f"Ignoring duplicate webhook for key '{dedup_key}'")
             return {"status": "ignored", "reason": "Duplicate webhook payload"}
-        SEEN_WEBHOOK_KEYS[msg_id] = now_ts
+        SEEN_WEBHOOK_KEYS[dedup_key] = now_ts
 
     # Handle QRCODE_UPDATED event to cache QR code in real-time
     if event_type in ["qrcode.updated", "qrcode_updated", "qrcode"]:
@@ -430,7 +431,7 @@ async def receive_evolution_webhook(
 
     tenant_id = whatsapp_number.tenant_id
 
-    # 2. Get or Create Contact (matching exact phone or normalized variant)
+    # 2. Get or Create Contact (matching exact phone, 8/9 digit variants or suffix match)
     phone_variants = [phone_number]
     if len(phone_number) == 13 and phone_number.startswith("55"):
         # e.g., 55 61 9 8334 8333 -> variant without extra 9: 55 61 8334 8333
@@ -439,11 +440,19 @@ async def receive_evolution_webhook(
         # e.g., 55 61 8334 8333 -> variant with 9: 55 61 9 8334 8333
         phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
 
-    contact_stmt = select(Contact).where(
-        Contact.tenant_id == tenant_id,
-        Contact.telefone.in_(phone_variants)
-    )
+    if len(phone_number) >= 8 and not is_group:
+        contact_stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            (Contact.telefone.in_(phone_variants) | Contact.telefone.like(f"%{phone_number[-8:]}%"))
+        )
+    else:
+        contact_stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.telefone.in_(phone_variants)
+        )
     contact_res = await db.execute(contact_stmt)
+    contact = contact_res.scalars().first()
+
     profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
 
     # If message is from a WhatsApp Group, fetch official group subject / title
@@ -510,7 +519,8 @@ async def receive_evolution_webhook(
         conversation = any_conv_res.scalars().first()
 
         if conversation:
-            conversation.status = ConversationStatus.COM_IA
+            if conversation.status == ConversationStatus.EXPIRADA_POR_INATIVIDADE:
+                conversation.status = ConversationStatus.COM_IA
             conversation.whatsapp_number_id = whatsapp_number.id
         else:
             conversation = Conversation(
