@@ -31,9 +31,8 @@ class GeminiService:
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Evaluates the customer intent against explicit department boundaries defined in Seção 0.
-        Resolves boundary ambiguities (e.g. rented machine defect -> Locação, bought machine defect -> Assistência Técnica,
-        rental payment/extension -> Locação, overdue general invoice -> Financeiro, new product purchase -> Vendas).
+        Evaluates customer intent against explicit department boundaries defined in Seção 0.
+        Calculates dynamic confidence score (0.0 to 1.0) and handles out-of-scope fallback safely.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
@@ -44,7 +43,7 @@ class GeminiService:
         ])
 
         system_instruction = (
-            "Você é o Especialista de Triagem e Roteamento de Atendimento da empresa Servweld.\n"
+            "Você é o Especialista de Triagem e Roteamento de Atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência e Locação).\n"
             "Sua única função é classificar a real necessidade do cliente e determinar com máxima precisão o departamento correto.\n\n"
             "DIRETRIZES DE FRONTEIRA ENTRE DEPARTAMENTOS (SEÇÃO 0 - REGRAS DE NEGÓCIO GLOBAIS):\n\n"
             f"{dept_descriptions_text}\n\n"
@@ -57,8 +56,15 @@ class GeminiService:
             "   - Se o cliente tratar de boletos bancários vencidos, notas fiscais, cobrança de dívidas gerais, estorno ou comprovante de pagamento de compras -> Destino OBRIGATÓRIO: 'Financeiro'.\n"
             "3. VENDAS vs OUTROS:\n"
             "   - Orçamentos de produtos novos, cotação de preços de venda, estoque de itens novos, compra de novos equipamentos -> Destino OBRIGATÓRIO: 'Vendas e E-commerce'.\n"
-            "4. MANUTENÇÃO NO SETOR ATUAL:\n"
-            "   - Se o cliente já estiver no setor correto para a sua dúvida, mantenha 'needs_transfer': false."
+            "4. FORA DO ESCOPO OU MENSAGEM VAGA (REGRA DE FALLBACK / NÃO-FORÇAR DEPARTAMENTO):\n"
+            "   - Se a mensagem do cliente NÃO tiver relação com produtos/serviços de solda, locação, assistência ou financeiro da empresa (ex: pedir comida, perguntar sobre outros assuntos, trânsito, piadas) OU for apenas uma saudação genérica vaga (ex: 'oi', 'bom dia') que ainda não revela a necessidade:\n"
+            "     * NÃO force nenhum departamento!\n"
+            "     * Defina: target_department_id = null, target_department_name = 'NENHUM', needs_transfer = false, requires_clarification = true, confidence = 0.0 a 0.3.\n\n"
+            "CALIBRAÇÃO DINÂMICA DO CAMPO 'confidence' (NÃO USE VALOR FIXO):\n"
+            "- 0.90 a 1.00: Intenção cristalina, explícita e inequívoca com termos diretos do setor.\n"
+            "- 0.60 a 0.89: Intenção provável, mas com detalhes parciais ou ligeira ambiguidade contextual.\n"
+            "- 0.20 a 0.59: Muito vaga, incompleta ou com sinais contraditórios.\n"
+            "- 0.00: Totalmente fora do escopo do negócio ou irrelevante."
         )
 
         messages_text = []
@@ -75,12 +81,13 @@ class GeminiService:
             "Responda ESTRITAMENTE em formato JSON com o seguinte schema:\n"
             "```json\n"
             "{\n"
-            '  "target_department_id": <int>,\n'
-            '  "target_department_name": "<NomeExatoDoSetor>",\n'
+            '  "target_department_id": <int ou null>,\n'
+            '  "target_department_name": "<NomeExatoDoSetor ou NENHUM>",\n'
             '  "needs_transfer": <true ou false>,\n'
-            '  "confidence": <float de 0.0 a 1.0>,\n'
-            '  "reason": "<justificativa concisa da fronteira de regras de negocio>",\n'
-            '  "customer_intent_summary": "<resumo da necessidade do cliente em 1 frase>"\n'
+            '  "requires_clarification": <true ou false>,\n'
+            '  "confidence": <float real calculado entre 0.0 e 1.0>,\n'
+            '  "reason": "<justificativa concisa baseada nas regras>",\n'
+            '  "customer_intent_summary": "<resumo da necessidade em 1 frase>"\n'
             "}\n"
             "```"
         )
@@ -90,16 +97,16 @@ class GeminiService:
                 "target_department_id": None,
                 "target_department_name": current_department_name,
                 "needs_transfer": False,
+                "requires_clarification": False,
                 "confidence": 0.0,
                 "reason": "Sem cliente Gemini configurado.",
                 "customer_intent_summary": user_message
             }
 
         models_to_try = [primary_model]
-        if "gemini-2.5-flash" not in models_to_try:
-            models_to_try.append("gemini-2.5-flash")
-        if "gemini-1.5-flash" not in models_to_try:
-            models_to_try.append("gemini-1.5-flash")
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
 
         last_error = None
         for m_name in models_to_try:
@@ -123,17 +130,24 @@ class GeminiService:
                     else:
                         raise ValueError(f"No JSON found in response: {raw_text}")
 
-                # Match target department ID if not exact
-                t_name = parsed.get("target_department_name", "").lower()
-                for d in departments:
-                    d_name = (d.get("nome_departamento") or d.get("nome") or "").lower()
-                    if d_name in t_name or t_name in d_name:
-                        parsed["target_department_id"] = d.get("id")
-                        parsed["target_department_name"] = d.get("nome_departamento") or d.get("nome")
-                        break
+                # Ensure confidence is float
+                parsed["confidence"] = float(parsed.get("confidence", 0.0))
 
-                if current_department_name.lower() in parsed.get("target_department_name", "").lower():
+                t_name = str(parsed.get("target_department_name", "")).lower()
+                if t_name in ("nenhum", "null", "none", "") or parsed.get("target_department_id") is None:
+                    parsed["target_department_id"] = None
+                    parsed["target_department_name"] = "NENHUM"
                     parsed["needs_transfer"] = False
+                else:
+                    for d in departments:
+                        d_name = (d.get("nome_departamento") or d.get("nome") or "").lower()
+                        if d_name in t_name or t_name in d_name:
+                            parsed["target_department_id"] = d.get("id")
+                            parsed["target_department_name"] = d.get("nome_departamento") or d.get("nome")
+                            break
+
+                    if current_department_name.lower() in str(parsed.get("target_department_name", "")).lower():
+                        parsed["needs_transfer"] = False
 
                 return parsed
             except Exception as e:
@@ -146,6 +160,7 @@ class GeminiService:
             "target_department_id": None,
             "target_department_name": current_department_name,
             "needs_transfer": False,
+            "requires_clarification": True,
             "confidence": 0.0,
             "reason": f"Erro de roteamento: {last_error}",
             "customer_intent_summary": user_message
@@ -165,10 +180,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Generates concierge response using tenant's dynamically configured Gemini API key and Model Name from DB.
-        Zero hardcoded model strings. Injects department boundaries from Seção 0.
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
 
@@ -189,34 +200,17 @@ class GeminiService:
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
             "2. ANÁLISE DE HISTÓRICO ANTERIOR E MESMO ASSUNTO (LEITURA NOS BASTIDORES):\n"
             "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' fornecido abaixo.\n"
-            "   - MESMO ASSUNTO: Se a nova mensagem do cliente indicar continuidade do MESMO assunto ou problema tratado na conversa anterior (ex: citar a mesma nota, contrato, produto ou chamado), RECONHEÇA IMEDIATAMENTE O HISTÓRICO ANTERIOR sem pedir para ele repetir tudo (ex: 'Olá novamente, Sr. Fernando! Vejo que você quer dar continuidade ao assunto sobre a nota X. Como posso te ajudar a resolver isso agora?').\n"
+            "   - MESMO ASSUNTO: Se a nova mensagem do cliente indicar continuidade do MESMO assunto ou problema tratado na conversa anterior (ex: citar a mesma nota, contrato, produto ou chamado), RECONHEÇA IMEDIATAMENTE O HISTÓRICO ANTERIOR sem pedir para ele repetir tudo.\n"
             "   - NOVO ASSUNTO OU SAUDAÇÃO GERAL: Se a nova mensagem for sobre um assunto DIFERENTE ou uma nova saudação geral (ex: 'Bom dia'), faça a recepção inicial normal e solicite as informações necessárias em bloco de uma só vez.\n"
-            "3. COLETA DE INFORMAÇÕES EM BLOCO: Para novos assuntos, solicite as informações chaves de uma só vez para não fazer micro-perguntas em loop.\n"
-            "4. TROCA DE SETOR SEM ENCERRAMENTO PRECIPITADO: Se o cliente necessitar de outro setor com base nas fronteiras (ex: problema em máquina alugada -> Locação; dúvida de boleto -> Financeiro), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeExatoDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
+            "3. FORA DO ESCOPO: Se o cliente fizer perguntas totalmente desconexas com a empresa (ex: 'Vocês vendem pizza?'), esclareça gentilmente os serviços e produtos que a Servweld atende (equipamentos de solda, corte, assistência, locação e financeiro).\n"
+            "4. TROCA DE SETOR: Se o cliente necessitar de outro setor com base nas fronteiras (ex: problema em máquina alugada -> Locação; dúvida de boleto -> Financeiro), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeExatoDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
             "5. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano, PERGUNTE PRIMEIRO:\n"
             "   'Antes de te encaminhar para o especialista humano do setor, teria mais alguma informação ou detalhe que você gostaria de acrescentar ao seu chamado?'\n"
-            "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final:\n"
-            "   'Perfeito! Coletei todas as suas informações e seu chamado foi encaminhado para o atendente especialista do setor [Setor]. Ele responderá em breve por aqui com a solução. Obrigado!'\n"
-            "   E defina obrigatoriamente 'ESCALAR_HUMANO: SIM'.\n"
+            "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final e defina 'ESCALAR_HUMANO: SIM'.\n"
             "7. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
-            "8. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço, localização ou como chegar à loja, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'. Caso contrário, defina 'ENVIAR_LOCALIZACAO: NAO'.\n"
-            "9. ENDEREÇO OFICIAL DA SERVWELD: O único endereço oficial da empresa Servweld / Servsolda é 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS exatas: Latitude -15.820418, Longitude -47.956467. É PROIBIDO inventar ou citar qualquer outro nome de rua ou endereço hipotético.\n"
-            "10. FLUXO OBRIGATÓRIO DE PAGAMENTO VIA PIX DA LOJA SERVWELD:\n"
-            "    a) SOLICITAÇÃO DE PIX SEM DETALHES: Se o cliente pedir o Pix da loja ou perguntar como pagar, MAS AINDA NÃO INFORMOU do que se trata (número da nota fiscal, pedido, orçamento ou serviço) OU o valor a pagar:\n"
-            "       - PERGUNTE DE FORMA EMPÁTICA E OBJETIVA:\n"
-            "         'Com certeza! Para eu te enviar os dados do Pix da Servweld, por favor me informe: 1) Do que se trata o pagamento (número da nota fiscal, pedido, orçamento ou serviço)? 2) Qual é o valor exato a ser pago?'\n"
-            "       - MANTENHA 'ESCALAR_HUMANO: NAO'.\n"
-            "    b) ENVIO DOS DADOS DO PIX (QUANDO DETALHES FOREM FORNECIDOS): Se o cliente já informou do que se trata (ex: Nota 123, Serviço de solda, Pedido) E/OU o valor (ex: R$ 150,00):\n"
-            "       - FORNEÇA IMEDIATAMENTE os dados oficiais de pagamento da Servweld:\n"
-            "         🏢 *Favorecido:* Servweld / Servsolda Equipamentos e Serviços Ltda\n"
-            "         🆔 *Chave Pix CNPJ:* 54.804.458/0001-22 (Chave Limpa: 54804458000122)\n"
-            "         📋 *Pix Copia e Cola:* 00020126360014br.gov.bcb.pix0114548044580001225204000053039865802BR5914SERVWELD SOLDA6008BRASILIA62070503***6304E6FC\n"
-            "       - Peça para ele enviar o comprovante de pagamento neste chat após concluir a transferência.\n"
-            "    c) ENVIO DO COMPROVANTE PELO CLIENTE OU NOTIFICAÇÃO DE PAGAMENTO CONCLUÍDO:\n"
-            "       - Quando o cliente enviar uma imagem/comprovante ou avisar que já pagou/enviou o comprovante:\n"
-            "       - RESPONDA: 'Agradeço pelo envio do comprovante! Recebi o registro de pagamento ref. ao [Assunto/Nota/Serviço] no valor de [Valor]. Estou transferindo agora para a nossa equipe do setor Financeiro conferir e baixar o seu título.'\n"
-            "       - DEFINA OBRIGATORIAMENTE 'ESCALAR_HUMANO: SIM'.\n"
-            "       - ESCREVA EM 'NOVA_MEMORIA': '📌 COMPROVANTE DE PIX RECEBIDO DO CLIENTE | Assunto/Nota: [Assunto/Nota] | Valor: [Valor] | Comprovante em anexo no chat para conferência do atendente.'\n\n"
+            "8. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço ou localização, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'.\n"
+            "9. ENDEREÇO OFICIAL DA SERVWELD: 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS: Latitude -15.820418, Longitude -47.956467.\n"
+            "10. FLUXO DE PAGAMENTO VIA PIX: Se o cliente pedir Pix, pergunte a nota/assunto e valor antes de enviar os dados oficiais CNPJ 54.804.458/0001-22.\n\n"
             f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}\n\n"
             f"HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA:\n{memory_summary or 'Nenhum histórico anterior.'}\n\n"
             f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}"
@@ -341,10 +335,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
-        """
-        Transcribes and understands incoming voice audio messages from customers using Gemini Multimodal SDK.
-        Returns the exact transcribed spoken text.
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
 
@@ -385,10 +375,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
-        """
-        Generates a structured executive AI summary of the entire conversation for seamless transfer
-        to a new attendant or department.
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
 
