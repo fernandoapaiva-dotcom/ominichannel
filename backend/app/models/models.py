@@ -140,6 +140,7 @@ class Conversation(Base):
     status: Mapped[ConversationStatus] = mapped_column(Enum(ConversationStatus), default=ConversationStatus.COM_IA, index=True)
     assigned_user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     assunto_atual: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    dados_adicionais: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=dict, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     ultima_interacao_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

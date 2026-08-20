@@ -700,6 +700,71 @@ async def receive_evolution_webhook(
                 ConversationStatus.EXPIRADA_POR_INATIVIDADE,
                 ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
             ]:
+                # CSAT Recognition: Check if customer is answering the satisfaction survey (1 to 5)
+                clean_txt = (text_content or "").strip()
+                csat_match = re.match(r"^(?:nota\s*)?([1-5])(?:\s*(?:estrelas?|⭐))?$", clean_txt, re.IGNORECASE)
+                
+                sorted_msgs = sorted(conversation.messages or [], key=lambda m: m.timestamp or datetime.min)
+                had_csat_survey = any("Como você avalia" in (m.conteudo or "") or "Pesquisa" in (m.conteudo or "") or "Atendimento Finalizado" in (m.conteudo or "") for m in sorted_msgs[-4:]) if sorted_msgs else False
+
+                if csat_match or (had_csat_survey and clean_txt in ["1", "2", "3", "4", "5"]):
+                    score = int(csat_match.group(1)) if csat_match else int(clean_txt)
+                    extra = dict(conversation.dados_adicionais or {})
+                    extra["csat_score"] = score
+                    extra["csat_received_at"] = datetime.utcnow().isoformat()
+                    conversation.dados_adicionais = extra
+                    
+                    # Record the customer's CSAT score message in chat
+                    user_msg = Message(
+                        conversation_id=conversation.id,
+                        remetente=MessageSender.CLIENTE,
+                        conteudo=text_content,
+                        tipo=msg_type,
+                        status="read",
+                        whatsapp_msg_id=msg_id if msg_id else None,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(user_msg)
+
+                    # Add system confirmation message in chat
+                    sys_msg = Message(
+                        conversation_id=conversation.id,
+                        remetente="sistema",
+                        conteudo=f"⭐ Nota de Satisfação CSAT registrada: {score}/5 estrelas.",
+                        tipo=MessageType.TEXTO,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(sys_msg)
+                    await db.commit()
+
+                    # Send thank-you message back on WhatsApp without reopening conversation
+                    if whatsapp_number and whatsapp_number.instancia_evolution_api:
+                        try:
+                            await evolution_service.send_text_message(
+                                instance_name=whatsapp_number.instancia_evolution_api,
+                                number=phone_number,
+                                text=f"🙏 Agradecemos pela sua avaliação ({score}/5 estrelas)! Sua opinião nos ajuda a melhorar nossos serviços continuamente."
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to send CSAT thank you: {e}")
+
+                    # Broadcast WS update
+                    await ws_manager.broadcast_to_department(
+                        tenant_id=tenant_id,
+                        whatsapp_number_id=whatsapp_number.id,
+                        message_data={
+                            "type": "CSAT_RECEIVED",
+                            "conversation_id": conversation.id,
+                            "score": score
+                        }
+                    )
+
+                    return {
+                        "status": "success",
+                        "message": f"CSAT score {score} recorded successfully without reopening conversation."
+                    }
+
+                # Otherwise, customer sent a new message -> reopen conversation with new protocol
                 conversation.status = ConversationStatus.COM_IA
                 conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
             conversation.whatsapp_number_id = whatsapp_number.id
