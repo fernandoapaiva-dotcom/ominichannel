@@ -1194,19 +1194,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {conversation.resumo_ia && (
         <div style={{
           padding: '12px 20px',
-          backgroundColor: 'rgba(234, 179, 8, 0.12)',
-          borderBottom: '1px solid rgba(234, 179, 8, 0.3)',
+          backgroundColor: 'rgba(245, 158, 11, 0.12)',
+          borderBottom: '1px solid rgba(245, 158, 11, 0.3)',
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
-          color: '#facc15'
         }}>
-          <Bot size={22} style={{ color: '#facc15', flexShrink: 0 }} />
+          <Bot size={22} style={{ color: '#d97706', flexShrink: 0 }} />
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+            <div style={{ fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px', color: '#d97706' }}>
               📌 Resumo da Transferência da IA:
             </div>
-            <div style={{ fontSize: '13px', color: '#ffffff', lineHeight: '1.4' }}>
+            <div style={{ fontSize: '13px', color: 'var(--text-main)', lineHeight: '1.5', fontWeight: '500' }}>
               {conversation.resumo_ia}
             </div>
           </div>
