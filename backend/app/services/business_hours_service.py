@@ -204,15 +204,105 @@ class BusinessHoursService:
 
         return {"status": "success", "closed_conversations": closed_count}
 
+    @staticmethod
+    def get_shift_opening_message(protocol_number: str) -> str:
+        """
+        Returns the shift reopening message sent at 08:00 on business days.
+        """
+        return (
+            f"🌅 *INÍCIO DO EXPEDIENTE COMERCIAL (08:00)*\n\n"
+            f"Bom dia! Nosso expediente comercial foi iniciado.\n\n"
+            f"Estamos retomando o seu atendimento (Protocolo: {protocol_number}) agora mesmo com prioridade na nossa fila. Um de nossos especialistas entrará em contato em instantes!"
+        )
+
+    async def execute_08h_shift_opening_job(self) -> Dict[str, Any]:
+        """
+        Job das 08:00 (Horário de Brasília):
+        - Scans conversations in ENCERRADA_FORA_EXPEDIENTE.
+        - Automatically reopens them into AGUARDANDO_ATENDENTE.
+        - Dispatches morning resumption notice to customer on WhatsApp.
+        - Adds system audit message in timeline.
+        - Drains pending queue via distribution_service.
+        """
+        from app.services.distribution_service import distribution_service
+        now_br = self.get_brasilia_now()
+        logger.info(f"[JOB 08:00] Retomando atendimentos pausados da noite anterior ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
+
+        reopened_count = 0
+        async with AsyncSessionLocal() as db:
+            try:
+                stmt = (
+                    select(Conversation)
+                    .options(
+                        selectinload(Conversation.contact),
+                        selectinload(Conversation.whatsapp_number)
+                    )
+                    .where(
+                        Conversation.status == ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
+                    )
+                )
+                res = await db.execute(stmt)
+                convs = res.scalars().all()
+
+                for conv in convs:
+                    proto = conv.protocol_number or "S/N"
+                    morning_text = self.get_shift_opening_message(proto)
+
+                    # 1. Send WhatsApp message
+                    if conv.contact and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+                        try:
+                            await evolution_service.send_text_message(
+                                instance_name=conv.whatsapp_number.instancia_evolution_api,
+                                number=conv.contact.telefone,
+                                text=morning_text
+                            )
+                        except Exception as send_err:
+                            logger.warning(f"Error sending 08h resumption message to #{conv.id}: {send_err}")
+
+                    # 2. Add System Message
+                    sys_msg = Message(
+                        conversation_id=conv.id,
+                        remetente="sistema",
+                        conteudo=f"🌅 Atendimento retomado automaticamente pelo início de expediente comercial das 08:00 (Horário de Brasília).",
+                        tipo=MessageType.TEXTO,
+                        timestamp=datetime.utcnow()
+                    )
+                    db.add(sys_msg)
+
+                    # 3. Put in AGUARDANDO_ATENDENTE
+                    conv.status = ConversationStatus.AGUARDANDO_ATENDENTE
+                    conv.assigned_user_id = None
+                    conv.ultima_interacao_em = datetime.utcnow()
+                    reopened_count += 1
+
+                await db.commit()
+
+                # 4. Drain and auto-assign pending queue across tenants/departments
+                departments_stmt = select(WhatsAppNumber.tenant_id, WhatsAppNumber.id).where(WhatsAppNumber.status == True)
+                d_res = await db.execute(departments_stmt)
+                for t_id, wn_id in d_res.all():
+                    try:
+                        await distribution_service.process_pending_queue(db, t_id, wn_id)
+                    except Exception:
+                        pass
+
+                logger.info(f"[JOB 08:00] Concluído com sucesso! {reopened_count} atendimentos retomados e enfileirados.")
+            except Exception as e:
+                logger.error(f"[JOB 08:00] Erro ao executar job das 08:00: {e}")
+
+        return {"status": "success", "reopened_conversations": reopened_count}
+
 business_hours_service = BusinessHoursService()
 
 async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
     """
     Continuous background loop that checks Brasília time (America/Sao_Paulo).
-    Exactly at 18:00 on business days (Mon-Fri), triggers the 18:00 shift closing job.
+    - Exactly at 08:00 on business days (Mon-Fri), triggers the 08:00 shift opening resumption job.
+    - Exactly at 18:00 on business days (Mon-Fri), triggers the 18:00 shift closing job.
     """
-    last_executed_date: Optional[str] = None
-    logger.info("Business hours 18:00 shift closing scheduler background loop started.")
+    last_executed_18h: Optional[str] = None
+    last_executed_08h: Optional[str] = None
+    logger.info("Business hours (08:00 / 18:00) scheduler background loop started.")
 
     while True:
         try:
@@ -220,14 +310,23 @@ async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
             today_str = now_br.strftime("%Y-%m-%d")
             weekday = now_br.weekday()  # 0=Mon ... 4=Fri (Sat=5, Sun=6)
 
-            # Only execute on business days (Mon-Fri) at 18:00
-            if weekday < 5 and now_br.hour == 18 and now_br.minute == 0:
-                if last_executed_date != today_str:
-                    logger.info(f"[SCHEDULER 18:00] Triggering 18:00 shift closing job for date {today_str} (Brasília time)...")
-                    await business_hours_service.execute_18h_shift_closing_job()
-                    last_executed_date = today_str
+            if weekday < 5:
+                # 08:00 Morning Resumption Job
+                if now_br.hour == 8 and now_br.minute == 0:
+                    if last_executed_08h != today_str:
+                        logger.info(f"[SCHEDULER 08:00] Triggering 08:00 morning shift opening job for {today_str}...")
+                        await business_hours_service.execute_08h_shift_opening_job()
+                        last_executed_08h = today_str
+
+                # 18:00 Evening Shift Closing Job
+                if now_br.hour == 18 and now_br.minute == 0:
+                    if last_executed_18h != today_str:
+                        logger.info(f"[SCHEDULER 18:00] Triggering 18:00 evening shift closing job for {today_str}...")
+                        await business_hours_service.execute_18h_shift_closing_job()
+                        last_executed_18h = today_str
         except Exception as e:
             logger.error(f"Error in business hours scheduler loop: {e}")
 
         await asyncio.sleep(check_interval_seconds)
+
 
