@@ -396,16 +396,24 @@ class GeminiService:
         mime_type: str = "audio/ogg",
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
-    ) -> str:
+    ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
 
-        if not client or not audio_bytes:
-            return ""
+        if not client or not audio_bytes or len(audio_bytes) < 50:
+            return {
+                "transcription": "",
+                "success": False,
+                "fallback_message": "Não consegui compreender o áudio. Você poderia enviar sua mensagem por escrito ou gravar um novo áudio?",
+                "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+            }
 
         from google.genai import types
 
-        prompt = "Ouça atentamente a esta mensagem de áudio em português enviada pelo cliente no WhatsApp e faça a transcrição exata e literal do texto falado, sem adicionar comentários ou introdução."
+        prompt = (
+            "Ouça atentamente este áudio em português enviado no WhatsApp. "
+            "Transcreva exatamente o que foi falado pelo cliente, sem introduções ou comentários."
+        )
 
         part = types.Part.from_bytes(
             data=audio_bytes,
@@ -413,8 +421,9 @@ class GeminiService:
         )
 
         models_to_try = [primary_model]
-        if "gemini-2.5-flash" not in models_to_try:
-            models_to_try.append("gemini-2.5-flash")
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
 
         for m_name in models_to_try:
             try:
@@ -423,12 +432,168 @@ class GeminiService:
                     model=m_name,
                     contents=[part, prompt]
                 )
-                return response.text.strip() if response and response.text else ""
+                text_out = response.text.strip() if response and response.text else ""
+                usage = getattr(response, "usage_metadata", None)
+                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+
+                if text_out:
+                    return {
+                        "transcription": text_out,
+                        "success": True,
+                        "fallback_message": None,
+                        "model_used": m_name,
+                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                    }
             except Exception as e:
                 logger.warning(f"Error processing audio with '{m_name}': {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
-        return ""
+        return {
+            "transcription": "",
+            "success": False,
+            "fallback_message": "Não consegui compreender o áudio com clareza. Você poderia enviar sua mensagem por escrito ou gravar um novo áudio?",
+            "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+        }
+
+    async def process_image_message(
+        self,
+        image_bytes: bytes,
+        mime_type: str = "image/jpeg",
+        context_prompt: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+
+        if not client or not image_bytes or len(image_bytes) < 50:
+            return {
+                "analysis": "",
+                "success": False,
+                "fallback_message": "Não foi possível visualizar a imagem com nitidez. Por favor, envie uma foto mais nítida ou informe os dados por texto.",
+                "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+            }
+
+        from google.genai import types
+
+        prompt = context_prompt or (
+            "Analise esta imagem enviada pelo cliente no WhatsApp da empresa Servweld (equipamentos e serviços de solda).\n"
+            "- Se for um comprovante de pagamento / PIX / nota fiscal: extraia o valor, favorecido, data e status da transação.\n"
+            "- Se for uma foto de máquina, tocha, cabo, peça ou equipamento de solda: descreva o modelo visível e identifique se há defeito aparente, código de erro no display ou desgaste visível.\n"
+            "- Se for uma foto de placa de identificação técnica: extraia a voltagem, amperagem, número de série e modelo."
+        )
+
+        part = types.Part.from_bytes(
+            data=image_bytes,
+            mime_type=mime_type or "image/jpeg"
+        )
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=[part, prompt]
+                )
+                text_out = response.text.strip() if response and response.text else ""
+                usage = getattr(response, "usage_metadata", None)
+                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+
+                if text_out:
+                    return {
+                        "analysis": text_out,
+                        "success": True,
+                        "fallback_message": None,
+                        "model_used": m_name,
+                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                    }
+            except Exception as e:
+                logger.warning(f"Error processing image with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return {
+            "analysis": "",
+            "success": False,
+            "fallback_message": "Não foi possível visualizar a imagem com nitidez. Por favor, envie uma foto mais nítida ou informe os dados por texto.",
+            "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+        }
+
+    async def process_document_message(
+        self,
+        doc_bytes: bytes,
+        mime_type: str = "application/pdf",
+        context_prompt: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+
+        if not client or not doc_bytes or len(doc_bytes) < 30:
+            return {
+                "extracted_content": "",
+                "success": False,
+                "fallback_message": "Não foi possível extrair o conteúdo deste documento PDF. Por favor, reenvie o arquivo ou nos informe os dados por texto.",
+                "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+            }
+
+        from google.genai import types
+
+        prompt = context_prompt or (
+            "Leia e analise o documento PDF em anexo enviado pelo cliente. "
+            "Extraia os principais dados relevantes (número do pedido/fatura/proposta, itens solicitados, valores, especificações técnicas de solda e prazos) de forma clara e estruturada."
+        )
+
+        part = types.Part.from_bytes(
+            data=doc_bytes,
+            mime_type=mime_type or "application/pdf"
+        )
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=[part, prompt]
+                )
+                text_out = response.text.strip() if response and response.text else ""
+                usage = getattr(response, "usage_metadata", None)
+                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
+                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
+                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+
+                if text_out:
+                    return {
+                        "extracted_content": text_out,
+                        "success": True,
+                        "fallback_message": None,
+                        "model_used": m_name,
+                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                    }
+            except Exception as e:
+                logger.warning(f"Error processing document with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return {
+            "extracted_content": "",
+            "success": False,
+            "fallback_message": "Não foi possível extrair o conteúdo deste documento PDF. Por favor, reenvie o arquivo ou nos informe os dados por texto.",
+            "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
+        }
 
     async def generate_onboarding_summary(
         self,
