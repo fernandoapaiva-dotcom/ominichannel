@@ -1269,11 +1269,21 @@ async def receive_evolution_webhook(
 
             logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (least loaded operator).")
 
-            # Create pinned system transfer card
+            # Generate structured Onboarding Summary (Resumo Onde Parou - Seção 2)
+            onboarding_summary = await gemini_service.generate_onboarding_summary(
+                customer_name=contact.nome or "Cliente",
+                protocol_number=conversation.protocol_number or "S/N",
+                department_name=whatsapp_number.nome_departamento,
+                messages_history=history + [{"remetente": "cliente", "conteudo": text_content}],
+                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+            )
+
+            # Create pinned system transfer card with Onboarding Summary
             sys_escalate_msg = Message(
                 conversation_id=conversation.id,
                 remetente="sistema",
-                conteudo=f"📌 *RESUMO DA TRANSFERÊNCIA DA IA:*\n{nova_memoria or memory_summary or 'Cliente solicita atendimento com operador.'}",
+                conteudo=onboarding_summary,
                 tipo=MessageType.TEXTO,
                 timestamp=datetime.utcnow()
             )

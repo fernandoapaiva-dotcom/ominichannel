@@ -427,6 +427,105 @@ class GeminiService:
 
         return ""
 
+    async def generate_onboarding_summary(
+        self,
+        customer_name: str,
+        protocol_number: str,
+        department_name: str,
+        messages_history: List[Dict[str, str]],
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Generates the structured 'Resumo Onde Parou' system onboarding card (Seção 2).
+        Synthesizes customer intent, what was already handled by the AI, and the immediate next recommended action.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
+
+        if not messages_history:
+            return (
+                f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
+                f"👤 *Cliente:* {customer_name}\n"
+                f"🔢 *Protocolo:* {protocol_number}\n"
+                f"🏢 *Departamento:* {department_name}\n"
+                f"🎯 *Motivo do Contato:* Novo chamado iniciado pelo cliente.\n"
+                f"📍 *Onde Parou:* Início do atendimento.\n"
+                f"👉 *Próxima Ação Sugerida:* Enviar saudação inicial e verificar a necessidade do cliente."
+            )
+
+        messages_text = []
+        for m in messages_history:
+            r_raw = str(m.get("remetente", "")).lower()
+            if r_raw == "cliente":
+                remetente = "Cliente"
+            elif r_raw == "ia":
+                remetente = "IA Concierge"
+            elif r_raw == "sistema":
+                remetente = "Sistema"
+            else:
+                remetente = "Atendente"
+
+            conteudo = str(m.get("conteudo", "")).strip()
+            if conteudo:
+                messages_text.append(f"[{remetente}]: {conteudo}")
+
+        prompt = (
+            f"Você é o assistente de IA responsável pelo Onboarding do Atendente Humano da empresa Servweld.\n"
+            f"Analise a conversa real abaixo entre o cliente '{customer_name}' e a IA no setor '{department_name}' (Protocolo: {protocol_number}).\n\n"
+            "Gere um resumo estruturado no seguinte formato exato:\n"
+            f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
+            f"👤 *Cliente:* {customer_name}\n"
+            f"🔢 *Protocolo:* {protocol_number}\n"
+            f"🏢 *Departamento:* {department_name}\n"
+            "🎯 *Motivo do Contato:* <resumo em 1 frase factual sobre o que o cliente quer>\n"
+            "📍 *Onde Parou:* <o que a IA/cliente já falaram antes de passar para o humano>\n"
+            "👉 *Próxima Ação Sugerida:* <orientação prática e direta para o atendente continuar o atendimento sem repetir perguntas já respondidas>\n\n"
+            "REGRAS:\n"
+            "1. Baseie-se ESTRITAMENTE no histórico real. Proibido inventar dados.\n"
+            "2. Seja direto, profissional e objetivo.\n\n"
+            f"HISTÓRICO:\n" + "\n".join(messages_text)
+        )
+
+        if not client:
+            return (
+                f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
+                f"👤 *Cliente:* {customer_name}\n"
+                f"🔢 *Protocolo:* {protocol_number}\n"
+                f"🏢 *Departamento:* {department_name}\n"
+                f"🎯 *Motivo do Contato:* Atendimento transferido para equipe humana.\n"
+                f"📍 *Onde Parou:* Transferência solicitada.\n"
+                f"👉 *Próxima Ação Sugerida:* Verifique a última mensagem do cliente e dê continuidade."
+            )
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                logger.warning(f"Error generating onboarding summary with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return (
+            f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
+            f"👤 *Cliente:* {customer_name}\n"
+            f"🔢 *Protocolo:* {protocol_number}\n"
+            f"🏢 *Departamento:* {department_name}\n"
+            f"🎯 *Motivo do Contato:* Atendimento transferido para operador.\n"
+            f"📍 *Onde Parou:* Transferência efetuada.\n"
+            f"👉 *Próxima Ação Sugerida:* Analise o histórico e responda o cliente."
+        )
+
     async def summarize_conversation_for_transfer(
         self,
         customer_name: str,
