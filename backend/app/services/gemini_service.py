@@ -441,7 +441,7 @@ class GeminiService:
         Synthesizes customer intent, what was already handled by the AI, and the immediate next recommended action.
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
 
         if not messages_history:
             return (
@@ -472,7 +472,7 @@ class GeminiService:
 
         prompt = (
             f"Você é o assistente de IA responsável pelo Onboarding do Atendente Humano da empresa Servweld.\n"
-            f"Analise a conversa real abaixo entre o cliente '{customer_name}' e a IA no setor '{department_name}' (Protocolo: {protocol_number}).\n\n"
+            f"Analise a conversa real abaixo entre o cliente e a IA no setor '{department_name}' (Protocolo: {protocol_number}).\n\n"
             "Gere um resumo estruturado no seguinte formato exato:\n"
             f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
             f"👤 *Cliente:* {customer_name}\n"
@@ -481,10 +481,11 @@ class GeminiService:
             "🎯 *Motivo do Contato:* <resumo em 1 frase factual sobre o que o cliente quer>\n"
             "📍 *Onde Parou:* <o que a IA/cliente já falaram antes de passar para o humano>\n"
             "👉 *Próxima Ação Sugerida:* <orientação prática e direta para o atendente continuar o atendimento sem repetir perguntas já respondidas>\n\n"
-            "REGRAS:\n"
-            "1. Baseie-se ESTRITAMENTE no histórico real. Proibido inventar dados.\n"
-            "2. Seja direto, profissional e objetivo.\n\n"
-            f"HISTÓRICO:\n" + "\n".join(messages_text)
+            "DIRETRIZES ESTRITAS DE FACTUALIDADE E ANTI-ALUCINAÇÃO:\n"
+            f"1. NOME DO CLIENTE: No campo 'Cliente', use EXATAMENTE '{customer_name}'. É PROIBIDO inventar títulos profissionais (Eng., Dr., etc.) ou sobrenomes que não constem expressamente na identificação.\n"
+            "2. BASE EXCLUSIVAMENTE FACTUAL: Use apenas o que foi dito nas mensagens reais. É proibido inventar valores, modelos de equipamentos, marcas ou problemas técnicos adicionais.\n"
+            "3. Seja direto, profissional e objetivo.\n\n"
+            f"HISTÓRICO REAL DA CONVERSA:\n" + "\n".join(messages_text)
         )
 
         if not client:
@@ -499,7 +500,7 @@ class GeminiService:
             )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
