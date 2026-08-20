@@ -102,8 +102,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
-  const [showPixModal, setShowPixModal] = useState(false);
   const [showAvatarZoom, setShowAvatarZoom] = useState(false);
+  const [isConsultingIA, setIsConsultingIA] = useState(false);
+
+  const handleConsultarIA = async () => {
+    if (!conversation?.id || isConsultingIA) return;
+    setIsConsultingIA(true);
+    try {
+      const res = await apiFetch(`/conversations/${conversation.id}/suggest-reply`, {
+        method: 'POST'
+      });
+      if (res && res.suggested_reply) {
+        setInputText(res.suggested_reply);
+      }
+    } catch (err: any) {
+      console.error('Erro ao consultar IA:', err);
+      alert(`Erro ao consultar IA: ${err.message || 'Falha na resposta'}`);
+    } finally {
+      setIsConsultingIA(false);
+    }
+  };
 
   // Edit Contact Name State
   const [isEditingContact, setIsEditingContact] = useState(false);
@@ -2336,6 +2354,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               disabled={isExpired}
               style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
             />
+            <button
+              type="button"
+              onClick={handleConsultarIA}
+              disabled={isExpired || isConsultingIA}
+              className="btn-secondary"
+              style={{
+                padding: '10px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: 'var(--accent-primary)',
+                borderColor: 'rgba(0, 230, 153, 0.4)',
+                backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                fontWeight: '600',
+                fontSize: '13px'
+              }}
+              title="Consultar IA (Gera rascunho de resposta no campo de texto para você revisar antes de enviar)"
+            >
+              <Bot size={16} className={isConsultingIA ? 'animate-spin' : ''} />
+              <span>{isConsultingIA ? 'Gerando...' : 'Consultar IA'}</span>
+            </button>
             <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending || isExpired}>
               <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
             </button>

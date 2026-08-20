@@ -1254,3 +1254,78 @@ async def update_conversation_status(
     )
 
     return {"status": "success", "new_status": conv.status.value}
+
+@router.post("/{conversation_id}/suggest-reply")
+async def suggest_reply_for_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generates a draft suggestion for the human attendant to review before sending (Seção 2 - Botão 'Consultar IA').
+    Does NOT send the message automatically.
+    """
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Fetch conversation memory summary if available
+    from app.models.models import ConversationMemory
+    mem_res = await db.execute(
+        select(ConversationMemory).where(
+            ConversationMemory.tenant_id == current_user.tenant_id,
+            ConversationMemory.contact_id == conv.contact_id
+        )
+    )
+    memory = mem_res.scalar_one_or_none()
+    memory_summary = memory.resumo_estruturado if memory else None
+
+    # Fetch RAG context from last customer message if available
+    customer_msgs = [m for m in conv.messages if str(m.remetente).lower() == "cliente"]
+    last_customer_text = customer_msgs[-1].conteudo if customer_msgs else ""
+    rag_context = ""
+    if last_customer_text:
+        try:
+            from app.services.rag_service import rag_service
+            rag_res = await rag_service.query_relevant_context(current_user.tenant_id, last_customer_text)
+            rag_context = rag_res if isinstance(rag_res, str) else ""
+        except Exception:
+            pass
+
+    history_dicts = [
+        {"remetente": getattr(m.remetente, 'value', str(m.remetente)), "conteudo": m.conteudo or ""}
+        for m in sorted(conv.messages, key=lambda x: x.timestamp or datetime.min)
+    ]
+
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
+    customer_name = conv.contact.nome if (conv.contact and conv.contact.nome) else "Cliente"
+    dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "Atendimento"
+
+    suggestion = await gemini_service.generate_suggested_reply(
+        customer_name=customer_name,
+        department_name=dept_name,
+        messages_history=history_dicts,
+        memory_summary=memory_summary,
+        rag_context=rag_context,
+        tenant_gemini_api_key=decrypted.get("gemini_api_key"),
+        tenant_gemini_model_name=decrypted.get("gemini_model_name")
+    )
+
+    return {
+        "success": True,
+        "suggested_reply": suggestion
+    }
+

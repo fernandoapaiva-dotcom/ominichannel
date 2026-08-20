@@ -527,6 +527,78 @@ class GeminiService:
             f"👉 *Próxima Ação Sugerida:* Analise o histórico e responda o cliente."
         )
 
+    async def generate_suggested_reply(
+        self,
+        customer_name: str,
+        department_name: str,
+        messages_history: List[Dict[str, str]],
+        memory_summary: Optional[str] = None,
+        rag_context: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Generates a professional, polite, and helpful draft response suggestion for the human attendant to review and edit before sending (Seção 2 - Botão 'Consultar IA').
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+
+        messages_text = []
+        for m in messages_history:
+            r_raw = str(m.get("remetente", "")).lower()
+            if r_raw == "cliente":
+                remetente = "Cliente"
+            elif r_raw == "ia":
+                remetente = "IA Concierge"
+            elif r_raw == "sistema":
+                remetente = "Sistema"
+            else:
+                remetente = "Atendente"
+
+            conteudo = str(m.get("conteudo", "")).strip()
+            if conteudo:
+                messages_text.append(f"[{remetente}]: {conteudo}")
+
+        rag_prompt = f"\nINFORMAÇÕES DA BASE DE CONHECIMENTO DA EMPRESA (RAG):\n{rag_context}\n" if rag_context else ""
+        memory_prompt = f"\nRESUMO CONTEXTUAL ANTERIOR DO CLIENTE:\n{memory_summary}\n" if memory_summary else ""
+
+        prompt = (
+            "Você é um consultor assistente de atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
+            f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente '{customer_name}'.\n\n"
+            f"{memory_prompt}"
+            f"{rag_prompt}"
+            "DIRETRIZES DA RESPOSTA:\n"
+            "1. Escreva uma mensagem pronta para envio, redigida em primeira pessoa (como se você fosse o atendente humano da Servweld).\n"
+            "2. Seja extremamente educado, claro, acolhedor, profissional e direto ao ponto.\n"
+            "3. Não use introduções explicativas como 'Aqui está uma sugestão:' ou 'Você pode dizer:'. Retorne APENAS o texto exato da resposta a ser colocada no chat.\n"
+            "4. Dê continuidade imediata ao diálogo, respondendo à última dúvida ou solicitação do cliente com base no histórico real.\n"
+            "5. Se for necessária uma informação técnica que você não tem certeza, sugira pedir educadamente a informação necessária ao cliente.\n\n"
+            f"HISTÓRICO DA CONVERSA:\n" + "\n".join(messages_text)
+        )
+
+        if not client:
+            return f"Olá {customer_name}, boa tarde! Como posso te ajudar hoje?"
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                logger.warning(f"Error generating suggested reply with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return f"Olá {customer_name}! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
+
     async def summarize_conversation_for_transfer(
         self,
         customer_name: str,
