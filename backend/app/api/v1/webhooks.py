@@ -424,20 +424,26 @@ async def receive_evolution_webhook(
                 msg_extra["delivered_to"] = delivered_to_list
                 msg_to_update.dados_adicionais = msg_extra
 
+                conv_id = msg_to_update.conversation_id
+                m_id = msg_to_update.id
+                m_status = msg_to_update.status
+
                 if mapped_status == "read" or len(read_by_list) > 0:
                     msg_to_update.status = "read"
+                    m_status = "read"
                     # Also mark all previous messages in this conversation as read
                     await db.execute(
                         update(Message)
                         .where(
-                            Message.conversation_id == msg_to_update.conversation_id,
-                            Message.id <= msg_to_update.id,
+                            Message.conversation_id == conv_id,
+                            Message.id <= m_id,
                             Message.remetente.in_(["atendente", "ia"])
                         )
                         .values(status="read")
                     )
                 elif mapped_status == "delivered" and msg_to_update.status != "read":
                     msg_to_update.status = "delivered"
+                    m_status = "delivered"
 
                 if key_id and not msg_to_update.whatsapp_msg_id:
                     msg_to_update.whatsapp_msg_id = key_id
@@ -448,9 +454,9 @@ async def receive_evolution_webhook(
                 try:
                     await ws_manager.broadcast({
                         "type": "MESSAGE_STATUS_UPDATE",
-                        "conversation_id": msg_to_update.conversation_id,
-                        "message_id": msg_to_update.id,
-                        "status": msg_to_update.status,
+                        "conversation_id": conv_id,
+                        "message_id": m_id,
+                        "status": m_status,
                         "dados_adicionais": msg_extra,
                         "whatsapp_msg_id": key_id
                     })
