@@ -907,24 +907,28 @@ async def receive_evolution_webhook(
 
         # Check if conversation was waiting for customer confirmation on sector transfer
         is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
-        text_clean = text_content.strip().lower()
-        
-        has_negative = bool(re.search(r'\b(n[ãa]o|outro|errad[oa]|nenhum|talvez|n[ãa]o sei|nada a ver)\b', text_clean))
-        has_affirmative = bool(re.search(r'\b(sim|isso|correto|pode|ok|positivo|claro|por favor|com certeza|exato)\b', text_clean))
-        
-        customer_confirmed = has_affirmative and not has_negative
-        customer_declined = has_negative or (not has_affirmative and bool(re.search(r'\b(talvez|espera|quem sabe)\b', text_clean)))
-
         transfer_executed = False
         ai_output = None
 
         if is_pending_transfer:
-            if customer_confirmed:
-                parts = conversation.assunto_atual.split(":", 2)
-                target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-                intent_sum = parts[2] if len(parts) > 2 else "Assunto confirmado pelo cliente"
+            parts = conversation.assunto_atual.split(":", 2)
+            target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+            intent_sum = parts[2] if len(parts) > 2 else "Assunto em confirmação"
 
-                target_wn = next((w for w in all_wns if w.id == target_id), None)
+            target_wn = next((w for w in all_wns if w.id == target_id), None)
+            target_dept_name = target_wn.nome_departamento if target_wn else "o setor responsável"
+            question_asked = f"Entendi que o seu assunto é sobre {intent_sum}, correto? Posso te encaminhar para a nossa equipe de {target_dept_name}?"
+
+            # Semantic natural language classification with Gemini
+            classification = await gemini_service.classify_confirmation_response(
+                question_asked=question_asked,
+                customer_response=text_content,
+                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+            )
+            logger.info(f"Gemini confirmation classification for '{text_content}': {classification}")
+
+            if classification == "CONFIRMA":
                 if target_wn and target_wn.id != whatsapp_number.id:
                     old_dept_name = whatsapp_number.nome_departamento
                     old_dept_id = whatsapp_number.id
@@ -959,17 +963,29 @@ async def receive_evolution_webhook(
                         "nova_memoria": f"Cliente confirmou transferência para {target_wn.nome_departamento} | Assunto: {intent_sum}"
                     }
                     transfer_executed = True
-            elif customer_declined:
-                # Customer declined or gave ambiguous reply -> Do not transfer, clear pending state and ask for details
+            elif classification == "NEGA":
                 logger.info(f"Customer declined sector transfer confirmation for conversation {conversation.id}")
                 conversation.assunto_atual = "Atendimento Concierge"
                 ai_output = {
-                    "resposta": "Sem problemas! Para que eu possa te ajudar e direcionar corretamente, por favor me informe com mais detalhes: o que exatamente você precisa ou qual é a sua dúvida?",
+                    "resposta": "Sem problemas! Para que eu possa te direcionar corretamente, por favor me informe com mais detalhes: o que exatamente você precisa ou qual é a sua dúvida?",
                     "transferir_setor": "NENHUM",
                     "enviar_localizacao": False,
                     "enviar_pix": False,
                     "escalar_humano": False,
-                    "nova_memoria": "Cliente recusou ou corrigiu a sugestão de setor; solicitando mais detalhes."
+                    "nova_memoria": "Cliente recusou sugestão de setor; solicitando mais detalhes."
+                }
+                transfer_executed = True
+            else:
+                # AMBIGUA -> Fallback: asks for clarification without transferring
+                logger.info(f"Customer response was ambiguous during confirmation for conversation {conversation.id}")
+                conversation.assunto_atual = "Atendimento Concierge"
+                ai_output = {
+                    "resposta": "Para eu ter certeza e não te encaminhar para o setor errado, por favor me confirme: qual é o serviço ou produto exato que você gostaria de tratar hoje?",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Resposta ambígua na confirmação; solicitando esclarecimento."
                 }
                 transfer_executed = True
 

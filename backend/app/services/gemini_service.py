@@ -166,6 +166,65 @@ class GeminiService:
             "customer_intent_summary": user_message
         }
 
+    async def classify_confirmation_response(
+        self,
+        question_asked: str,
+        customer_response: str,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Classifies customer response to a confirmation question as 'CONFIRMA', 'NEGA', or 'AMBIGUA' using Gemini.
+        Understands natural Brazilian Portuguese subtleties (e.g. 'não, é isso mesmo', 'beleza 👍', 'show', 'manda ver', 'não precisa', 'talvez').
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
+
+        prompt = (
+            "Você é um classificador semântico de linguagem natural em português brasileiro.\n"
+            "Analise a pergunta de confirmação que o sistema fez ao cliente e a resposta enviada pelo cliente no WhatsApp.\n\n"
+            f"Pergunta Feita ao Cliente: \"{question_asked}\"\n"
+            f"Resposta Enviada pelo Cliente: \"{customer_response}\"\n\n"
+            "Classifique a resposta do cliente ESTRITAMENTE em uma das 3 categorias:\n"
+            "- CONFIRMA: O cliente aceita, concorda, confirma a transferência ou diz que é isso mesmo (ex: 'sim', 'correto', 'isso', 'pode transferir', 'não, é isso mesmo', 'beleza', 'manda ver', '👍', 'show', 'por favor', 'bora').\n"
+            "- NEGA: O cliente recusa a transferência, diz que é outro assunto, que não precisa ou que está errado (ex: 'não', 'nada a ver', 'é outro assunto', 'não quero vendas', 'errou', 'não precisa').\n"
+            "- AMBIGUA: O cliente demonstra incerteza, hesitação, responde com algo desconexo ou pergunta algo novo sem confirmar nem negar (ex: 'talvez', 'não sei', 'quanto custa antes?', 'quem sabe').\n\n"
+            "Responda APENAS com uma única palavra: CONFIRMA, NEGA ou AMBIGUA."
+        )
+
+        if not client:
+            clean = customer_response.strip().lower()
+            if any(w in clean for w in ["sim", "isso", "correto", "pode", "ok", "beleza"]):
+                return "CONFIRMA"
+            elif any(w in clean for w in ["não", "nao", "outro", "errado"]):
+                return "NEGA"
+            return "AMBIGUA"
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=prompt
+                )
+                res_text = response.text.strip().upper()
+                if "CONFIRMA" in res_text:
+                    return "CONFIRMA"
+                elif "NEGA" in res_text:
+                    return "NEGA"
+                else:
+                    return "AMBIGUA"
+            except Exception as e:
+                logger.warning(f"Error classifying confirmation with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return "AMBIGUA"
+
     async def generate_concierge_response(
         self,
         customer_name: str,
