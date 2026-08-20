@@ -444,8 +444,23 @@ async def receive_evolution_webhook(
         Contact.telefone.in_(phone_variants)
     )
     contact_res = await db.execute(contact_stmt)
-    contact = contact_res.scalars().first()
     profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
+
+    # If message is from a WhatsApp Group, fetch official group subject / title
+    if is_group:
+        try:
+            g_info = await asyncio.wait_for(
+                evolution_service.fetch_group_info(whatsapp_number.instancia_evolution_api, remote_jid),
+                timeout=2.5
+            )
+            if g_info and isinstance(g_info, dict):
+                group_subject = g_info.get("subject") or g_info.get("name")
+                if group_subject:
+                    push_name = group_subject
+                if g_info.get("pictureUrl"):
+                    profile_pic_url = g_info.get("pictureUrl")
+        except Exception:
+            pass
 
     if not profile_pic_url and (not contact or not contact.foto_perfil_url) and whatsapp_number.instancia_evolution_api:
         try:
@@ -461,7 +476,7 @@ async def receive_evolution_webhook(
         db.add(contact)
         await db.flush()
     else:
-        if push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente"):
+        if push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente" or is_group):
             contact.nome = push_name
         if profile_pic_url and contact.foto_perfil_url != profile_pic_url:
             contact.foto_perfil_url = profile_pic_url

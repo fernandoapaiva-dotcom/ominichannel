@@ -481,14 +481,78 @@ class EvolutionService:
             except Exception as e:
                 logger.warning(f"Error checking connected instances for profile pic: {e}")
 
+    async def fetch_group_info(
+        self,
+        instance_name: Optional[str],
+        group_jid: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Optional[dict]:
+        """
+        Fetches official WhatsApp Group metadata (subject, picture, participants, community parent).
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        normalized_jid = group_jid if "@" in group_jid else f"{group_jid}@g.us"
+
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            # 1. Try specified instance
+            if instance_name:
+                url = f"{base_url}/group/findGroupInfos/{instance_name}?groupJid={normalized_jid}"
+                try:
+                    res = await client.get(url, headers=headers)
+                    if res.status_code == 200 and isinstance(res.json(), dict):
+                        return res.json()
+                except Exception:
+                    pass
+
+            # 2. Fallback across all active open instances
+            try:
+                inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
+                if inst_res.status_code == 200:
+                    instances = [
+                        i.get("name") for i in inst_res.json()
+                        if isinstance(i, dict) and i.get("connectionStatus") == "open" and i.get("name") != instance_name
+                    ]
+                    for inst in instances:
+                        if not inst:
+                            continue
+                        try:
+                            res = await client.get(f"{base_url}/group/findGroupInfos/{inst}?groupJid={normalized_jid}", headers=headers)
+                            if res.status_code == 200 and isinstance(res.json(), dict):
+                                return res.json()
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.warning(f"Error checking group info: {e}")
+
         return None
+
+    async def fetch_all_groups(
+        self,
+        instance_name: Optional[str],
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> list:
+        """
+        Fetches all groups that the WhatsApp instance participates in.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            if instance_name:
+                try:
+                    res = await client.get(f"{base_url}/group/fetchAllGroups/{instance_name}?getParticipants=true", headers=headers)
+                    if res.status_code == 200 and isinstance(res.json(), list):
+                        return res.json()
+                except Exception:
+                    pass
+        return []
 
 evolution_service = EvolutionService()
 
 
 async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
     """
-    Background loop that continuously ensures all contacts have their official WhatsApp profile pictures.
+    Background loop that continuously ensures all contacts and WhatsApp Groups have their official names & profile pictures.
     """
     await asyncio.sleep(3)
     while True:
@@ -498,32 +562,80 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
             from sqlalchemy import select
 
             base_url, headers = evolution_service._get_headers_and_url()
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 r = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
                 if r.status_code == 200:
                     instances = [i.get("name") for i in r.json() if isinstance(i, dict) and i.get("connectionStatus") == "open"]
                     if instances:
+                        # 1. Collect all WhatsApp Groups from active instances
+                        group_map = {}
+                        lid_map = {}
+                        for inst in instances:
+                            try:
+                                g_res = await client.get(f"{base_url}/group/fetchAllGroups/{inst}?getParticipants=true", headers=headers)
+                                if g_res.status_code == 200 and isinstance(g_res.json(), list):
+                                    for g in g_res.json():
+                                        gid = (g.get("id") or g.get("jid") or "").split("@")[0]
+                                        subj = g.get("subject") or g.get("name")
+                                        pic = g.get("pictureUrl") or g.get("profilePictureUrl")
+                                        if gid and subj:
+                                            group_map[gid] = {"subject": subj, "pictureUrl": pic}
+                                        for p in g.get("participants", []):
+                                            pid = (p.get("id") or "").split("@")[0]
+                                            phone = (p.get("phoneNumber") or "").split("@")[0]
+                                            if pid and phone:
+                                                lid_map[pid] = phone
+                            except Exception:
+                                pass
+
                         async with AsyncSessionLocal() as db:
-                            c_res = await db.execute(select(Contact).where(Contact.foto_perfil_url.is_(None)))
+                            c_res = await db.execute(select(Contact))
                             contacts = c_res.scalars().all()
                             updated = False
+
                             for c in contacts:
                                 clean_num = c.telefone.replace("+", "").replace("-", "").replace(" ", "").strip()
-                                for inst in instances:
-                                    try:
-                                        res = await client.post(f"{base_url}/chat/fetchProfilePictureUrl/{inst}", headers=headers, json={"number": clean_num})
-                                        if res.status_code in [200, 201]:
-                                            pic = res.json().get("profilePictureUrl")
-                                            if pic:
-                                                c.foto_perfil_url = pic
-                                                updated = True
-                                                break
-                                    except Exception:
-                                        continue
+
+                                # A. Check if Contact is a WhatsApp Group
+                                if clean_num in group_map:
+                                    g_info = group_map[clean_num]
+                                    if c.nome != g_info["subject"]:
+                                        c.nome = g_info["subject"]
+                                        updated = True
+                                    if g_info["pictureUrl"] and c.foto_perfil_url != g_info["pictureUrl"]:
+                                        c.foto_perfil_url = g_info["pictureUrl"]
+                                        updated = True
+                                    continue
+
+                                # B. Check if Contact is an internal WhatsApp LID
+                                if clean_num in lid_map:
+                                    real_phone = lid_map[clean_num]
+                                    matching = next((x for x in contacts if x.telefone == real_phone), None)
+                                    if matching and c.nome != f"{matching.nome} (Comunidade)":
+                                        c.nome = f"{matching.nome} (Comunidade)"
+                                        if matching.foto_perfil_url and not c.foto_perfil_url:
+                                            c.foto_perfil_url = matching.foto_perfil_url
+                                        updated = True
+                                    continue
+
+                                # C. Fetch Profile Picture if missing
+                                if not c.foto_perfil_url:
+                                    for inst in instances:
+                                        try:
+                                            res = await client.post(f"{base_url}/chat/fetchProfilePictureUrl/{inst}", headers=headers, json={"number": clean_num})
+                                            if res.status_code in [200, 201]:
+                                                pic = res.json().get("profilePictureUrl")
+                                                if pic:
+                                                    c.foto_perfil_url = pic
+                                                    updated = True
+                                                    break
+                                        except Exception:
+                                            continue
+
                             if updated:
                                 await db.commit()
         except Exception as e:
-            logger.debug(f"Profile picture sync loop error: {e}")
+            logger.debug(f"Profile picture and group sync loop error: {e}")
 
         await asyncio.sleep(interval_seconds)
 
