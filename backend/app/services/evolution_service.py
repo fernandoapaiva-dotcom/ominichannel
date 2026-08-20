@@ -590,6 +590,33 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                 if r.status_code == 200:
                     instances = [i.get("name") for i in r.json() if isinstance(i, dict) and i.get("connectionStatus") == "open"]
                     if instances:
+                        # 0. Ensure Webhooks are active for all connected instances
+                        webhook_url = "http://host.docker.internal:8000/api/v1/webhooks/evolution"
+                        for inst in instances:
+                            try:
+                                await client.post(
+                                    f"{base_url}/webhook/set/{inst}",
+                                    headers=headers,
+                                    json={
+                                        "webhook": {
+                                            "url": webhook_url,
+                                            "enabled": True,
+                                            "webhookByEvents": False,
+                                            "webhookBase64": True,
+                                            "events": [
+                                                "QRCODE_UPDATED",
+                                                "MESSAGES_UPSERT",
+                                                "MESSAGES_UPDATE",
+                                                "SEND_MESSAGE",
+                                                "CONNECTION_UPDATE",
+                                                "CALL"
+                                            ]
+                                        }
+                                    }
+                                )
+                            except Exception:
+                                pass
+
                         # 1. Collect all WhatsApp Groups from active instances
                         group_map = {}
                         lid_map = {}

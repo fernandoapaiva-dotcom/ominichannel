@@ -51,6 +51,9 @@ class InactivityService:
                     if conv.contact and (conv.contact.telefone.startswith("120363") or "@g.us" in conv.contact.telefone or len(conv.contact.telefone) > 15):
                         continue
 
+                    threshold_minutes = (tenant.config_geral or {}).get("inatividade_minutos", 30) if isinstance(tenant.config_geral, dict) else 30
+                    threshold_time = now - timedelta(minutes=threshold_minutes)
+
                     if conv.ultima_interacao_em and conv.ultima_interacao_em < threshold_time:
                         conv.status = ConversationStatus.EXPIRADA_POR_INATIVIDADE
                         expired_count += 1
