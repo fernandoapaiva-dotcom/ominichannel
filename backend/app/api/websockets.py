@@ -47,6 +47,16 @@ class ConnectionManager:
                 except Exception as e:
                     logger.error(f"Failed to send websocket message to user {u_id}: {e}")
 
+    async def broadcast(self, message_data: dict):
+        """
+        Sends payload to all active websockets across all connected users.
+        """
+        for ws, (t_id, u_id) in list(self.socket_info.items()):
+            try:
+                await ws.send_json(message_data)
+            except Exception as e:
+                logger.error(f"Failed to broadcast websocket message to user {u_id}: {e}")
+
 manager = ConnectionManager()
 
 @router.websocket("/ws")

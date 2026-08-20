@@ -9,7 +9,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Request, HTTPException
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
@@ -483,8 +483,33 @@ async def receive_evolution_webhook(
     push_name = data.get("pushName") or "Cliente"
 
 
-    # Extract text or media content
     message_obj = data.get("message", {})
+
+    # Handle incoming WhatsApp Emoji Reaction (reactionMessage) from customer
+    reaction_msg = message_obj.get("reactionMessage")
+    if reaction_msg or data.get("messageType") == "reactionMessage":
+        reaction_payload = reaction_msg if isinstance(reaction_msg, dict) else (data.get("reaction") or {})
+        target_key_id = (reaction_payload.get("key") or {}).get("id") or reaction_payload.get("keyId")
+        emoji_reaction = reaction_payload.get("text") or ""
+
+        if target_key_id:
+            m_res = await db.execute(select(Message).where(Message.whatsapp_msg_id == target_key_id))
+            target_msg = m_res.scalar_one_or_none()
+            if target_msg:
+                msg_extra = dict(target_msg.dados_adicionais or {})
+                msg_extra["reaction"] = emoji_reaction
+                target_msg.dados_adicionais = msg_extra
+                await db.commit()
+
+                await ws_manager.broadcast({
+                    "type": "MESSAGE_REACTION_UPDATE",
+                    "conversation_id": target_msg.conversation_id,
+                    "message_id": target_msg.id,
+                    "reaction": emoji_reaction
+                })
+                return {"status": "success", "event": "reactionMessage", "reaction": emoji_reaction}
+
+    # Extract text or media content
     text_content = (
         message_obj.get("conversation") or
         message_obj.get("extendedTextMessage", {}).get("text") or
