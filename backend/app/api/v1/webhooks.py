@@ -765,9 +765,21 @@ async def receive_evolution_webhook(
                         "message": f"CSAT score {score} recorded successfully without reopening conversation."
                     }
 
-                # Otherwise, customer sent a new message -> reopen conversation with new protocol
+                # Otherwise, customer sent a new message -> ALWAYS generate a NEW daily protocol!
+                prev_proto = conversation.protocol_number
+                last_time = conversation.ultima_interacao_em or datetime.utcnow()
+                hours_diff = (datetime.utcnow() - last_time).total_seconds() / 3600.0
+
+                new_proto = await generate_daily_protocol(db, tenant_id)
                 conversation.status = ConversationStatus.COM_IA
-                conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
+                conversation.protocol_number = new_proto
+                conversation.assigned_user_id = None
+
+                extra = dict(conversation.dados_adicionais or {})
+                extra["reopened_at"] = datetime.utcnow().isoformat()
+                extra["previous_protocol_number"] = prev_proto
+                extra["reopened_within_5_days"] = (hours_diff <= 120.0)
+                conversation.dados_adicionais = extra
             conversation.whatsapp_number_id = whatsapp_number.id
         else:
             proto = await generate_daily_protocol(db, tenant_id)
