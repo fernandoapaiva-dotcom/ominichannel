@@ -133,7 +133,18 @@ export const ChatList: React.FC<ChatListProps> = ({
       });
     });
 
-    return groups.sort((a, b) => new Date(b.primaryConv.ultima_interacao_em).getTime() - new Date(a.primaryConv.ultima_interacao_em).getTime());
+    const getLatestInteraction = (g: ContactGroup) => {
+      let maxTime = new Date(g.primaryConv.ultima_interacao_em).getTime();
+      for (const c of g.allConversations) {
+        const t = new Date(c.ultima_interacao_em).getTime();
+        if (!isNaN(t) && t > maxTime) {
+          maxTime = t;
+        }
+      }
+      return isNaN(maxTime) ? 0 : maxTime;
+    };
+
+    return groups.sort((a, b) => getLatestInteraction(b) - getLatestInteraction(a));
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
 
   const totalUnread = conversations.filter(conv => {

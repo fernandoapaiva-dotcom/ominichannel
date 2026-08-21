@@ -301,18 +301,11 @@ class WhatsAppSyncService:
                                     else []
                                 )
 
+                                latest_msg_dt = None
                                 for m_obj in records:
                                     key_obj = m_obj.get("key", {})
                                     msg_wa_id = key_obj.get("id")
                                     if not msg_wa_id:
-                                        continue
-
-                                    existing_msg_stmt = select(Message.id).where(
-                                        Message.conversation_id == conv.id,
-                                        Message.whatsapp_msg_id == msg_wa_id
-                                    )
-                                    existing_res = await session.execute(existing_msg_stmt)
-                                    if existing_res.scalars().first():
                                         continue
 
                                     from_me = key_obj.get("fromMe", False)
@@ -330,6 +323,17 @@ class WhatsAppSyncService:
                                         except Exception:
                                             pass
 
+                                    if latest_msg_dt is None or msg_dt > latest_msg_dt:
+                                        latest_msg_dt = msg_dt
+
+                                    existing_msg_stmt = select(Message.id).where(
+                                        Message.conversation_id == conv.id,
+                                        Message.whatsapp_msg_id == msg_wa_id
+                                    )
+                                    existing_res = await session.execute(existing_msg_stmt)
+                                    if existing_res.scalars().first():
+                                        continue
+
                                     db_msg = Message(
                                         conversation_id=conv.id,
                                         remetente=remetente,
@@ -341,6 +345,9 @@ class WhatsAppSyncService:
                                     )
                                     session.add(db_msg)
                                     stats["messages_synced"] += 1
+
+                                if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
+                                    conv.ultima_interacao_em = latest_msg_dt
 
                         except Exception as chat_err:
                             logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
