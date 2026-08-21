@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ShieldCheck, Filter, ChevronLeft, ChevronRight, Menu, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, Clock, UserCheck, X } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle } from 'lucide-react';
 import { User, Conversation } from '../types';
 
 interface SidebarProps {
@@ -52,28 +52,71 @@ export const Sidebar: React.FC<SidebarProps> = ({
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Attendant assigned conversations & unread calculation
-  const myAssignedConversations = useMemo(() => {
+  // Helper: check if conversation is pending a response from this attendant
+  const isConversationPendingForAttendant = (conv: Conversation): boolean => {
+    const isAssigned = conv.assigned_user_id === user.id || (user.role === 'admin' && conv.status === 'aguardando_atendente');
+    if (!isAssigned) return false;
+    
+    if (conv.status === 'encerrada' || conv.status === 'expirada_por_inatividade') return false;
+
+    const msgs = conv.messages || [];
+    if (msgs.length === 0) return true;
+
+    let lastAttendantMsgIndex = -1;
+    let lastClientMsgIndex = -1;
+
+    for (let i = 0; i < msgs.length; i++) {
+      if (msgs[i].remetente === 'atendente') {
+        lastAttendantMsgIndex = i;
+      } else if (msgs[i].remetente === 'cliente') {
+        lastClientMsgIndex = i;
+      }
+    }
+
+    // If attendant has never sent a message in this conversation, it is strictly pending
+    if (lastAttendantMsgIndex === -1) return true;
+
+    // If client sent a new message after the attendant's last reply, it is pending again
+    if (lastClientMsgIndex > lastAttendantMsgIndex) return true;
+
+    return false;
+  };
+
+  // List of all conversations genuinely pending response from this attendant
+  const pendingConversations = useMemo(() => {
     if (!conversations || !Array.isArray(conversations)) return [];
-    return conversations.filter(c => 
-      c.assigned_user_id === user.id || 
-      (c.status === 'com_humano' && c.assigned_user_id === user.id) ||
-      (user.role === 'admin' && (c.status === 'aguardando_atendente' || c.status === 'com_humano'))
-    );
+    return conversations.filter(isConversationPendingForAttendant);
   }, [conversations, user]);
 
-  const totalUnreadCount = useMemo(() => {
-    return myAssignedConversations.reduce((acc, c) => acc + (c.unread_count || 0), 0);
-  }, [myAssignedConversations]);
+  const pendingBadgeCount = pendingConversations.length;
 
-  const pendingRepliesCount = useMemo(() => {
-    return myAssignedConversations.filter(c => {
-      const lastMsg = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
-      return lastMsg && lastMsg.remetente === 'cliente';
-    }).length;
-  }, [myAssignedConversations]);
+  // Extract short summary / reason for the transfer
+  const getConversationReason = (conv: Conversation): string => {
+    if (conv.assunto_atual) return conv.assunto_atual;
+    if (conv.resumo_ia) return conv.resumo_ia;
 
-  const totalBadge = totalUnreadCount > 0 ? totalUnreadCount : (pendingRepliesCount > 0 ? pendingRepliesCount : 0);
+    const msgs = conv.messages || [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.remetente === 'sistema' && m.conteudo) {
+        const lines = m.conteudo.split('\n');
+        for (const line of lines) {
+          if (line.toLowerCase().includes('motivo:') || line.toLowerCase().includes('problema:') || line.toLowerCase().includes('solicita') || line.toLowerCase().includes('resumo:')) {
+            const clean = line.replace(/[#*`_]/g, '').trim();
+            if (clean.length > 5) return clean;
+          }
+        }
+      }
+    }
+
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].remetente === 'cliente' && msgs[i].conteudo) {
+        return msgs[i].conteudo;
+      }
+    }
+
+    return 'Atendimento transferido para suporte humano';
+  };
 
   const handleOpenConversationFromMenu = (convId: number) => {
     setShowAvatarMenu(false);
@@ -93,24 +136,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
           position: 'fixed',
           left: isCollapsed ? '52px' : '88px',
           bottom: '20px',
-          width: '340px',
-          maxHeight: '520px',
+          width: '360px',
+          maxHeight: '540px',
           backgroundColor: 'var(--bg-secondary)',
           border: '1px solid var(--border-color)',
           borderRadius: 'var(--radius-lg)',
-          boxShadow: '0 12px 36px rgba(0,0,0,0.45)',
+          boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
           zIndex: 9999,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          animation: 'fadeIn 0.2s ease-out'
+          animation: 'fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
         }}
       >
-        {/* Profile Header */}
+        {/* Attendant Profile Header */}
         <div style={{
           padding: '16px',
           borderBottom: '1px solid var(--border-color)',
-          backgroundColor: 'rgba(0,0,0,0.15)',
+          backgroundColor: 'rgba(0,0,0,0.2)',
           display: 'flex',
           alignItems: 'center',
           gap: '12px'
@@ -154,15 +197,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 width: '8px',
                 height: '8px',
                 borderRadius: '50%',
-                backgroundColor: '#10b981'
+                backgroundColor: '#10b981',
+                boxShadow: '0 0 6px rgba(16, 185, 129, 0.6)'
               }} />
               <span>Online • {user.role === 'admin' ? 'Administrador' : 'Atendente'}</span>
             </div>
-            {user.departamento && (
-              <div style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: '600', marginTop: '2px' }}>
-                Setor: {user.departamento}
-              </div>
-            )}
           </div>
 
           <button
@@ -179,28 +218,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Submenu Title */}
+        {/* Submenu Title: Mensagens Pendentes */}
         <div style={{
-          padding: '10px 16px',
+          padding: '12px 16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           borderBottom: '1px solid var(--border-color)',
-          backgroundColor: 'rgba(0, 230, 153, 0.05)'
+          backgroundColor: pendingBadgeCount > 0 ? 'rgba(239, 68, 68, 0.08)' : 'rgba(0, 230, 153, 0.05)'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: '700', color: 'var(--text-main)' }}>
-            <Bell size={14} color="var(--accent-primary)" />
-            <span>Minhas Mensagens & Conversas</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: '700', color: 'var(--text-main)' }}>
+            <MessageCircle size={16} color={pendingBadgeCount > 0 ? '#ef4444' : 'var(--accent-primary)'} />
+            <span>Mensagens Pendentes de Resposta</span>
           </div>
           <span style={{
             fontSize: '11px',
-            backgroundColor: totalBadge > 0 ? '#ef4444' : 'var(--border-color)',
+            backgroundColor: pendingBadgeCount > 0 ? '#ef4444' : 'var(--border-color)',
             color: '#fff',
             padding: '2px 8px',
-            borderRadius: '10px',
-            fontWeight: '700'
+            borderRadius: '12px',
+            fontWeight: '800'
           }}>
-            {myAssignedConversations.length}
+            {pendingBadgeCount}
           </span>
         </div>
 
@@ -208,83 +247,84 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div style={{
           flex: 1,
           overflowY: 'auto',
-          maxHeight: '260px',
-          padding: '6px'
+          maxHeight: '300px',
+          padding: '8px'
         }}>
-          {myAssignedConversations.length === 0 ? (
-            <div style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-              <CheckCircle2 size={28} color="var(--accent-primary)" style={{ margin: '0 auto 8px', display: 'block' }} />
-              Nenhuma mensagem pendente no momento. Você está em dia!
+          {pendingConversations.length === 0 ? (
+            <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+              <CheckCircle2 size={32} color="var(--accent-primary)" style={{ margin: '0 auto 10px', display: 'block' }} />
+              <div style={{ fontWeight: '600', color: 'var(--text-main)', marginBottom: '4px' }}>Tudo respondido!</div>
+              Nenhuma conversa atribuída aguardando sua resposta no momento.
             </div>
           ) : (
-            myAssignedConversations.map(conv => {
-              const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
-              const isUnread = (conv.unread_count || 0) > 0 || (lastMsg && lastMsg.remetente === 'cliente');
+            pendingConversations.map(conv => {
+              const deptName = conv.whatsapp_number?.nome_departamento || 'Geral';
+              const reason = getConversationReason(conv);
+              const proto = conv.protocol_number ? `#${conv.protocol_number.slice(-4)}` : '';
 
               return (
                 <div
                   key={conv.id}
                   onClick={() => handleOpenConversationFromMenu(conv.id)}
                   style={{
-                    padding: '10px 12px',
+                    padding: '12px',
                     borderRadius: 'var(--radius-md)',
-                    marginBottom: '4px',
+                    marginBottom: '6px',
                     cursor: 'pointer',
-                    backgroundColor: isUnread ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
-                    border: isUnread ? '1px solid rgba(0, 230, 153, 0.25)' : '1px solid transparent',
+                    backgroundColor: 'rgba(239, 68, 68, 0.06)',
+                    border: '1px solid rgba(239, 68, 68, 0.25)',
                     display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
+                    flexDirection: 'column',
+                    gap: '6px',
                     transition: 'all 0.15s ease'
                   }}
-                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = isUnread ? 'rgba(0, 230, 153, 0.08)' : 'transparent'; }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.12)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.06)'; }}
                 >
-                  <div style={{
-                    width: '36px',
-                    height: '36px',
-                    borderRadius: '50%',
-                    background: 'var(--accent-gradient)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#051a12',
-                    fontWeight: '700',
-                    fontSize: '13px',
-                    flexShrink: 0
-                  }}>
-                    {conv.contact?.nome ? conv.contact.nome.charAt(0).toUpperCase() : 'C'}
-                  </div>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2px' }}>
-                      <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{
+                        display: 'inline-block',
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        backgroundColor: '#ef4444',
+                        boxShadow: '0 0 6px rgba(239,68,68,0.8)'
+                      }} />
+                      <span style={{ fontSize: '13px', fontWeight: '700', color: 'var(--text-main)' }}>
                         {conv.contact?.nome || 'Cliente'}
                       </span>
-                      {conv.protocol_number && (
-                        <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: '600' }}>
-                          #{conv.protocol_number.slice(-4)}
-                        </span>
-                      )}
                     </div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {lastMsg ? lastMsg.conteudo : 'Conversa em andamento'}
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: '700' }}>
+                        {proto}
+                      </span>
+                      <span style={{
+                        fontSize: '10px',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        backgroundColor: 'rgba(255,255,255,0.08)',
+                        color: 'var(--text-muted)',
+                        fontWeight: '600'
+                      }}>
+                        {deptName}
+                      </span>
                     </div>
                   </div>
 
-                  {conv.unread_count && conv.unread_count > 0 ? (
-                    <span style={{
-                      backgroundColor: '#ef4444',
-                      color: '#fff',
-                      fontSize: '10px',
-                      fontWeight: '800',
-                      padding: '2px 6px',
-                      borderRadius: '10px',
-                      flexShrink: 0
-                    }}>
-                      {conv.unread_count}
-                    </span>
-                  ) : null}
+                  <div style={{
+                    fontSize: '12px',
+                    color: 'var(--text-muted)',
+                    lineHeight: '1.4',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden'
+                  }}>
+                    <strong style={{ color: 'var(--text-main)', fontWeight: '600' }}>Motivo: </strong>
+                    {reason}
+                  </div>
                 </div>
               );
             })
@@ -295,7 +335,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div style={{
           padding: '10px 16px',
           borderTop: '1px solid var(--border-color)',
-          backgroundColor: 'rgba(0,0,0,0.15)',
+          backgroundColor: 'rgba(0,0,0,0.2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between'
@@ -332,7 +372,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
           >
             <LogOut size={14} />
-            <span>Sair</span>
+            <span>Sair da Conta</span>
           </button>
         </div>
       </div>
@@ -502,11 +542,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
 
-          {/* Avatar with notification badge */}
+          {/* Attendant Avatar with Red Pending Badge */}
           <div
             onClick={() => setShowAvatarMenu(!showAvatarMenu)}
             style={{ position: 'relative', cursor: 'pointer' }}
-            title={`${user.nome} - Clique para ver mensagens atribuídas`}
+            title={`${user.nome} - ${pendingBadgeCount} conversa(s) pendente(s)`}
           >
             {user.foto_perfil_url ? (
               <img
@@ -517,7 +557,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   height: '32px',
                   borderRadius: '50%',
                   objectFit: 'cover',
-                  border: '2px solid var(--accent-primary)'
+                  border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '2px solid var(--accent-primary)'
                 }}
               />
             ) : (
@@ -531,13 +571,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 justifyContent: 'center',
                 color: '#051a12',
                 fontSize: '13px',
-                fontWeight: '700'
+                fontWeight: '700',
+                border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '1px solid var(--border-color)'
               }}>
                 {user.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
               </div>
             )}
 
-            {totalBadge > 0 && (
+            {pendingBadgeCount > 0 && (
               <span style={{
                 position: 'absolute',
                 top: '-4px',
@@ -553,9 +594,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center',
                 border: '2px solid var(--bg-secondary)',
-                boxShadow: '0 0 6px rgba(239,68,68,0.8)'
+                boxShadow: '0 0 8px rgba(239,68,68,0.9)'
               }}>
-                {totalBadge > 9 ? '9+' : totalBadge}
+                {pendingBadgeCount > 9 ? '9+' : pendingBadgeCount}
               </span>
             )}
           </div>
@@ -761,11 +802,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
         </button>
 
-        {/* Attendant Avatar with Real-time Notification Badge */}
+        {/* Attendant Avatar with Red Pending Badge */}
         <div
           onClick={() => setShowAvatarMenu(!showAvatarMenu)}
           style={{ position: 'relative', cursor: 'pointer', transition: 'transform 0.15s ease' }}
-          title={`${user.nome} (${user.role}) - Clique para ver mensagens e conversas atribuídas`}
+          title={`${user.nome} (${user.role}) - ${pendingBadgeCount} conversa(s) pendente(s)`}
           onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
           onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
         >
@@ -778,8 +819,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 height: '42px',
                 borderRadius: '50%',
                 objectFit: 'cover',
-                border: '2px solid var(--accent-primary)',
-                boxShadow: '0 2px 8px rgba(0, 230, 153, 0.25)'
+                border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '2px solid var(--accent-primary)',
+                boxShadow: pendingBadgeCount > 0 ? '0 0 10px rgba(239, 68, 68, 0.4)' : '0 2px 8px rgba(0, 230, 153, 0.25)'
               }}
             />
           ) : (
@@ -794,15 +835,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               color: '#051a12',
               fontSize: '16px',
               fontWeight: '700',
-              border: '1px solid var(--border-color)',
-              boxShadow: '0 2px 8px rgba(0, 230, 153, 0.25)'
+              border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '1px solid var(--border-color)',
+              boxShadow: pendingBadgeCount > 0 ? '0 0 10px rgba(239, 68, 68, 0.4)' : '0 2px 8px rgba(0, 230, 153, 0.25)'
             }}>
               {user.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
             </div>
           )}
 
-          {/* Glowing Notification Badge on Avatar */}
-          {totalBadge > 0 && (
+          {/* Glowing Red Notification Badge on Avatar */}
+          {pendingBadgeCount > 0 && (
             <span style={{
               position: 'absolute',
               top: '-4px',
@@ -822,7 +863,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               boxShadow: '0 0 8px rgba(239,68,68,0.85)',
               animation: 'pulse 2s infinite'
             }}>
-              {totalBadge > 99 ? '99+' : totalBadge}
+              {pendingBadgeCount > 99 ? '99+' : pendingBadgeCount}
             </span>
           )}
         </div>
