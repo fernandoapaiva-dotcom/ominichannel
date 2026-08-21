@@ -25,7 +25,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
-  const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all' | 'nao_lidas'>('all');
 
   const displayedConversations = React.useMemo(() => {
     return conversations.filter(c => {

@@ -24,8 +24,8 @@ interface ChatListProps {
   whatsappNumbers: WhatsAppNumber[];
   selectedDepartmentId: number | 'all';
   setSelectedDepartmentId: (id: number | 'all') => void;
-  statusFilter: ConversationStatus | 'all';
-  setStatusFilter: (status: ConversationStatus | 'all') => void;
+  statusFilter: ConversationStatus | 'all' | 'nao_lidas';
+  setStatusFilter: (status: ConversationStatus | 'all' | 'nao_lidas') => void;
   onOpenNewConversationModal?: () => void;
   onStatusToggle?: () => void;
   isCollapsed?: boolean;
@@ -100,7 +100,20 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       const matchingConvs = convs.filter(conv => {
         const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
-        const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
+        
+        let matchesStatus = true;
+        if (statusFilter === 'nao_lidas') {
+          const extra = conv.dados_adicionais || {};
+          if (extra.marked_as_read) {
+            matchesStatus = false;
+          } else {
+            const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
+            matchesStatus = Boolean(lastMsg && lastMsg.status !== 'read' && lastMsg.remetente?.toLowerCase() === 'cliente');
+          }
+        } else if (statusFilter !== 'all') {
+          matchesStatus = conv.status === statusFilter;
+        }
+
         const contactName = conv.contact?.nome || '';
         const contactPhone = conv.contact?.telefone || '';
         const protoNumber = (conv as any).protocol_number || '';
@@ -125,6 +138,8 @@ export const ChatList: React.FC<ChatListProps> = ({
         if (lastMsg.status === 'read') return false;
         return lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
       });
+
+      if (statusFilter === 'nao_lidas' && !hasUnread) return;
 
       groups.push({
         contactId: cid,
@@ -215,6 +230,40 @@ export const ChatList: React.FC<ChatListProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
+              onClick={() => setStatusFilter(statusFilter === 'nao_lidas' ? 'all' : 'nao_lidas')}
+              style={{
+                background: statusFilter === 'nao_lidas' ? '#ef4444' : (totalUnread > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255,255,255,0.04)'),
+                border: statusFilter === 'nao_lidas' ? '1px solid #ef4444' : (totalUnread > 0 ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid var(--border-color)'),
+                color: statusFilter === 'nao_lidas' ? '#ffffff' : (totalUnread > 0 ? '#f87171' : 'var(--text-muted)'),
+                borderRadius: 'var(--radius-md)',
+                padding: '5px 8px',
+                fontSize: '11px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.2s ease',
+                boxShadow: statusFilter === 'nao_lidas' ? '0 0 10px rgba(239, 68, 68, 0.4)' : 'none'
+              }}
+              title="Filtrar apenas conversas com mensagens não lidas"
+            >
+              <span>Não lidas</span>
+              {totalUnread > 0 && (
+                <span style={{
+                  backgroundColor: statusFilter === 'nao_lidas' ? '#ffffff' : '#ef4444',
+                  color: statusFilter === 'nao_lidas' ? '#ef4444' : '#ffffff',
+                  borderRadius: '10px',
+                  padding: '1px 5px',
+                  fontSize: '9px',
+                  fontWeight: '800'
+                }}>
+                  {totalUnread}
+                </span>
+              )}
+            </button>
+
+            <button
               onClick={handleMarkAllAsRead}
               disabled={isMarkingAllRead || totalUnread === 0}
               style={{
@@ -299,7 +348,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         padding: '8px 16px',
         borderBottom: '1px solid var(--border-color)',
         display: 'flex',
-        justify: 'space-between',
+        justifyContent: 'space-between',
         alignItems: 'center',
         fontSize: '11px',
         color: 'var(--text-muted)'
@@ -319,6 +368,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           }}
         >
           <option value="all" style={{ background: '#131b2e' }}>Todos ({contactGroups.length} clientes)</option>
+          <option value="nao_lidas" style={{ background: '#131b2e', color: '#f87171', fontWeight: '700' }}>📩 Não Lidas ({totalUnread})</option>
           <option value="com_ia" style={{ background: '#131b2e' }}>Com IA Concierge</option>
           <option value="com_humano" style={{ background: '#131b2e' }}>Com Atendente Humano</option>
           <option value="encerrada" style={{ background: '#131b2e' }}>Encerradas</option>
