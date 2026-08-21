@@ -66,6 +66,15 @@ class InactivityService:
                     if conv.contact and (conv.contact.telefone.startswith("120363") or "@g.us" in conv.contact.telefone or len(conv.contact.telefone) > 15):
                         continue
 
+                    # CRITICAL: Inactivity warnings and closing messages MUST ONLY EVER be sent to live active protocols!
+                    # NEVER send messages to migrated chats, historical WhatsApp conversations, or chats without an open protocol!
+                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
+                        continue
+
+                    extra = dict(conv.dados_adicionais or {})
+                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
+                        continue
+
                     if not conv.ultima_interacao_em:
                         continue
 
@@ -276,6 +285,14 @@ class InactivityService:
 
                 for conv in conversations:
                     if not conv.messages or not conv.contact or not conv.whatsapp_number:
+                        continue
+
+                    # Only auto-respond if a real protocol was opened in the live system
+                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
+                        continue
+
+                    extra = dict(conv.dados_adicionais or {})
+                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
                         continue
 
                     sorted_msgs = sorted(conv.messages, key=lambda m: m.timestamp)

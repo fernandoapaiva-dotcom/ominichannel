@@ -273,6 +273,8 @@ class WhatsAppSyncService:
                                 whatsapp_number_id=whatsapp_number_id,
                                 contact_id=contact.id,
                                 status=ConversationStatus.COM_HUMANO,
+                                protocol_number=None,
+                                dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
                                 criado_em=datetime.utcnow(),
                                 ultima_interacao_em=datetime.utcnow()
                             )
