@@ -1199,7 +1199,7 @@ async def transfer_conversation(
 
     # Broadcast WebSocket message event
     try:
-        from app.api.v1.webhooks import manager
+        from app.api.websockets import manager
         await manager.broadcast({
             "type": "conversation_updated",
             "conversation_id": conv.id,
