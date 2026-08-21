@@ -30,6 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return (localStorage.getItem('omni_theme') as 'dark' | 'light') || 'dark';
   });
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const [dismissedConvIds, setDismissedConvIds] = useState<Set<number>>(new Set());
   const avatarMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,6 +58,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
+    if (dismissedConvIds.has(conv.id)) return false;
+
     const isAssigned = conv.assigned_user_id === user.id || (user.role === 'admin' && conv.status === 'aguardando_atendente');
     if (!isAssigned) return false;
     
@@ -97,18 +100,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const pendingConversations = useMemo(() => {
     if (!conversations || !Array.isArray(conversations)) return [];
     return conversations.filter(isConversationPendingForAttendant);
-  }, [conversations, user]);
+  }, [conversations, user, dismissedConvIds]);
 
   const pendingBadgeCount = pendingConversations.length;
 
   const handleMarkSingleAsRead = async (e: React.MouseEvent, convId: number) => {
+    e.preventDefault();
     e.stopPropagation();
+    // Instantly remove from UI
+    setDismissedConvIds(prev => new Set(prev).add(convId));
     try {
       await apiFetch(`/conversations/${convId}/mark_read`, { method: 'POST' });
-      const target = conversations?.find(c => c.id === convId);
-      if (target) {
-        target.dados_adicionais = { ...(target.dados_adicionais || {}), marked_as_read: true, pending_dismissed: true };
-      }
       if (onRefreshConversations) onRefreshConversations();
     } catch (err) {
       console.error('Error marking conversation read:', err);
@@ -116,12 +118,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const handleMarkAllPendingAsRead = async (e: React.MouseEvent) => {
+    e.preventDefault();
     e.stopPropagation();
+    // Instantly clear all from UI
+    const idsToDismiss = pendingConversations.map(c => c.id);
+    setDismissedConvIds(prev => {
+      const next = new Set(prev);
+      idsToDismiss.forEach(id => next.add(id));
+      return next;
+    });
     try {
       await apiFetch('/conversations/mark_all_read', { method: 'POST' });
-      conversations?.forEach(c => {
-        c.dados_adicionais = { ...(c.dados_adicionais || {}), marked_as_read: true, pending_dismissed: true };
-      });
       if (onRefreshConversations) onRefreshConversations();
     } catch (err) {
       console.error('Error marking all read:', err);
@@ -272,6 +279,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             {pendingBadgeCount > 0 && (
               <button
+                type="button"
                 onClick={handleMarkAllPendingAsRead}
                 style={{
                   background: 'rgba(255, 255, 255, 0.08)',
@@ -392,6 +400,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       👉 Abrir chat
                     </span>
                     <button
+                      type="button"
                       onClick={(e) => handleMarkSingleAsRead(e, conv.id)}
                       style={{
                         background: 'rgba(52, 211, 153, 0.15)',

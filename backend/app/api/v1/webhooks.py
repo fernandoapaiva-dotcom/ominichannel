@@ -400,7 +400,7 @@ async def receive_evolution_webhook(
             if key_id:
                 m_stmt = select(Message).where(Message.whatsapp_msg_id == key_id)
                 m_res = await db.execute(m_stmt)
-                msg_to_update = m_res.scalar_one_or_none()
+                msg_to_update = m_res.scalars().first()
 
             # Fallback by remoteJid
             if not msg_to_update and (item.get("remoteJid") or (item.get("key") or {}).get("remoteJid")):

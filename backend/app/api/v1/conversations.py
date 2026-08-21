@@ -132,6 +132,7 @@ async def mark_all_conversations_read(
 
     if conv_ids:
         from sqlalchemy import update
+        from sqlalchemy.orm.attributes import flag_modified
         upd_msgs = (
             update(Message)
             .where(
@@ -145,7 +146,9 @@ async def mark_all_conversations_read(
         for c in convs:
             extra = dict(c.dados_adicionais or {})
             extra["marked_as_read"] = True
+            extra["pending_dismissed"] = True
             c.dados_adicionais = extra
+            flag_modified(c, "dados_adicionais")
 
         await db.commit()
 
@@ -171,6 +174,7 @@ async def mark_single_conversation_read(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     from sqlalchemy import update
+    from sqlalchemy.orm.attributes import flag_modified
     upd_msgs = (
         update(Message)
         .where(
@@ -183,7 +187,9 @@ async def mark_single_conversation_read(
 
     extra = dict(conv.dados_adicionais or {})
     extra["marked_as_read"] = True
+    extra["pending_dismissed"] = True
     conv.dados_adicionais = extra
+    flag_modified(conv, "dados_adicionais")
 
     await db.commit()
     return {"success": True, "conversation_id": conv.id}

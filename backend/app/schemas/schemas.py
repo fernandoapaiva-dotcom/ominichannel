@@ -162,6 +162,7 @@ class ConversationResponse(BaseModel):
     assigned_user_name: Optional[str] = None
     resumo_ia: Optional[str] = None
     assunto_atual: Optional[str] = None
+    dados_adicionais: Optional[Dict[str, Any]] = None
     criado_em: datetime
     ultima_interacao_em: datetime
     contact: Optional[ContactResponse] = None
