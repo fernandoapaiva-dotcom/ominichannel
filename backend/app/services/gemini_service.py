@@ -9,7 +9,7 @@ from app.core.config import settings
 logger = logging.getLogger("gemini_service")
 
 # =========================================================================
-# CENTRALIZED CUSTOMER NAME SANITIZATION & ANTI-HALLUCINATION DIRECTIVE
+# CENTRALIZED CUSTOMER NAME SANITIZATION & ANTI-HALLUCINATION DIRECTIVES
 # =========================================================================
 
 def sanitize_customer_name(name: Optional[str]) -> str:
@@ -46,6 +46,14 @@ CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE = (
     "===================================================================\n"
 )
 
+RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE = (
+    "=== REGRA MANDATÓRIA CENTRAL: PREÇOS, PRODUTOS & ANTI-ALUCINAÇÃO DE VALORES ===\n"
+    "1. PREÇOS E CONDIÇÕES SÓ COM FONTE REAL: Você SOMENTE pode informar valores em R$, preços de venda, locação ou condições comerciais se constarem EXPRESSAMENTE na 'BASE DE CONHECIMENTO RAG' fornecida.\n"
+    "2. PROIBIÇÃO ABSOLUTA DE ESTIMAR OU INVENTAR PREÇOS: Se o cliente perguntar o valor de um item, serviço ou máquina e o preço NÃO estiver na Base RAG, É ESTRITAMENTE PROIBIDO inventar, supor ou estimar um número!\n"
+    "3. COMPORTAMENTO QUANDO O PREÇO NÃO CONSTA NO RAG: Responda gentilmente que no momento você não tem o valor exato cadastrado e que vai confirmar a cotação atualizada diretamente com a equipe do setor, oferecendo encaminhar ou verificar com um especialista.\n"
+    "=================================================================================\n"
+)
+
 
 class GeminiService:
     def __init__(self):
@@ -69,10 +77,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """
-        Evaluates customer intent against explicit department boundaries defined in Seção 0.
-        Calculates dynamic confidence score (0.0 to 1.0) and handles out-of-scope fallback safely.
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
         clean_name = sanitize_customer_name(customer_name)
@@ -211,6 +215,7 @@ class GeminiService:
             f"Você é a IA de Atendimento da empresa Servweld (Setor: {department_name}).\n"
             f"Atenda o cliente '{clean_name}' com extrema cordialidade e precisão técnica.\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{tenant_prompt or 'Resolva dúvidas com base estritamente no contexto da base de conhecimento da empresa.'}\n\n"
             f"BASE DE CONHECIMENTO RAG:\n{rag_context}"
         )
@@ -275,6 +280,7 @@ class GeminiService:
             f"{dept_desc_prompt}"
             f"Atenda o cliente '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
             "2. ANÁLISE DE HISTÓRICO ANTERIOR E REABERTURA EM ATÉ 5 DIAS (OBRIGATÓRIO NA RESPOSTA):\n"
@@ -674,10 +680,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
-        """
-        Generates the structured 'Resumo Onde Parou' system onboarding card (Seção 2).
-        Synthesizes customer intent, what was already handled by the AI, and the immediate next recommended action.
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
         clean_name = sanitize_customer_name(customer_name)
@@ -777,9 +779,6 @@ class GeminiService:
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
-        """
-        Generates a professional, polite, and helpful draft response suggestion for the human attendant to review and edit before sending (Seção 2 - Botão 'Consultar IA').
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
         clean_name = sanitize_customer_name(customer_name)
@@ -807,6 +806,7 @@ class GeminiService:
             "Você é um consultor assistente de atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
             f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente '{clean_name}'.\n\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{memory_prompt}"
             f"{rag_prompt}"
             "DIRETRIZES DA RESPOSTA:\n"
@@ -814,7 +814,7 @@ class GeminiService:
             "2. Seja extremamente educado, claro, acolhedor, profissional e direto ao ponto.\n"
             "3. Não use introduções explicativas como 'Aqui está uma sugestão:' ou 'Você pode dizer:'. Retorne APENAS o texto exato da resposta a ser colocada no chat.\n"
             "4. Dê continuidade imediata ao diálogo, respondendo à última dúvida ou solicitação do cliente com base no histórico real.\n"
-            "5. Se for necessária uma informação técnica que você não tem certeza, sugira pedir educadamente a informação necessária ao cliente.\n\n"
+            "5. Se for necessária uma informação técnica ou valor que não conste na base, sugira verificar com o setor responsável em vez de inventar números.\n\n"
             f"HISTÓRICO DA CONVERSA:\n" + "\n".join(messages_text)
         )
 
