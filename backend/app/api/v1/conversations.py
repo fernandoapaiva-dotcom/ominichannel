@@ -7,7 +7,7 @@ import re
 import logging
 import unicodedata
 import httpx
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -29,7 +29,7 @@ from app.schemas.schemas import (
 )
 from app.services.whatsapp_provider_service import WhatsAppProviderFactory
 from app.services.settings_service import settings_service
-from app.services.gemini_service import gemini_service
+from app.services.gemini_service import gemini_service, sanitize_customer_name
 from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
 from app.services.distribution_service import distribution_service
@@ -1409,6 +1409,45 @@ async def suggest_reply_for_conversation(
     }
 
 
+async def dispatch_whatsapp_notification(
+    db: AsyncSession,
+    conv: Conversation,
+    text: str,
+    tenant_id: int
+) -> Dict[str, Any]:
+    if not conv.contact or not conv.contact.telefone:
+        return {"success": False, "error": "Contato sem telefone"}
+
+    provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+    try:
+        send_res = await provider.send_text_message(
+            number=conv.contact.telefone,
+            text=text
+        )
+        if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
+            wn_all_stmt = select(WhatsAppNumber).where(
+                WhatsAppNumber.tenant_id == tenant_id,
+                WhatsAppNumber.status == True
+            )
+            wn_all_res = await db.execute(wn_all_stmt)
+            all_wns = wn_all_res.scalars().all()
+            for alt_wn in all_wns:
+                if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
+                    continue
+                alt_res = await evolution_service.send_text_message(
+                    instance_name=alt_wn.instancia_evolution_api,
+                    number=conv.contact.telefone,
+                    text=text
+                )
+                if alt_res.get("success"):
+                    send_res = alt_res
+                    break
+        return send_res
+    except Exception as e:
+        logger.warning(f"Error dispatching WhatsApp protocol message: {e}")
+        return {"success": False, "error": str(e)}
+
+
 @router.post("/{conversation_id}/open_protocol")
 async def open_conversation_protocol(
     conversation_id: int,
@@ -1417,7 +1456,7 @@ async def open_conversation_protocol(
 ):
     """
     Manually opens a formal service protocol on the ongoing conversation.
-    Retroactively marks/registers the protocol for this dialogue phase.
+    Sends WhatsApp notification to the customer and registers protocol milestone.
     """
     stmt = (
         select(Conversation)
@@ -1435,16 +1474,43 @@ async def open_conversation_protocol(
     conv.assigned_user_id = current_user.id
     conv.ultima_interacao_em = datetime.utcnow()
 
-    # System marker message in chat
-    system_msg_content = f"📋 *PROTOCOLO FORMAL ABERTO: #{new_protocol}*\nAtendimento formal iniciado por {current_user.nome}. Todas as mensagens deste atendimento estão associadas a este protocolo."
+    clean_cust_name = sanitize_customer_name(conv.contact.nome if conv.contact else "Cliente")
+    dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "Atendimento"
+    whatsapp_text = (
+        f"📋 *Servweld - Protocolo de Atendimento*\n\n"
+        f"Olá, {clean_cust_name}! Seu atendimento formal foi iniciado com sucesso.\n\n"
+        f"🔢 *Protocolo do seu chamado:* #{new_protocol}\n"
+        f"👤 *Atendente:* {current_user.nome}\n"
+        f"🏢 *Setor:* {dept_name}\n\n"
+        f"Como podemos te ajudar hoje?"
+    )
+
+    # Dispatch to customer's WhatsApp
+    wa_res = await dispatch_whatsapp_notification(db, conv, whatsapp_text, current_user.tenant_id)
+    wa_key_id = wa_res.get("key", {}).get("id") if isinstance(wa_res.get("key"), dict) else wa_res.get("id")
+
+    # Message in chat
     sys_msg = Message(
         conversation_id=conv.id,
-        remetente=MessageSender.SISTEMA,
-        conteudo=system_msg_content,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=whatsapp_text,
         tipo=MessageType.TEXTO,
+        status="sent" if wa_res.get("success") else "pending",
+        whatsapp_msg_id=wa_key_id,
         timestamp=datetime.utcnow()
     )
     db.add(sys_msg)
+
+    # Opening Divider Marker
+    divider_msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.SISTEMA,
+        conteudo=f"PROTOCOLO FORMAL ABERTO: #{new_protocol} Atendimento formal iniciado por {current_user.nome}. Notificação enviada ao cliente.",
+        tipo=MessageType.TEXTO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(divider_msg)
+
     await db.commit()
     await db.refresh(conv)
 
@@ -1464,7 +1530,7 @@ async def open_conversation_protocol(
     return {
         "success": True,
         "protocol_number": new_protocol,
-        "message": f"Protocolo #{new_protocol} aberto com sucesso!"
+        "message": f"Protocolo #{new_protocol} aberto e notificação enviada ao cliente com sucesso!"
     }
 
 
@@ -1476,7 +1542,7 @@ async def close_conversation_protocol(
 ):
     """
     Manually closes/finalizes the active protocol on the ongoing conversation.
-    Inserts a visual divider milestone and leaves the chat freely available for the attendant.
+    Sends WhatsApp closing notification to customer and leaves chat open.
     """
     stmt = (
         select(Conversation)
@@ -1489,18 +1555,40 @@ async def close_conversation_protocol(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     current_proto = conv.protocol_number or "ATUAL"
+    clean_cust_name = sanitize_customer_name(conv.contact.nome if conv.contact else "Cliente")
     now_str = datetime.now().strftime("%d/%m/%Y às %H:%M")
+    
+    whatsapp_text = (
+        f"🔒 *Servweld - Protocolo Finalizado*\n\n"
+        f"Olá, {clean_cust_name}! Informamos que o seu atendimento referente ao *Protocolo #{current_proto}* foi finalizado por {current_user.nome}.\n\n"
+        f"Agradecemos pelo contato! O canal permanece à disposição para quando precisar."
+    )
 
-    # Visual closing divider message in chat
-    system_msg_content = f"🔒 *PROTOCOLO #{current_proto} FINALIZADO*\nAtendimento concluído em {now_str} por {current_user.nome}. O canal de conversa permanece aberto e disponível para novas mensagens."
+    # Dispatch to customer's WhatsApp
+    wa_res = await dispatch_whatsapp_notification(db, conv, whatsapp_text, current_user.tenant_id)
+    wa_key_id = wa_res.get("key", {}).get("id") if isinstance(wa_res.get("key"), dict) else wa_res.get("id")
+
+    # Message in chat
     sys_msg = Message(
         conversation_id=conv.id,
-        remetente=MessageSender.SISTEMA,
-        conteudo=system_msg_content,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=whatsapp_text,
         tipo=MessageType.TEXTO,
+        status="sent" if wa_res.get("success") else "pending",
+        whatsapp_msg_id=wa_key_id,
         timestamp=datetime.utcnow()
     )
     db.add(sys_msg)
+
+    # Closing Divider Milestone
+    divider_msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.SISTEMA,
+        conteudo=f"PROTOCOLO #{current_proto} FINALIZADO Atendimento concluído em {now_str} por {current_user.nome}. O canal de conversa permanece aberto e disponível para novas mensagens.",
+        tipo=MessageType.TEXTO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(divider_msg)
 
     # Clear active protocol number on ongoing conversation so new protocol can be opened in the future
     conv.protocol_number = None
@@ -1524,7 +1612,7 @@ async def close_conversation_protocol(
 
     return {
         "success": True,
-        "message": f"Protocolo #{current_proto} finalizado com sucesso!"
+        "message": f"Protocolo #{current_proto} finalizado e notificação enviada ao cliente com sucesso!"
     }
 
 
