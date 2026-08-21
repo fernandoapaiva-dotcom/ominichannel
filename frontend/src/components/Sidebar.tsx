@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter } from 'lucide-react';
 import { User, Conversation } from '../types';
 
 interface SidebarProps {
