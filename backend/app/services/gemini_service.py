@@ -8,6 +8,45 @@ from app.core.config import settings
 
 logger = logging.getLogger("gemini_service")
 
+# =========================================================================
+# CENTRALIZED CUSTOMER NAME SANITIZATION & ANTI-HALLUCINATION DIRECTIVE
+# =========================================================================
+
+def sanitize_customer_name(name: Optional[str]) -> str:
+    """
+    Centralized anti-hallucination sanitizer for customer names across the entire system.
+    Strips hallucinated prefixes (Eng., Dr., Sr., Prof., Adv., etc.), quotes, extra symbols,
+    and returns a clean, factual customer name (or 'Cliente' if missing/empty).
+    """
+    if not name or not isinstance(name, str):
+        return "Cliente"
+    
+    clean = name.strip()
+    if not clean or clean.lower() in ["none", "null", "undefined", "cliente", "contato", "usuário", "usuario"]:
+        return "Cliente"
+
+    # Strip surrounding quotes or parentheses
+    clean = re.sub(r'^[\s"\'`\(\[\{]+|[\s"\'`\)\]\}]+$', '', clean).strip()
+
+    # Regex to remove hallucinated professional/honorific titles at the beginning of the name
+    title_pattern = r'^(?:(?:eng(?:enheiro|enheira|º|ª)?\.?)|(?:dr(?:a|ª|º)?\.?)|(?:doutor(?:a)?\.?)|(?:sr(?:a|ª)?\.?)|(?:senhor(?:a)?\.?)|(?:prof(?:essor|essora)?\.?)|(?:adv(?:ogado|ogada)?\.?))\s+'
+    clean = re.sub(title_pattern, '', clean, flags=re.IGNORECASE).strip()
+
+    if not clean or len(clean) < 2:
+        return "Cliente"
+
+    return clean
+
+CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE = (
+    "=== REGRA MANDATÓRIA CENTRAL: NOME DO CLIENTE & ANTI-ALUCINAÇÃO ===\n"
+    "1. NUNCA invente, deduza ou adicione títulos profissionais, honoríficos ou acadêmicos (tais como 'Eng.', 'Dr.', 'Engenheiro', 'Doutor', 'Sr.', 'Sra.', 'Prof.', 'Advogado', etc.).\n"
+    "2. NUNCA invente sobrenomes, cargos ou apelidos que não tenham sido expressamente declarados pelo próprio cliente.\n"
+    "3. Se o cliente apenas informou um primeiro nome (ex: 'Marcos'), use ESTRITAMENTE E APENAS 'Marcos'. É ESTRITAMENTE PROIBIDO inventar 'Eng. Marcos', 'Sr. Marcos' ou 'Marcos Roberto'.\n"
+    "4. Se o nome não foi informado ou for genérico ('Cliente'), trate o usuário cordialmente como 'Cliente' sem inventar nenhum nome próprio.\n"
+    "===================================================================\n"
+)
+
+
 class GeminiService:
     def __init__(self):
         if settings.GEMINI_API_KEY:
@@ -36,6 +75,7 @@ class GeminiService:
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        clean_name = sanitize_customer_name(customer_name)
 
         dept_descriptions_text = "\n".join([
             f"• SETOR: '{d.get('nome_departamento') or d.get('nome')}' (ID: {d.get('id')}):\n  {d.get('descricao_roteamento') or d.get('descricao')}"
@@ -45,6 +85,7 @@ class GeminiService:
         system_instruction = (
             "Você é o Especialista de Triagem e Roteamento de Atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência e Locação).\n"
             "Sua única função é classificar a real necessidade do cliente e determinar com máxima precisão o departamento correto.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "DIRETRIZES DE FRONTEIRA ENTRE DEPARTAMENTOS (SEÇÃO 0 - REGRAS DE NEGÓCIO GLOBAIS):\n\n"
             f"{dept_descriptions_text}\n\n"
             "REGRAS CRÍTICAS DE DESAMBIGUAÇÃO DE FRONTEIRA:\n"
@@ -75,7 +116,7 @@ class GeminiService:
         full_prompt = (
             f"{system_instruction}\n\n"
             f"Setor Atual da Conversa: '{current_department_name}'\n"
-            f"Cliente: '{customer_name or 'Cliente'}'\n"
+            f"Cliente: '{clean_name}'\n"
             f"Histórico Recente:\n" + ("\n".join(messages_text) if messages_text else "Sem histórico anterior.") + "\n\n"
             f"Mensagem Atual do Cliente: \"{user_message}\"\n\n"
             "Responda ESTRITAMENTE em formato JSON com o seguinte schema:\n"
@@ -98,17 +139,16 @@ class GeminiService:
                 "target_department_name": current_department_name,
                 "needs_transfer": False,
                 "requires_clarification": False,
-                "confidence": 0.0,
-                "reason": "Sem cliente Gemini configurado.",
-                "customer_intent_summary": user_message
+                "confidence": 0.5,
+                "reason": "Cliente Gemini não inicializado",
+                "customer_intent_summary": "Triagem padrão de atendimento"
             }
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
-        last_error = None
         for m_name in models_to_try:
             try:
                 response = await asyncio.to_thread(
@@ -116,114 +156,92 @@ class GeminiService:
                     model=m_name,
                     contents=full_prompt
                 )
-                raw_text = response.text.strip()
-                
-                # Extract JSON block
-                json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
-                if json_match:
-                    parsed = json.loads(json_match.group(1))
-                else:
-                    json_start = raw_text.find("{")
-                    json_end = raw_text.rfind("}")
-                    if json_start != -1 and json_end != -1:
-                        parsed = json.loads(raw_text[json_start:json_end+1])
-                    else:
-                        raise ValueError(f"No JSON found in response: {raw_text}")
-
-                # Ensure confidence is float
-                parsed["confidence"] = float(parsed.get("confidence", 0.0))
-
-                t_name = str(parsed.get("target_department_name", "")).lower()
-                if t_name in ("nenhum", "null", "none", "") or parsed.get("target_department_id") is None:
-                    parsed["target_department_id"] = None
-                    parsed["target_department_name"] = "NENHUM"
-                    parsed["needs_transfer"] = False
-                else:
-                    for d in departments:
-                        d_name = (d.get("nome_departamento") or d.get("nome") or "").lower()
-                        if d_name in t_name or t_name in d_name:
-                            parsed["target_department_id"] = d.get("id")
-                            parsed["target_department_name"] = d.get("nome_departamento") or d.get("nome")
-                            break
-
-                    if current_department_name.lower() in str(parsed.get("target_department_name", "")).lower():
-                        parsed["needs_transfer"] = False
-
-                return parsed
+                if response and response.text:
+                    clean_text = response.text.strip()
+                    if "```json" in clean_text:
+                        clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+                    elif "```" in clean_text:
+                        clean_text = clean_text.split("```")[1].split("```")[0].strip()
+                    
+                    data = json.loads(clean_text)
+                    return {
+                        "target_department_id": data.get("target_department_id"),
+                        "target_department_name": data.get("target_department_name") or current_department_name,
+                        "needs_transfer": bool(data.get("needs_transfer", False)),
+                        "requires_clarification": bool(data.get("requires_clarification", False)),
+                        "confidence": float(data.get("confidence", 0.8)),
+                        "reason": str(data.get("reason", "Avaliação de intenção concluída")),
+                        "customer_intent_summary": str(data.get("customer_intent_summary", "Atendimento geral"))
+                    }
             except Exception as e:
-                last_error = e
-                logger.warning(f"Model '{m_name}' error: {e}. Trying fallback if available...")
-                await asyncio.sleep(0.5)
+                logger.warning(f"Error evaluating department routing with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
 
-        logger.error(f"All Gemini models failed for department routing: {last_error}")
         return {
             "target_department_id": None,
             "target_department_name": current_department_name,
             "needs_transfer": False,
-            "requires_clarification": True,
-            "confidence": 0.0,
-            "reason": f"Erro de roteamento: {last_error}",
-            "customer_intent_summary": user_message
+            "requires_clarification": False,
+            "confidence": 0.5,
+            "reason": "Fallback após falha de classificação",
+            "customer_intent_summary": "Atendimento padrão"
         }
 
-    async def classify_confirmation_response(
+    async def generate_rag_response(
         self,
-        question_asked: str,
-        customer_response: str,
+        customer_name: str,
+        department_name: str,
+        user_message: str,
+        rag_context: str,
+        conversation_history: List[Dict[str, str]],
+        tenant_prompt: Optional[str] = None,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
-        """
-        Classifies customer response to a confirmation question as 'CONFIRMA', 'NEGA', or 'AMBIGUA' using Gemini.
-        Understands natural Brazilian Portuguese subtleties (e.g. 'não, é isso mesmo', 'beleza 👍', 'show', 'manda ver', 'não precisa', 'talvez').
-        """
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
+        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        clean_name = sanitize_customer_name(customer_name)
 
-        prompt = (
-            "Você é um classificador semântico de linguagem natural em português brasileiro.\n"
-            "Analise a pergunta de confirmação que o sistema fez ao cliente e a resposta enviada pelo cliente no WhatsApp.\n\n"
-            f"Pergunta Feita ao Cliente: \"{question_asked}\"\n"
-            f"Resposta Enviada pelo Cliente: \"{customer_response}\"\n\n"
-            "Classifique a resposta do cliente ESTRITAMENTE em uma das 3 categorias:\n"
-            "- CONFIRMA: O cliente aceita, concorda, confirma a transferência ou diz que é isso mesmo (ex: 'sim', 'correto', 'isso', 'pode transferir', 'não, é isso mesmo', 'beleza', 'manda ver', '👍', 'show', 'por favor', 'bora').\n"
-            "- NEGA: O cliente recusa a transferência, diz que é outro assunto, que não precisa ou que está errado (ex: 'não', 'nada a ver', 'é outro assunto', 'não quero vendas', 'errou', 'não precisa').\n"
-            "- AMBIGUA: O cliente demonstra incerteza, hesitação, responde com algo desconexo ou pergunta algo novo sem confirmar nem negar (ex: 'talvez', 'não sei', 'quanto custa antes?', 'quem sabe').\n\n"
-            "Responda APENAS com uma única palavra: CONFIRMA, NEGA ou AMBIGUA."
+        messages_text = []
+        for msg in conversation_history[-4:]:
+            role = "Cliente" if msg["remetente"] == "cliente" else "Atendente/IA"
+            messages_text.append(f"{role}: {msg['conteudo']}")
+
+        system_instruction = (
+            f"Você é a IA de Atendimento da empresa Servweld (Setor: {department_name}).\n"
+            f"Atenda o cliente '{clean_name}' com extrema cordialidade e precisão técnica.\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{tenant_prompt or 'Resolva dúvidas com base estritamente no contexto da base de conhecimento da empresa.'}\n\n"
+            f"BASE DE CONHECIMENTO RAG:\n{rag_context}"
+        )
+
+        full_prompt = (
+            f"{system_instruction}\n\n"
+            f"Histórico Recente:\n" + "\n".join(messages_text) + "\n\n"
+            f"Mensagem Atual do Cliente: {user_message}\n\n"
+            "Responda de forma clara, natural e prestativa:"
         )
 
         if not client:
-            clean = customer_response.strip().lower()
-            if any(w in clean for w in ["sim", "isso", "correto", "pode", "ok", "beleza"]):
-                return "CONFIRMA"
-            elif any(w in clean for w in ["não", "nao", "outro", "errado"]):
-                return "NEGA"
-            return "AMBIGUA"
+            return f"Olá {clean_name}! Como posso te ajudar hoje?"
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
-            if candidate not in models_to_try:
-                models_to_try.append(candidate)
+        if "gemini-2.5-flash" not in models_to_try:
+            models_to_try.append("gemini-2.5-flash")
 
         for m_name in models_to_try:
             try:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=m_name,
-                    contents=prompt
+                    contents=full_prompt
                 )
-                res_text = response.text.strip().upper()
-                if "CONFIRMA" in res_text:
-                    return "CONFIRMA"
-                elif "NEGA" in res_text:
-                    return "NEGA"
-                else:
-                    return "AMBIGUA"
+                return response.text.strip()
             except Exception as e:
-                logger.warning(f"Error classifying confirmation with '{m_name}': {e}")
-                await asyncio.sleep(0.3)
+                logger.warning(f"Error generating RAG response with '{m_name}': {e}")
+                await asyncio.sleep(0.5)
 
-        return "AMBIGUA"
+        return f"Olá {clean_name}! Em que posso te ajudar hoje?"
 
     async def generate_concierge_response(
         self,
@@ -241,6 +259,7 @@ class GeminiService:
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        clean_name = sanitize_customer_name(customer_name)
 
         dept_desc_prompt = ""
         if department_descriptions:
@@ -254,14 +273,15 @@ class GeminiService:
             f"Você é a IA Concierge de atendimento da empresa Servweld.\n"
             f"Setor atual do atendimento: '{department_name}'. Setores ativos na empresa: [{dept_list_str}].\n"
             f"{dept_desc_prompt}"
-            f"Atenda o cliente '{customer_name or 'Cliente'}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
+            f"Atenda o cliente '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
             "2. ANÁLISE DE HISTÓRICO ANTERIOR E REABERTURA EM ATÉ 5 DIAS (OBRIGATÓRIO NA RESPOSTA):\n"
             "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' fornecido abaixo.\n"
             "   - SE HOUVER HISTÓRICO ANTERIOR RECENTE E A MENSAGEM DO CLIENTE FOR APENAS UMA SAUDAÇÃO VAGA (ex: 'Oi', 'Olá', 'Bom dia', 'Tudo bem?'):\n"
             "     * SUA RESPOSTA AO CLIENTE DEVE OBRIGATORIAMENTE CITAR O ASSUNTO ANTERIOR E FAZER A PERGUNTA DE RETOMADA!\n"
-            "     * Formato obrigatório: 'Olá, [Nome]! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
+            f"     * Formato obrigatório: 'Olá, {clean_name}! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
             "     * NUNCA envie apenas uma saudação vazia se houver histórico anterior recente!\n"
             "   - CONTINUIDADE DIRETA: Se o cliente já indicar continuidade explícita daquele assunto, reconheça imediatamente sem pedir para repetir.\n"
             "   - NOVO ASSUNTO: Se o cliente indicar um novo tema, faça a recepção do novo assunto normalmente.\n"
@@ -298,41 +318,31 @@ class GeminiService:
             f"Diálogo Recente:\n" + "\n".join(messages_text) + "\n\n"
             f"Mensagem Atual do Cliente: {user_message}\n\n"
             "Responda no seguinte formato exato:\n"
-            "RESPOSTA: <sua resposta calorosa e conversacional ao cliente>\n"
-            "TRANSFERIR_SETOR: <NomeExatoDoSetor ou NENHUM>\n"
-            "ENVIAR_LOCALIZACAO: <SIM ou NAO>\n"
-            "ENVIAR_PIX: <SIM ou NAO>\n"
+            "RESPOSTA: <mensagem em português natural para o cliente>\n"
             "ESCALAR_HUMANO: <SIM ou NAO>\n"
-            "NOVA_MEMORIA: <resumo atualizado em 1 ou 2 frases curtas>"
+            "TRANSFERIR_SETOR: <NomeDoNovoSetor ou NAO>\n"
+            "NOVA_MEMORIA: <resumo factual dos fatos relevantes>\n"
+            "FINALIZAR_CONVERSA: <SIM ou NAO>\n"
+            "ENVIAR_LOCALIZACAO: <SIM ou NAO>"
         )
 
-        if not client:
-            needs_human = any(word in user_message.lower() for word in ["humano", "atendente", "falar com pessoa"])
-            wants_loc = any(word in user_message.lower() for word in ["localizacao", "localização", "endereco", "endereço", "onde fica", "como chegar"])
-            wants_pix = any(word in user_message.lower() for word in ["pix", "chave pix", "pode enviar"])
-            target_dept = "NENHUM"
-            if available_departments:
-                for d in available_departments:
-                    if d.lower() != department_name.lower() and d.lower() in user_message.lower():
-                        target_dept = d
-                        break
+        default_res = {
+            "resposta": f"Olá, {clean_name}! Como posso te ajudar hoje?",
+            "escalar_humano": False,
+            "transferir_setor": None,
+            "nova_memoria": memory_summary or "",
+            "finalizar_conversa": False,
+            "enviar_localizacao": False
+        }
 
-            return {
-                "resposta": "Olá! Seja muito bem-vindo. Como posso te ajudar hoje?" if not needs_human else "Estou transferindo seu atendimento para um de nossos especialistas.",
-                "transferir_setor": target_dept,
-                "enviar_localizacao": wants_loc,
-                "enviar_pix": wants_pix,
-                "escalar_humano": needs_human,
-                "nova_memoria": f"Cliente perguntou: '{user_message}'",
-                "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
-            }
+        if not client:
+            return default_res
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
-        last_error = None
         for m_name in models_to_try:
             try:
                 response = await asyncio.to_thread(
@@ -340,64 +350,75 @@ class GeminiService:
                     model=m_name,
                     contents=full_prompt
                 )
-                text_out = response.text.strip()
                 
-                usage = getattr(response, "usage_metadata", None)
-                prompt_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-                response_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-                total_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+                if response and response.text:
+                    text = response.text.strip()
+                    lines = text.split("\n")
+                    
+                    resposta = ""
+                    escalar_humano = False
+                    transferir_setor = None
+                    nova_memoria = memory_summary or ""
+                    finalizar_conversa = False
+                    enviar_localizacao = False
 
-                resposta = ""
-                transferir_setor = "NENHUM"
-                enviar_localizacao = False
-                enviar_pix = False
-                escalar_humano = False
-                nova_memoria = ""
+                    current_field = None
+                    resposta_lines = []
+                    memoria_lines = []
 
-                for line in text_out.split("\n"):
-                    if line.startswith("RESPOSTA:"):
-                        resposta = line.replace("RESPOSTA:", "").strip()
-                    elif line.startswith("TRANSFERIR_SETOR:"):
-                        transferir_setor = line.replace("TRANSFERIR_SETOR:", "").strip()
-                    elif line.startswith("ENVIAR_LOCALIZACAO:"):
-                        enviar_localizacao = "SIM" in line.upper()
-                    elif line.startswith("ENVIAR_PIX:"):
-                        enviar_pix = "SIM" in line.upper()
-                    elif line.startswith("ESCALAR_HUMANO:"):
-                        escalar_humano = "SIM" in line.upper()
-                    elif line.startswith("NOVA_MEMORIA:"):
-                        nova_memoria = line.replace("NOVA_MEMORIA:", "").strip()
+                    for line in lines:
+                        if line.startswith("RESPOSTA:"):
+                            current_field = "RESPOSTA"
+                            resposta_lines.append(line.replace("RESPOSTA:", "").strip())
+                        elif line.startswith("ESCALAR_HUMANO:"):
+                            current_field = "ESCALAR_HUMANO"
+                            val = line.replace("ESCALAR_HUMANO:", "").strip().upper()
+                            escalar_humano = "SIM" in val or "TRUE" in val
+                        elif line.startswith("TRANSFERIR_SETOR:"):
+                            current_field = "TRANSFERIR_SETOR"
+                            val = line.replace("TRANSFERIR_SETOR:", "").strip()
+                            if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
+                                transferir_setor = val
+                        elif line.startswith("NOVA_MEMORIA:"):
+                            current_field = "NOVA_MEMORIA"
+                            memoria_lines.append(line.replace("NOVA_MEMORIA:", "").strip())
+                        elif line.startswith("FINALIZAR_CONVERSA:"):
+                            current_field = "FINALIZAR_CONVERSA"
+                            val = line.replace("FINALIZAR_CONVERSA:", "").strip().upper()
+                            finalizar_conversa = "SIM" in val or "TRUE" in val
+                        elif line.startswith("ENVIAR_LOCALIZACAO:"):
+                            current_field = "ENVIAR_LOCALIZACAO"
+                            val = line.replace("ENVIAR_LOCALIZACAO:", "").strip().upper()
+                            enviar_localizacao = "SIM" in val or "TRUE" in val
+                        else:
+                            if current_field == "RESPOSTA":
+                                resposta_lines.append(line)
+                            elif current_field == "NOVA_MEMORIA":
+                                memoria_lines.append(line)
 
-                if not resposta:
-                    resposta = text_out
+                    resposta = "\n".join(resposta_lines).strip()
+                    nova_memoria = "\n".join(memoria_lines).strip()
 
-                return {
-                    "resposta": resposta,
-                    "transferir_setor": transferir_setor,
-                    "enviar_localizacao": enviar_localizacao,
-                    "enviar_pix": enviar_pix,
-                    "escalar_humano": escalar_humano,
-                    "nova_memoria": nova_memoria or memory_summary or f"Cliente interagiu sobre: {user_message[:50]}",
-                    "tokens": {
-                        "prompt_tokens": prompt_tokens,
-                        "response_tokens": response_tokens,
-                        "total_tokens": total_tokens
+                    if not resposta:
+                        resposta = text
+
+                    return {
+                        "resposta": resposta,
+                        "escalar_humano": escalar_humano,
+                        "transferir_setor": transferir_setor,
+                        "nova_memoria": nova_memoria,
+                        "finalizar_conversa": finalizar_conversa,
+                        "enviar_localizacao": enviar_localizacao
                     }
-                }
             except Exception as e:
-                last_error = e
-                logger.warning(f"Model '{m_name}' error: {e}. Trying fallback if available...")
+                logger.warning(f"Error calling Gemini with model '{m_name}': {e}")
                 await asyncio.sleep(0.5)
 
-        logger.error(f"All Gemini models failed for concierge: {last_error}")
-        return {
-            "resposta": "Recebi sua mensagem. Um momento por favor, vou direcionar para nossa equipe.",
-            "transferir_setor": "NENHUM",
-            "enviar_localizacao": False,
-            "escalar_humano": True,
-            "nova_memoria": "Erro na IA Concierge, escalado automaticamente para humano.",
-            "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
-        }
+        return default_res
+
+    # =========================================================================
+    # MULTIMODAL MEDIA PROCESSING METHODS
+    # =========================================================================
 
     async def process_audio_message(
         self,
@@ -409,28 +430,22 @@ class GeminiService:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
 
-        if not client or not audio_bytes or len(audio_bytes) < 50:
+        if not client or not audio_bytes:
             return {
                 "transcription": "",
                 "success": False,
-                "fallback_message": "Não consegui compreender o áudio. Você poderia enviar sua mensagem por escrito ou gravar um novo áudio?",
+                "fallback_message": "Não foi possível transcrever o áudio recebido. Por favor, envie uma mensagem de texto ou tente gravar novamente.",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
 
-        from google.genai import types
-
-        prompt = (
-            "Ouça atentamente este áudio em português enviado no WhatsApp. "
-            "Transcreva exatamente o que foi falado pelo cliente, sem introduções ou comentários."
-        )
-
-        part = types.Part.from_bytes(
-            data=audio_bytes,
-            mime_type=mime_type or "audio/ogg"
+        audio_prompt = (
+            "Transcreva com extrema precisão o áudio em português brasileiro a seguir.\n"
+            "Retorne APENAS o texto exato falado, sem introduções, aspas ou comentários adicionais.\n"
+            "Se o áudio estiver completamente inaudível, mudo ou irreconhecível, retorne exatamente: [AUDIO_INAUDIVEL]"
         )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -439,21 +454,34 @@ class GeminiService:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=m_name,
-                    contents=[part, prompt]
+                    contents=[
+                        audio_prompt,
+                        genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+                    ]
                 )
-                text_out = response.text.strip() if response and response.text else ""
-                usage = getattr(response, "usage_metadata", None)
-                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+                if response and response.text:
+                    transcription = response.text.strip()
+                    if "[AUDIO_INAUDIVEL]" in transcription or not transcription:
+                        return {
+                            "transcription": "",
+                            "success": False,
+                            "fallback_message": "Não consegui compreender o seu áudio devido ao ruído ou volume baixo. Poderia enviar novamente ou escrever por texto?",
+                            "tokens": {
+                                "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                                "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                                "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                            }
+                        }
 
-                if text_out:
                     return {
-                        "transcription": text_out,
+                        "transcription": transcription,
                         "success": True,
-                        "fallback_message": None,
-                        "model_used": m_name,
-                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                        "tokens": {
+                            "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                            "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                            "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                        },
+                        "model_used": m_name
                     }
             except Exception as e:
                 logger.warning(f"Error processing audio with '{m_name}': {e}")
@@ -462,7 +490,7 @@ class GeminiService:
         return {
             "transcription": "",
             "success": False,
-            "fallback_message": "Não consegui compreender o áudio com clareza. Você poderia enviar sua mensagem por escrito ou gravar um novo áudio?",
+            "fallback_message": "Não consegui processar o áudio enviado. Por favor, digite sua mensagem por texto para que possamos te ajudar.",
             "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
         }
 
@@ -470,37 +498,43 @@ class GeminiService:
         self,
         image_bytes: bytes,
         mime_type: str = "image/jpeg",
-        context_prompt: Optional[str] = None,
+        task_type: str = "general",
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
 
-        if not client or not image_bytes or len(image_bytes) < 50:
+        if not client or not image_bytes:
             return {
-                "analysis": "",
+                "description": "",
+                "extracted_text": "",
                 "success": False,
-                "fallback_message": "Não foi possível visualizar a imagem com nitidez. Por favor, envie uma foto mais nítida ou informe os dados por texto.",
+                "fallback_message": "Não foi possível analisar a imagem enviada. Por favor, envie uma nova foto mais nítida ou detalhe por mensagem de texto.",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
 
-        from google.genai import types
-
-        prompt = context_prompt or (
-            "Analise esta imagem enviada pelo cliente no WhatsApp da empresa Servweld (equipamentos e serviços de solda).\n"
-            "- Se for um comprovante de pagamento / PIX / nota fiscal: extraia o valor, favorecido, data e status da transação.\n"
-            "- Se for uma foto de máquina, tocha, cabo, peça ou equipamento de solda: descreva o modelo visível e identifique se há defeito aparente, código de erro no display ou desgaste visível.\n"
-            "- Se for uma foto de placa de identificação técnica: extraia a voltagem, amperagem, número de série e modelo."
-        )
-
-        part = types.Part.from_bytes(
-            data=image_bytes,
-            mime_type=mime_type or "image/jpeg"
-        )
+        if task_type == "defect_inspection":
+            image_prompt = (
+                "Você é um técnico especialista em equipamentos de solda e corte da empresa Servweld.\n"
+                "Analise detalhadamente a foto do equipamento ou peça enviada pelo cliente.\n"
+                "Identifique:\n"
+                "1. O tipo de equipamento, componente ou peça visível (tocha, cabo, bocal, máquina, etc.).\n"
+                "2. Quaisquer defeitos visíveis, danos, rompimentos, queimaduras, desgaste ou anomalias.\n"
+                "3. Um diagnóstico técnico inicial claro em 2 a 3 frases com a recomendação prática.\n"
+                "Se a imagem estiver totalmente ilegível, escura, corrompida ou não for de equipamento/ferramenta, retorne: [IMAGEM_ILEGIVEL]"
+            )
+        else:
+            image_prompt = (
+                "Você é um assistente de OCR e visão computacional da empresa Servweld.\n"
+                "Analise a imagem enviada (comprovante de pagamento, nota fiscal, documento ou texto).\n"
+                "Extraia com precisão todas as informações textuais relevantes (valor em R$, pagador, recebedor, data, ID de transação Pix ou dados da nota).\n"
+                "Resuma de forma clara e factual os dados encontrados.\n"
+                "Se a imagem estiver completamente ilegível, borrada ou sem texto identificável, retorne: [IMAGEM_ILEGIVEL]"
+            )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -509,66 +543,80 @@ class GeminiService:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=m_name,
-                    contents=[part, prompt]
+                    contents=[
+                        image_prompt,
+                        genai.types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+                    ]
                 )
-                text_out = response.text.strip() if response and response.text else ""
-                usage = getattr(response, "usage_metadata", None)
-                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+                if response and response.text:
+                    analysis_text = response.text.strip()
+                    if "[IMAGEM_ILEGIVEL]" in analysis_text or not analysis_text:
+                        return {
+                            "description": "",
+                            "extracted_text": "",
+                            "success": False,
+                            "fallback_message": "A foto enviada está um pouco ilegível ou escura. Poderia nos enviar uma nova imagem mais nítida e iluminada?",
+                            "tokens": {
+                                "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                                "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                                "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                            }
+                        }
 
-                if text_out:
                     return {
-                        "analysis": text_out,
+                        "description": analysis_text,
+                        "extracted_text": analysis_text,
                         "success": True,
-                        "fallback_message": None,
-                        "model_used": m_name,
-                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                        "tokens": {
+                            "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                            "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                            "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                        },
+                        "model_used": m_name
                     }
             except Exception as e:
                 logger.warning(f"Error processing image with '{m_name}': {e}")
                 await asyncio.sleep(0.3)
 
         return {
-            "analysis": "",
+            "description": "",
+            "extracted_text": "",
             "success": False,
-            "fallback_message": "Não foi possível visualizar a imagem com nitidez. Por favor, envie uma foto mais nítida ou informe os dados por texto.",
+            "fallback_message": "Não foi possível carregar a imagem. Por favor, reenvie a foto ou digite as informações.",
             "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
         }
 
     async def process_document_message(
         self,
-        doc_bytes: bytes,
-        mime_type: str = "application/pdf",
-        context_prompt: Optional[str] = None,
+        pdf_bytes: bytes,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
 
-        if not client or not doc_bytes or len(doc_bytes) < 30:
+        if not client or not pdf_bytes:
             return {
                 "extracted_content": "",
                 "success": False,
-                "fallback_message": "Não foi possível extrair o conteúdo deste documento PDF. Por favor, reenvie o arquivo ou nos informe os dados por texto.",
+                "fallback_message": "Não foi possível ler o documento PDF enviado. Por favor, envie novamente ou nos informe os dados por texto.",
                 "tokens": {"prompt_tokens": 0, "response_tokens": 0, "total_tokens": 0}
             }
 
-        from google.genai import types
-
-        prompt = context_prompt or (
-            "Leia e analise o documento PDF em anexo enviado pelo cliente. "
-            "Extraia os principais dados relevantes (número do pedido/fatura/proposta, itens solicitados, valores, especificações técnicas de solda e prazos) de forma clara e estruturada."
-        )
-
-        part = types.Part.from_bytes(
-            data=doc_bytes,
-            mime_type=mime_type or "application/pdf"
+        doc_prompt = (
+            "Você é o assistente de análise de documentos da empresa Servweld.\n"
+            "Leia com atenção o documento PDF em anexo (Ordem de Serviço, Nota Fiscal, Contrato ou Relatório Técnico).\n"
+            "Extraia e resuma de forma estruturada:\n"
+            "- Tipo de documento\n"
+            "- Número de identificação/OS/NF\n"
+            "- Partes envolvidas (cliente, prestador)\n"
+            "- Descrição dos serviços, produtos ou equipamentos citados\n"
+            "- Valores e prazos informados (se houver)\n"
+            "Se o documento for inválido, corrompido ou ilegível, retorne exatamente: [PDF_CORROMPIDO]"
         )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -577,24 +625,37 @@ class GeminiService:
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=m_name,
-                    contents=[part, prompt]
+                    contents=[
+                        doc_prompt,
+                        genai.types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+                    ]
                 )
-                text_out = response.text.strip() if response and response.text else ""
-                usage = getattr(response, "usage_metadata", None)
-                p_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
-                c_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-                t_tokens = getattr(usage, "total_token_count", 0) if usage else 0
+                if response and response.text:
+                    extracted = response.text.strip()
+                    if "[PDF_CORROMPIDO]" in extracted or not extracted:
+                        return {
+                            "extracted_content": "",
+                            "success": False,
+                            "fallback_message": "O arquivo PDF enviado parece estar corrompido ou ilegível. Por favor, tente enviar novamente o arquivo ou tire uma foto dele.",
+                            "tokens": {
+                                "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                                "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                                "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                            }
+                        }
 
-                if text_out:
                     return {
-                        "extracted_content": text_out,
+                        "extracted_content": extracted,
                         "success": True,
-                        "fallback_message": None,
-                        "model_used": m_name,
-                        "tokens": {"prompt_tokens": p_tokens, "response_tokens": c_tokens, "total_tokens": t_tokens}
+                        "tokens": {
+                            "prompt_tokens": getattr(response.usage_metadata, "prompt_token_count", 0),
+                            "response_tokens": getattr(response.usage_metadata, "candidates_token_count", 0),
+                            "total_tokens": getattr(response.usage_metadata, "total_token_count", 0)
+                        },
+                        "model_used": m_name
                     }
             except Exception as e:
-                logger.warning(f"Error processing document with '{m_name}': {e}")
+                logger.warning(f"Error processing PDF document with '{m_name}': {e}")
                 await asyncio.sleep(0.3)
 
         return {
@@ -619,11 +680,12 @@ class GeminiService:
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+        clean_name = sanitize_customer_name(customer_name)
 
         if not messages_history:
             return (
                 f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-                f"👤 *Cliente:* {customer_name}\n"
+                f"👤 *Cliente:* {clean_name}\n"
                 f"🔢 *Protocolo:* {protocol_number}\n"
                 f"🏢 *Departamento:* {department_name}\n"
                 f"🎯 *Motivo do Contato:* Novo chamado iniciado pelo cliente.\n"
@@ -650,16 +712,17 @@ class GeminiService:
         prompt = (
             f"Você é o assistente de IA responsável pelo Onboarding do Atendente Humano da empresa Servweld.\n"
             f"Analise a conversa real abaixo entre o cliente e a IA no setor '{department_name}' (Protocolo: {protocol_number}).\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "Gere um resumo estruturado no seguinte formato exato:\n"
             f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-            f"👤 *Cliente:* {customer_name}\n"
+            f"👤 *Cliente:* {clean_name}\n"
             f"🔢 *Protocolo:* {protocol_number}\n"
             f"🏢 *Departamento:* {department_name}\n"
             "🎯 *Motivo do Contato:* <resumo em 1 frase factual sobre o que o cliente quer>\n"
             "📍 *Onde Parou:* <o que a IA/cliente já falaram antes de passar para o humano>\n"
             "👉 *Próxima Ação Sugerida:* <orientação prática e direta para o atendente continuar o atendimento sem repetir perguntas já respondidas>\n\n"
-            "DIRETRIZES ESTRITAS DE FACTUALIDADE E ANTI-ALUCINAÇÃO:\n"
-            f"1. NOME DO CLIENTE: No campo 'Cliente', use EXATAMENTE '{customer_name}'. É PROIBIDO inventar títulos profissionais (Eng., Dr., etc.) ou sobrenomes que não constem expressamente na identificação.\n"
+            "DIRETRIZES ESTRITAS DE FACTUALIDADE:\n"
+            f"1. NOME DO CLIENTE: No campo 'Cliente', use EXATAMENTE '{clean_name}'. É PROIBIDO inventar títulos profissionais (Eng., Dr., etc.) ou sobrenomes que não constem expressamente na identificação.\n"
             "2. BASE EXCLUSIVAMENTE FACTUAL: Use apenas o que foi dito nas mensagens reais. É proibido inventar valores, modelos de equipamentos, marcas ou problemas técnicos adicionais.\n"
             "3. Seja direto, profissional e objetivo.\n\n"
             f"HISTÓRICO REAL DA CONVERSA:\n" + "\n".join(messages_text)
@@ -668,7 +731,7 @@ class GeminiService:
         if not client:
             return (
                 f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-                f"👤 *Cliente:* {customer_name}\n"
+                f"👤 *Cliente:* {clean_name}\n"
                 f"🔢 *Protocolo:* {protocol_number}\n"
                 f"🏢 *Departamento:* {department_name}\n"
                 f"🎯 *Motivo do Contato:* Atendimento transferido para equipe humana.\n"
@@ -696,7 +759,7 @@ class GeminiService:
 
         return (
             f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-            f"👤 *Cliente:* {customer_name}\n"
+            f"👤 *Cliente:* {clean_name}\n"
             f"🔢 *Protocolo:* {protocol_number}\n"
             f"🏢 *Departamento:* {department_name}\n"
             f"🎯 *Motivo do Contato:* Atendimento transferido para operador.\n"
@@ -719,6 +782,7 @@ class GeminiService:
         """
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+        clean_name = sanitize_customer_name(customer_name)
 
         messages_text = []
         for m in messages_history:
@@ -741,7 +805,8 @@ class GeminiService:
 
         prompt = (
             "Você é um consultor assistente de atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
-            f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente '{customer_name}'.\n\n"
+            f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente '{clean_name}'.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{memory_prompt}"
             f"{rag_prompt}"
             "DIRETRIZES DA RESPOSTA:\n"
@@ -754,7 +819,7 @@ class GeminiService:
         )
 
         if not client:
-            return f"Olá {customer_name}, boa tarde! Como posso te ajudar hoje?"
+            return f"Olá {clean_name}, boa tarde! Como posso te ajudar hoje?"
 
         models_to_try = [primary_model]
         for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
@@ -774,7 +839,7 @@ class GeminiService:
                 logger.warning(f"Error generating suggested reply with '{m_name}': {e}")
                 await asyncio.sleep(0.3)
 
-        return f"Olá {customer_name}! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
+        return f"Olá {clean_name}! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
 
     async def summarize_conversation_for_transfer(
         self,
@@ -785,6 +850,7 @@ class GeminiService:
     ) -> str:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        clean_name = sanitize_customer_name(customer_name)
 
         if not messages_history:
             return "Nenhum histórico prévio de mensagens para resumir."
@@ -807,7 +873,8 @@ class GeminiService:
 
         full_prompt = (
             f"Você é um assistente de IA corporativo ultra-preciso, factual e objetivo.\n"
-            f"Sua tarefa é analisar a conversa real com o cliente '{customer_name}' abaixo e gerar um RESUMO EXECUTIVO verdadeiro para o próximo atendente.\n\n"
+            f"Sua tarefa é analisar a conversa real com o cliente '{clean_name}' abaixo e gerar um RESUMO EXECUTIVO verdadeiro para o próximo atendente.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "REGRAS DE CONFIABILIDADE E ANTI-ALUCINAÇÃO:\n"
             "1. Baseie-se ESTRITAMENTE E APENAS no conteúdo das mensagens fornecidas no histórico.\n"
             "2. É PROIBIDO inventar produtos, equipamentos, valores, peças ou ocorrências que não estejam explicitamente no texto.\n"
@@ -821,7 +888,7 @@ class GeminiService:
 
         if not client:
             return (
-                f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
+                f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {clean_name}.\n"
                 f"• 📝 **Histórico**: Conversa transferida manualmente pelo atendente.\n"
                 f"• ⚡ **Próximo Passo**: Verifique a última mensagem enviada."
             )
@@ -843,9 +910,10 @@ class GeminiService:
                 await asyncio.sleep(0.5)
 
         return (
-            f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {customer_name}.\n"
+            f"• 🎯 **Objetivo Principal**: Transferência de atendimento de {clean_name}.\n"
             f"• 📝 **Histórico**: Conversa transferida com histórico disponível.\n"
             f"• ⚡ **Próximo Passo**: Analise as mensagens anteriores."
         )
+
 
 gemini_service = GeminiService()

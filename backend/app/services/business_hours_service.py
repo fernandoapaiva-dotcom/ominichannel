@@ -64,9 +64,11 @@ class BusinessHoursService:
         """
         Returns the official standard out-of-office message (Seção 3).
         """
+        from app.services.gemini_service import sanitize_customer_name
+        clean_name = sanitize_customer_name(customer_name)
         return (
             f"🌙 *ATENDIMENTO FORA DO EXPEDIENTE*\n\n"
-            f"Olá, {customer_name}! No momento nossa equipe humana está fora do horário comercial.\n\n"
+            f"Olá, {clean_name}! No momento nossa equipe humana está fora do horário comercial.\n\n"
             f"⏰ *Horário de Atendimento da Servweld:*\n"
             f"• Segunda a Sexta-feira: das 08:00 às 18:00 (Horário de Brasília)\n"
             f"• Sábados, Domingos e Feriados: Fechado\n\n"

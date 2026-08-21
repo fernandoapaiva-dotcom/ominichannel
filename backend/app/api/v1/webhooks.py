@@ -19,7 +19,7 @@ from app.models.models import (
 )
 
 from app.services.evolution_service import evolution_service
-from app.services.gemini_service import gemini_service
+from app.services.gemini_service import gemini_service, sanitize_customer_name
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol
@@ -657,13 +657,14 @@ async def receive_evolution_webhook(
         except Exception:
             profile_pic_url = None
 
+    clean_push_name = sanitize_customer_name(push_name) if push_name else "Cliente"
     if not contact:
-        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=push_name, foto_perfil_url=profile_pic_url)
+        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=clean_push_name, foto_perfil_url=profile_pic_url)
         db.add(contact)
         await db.flush()
     else:
-        if push_name and push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente" or is_group):
-            contact.nome = push_name
+        if clean_push_name and clean_push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente" or is_group):
+            contact.nome = clean_push_name
         if profile_pic_url and contact.foto_perfil_url != profile_pic_url:
             contact.foto_perfil_url = profile_pic_url
 
