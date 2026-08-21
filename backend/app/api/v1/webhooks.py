@@ -886,6 +886,30 @@ async def receive_evolution_webhook(
     conversation.dados_adicionais = extra
     conversation.ultima_interacao_em = datetime.utcnow()
 
+    # Check if incoming message is from another internal WhatsApp number of the company
+    all_tenant_numbers_stmt = select(WhatsAppNumber.numero).where(WhatsAppNumber.tenant_id == tenant_id)
+    all_tenant_numbers_res = await db.execute(all_tenant_numbers_stmt)
+    tenant_phones = [
+        "".join(filter(str.isdigit, str(p))) for p in all_tenant_numbers_res.scalars().all() if p
+    ]
+
+    is_internal_company_number = False
+    for tp in tenant_phones:
+        if tp and (phone_number == tp or (len(phone_number) >= 8 and len(tp) >= 8 and phone_number[-8:] == tp[-8:])):
+            is_internal_company_number = True
+            break
+
+    is_bot_echo = (
+        "*🤖 IA Concierge:*" in text_content or
+        "🤖" in text_content or
+        "Protocolo de Atendimento:" in text_content or
+        "Protocolo:" in text_content or
+        "DADOS OFICIAIS PARA PAGAMENTO VIA PIX" in text_content or
+        ("Servweld" in text_content and "GPS" in text_content) or
+        ("SOF Q 5" in text_content and "71215-226" in text_content) or
+        is_bot_or_menu_message(text_content)
+    )
+
     # 4. Save Customer Message with WhatsApp Message ID
     user_msg = Message(
         conversation_id=conversation.id,
@@ -915,33 +939,20 @@ async def receive_evolution_webhook(
         }
     )
 
-    # Auto Re-engagement / Anti-Vacuum logic:
-    # If conversation is currently COM_HUMANO, check if customer is sending a greeting or if human agent hasn't replied recently
+    # Internal Number / Bot Echo Shield: Never run AI if sender is another internal company phone or automated bot
+    if is_internal_company_number or is_bot_echo:
+        logger.info(f"[ANTI-LOOP ESCUDO] Mensagem de número interno ({phone_number}) ou eco de bot detectado. Silenciando IA.")
+        conversation.status = ConversationStatus.COM_HUMANO
+        await db.commit()
+        return {"status": "success", "action": "internal_number_or_bot_silenced"}
+
+    # Safe Re-engagement logic: Only reactivate AI if customer explicitly asks for it
     if conversation.status == ConversationStatus.COM_HUMANO:
-        should_reactivate_ai = False
-
         text_lower = text_content.strip().lower()
-        greetings = ["oi", "olá", "ola", "boa tarde", "bom dia", "boa noite", "oie", "opa", "atendimento", "ajuda", "falar com ia", "menu"]
-        is_greeting = any(g in text_lower for g in greetings)
-
-        # Query latest attendant message safely in async SQLAlchemy
-        att_stmt = select(Message).where(
-            Message.conversation_id == conversation.id,
-            Message.remetente == MessageSender.ATENDENTE
-        ).order_by(Message.timestamp.desc()).limit(1)
-        att_res = await db.execute(att_stmt)
-        last_attendant_msg = att_res.scalar_one_or_none()
-
-        if not last_attendant_msg:
-            should_reactivate_ai = True
-        else:
-            time_diff_min = (datetime.utcnow() - last_attendant_msg.timestamp).total_seconds() / 60.0
-            if time_diff_min >= 3.0 or is_greeting:
-                should_reactivate_ai = True
-
-        if should_reactivate_ai:
+        explicit_ai_keywords = ["falar com ia", "reativar ia", "chamar ia", "iniciar ia", "menu ia"]
+        if any(k in text_lower for k in explicit_ai_keywords):
             conversation.status = ConversationStatus.COM_IA
-            logger.info(f"[IA REATIVADA AUTOMATICAMENTE] Conversa {conversation.id} com {contact.nome or contact.telefone} reativada para COM_IA.")
+            logger.info(f"[IA REATIVADA EXPLICITAMENTE] Conversa {conversation.id} com {contact.nome or contact.telefone} reativada para COM_IA a pedido do cliente.")
             await ws_manager.broadcast_to_department(
                 tenant_id=tenant_id,
                 whatsapp_number_id=whatsapp_number.id,
@@ -951,8 +962,6 @@ async def receive_evolution_webhook(
                     "status": "com_ia"
                 }
             )
-
-
 
     # 5. Process AI Concierge response if conversation is with AI
     current_status_str = getattr(conversation.status, 'value', str(conversation.status))
