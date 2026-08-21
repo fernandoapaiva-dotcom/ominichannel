@@ -35,6 +35,14 @@ def sanitize_customer_name(name: Optional[str]) -> str:
     if not clean or len(clean) < 2:
         return "Cliente"
 
+    # If the contact is an internal device/branch name (e.g., "Servweld Assistência Técnica", "Servsolda Locação"), return "Cliente"
+    internal_keywords = [
+        "servweld", "servsolda", "assistência técnica", "assistencia tecnica",
+        "locação e corte", "locacao e corte", "financeiro servweld", "vendas e e-commerce"
+    ]
+    if any(k in clean.lower() for k in internal_keywords):
+        return "Cliente"
+
     return clean
 
 def is_bot_or_menu_message(text: str) -> bool:
@@ -134,7 +142,13 @@ class GeminiService:
             "4. FORA DO ESCOPO OU MENSAGEM VAGA (REGRA DE FALLBACK / NÃO-FORÇAR DEPARTAMENTO):\n"
             "   - Se a mensagem do cliente NÃO tiver relação com produtos/serviços de solda, locação, assistência ou financeiro da empresa (ex: pedir comida, perguntar sobre outros assuntos, trânsito, piadas) OU for apenas uma saudação genérica vaga (ex: 'oi', 'bom dia') que ainda não revela a necessidade:\n"
             "     * NÃO force nenhum departamento!\n"
-            "     * Defina: target_department_id = null, target_department_name = 'NENHUM', needs_transfer = false, requires_clarification = true, confidence = 0.0 a 0.3.\n\n"
+            "     * Defina: target_department_id = null, target_department_name = 'NENHUM', needs_transfer = false, requires_clarification = true, confidence = 0.0 a 0.3.\n"
+            "5. REGRA MANDATÓRIA DE PERMANÊNCIA NO SETOR ATUAL (PROIBIÇÃO DE TRANSFERÊNCIAS INDEVIDAS):\n"
+            "   - NUNCA use o nome do contato cadastrado na agenda (ex: se o contato contiver 'Assistência Técnica' ou 'Vendas' no nome) para decidir o setor! O setor depende 100% da mensagem do cliente.\n"
+            f"   - Se o cliente perguntar por um atendente/colaborador específico (ex: 'Consigo falar com o Fernando?', 'Quero falar com um humano', 'Me passa para um atendente', 'Pode me atender?'), ISSO NUNCA É MOTIVO DE TRANSFERÊNCIA DE SETOR!\n"
+            f"   - O atendimento DEVE PERMANECER NO SETOR ATUAL ('{current_department_name}')!\n"
+            "     * Defina: needs_transfer = false, target_department_id = null, target_department_name = 'NENHUM', confidence = 0.0.\n"
+            "   - SOMENTE transfira se a mensagem do cliente contiver expressamente palavras-chave e intenção técnica/comercial clara de OUTRO setor diferente do atual.\n\n"
             "CALIBRAÇÃO DINÂMICA DO CAMPO 'confidence' (NÃO USE VALOR FIXO):\n"
             "- 0.90 a 1.00: Intenção cristalina, explícita e inequívoca com termos diretos do setor.\n"
             "- 0.60 a 0.89: Intenção provável, mas com detalhes parciais ou ligeira ambiguidade contextual.\n"
@@ -289,6 +303,8 @@ class GeminiService:
         tenant_prompt: Optional[str] = None,
         available_departments: Optional[List[str]] = None,
         department_descriptions: Optional[Dict[str, str]] = None,
+        protocol_number: Optional[str] = None,
+        should_announce_protocol: bool = False,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -304,10 +320,18 @@ class GeminiService:
 
         dept_list_str = ", ".join(available_departments) if available_departments else department_name
 
+        proto_prompt = ""
+        if protocol_number:
+            if should_announce_protocol:
+                proto_prompt = f"PROTOCOLO OFICIAL DESTE ATENDIMENTO: #{protocol_number}\n- REGRA OBRIGATÓRIA: Como é a abertura deste atendimento, mencione o protocolo formal logo no início da mensagem (ex: '📋 Protocolo: #{protocol_number}').\n\n"
+            else:
+                proto_prompt = f"PROTOCOLO OFICIAL DESTE ATENDIMENTO: #{protocol_number}\n\n"
+
         system_instruction = (
             f"Você é a IA Concierge de atendimento da empresa Servweld.\n"
             f"Setor atual do atendimento: '{department_name}'. Setores ativos na empresa: [{dept_list_str}].\n"
             f"{dept_desc_prompt}"
+            f"{proto_prompt}"
             f"Atenda o cliente '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
@@ -322,7 +346,14 @@ class GeminiService:
             "   - CONTINUIDADE DIRETA: Se o cliente já indicar continuidade explícita daquele assunto, reconheça imediatamente sem pedir para repetir.\n"
             "   - NOVO ASSUNTO: Se o cliente indicar um novo tema, faça a recepção do novo assunto normalmente.\n"
             "3. FORA DO ESCOPO: Se o cliente fizer perguntas totalmente desconexas com a empresa (ex: 'Vocês vendem pizza?'), esclareça gentilmente os serviços e produtos que a Servweld atende (equipamentos de solda, corte, assistência, locação e financeiro).\n"
-            "4. TROCA DE SETOR: Se o cliente necessitar de outro setor com base nas fronteiras (ex: problema em máquina alugada -> Locação; dúvida de boleto -> Financeiro), informe gentilmente a mudança, defina 'TRANSFERIR_SETOR: <NomeExatoDoSetor>', MANTENHA 'ESCALAR_HUMANO: NAO' e solicite os dados do novo setor em bloco.\n"
+            "4. REGRAS DE SETOR & PROIBIÇÃO DE TRANSFERÊNCIAS INDEVIDAS:\n"
+            f"   - Se o cliente pedir para falar com um atendente humano, vendedor ou colaborador específico (ex: 'Consigo falar com o Fernando?', 'Quero falar com atendente', 'Pode me atender?'):\n"
+            f"     * O ATENDIMENTO DEVE PERMANECER NO SETOR ATUAL ('{department_name}')!\n"
+            "     * DEFINA 'TRANSFERIR_SETOR: NAO'.\n"
+            f"     * Tente adiantar as informações antes de transferir ('Com certeza! Para eu já adiantar o seu atendimento com a nossa equipe de {department_name}, você poderia me informar o que você precisa ou qual máquina tem interesse?').\n"
+            "   - NUNCA transfira de setor com base no nome salvo na agenda do cliente!\n"
+            "   - SOMENTE defina 'TRANSFERIR_SETOR: <NomeDoSetor>' se a mensagem do cliente contiver expressamente palavras-chave e intenção clara de OUTRO setor (ex: problema em máquina alugada -> Locação; comprar produtos novos -> Vendas; dúvida de boleto -> Financeiro).\n"
+            "   - SE VOCÊ FOR TRANSFERIR DE SETOR: Você DEVE OBRIGATORIAMENTE informar o cliente no texto da resposta ('Com certeza! Estou transferindo seu atendimento para a nossa equipe de [NomeDoSetor], que é o setor responsável por...')!\n"
             "5. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano, PERGUNTE PRIMEIRO:\n"
             "   'Antes de te encaminhar para o especialista humano do setor, teria mais alguma informação ou detalhe que você gostaria de acrescentar ao seu chamado?'\n"
             "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final e defina 'ESCALAR_HUMANO: SIM'.\n"

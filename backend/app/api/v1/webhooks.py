@@ -93,7 +93,7 @@ async def receive_evolution_webhook(
         dedup_key = f"{event_type}_{msg_id}"
         now_ts = datetime.utcnow().timestamp()
         # Clean cache older than 60s
-        to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if now_ts - ts > 60]
+        to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if (now_ts - (ts.timestamp() if isinstance(ts, datetime) else float(ts))) > 60]
         for k in to_del:
             del SEEN_WEBHOOK_KEYS[k]
         if dedup_key in SEEN_WEBHOOK_KEYS:
@@ -567,14 +567,15 @@ async def receive_evolution_webhook(
             logger.info(f"[DEDUPLICACAO IN-MEMORY] Mensagem '{msg_id}' já processada recentemente. Descartando duplicata.")
             return {"status": "success", "action": "ignored_duplicate"}
 
+        now_ts = datetime.utcnow().timestamp()
         existing_msg_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
         existing_msg_res = await db.execute(existing_msg_stmt)
         if existing_msg_res.scalars().first():
             logger.info(f"[DEDUPLICACAO DB] Mensagem '{msg_id}' já gravada no banco. Descartando duplicata.")
-            SEEN_WEBHOOK_KEYS[msg_id] = datetime.utcnow()
+            SEEN_WEBHOOK_KEYS[msg_id] = now_ts
             return {"status": "success", "action": "ignored_duplicate"}
 
-        SEEN_WEBHOOK_KEYS[msg_id] = datetime.utcnow()
+        SEEN_WEBHOOK_KEYS[msg_id] = now_ts
         if len(SEEN_WEBHOOK_KEYS) > 5000:
             SEEN_WEBHOOK_KEYS.clear()
 
@@ -1188,8 +1189,8 @@ async def receive_evolution_webhook(
                         "escalar_humano": False,
                         "nova_memoria": f"Aguardando confirmação do cliente para transferir para {target_wn.nome_departamento}"
                     }
-                    conversation.assunto_atual = f"CONFIRM_TRANSFER:{target_wn.id}:{intent_summary}"
                 else:
+                    should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                     ai_output = await gemini_service.generate_concierge_response(
                         customer_name=contact.nome or "Cliente",
                         department_name=whatsapp_number.nome_departamento,
@@ -1198,10 +1199,16 @@ async def receive_evolution_webhook(
                         memory_summary=memory_summary,
                         rag_context=rag_context,
                         available_departments=available_dept_names,
+                        protocol_number=conversation.protocol_number,
+                        should_announce_protocol=should_announce_proto,
                         tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                         tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                     )
+                    extra = dict(conversation.dados_adicionais or {})
+                    extra["protocol_announced"] = True
+                    conversation.dados_adicionais = extra
             else:
+                should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                 ai_output = await gemini_service.generate_concierge_response(
                     customer_name=contact.nome or "Cliente",
                     department_name=whatsapp_number.nome_departamento,
@@ -1210,9 +1217,14 @@ async def receive_evolution_webhook(
                     memory_summary=memory_summary,
                     rag_context=rag_context,
                     available_departments=available_dept_names,
+                    protocol_number=conversation.protocol_number,
+                    should_announce_protocol=should_announce_proto,
                     tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                     tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                 )
+                extra = dict(conversation.dados_adicionais or {})
+                extra["protocol_announced"] = True
+                conversation.dados_adicionais = extra
 
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
@@ -1250,6 +1262,10 @@ async def receive_evolution_webhook(
                 old_dept_name = whatsapp_number.nome_departamento
                 conversation.whatsapp_number_id = target_wn.id
                 whatsapp_number = target_wn
+
+                # Guarantee the customer is explicitly informed about the sector transfer
+                if target_wn.nome_departamento.lower() not in ai_reply.lower():
+                    ai_reply = f"Com certeza! Estou transferindo seu atendimento para a nossa equipe de *{target_wn.nome_departamento}*, que é o setor responsável e dará continuidade.\n\n" + ai_reply
 
                 # Insert system message logging the sector transfer
                 sys_transfer_msg = Message(
