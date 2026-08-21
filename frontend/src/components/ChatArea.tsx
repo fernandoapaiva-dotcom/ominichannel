@@ -1301,49 +1301,49 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <button
               onClick={handleCloseProtocol}
               disabled={isOperatingProtocol}
-              className="btn-secondary"
               style={{
                 height: '34px',
-                padding: '0 12px',
+                padding: '0 14px',
                 borderRadius: 'var(--radius-md)',
-                fontSize: '11px',
+                fontSize: '12px',
                 fontWeight: '700',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
-                backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                color: '#f87171',
+                border: '1px solid #ef4444',
+                backgroundColor: 'rgba(239, 68, 68, 0.25)',
+                color: '#fca5a5',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                boxShadow: '0 0 10px rgba(239, 68, 68, 0.3)'
               }}
               title="Finalizar este atendimento e registrar marco do protocolo"
             >
-              <Lock size={14} /> Fechar Protocolo
+              <Lock size={15} /> Fechar Protocolo
             </button>
           ) : (
             <button
               onClick={handleOpenProtocol}
               disabled={isOperatingProtocol}
-              className="btn-secondary"
               style={{
                 height: '34px',
-                padding: '0 12px',
+                padding: '0 14px',
                 borderRadius: 'var(--radius-md)',
-                fontSize: '11px',
-                fontWeight: '700',
-                border: '1px solid rgba(0, 230, 153, 0.4)',
-                backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                fontSize: '12px',
+                fontWeight: '800',
+                border: '1px solid var(--accent-primary)',
+                backgroundColor: 'rgba(0, 230, 153, 0.22)',
                 color: 'var(--accent-primary)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '6px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                boxShadow: '0 0 12px rgba(0, 230, 153, 0.3)'
               }}
               title="Iniciar protocolo formal para este atendimento (associa mensagens retroativas)"
             >
-              <FileText size={14} /> Abrir Protocolo
+              <FileText size={15} /> Abrir Protocolo
             </button>
           )}
 
