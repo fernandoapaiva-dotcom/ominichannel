@@ -72,6 +72,8 @@ class EvolutionService:
                     "MESSAGES_UPDATE",
                     "SEND_MESSAGE",
                     "CONNECTION_UPDATE",
+                    "CONTACTS_UPSERT",
+                    "CONTACTS_UPDATE",
                     "CALL"
                 ]
             }

@@ -137,6 +137,49 @@ async def receive_evolution_webhook(
                 logger.info(f"Triggered automatic background history sync for connected instance '{instance_name}'")
         return {"status": "success", "event": event_type, "state": conn_state}
 
+    # Handle CONTACTS_UPDATE / CONTACTS_UPSERT (Phone address book synced or updated on mobile)
+    if event_type in ["contacts.update", "contacts.upsert", "contacts_update", "contacts_upsert"]:
+        contacts_raw = payload.get("data") or data
+        if not isinstance(contacts_raw, list):
+            contacts_raw = [contacts_raw] if isinstance(contacts_raw, dict) else []
+
+        wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+        wn_res = await db.execute(wn_stmt)
+        wn = wn_res.scalar_one_or_none()
+        tenant_id = wn.tenant_id if wn else 1
+
+        updated_count = 0
+        for c_entry in contacts_raw:
+            if not isinstance(c_entry, dict):
+                continue
+            jid = c_entry.get("remoteJid") or c_entry.get("id") or ""
+            if not jid or "status@broadcast" in jid:
+                continue
+            clean_phone = jid.split("@")[0].split(":")[0]
+            if not clean_phone:
+                continue
+            
+            contact_name = c_entry.get("pushName") or c_entry.get("name") or c_entry.get("verifiedName")
+            profile_pic = c_entry.get("profilePicUrl")
+
+            if contact_name or profile_pic:
+                c_stmt = select(Contact).where(
+                    Contact.tenant_id == tenant_id,
+                    Contact.telefone.like(f"%{clean_phone[-8:]}%")
+                )
+                c_matches = await db.execute(c_stmt)
+                for existing_c in c_matches.scalars().all():
+                    if contact_name and contact_name != clean_phone:
+                        existing_c.nome = contact_name
+                    if profile_pic and not existing_c.foto_perfil_url:
+                        existing_c.foto_perfil_url = profile_pic
+                    updated_count += 1
+
+        if updated_count > 0:
+            await db.commit()
+            logger.info(f"[CONTACTS_UPDATE] Sincronizados {updated_count} contatos da agenda do celular via webhook.")
+        return {"status": "success", "event": event_type, "updated_contacts": updated_count}
+
     # Handle Incoming WhatsApp Call event (CALL / call / call.updated)
     is_call_event = (
         event_type in ["call", "CALL", "call.updated", "call_received"] or

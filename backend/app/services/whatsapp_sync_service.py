@@ -101,8 +101,8 @@ class WhatsAppSyncService:
         limit_msgs: int = 500
     ) -> Dict[str, Any]:
         """
-        Scans connected instance chats & message history, automatically importing and deduplicating
-        into the tenant's database with real-time live progress tracking.
+        Scans connected instance address book, chats & message history, automatically importing
+        true contact names from phone agenda and deduplicating into database with live progress tracking.
         """
         if instance_name in self.syncing_instances:
             logger.info(f"Sync already running for instance '{instance_name}'. Skipping duplicate trigger.")
@@ -121,7 +121,7 @@ class WhatsAppSyncService:
             "conversations_synced": 0,
             "messages_synced": 0,
             "percentage": 0,
-            "current_contact": "Iniciando varredura...",
+            "current_contact": "Iniciando varredura da agenda de contatos...",
             "started_at": datetime.utcnow().isoformat(),
             "errors": []
         }
@@ -130,7 +130,30 @@ class WhatsAppSyncService:
 
         try:
             logger.info(f"=== INICIANDO SINCRONIZAÇÃO AUTOMÁTICA DE HISTÓRICO: {instance_name} (Tenant {tenant_id}) ===")
-            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=30.0) as client:
+            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=35.0) as client:
+                
+                # 1. First fetch Phone Address Book Contacts (/chat/findContacts)
+                address_book_map: Dict[str, Dict[str, Any]] = {}
+                try:
+                    contacts_res = await client.post(f"/chat/findContacts/{instance_name}", json={})
+                    if contacts_res.status_code == 200:
+                        raw_contacts = contacts_res.json()
+                        if isinstance(raw_contacts, list):
+                            for c in raw_contacts:
+                                jid = c.get("remoteJid", "")
+                                if "@s.whatsapp.net" in jid:
+                                    p = self._clean_phone_from_jid(jid)
+                                    name = c.get("pushName") or c.get("name") or c.get("verifiedName")
+                                    if p and name and name != p:
+                                        address_book_map[p] = {
+                                            "name": name,
+                                            "profile_pic": c.get("profilePicUrl")
+                                        }
+                            logger.info(f"[{instance_name}] {len(address_book_map)} contatos com nome recuperados da agenda do WhatsApp.")
+                except Exception as ab_err:
+                    logger.warning(f"Erro ao buscar agenda de contatos: {ab_err}")
+
+                # 2. Fetch chats from Evolution API
                 chats_res = await client.post(f"/chat/findChats/{instance_name}", json={})
                 if chats_res.status_code != 200:
                     err_msg = f"Instância {instance_name} não respondeu (HTTP {chats_res.status_code}). Verifique se o QR Code está conectado."
@@ -156,6 +179,31 @@ class WhatsAppSyncService:
                     return {"success": True, "stats": stats}
 
                 async with AsyncSessionLocal() as session:
+                    # Pre-sync all address book contacts into DB
+                    for phone, ab_info in address_book_map.items():
+                        c_stmt = select(Contact).where(
+                            Contact.tenant_id == tenant_id,
+                            Contact.telefone == phone
+                        )
+                        c_res = await session.execute(c_stmt)
+                        c_obj = c_res.scalars().first()
+                        if not c_obj:
+                            c_obj = Contact(
+                                tenant_id=tenant_id,
+                                telefone=phone,
+                                nome=ab_info["name"],
+                                foto_perfil_url=ab_info["profile_pic"]
+                            )
+                            session.add(c_obj)
+                            stats["contacts_synced"] += 1
+                        else:
+                            if c_obj.nome != ab_info["name"]:
+                                c_obj.nome = ab_info["name"]
+                            if ab_info["profile_pic"] and not c_obj.foto_perfil_url:
+                                c_obj.foto_perfil_url = ab_info["profile_pic"]
+                    await session.commit()
+
+                    # Process chats batch by batch
                     for idx, chat in enumerate(chats_list[:total_chats]):
                         jid = chat.get("remoteJid", "")
                         if not jid or "status@broadcast" in jid:
@@ -169,8 +217,13 @@ class WhatsAppSyncService:
                             stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
                             continue
 
-                        name = chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
-                        profile_pic = chat.get("profilePicUrl")
+                        # Prefer address book name over raw chat name or fallback to chat name / phone
+                        ab_entry = address_book_map.get(phone)
+                        name = (
+                            ab_entry["name"] if ab_entry
+                            else chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
+                        )
+                        profile_pic = (ab_entry.get("profile_pic") if ab_entry else None) or chat.get("profilePicUrl")
 
                         stats["current_contact"] = f"{name} ({phone})"
                         stats["processed_chats"] = idx + 1
@@ -200,6 +253,8 @@ class WhatsAppSyncService:
                         else:
                             if (not contact.nome or contact.nome == phone) and name != phone:
                                 contact.nome = name
+                            elif ab_entry and contact.nome != ab_entry["name"]:
+                                contact.nome = ab_entry["name"]
                             if not contact.foto_perfil_url and profile_pic:
                                 contact.foto_perfil_url = profile_pic
 
