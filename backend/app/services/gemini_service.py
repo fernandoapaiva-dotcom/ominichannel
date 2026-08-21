@@ -984,6 +984,118 @@ class GeminiService:
 
         return f"Olá {clean_name}! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
 
+    async def generate_copilot_consultation(
+        self,
+        attendant_name: str,
+        customer_name: str,
+        department_name: str,
+        conversation_history: List[Dict[str, str]],
+        copilot_chat_history: List[Dict[str, str]],
+        user_question: str,
+        rag_context: Optional[str] = None,
+        memory_summary: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Interactive Copilot AI for the human attendant:
+        - Analyzes the full customer conversation history.
+        - Uses department RAG knowledge base (manuals, prices, store procedures).
+        - Answers the attendant's questions and provides ready-to-use message drafts.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+        clean_name = sanitize_customer_name(customer_name)
+
+        customer_transcript = []
+        for m in conversation_history:
+            r_raw = str(m.get("remetente", "")).lower()
+            if r_raw == "cliente":
+                remetente = f"Cliente ({clean_name})"
+            elif r_raw == "ia":
+                remetente = "IA Concierge"
+            elif r_raw == "sistema":
+                remetente = "Sistema"
+            else:
+                remetente = f"Atendente ({attendant_name})"
+
+            conteudo = str(m.get("conteudo", "")).strip()
+            if conteudo:
+                customer_transcript.append(f"[{remetente}]: {conteudo}")
+
+        copilot_history_text = []
+        for ch in (copilot_chat_history or []):
+            role = "Atendente" if ch.get("role") == "user" else "Copiloto IA"
+            copilot_history_text.append(f"{role}: {ch.get('content', '')}")
+
+        rag_block = f"\n📚 BASE DE CONHECIMENTO TÉCNICO & PROCEDIMENTOS DA EMPRESA (RAG):\n{rag_context}\n" if rag_context else ""
+        mem_block = f"\n🧠 MEMÓRIA ANTERIOR DO CLIENTE:\n{memory_summary}\n" if memory_summary else ""
+        copilot_block = f"\n💬 HISTÓRICO DE CONSULTA ENTRE VOCÊ E O ATENDENTE:\n" + "\n".join(copilot_history_text) + "\n" if copilot_history_text else ""
+
+        system_instruction = (
+            "Você é o COPILOTO IA ESPECIALISTA DA SERVWELD (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
+            f"Você está prestando consultoria em tempo real diretamente para o ATENDENTE HUMANO ({attendant_name}) do setor '{department_name}'.\n\n"
+            f"O atendente está em atendimento com o cliente '{clean_name}'.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"{mem_block}"
+            f"{rag_block}"
+            "SUAS ATRIBUIÇÕES:\n"
+            "1. Analise todo o histórico da conversa entre o cliente e a empresa.\n"
+            "2. Oriente o atendente com clareza, objetividade técnica ou comercial, explicando causas de defeitos, diagnósticos, procedimentos, compatibilidade de peças ou estratégias de vendas.\n"
+            "3. Quando a pergunta do atendente pedir uma sugestão de resposta para enviar ao cliente (ou quando for conveniente fornecer uma mensagem pronta), inclua uma mensagem pronta formatada entre as tags [SUGESTAO_RESPOSTA] e [/SUGESTAO_RESPOSTA]. O atendente poderá inserir essa sugestão no chat com 1 clique.\n"
+            "4. Mantenha um tom profissional, prestativo e colaborativo de parceiro/mentor técnico.\n\n"
+            f"📜 HISTÓRICO REAL DA CONVERSA COM O CLIENTE:\n" + ("\n".join(customer_transcript[-25:]) if customer_transcript else "Nenhuma mensagem anterior.") + "\n"
+            f"{copilot_block}\n"
+            f"PERGUNTA OU SOLICITAÇÃO DO ATENDENTE ({attendant_name}):\n{user_question}"
+        )
+
+        if not client:
+            return {
+                "answer": "Copiloto IA indisponível: Chave de API Gemini não configurada nas configurações do sistema.",
+                "suggested_message": ""
+            }
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=system_instruction
+                )
+                if response and response.text:
+                    full_text = response.text.strip()
+                    
+                    # Extract suggested message if delimited
+                    suggested_msg = ""
+                    if "[SUGESTAO_RESPOSTA]" in full_text and "[/SUGESTAO_RESPOSTA]" in full_text:
+                        parts = full_text.split("[SUGESTAO_RESPOSTA]")
+                        clean_answer = parts[0].strip()
+                        rest = parts[1].split("[/SUGESTAO_RESPOSTA]")
+                        suggested_msg = rest[0].strip()
+                        if len(rest) > 1 and rest[1].strip():
+                            clean_answer += "\n\n" + rest[1].strip()
+                    else:
+                        clean_answer = full_text
+
+                    return {
+                        "answer": clean_answer,
+                        "suggested_message": suggested_msg
+                    }
+            except Exception as e:
+                logger.warning(f"Error in copilot consultation with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return {
+            "answer": "Desculpe, ocorreu uma instabilidade momentânea ao processar sua consulta com o Copiloto IA. Por favor, tente novamente.",
+            "suggested_message": ""
+        }
+
     async def summarize_conversation_for_transfer(
         self,
         customer_name: str,

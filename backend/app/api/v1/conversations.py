@@ -1587,6 +1587,93 @@ async def suggest_reply_for_conversation(
     }
 
 
+class CopilotChatRequest(BaseModel):
+    user_prompt: str
+    chat_history: Optional[List[Dict[str, str]]] = []
+
+
+@router.post("/{conversation_id}/copilot-chat")
+async def copilot_chat_for_conversation(
+    conversation_id: int,
+    payload: CopilotChatRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Interactive Copilot AI conversation for the human attendant:
+    Answers technical questions, analyzes entire customer context, checks RAG knowledge base,
+    and returns advice + ready-to-use message proposals.
+    """
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Fetch conversation memory
+    from app.models.models import ConversationMemory
+    mem_res = await db.execute(
+        select(ConversationMemory).where(
+            ConversationMemory.tenant_id == current_user.tenant_id,
+            ConversationMemory.contact_id == conv.contact_id
+        )
+    )
+    memory = mem_res.scalar_one_or_none()
+    memory_summary = memory.resumo_estruturado if memory else None
+
+    # Query RAG context using both customer topic & attendant's prompt
+    rag_context = ""
+    try:
+        from app.services.rag_service import rag_service
+        search_query = f"{payload.user_prompt}"
+        customer_msgs = [m for m in conv.messages if str(m.remetente).lower() == "cliente"]
+        if customer_msgs:
+            search_query += f" {customer_msgs[-1].conteudo or ''}"
+        rag_res = await rag_service.query_relevant_context(current_user.tenant_id, search_query)
+        rag_context = rag_res if isinstance(rag_res, str) else ""
+    except Exception:
+        pass
+
+    history_dicts = [
+        {"remetente": getattr(m.remetente, 'value', str(m.remetente)), "conteudo": m.conteudo or ""}
+        for m in sorted(conv.messages, key=lambda x: x.timestamp or datetime.min)
+    ]
+
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
+    customer_name = conv.contact.nome if (conv.contact and conv.contact.nome) else "Cliente"
+    dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "Atendimento"
+
+    result = await gemini_service.generate_copilot_consultation(
+        attendant_name=current_user.nome or "Atendente",
+        customer_name=customer_name,
+        department_name=dept_name,
+        conversation_history=history_dicts,
+        copilot_chat_history=payload.chat_history or [],
+        user_question=payload.user_prompt,
+        rag_context=rag_context,
+        memory_summary=memory_summary,
+        tenant_gemini_api_key=decrypted.get("gemini_api_key"),
+        tenant_gemini_model_name=decrypted.get("gemini_model_name")
+    )
+
+    return {
+        "success": True,
+        "answer": result.get("answer", ""),
+        "suggested_message": result.get("suggested_message", "")
+    }
+
+
 async def dispatch_whatsapp_notification(
     db: AsyncSession,
     conv: Conversation,

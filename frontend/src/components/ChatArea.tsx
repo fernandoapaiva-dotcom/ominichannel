@@ -14,6 +14,7 @@ import { AvatarModal } from './AvatarModal';
 import { ForwardModal } from './ForwardModal';
 import { MessageInfoModal } from './MessageInfoModal';
 import { EmojiGifStickerPicker } from './EmojiGifStickerPicker';
+import { AICopilotModal } from './AICopilotModal';
 import { Conversation, User, Message } from '../types';
 
 interface ChatAreaProps {
@@ -106,6 +107,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showContactModal, setShowContactModal] = useState(false);
   const [showPixModal, setShowPixModal] = useState(false);
   const [showAvatarZoom, setShowAvatarZoom] = useState(false);
+  const [showCopilotModal, setShowCopilotModal] = useState(false);
   const [isConsultingIA, setIsConsultingIA] = useState(false);
   const [isAssumingControl, setIsAssumingControl] = useState(false);
 
@@ -2812,8 +2814,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             />
             <button
               type="button"
-              onClick={handleConsultarIA}
-              disabled={isConsultingIA}
+              onClick={() => setShowCopilotModal(true)}
               className="btn-secondary"
               style={{
                 padding: '10px 14px',
@@ -2822,14 +2823,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 gap: '6px',
                 color: 'var(--accent-primary)',
                 borderColor: 'rgba(0, 230, 153, 0.4)',
-                backgroundColor: 'rgba(0, 230, 153, 0.08)',
-                fontWeight: '600',
-                fontSize: '13px'
+                backgroundColor: 'rgba(0, 230, 153, 0.1)',
+                fontWeight: '700',
+                fontSize: '13px',
+                boxShadow: '0 2px 8px rgba(0, 230, 153, 0.15)',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
               }}
-              title="Consultar IA (Gera rascunho de resposta no campo de texto para você revisar antes de enviar)"
+              title="Conversar com a IA (Abre o Copiloto IA para analisar todo o teor da conversa, consultar manuais e ajudar a responder o cliente)"
             >
-              <Bot size={16} className={isConsultingIA ? 'animate-spin' : ''} />
-              <span>{isConsultingIA ? 'Gerando...' : 'Consultar IA'}</span>
+              <Bot size={16} />
+              <span>Consultar IA</span>
             </button>
             <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending}>
               <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
@@ -2990,6 +2994,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         onSelectSticker={(stickerUrl) => {
           setShowEmojiPicker(false);
           onSendMessage(stickerUrl, 'imagem');
+        }}
+      />
+
+      {/* 8. Interactive AI Copilot Modal (Conversar com a IA Consultora em Tempo Real) */}
+      <AICopilotModal
+        isOpen={showCopilotModal}
+        onClose={() => setShowCopilotModal(false)}
+        conversation={conversation}
+        currentUser={currentUser}
+        onInsertText={(text) => {
+          setInputText(prev => (prev ? prev + '\n' + text : text));
         }}
       />
     </div>
