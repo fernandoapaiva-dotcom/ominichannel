@@ -562,6 +562,22 @@ async def receive_evolution_webhook(
         stk_msg = message_obj
 
     msg_id = key.get("id", "") if isinstance(key, dict) else ""
+    if msg_id:
+        if msg_id in SEEN_WEBHOOK_KEYS:
+            logger.info(f"[DEDUPLICACAO IN-MEMORY] Mensagem '{msg_id}' já processada recentemente. Descartando duplicata.")
+            return {"status": "success", "action": "ignored_duplicate"}
+
+        existing_msg_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
+        existing_msg_res = await db.execute(existing_msg_stmt)
+        if existing_msg_res.scalars().first():
+            logger.info(f"[DEDUPLICACAO DB] Mensagem '{msg_id}' já gravada no banco. Descartando duplicata.")
+            SEEN_WEBHOOK_KEYS[msg_id] = datetime.utcnow()
+            return {"status": "success", "action": "ignored_duplicate"}
+
+        SEEN_WEBHOOK_KEYS[msg_id] = datetime.utcnow()
+        if len(SEEN_WEBHOOK_KEYS) > 5000:
+            SEEN_WEBHOOK_KEYS.clear()
+
     media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
 
     # Check location payload

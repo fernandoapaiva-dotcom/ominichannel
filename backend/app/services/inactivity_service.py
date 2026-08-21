@@ -382,12 +382,11 @@ class InactivityService:
 inactivity_service = InactivityService()
 
 async def start_inactivity_checker_loop(interval_seconds: int = 15):
-    """Continuous background loop for inactivity check and unreplied message auto-response."""
+    """Continuous background loop for inactivity check."""
     logger.info("Inactivity background monitor task started.")
     while True:
         try:
             await inactivity_service.check_and_expire_idle_conversations()
-            await inactivity_service.auto_respond_unreplied_conversations()
         except Exception as e:
             logger.error(f"Error in inactivity checker background loop: {e}")
         await asyncio.sleep(interval_seconds)
