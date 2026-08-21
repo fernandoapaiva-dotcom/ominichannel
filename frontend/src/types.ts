@@ -51,11 +51,13 @@ export interface Conversation {
   tenant_id: number;
   whatsapp_number_id: number;
   contact_id: number;
+  protocol_number?: string;
   status: ConversationStatus;
   assigned_user_id?: number;
   assigned_user_name?: string;
   resumo_ia?: string;
   assunto_atual?: string;
+  dados_adicionais?: Record<string, any>;
   criado_em: string;
   ultima_interacao_em: string;
   contact?: Contact;

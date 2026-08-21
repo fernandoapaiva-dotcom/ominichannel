@@ -797,7 +797,12 @@ async def receive_evolution_webhook(
     conv_res = await db.execute(conv_stmt)
     conversation = conv_res.scalars().first()
 
-    if not conversation:
+    if conversation:
+        # Crucial: If message was received on a specific instance/department, bind conversation to this whatsapp_number_id!
+        if conversation.whatsapp_number_id != whatsapp_number.id:
+            logger.info(f"[ROUTING INSTANCE] Setting conversation #{conversation.id} whatsapp_number_id from {conversation.whatsapp_number_id} to current receiving instance {whatsapp_number.id} ({whatsapp_number.nome_departamento})")
+            conversation.whatsapp_number_id = whatsapp_number.id
+    else:
         # Also check if there is ANY conversation for this contact in tenant to reopen instead of duplicating
         any_conv_stmt = (
             select(Conversation)
@@ -1279,6 +1284,15 @@ async def receive_evolution_webhook(
         enviar_pix = ai_output.get("enviar_pix", False)
         escalar_humano = ai_output.get("escalar_humano", False)
         nova_memoria = ai_output.get("nova_memoria", "")
+
+        # Guarantee Protocol Number is ALWAYS explicitly present in customer response
+        if conversation.protocol_number:
+            proto_str = str(conversation.protocol_number).strip()
+            if proto_str not in ai_reply:
+                ai_reply = f"📋 *Protocolo:* #{proto_str}\n\n{ai_reply}"
+                extra = dict(conversation.dados_adicionais or {})
+                extra["protocol_announced"] = True
+                conversation.dados_adicionais = extra
 
         # Enforce Pix Payload Appending if AI or customer requested Pix data and details are present
         msg_lower = text_content.lower()

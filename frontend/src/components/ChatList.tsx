@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck, Pin } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck, Pin, Clock, AlertCircle, Building, User as UserIcon } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
@@ -522,9 +522,12 @@ export const ChatList: React.FC<ChatListProps> = ({
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Phone size={11} /> {group.contactPhone}
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'var(--accent-primary)', fontWeight: '600' }}>
+                          🏢 {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
+                        </span>
                       </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -594,7 +597,65 @@ export const ChatList: React.FC<ChatListProps> = ({
                     </div>
                   </div>
 
-                  {/* Last Message Preview & Dept */}
+                  {/* Attendant & Waiting Alert Row */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    {primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente' ? (
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: '700',
+                        color: '#93c5fd',
+                        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                        border: '1px solid rgba(59, 130, 246, 0.35)',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        maxWidth: '170px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        <UserIcon size={9} />
+                        Atendente: {primaryConv.assigned_user_name || 'Sem Atendente'}
+                      </span>
+                    ) : (
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: '700',
+                        color: '#c084fc',
+                        backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                        border: '1px solid rgba(168, 85, 247, 0.35)',
+                        padding: '1px 6px',
+                        borderRadius: '4px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px'
+                      }}>
+                        <Bot size={9} /> Atendimento IA
+                      </span>
+                    )}
+
+                    {/* Pending / Unreplied Alert Badge */}
+                    {((primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') && (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente'))) && (
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: '800',
+                        backgroundColor: '#ef4444',
+                        color: '#ffffff',
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)'
+                      }}>
+                        <AlertCircle size={9} /> AGUARDANDO
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Last Message Preview */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <p style={{
                       fontSize: '11px',
@@ -603,22 +664,11 @@ export const ChatList: React.FC<ChatListProps> = ({
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      maxWidth: '200px',
+                      maxWidth: '220px',
                       margin: 0
                     }}>
                       {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
                     </p>
-                    <span style={{
-                      fontSize: '9px',
-                      padding: '1px 5px',
-                      borderRadius: '4px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
-                      color: 'var(--text-muted)',
-                      whiteSpace: 'nowrap',
-                      flexShrink: 0
-                    }}>
-                      {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
-                    </span>
                   </div>
                   </div>
                 </div>
