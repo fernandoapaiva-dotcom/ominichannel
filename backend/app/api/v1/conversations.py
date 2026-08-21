@@ -1771,4 +1771,57 @@ async def close_conversation_protocol(
         "message": f"Protocolo #{current_proto} finalizado e notificação enviada ao cliente com sucesso!"
     }
 
+@router.post("/{conversation_id}/toggle-pin")
+async def toggle_pin_conversation(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Toggles the pinned status of a conversation (or group) so it stays at the top of the chat list.
+    """
+    stmt = (
+        select(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    extra = dict(conv.dados_adicionais or {})
+    current_pinned = bool(extra.get("is_pinned", False))
+    new_pinned = not current_pinned
+
+    extra["is_pinned"] = new_pinned
+    if new_pinned:
+        extra["pinned_at"] = datetime.utcnow().isoformat()
+    else:
+        extra.pop("pinned_at", None)
+
+    conv.dados_adicionais = extra
+    await db.commit()
+    await db.refresh(conv)
+
+    # Broadcast WebSocket update
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "conversation_pinned_toggled",
+            "conversation_id": conv.id,
+            "is_pinned": new_pinned
+        }
+    )
+
+    return {
+        "success": True,
+        "conversation_id": conv.id,
+        "is_pinned": new_pinned,
+        "message": "Conversa fixada no topo com sucesso!" if new_pinned else "Conversa desfixada do topo!"
+    }
+
 

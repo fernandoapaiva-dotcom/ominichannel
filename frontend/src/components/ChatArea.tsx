@@ -4,7 +4,7 @@ import {
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
-  Lock, Unlock
+  Lock, Unlock, Pin
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -402,6 +402,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       console.error('Error marking conversation as read:', err);
     } finally {
       setIsMarkingRead(false);
+    }
+  };
+
+  const [isTogglingPin, setIsTogglingPin] = useState(false);
+
+  const handleTogglePin = async () => {
+    if (!conversation || isTogglingPin) return;
+    const currentPinned = Boolean((conversation as any).dados_adicionais?.is_pinned);
+    const nextPinned = !currentPinned;
+    try {
+      setIsTogglingPin(true);
+      const extra = (conversation as any).dados_adicionais || {};
+      extra.is_pinned = nextPinned;
+      if (nextPinned) {
+        extra.pinned_at = new Date().toISOString();
+      } else {
+        delete extra.pinned_at;
+      }
+      (conversation as any).dados_adicionais = extra;
+
+      await apiFetch(`/conversations/${conversation.id}/toggle-pin`, { method: 'POST' });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err: any) {
+      console.error('Error toggling pin in ChatArea:', err);
+    } finally {
+      setIsTogglingPin(false);
     }
   };
 
@@ -1415,6 +1441,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <FileText size={15} /> Abrir Protocolo
             </button>
           )}
+
+          {/* Pin / Fix Conversation Button */}
+          {(() => {
+            const isPinned = Boolean((conversation as any).dados_adicionais?.is_pinned);
+            return (
+              <button
+                onClick={handleTogglePin}
+                disabled={isTogglingPin}
+                className="btn-secondary"
+                style={{
+                  height: '34px',
+                  padding: '0 12px',
+                  fontSize: '11px',
+                  fontWeight: '600',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: isPinned ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                  color: isPinned ? '#eab308' : 'var(--text-main)',
+                  border: isPinned ? '1px solid rgba(234, 179, 8, 0.5)' : '1px solid var(--border-color)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '5px',
+                  cursor: 'pointer'
+                }}
+                title={isPinned ? "Desafixar esta conversa do topo" : "Fixar esta conversa no topo da lista"}
+              >
+                <Pin size={13} fill={isPinned ? '#eab308' : 'none'} color={isPinned ? '#eab308' : 'currentColor'} />
+                {isPinned ? 'Fixado' : 'Fixar'}
+              </button>
+            );
+          })()}
 
           <button
             onClick={handleMarkAsRead}

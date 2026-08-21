@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck, Pin } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
@@ -78,6 +78,28 @@ export const ChatList: React.FC<ChatListProps> = ({
       if (onStatusToggle) onStatusToggle();
     } catch (err) {
       console.error('Failed to toggle status from list:', err);
+    }
+  };
+
+  const handleTogglePin = async (e: React.MouseEvent, conv: Conversation) => {
+    e.stopPropagation();
+    const currentPinned = Boolean(conv.dados_adicionais?.is_pinned);
+    const nextPinned = !currentPinned;
+    
+    // Optimistic local state update
+    conv.dados_adicionais = {
+      ...(conv.dados_adicionais || {}),
+      is_pinned: nextPinned,
+      pinned_at: nextPinned ? new Date().toISOString() : undefined
+    };
+
+    try {
+      await apiFetch(`/conversations/${conv.id}/toggle-pin`, {
+        method: 'POST'
+      });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err) {
+      console.error('Failed to toggle pin from list:', err);
     }
   };
 
@@ -163,7 +185,13 @@ export const ChatList: React.FC<ChatListProps> = ({
       return isNaN(maxTime) ? 0 : maxTime;
     };
 
-    return groups.sort((a, b) => getLatestInteraction(b) - getLatestInteraction(a));
+    return groups.sort((a, b) => {
+      const isPinnedA = Boolean(a.primaryConv.dados_adicionais?.is_pinned || a.allConversations.some(c => c.dados_adicionais?.is_pinned));
+      const isPinnedB = Boolean(b.primaryConv.dados_adicionais?.is_pinned || b.allConversations.some(c => c.dados_adicionais?.is_pinned));
+      if (isPinnedA && !isPinnedB) return -1;
+      if (!isPinnedA && isPinnedB) return 1;
+      return getLatestInteraction(b) - getLatestInteraction(a);
+    });
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
 
   const totalUnread = conversations.filter(conv => {
@@ -389,13 +417,17 @@ export const ChatList: React.FC<ChatListProps> = ({
             const primaryConv = group.primaryConv;
             const isSelected = activeConversation?.id === primaryConv.id;
             const lastMessage = primaryConv.messages[primaryConv.messages.length - 1];
+            const isGroupPinned = Boolean(
+              primaryConv.dados_adicionais?.is_pinned ||
+              group.allConversations.some(c => c.dados_adicionais?.is_pinned)
+            );
 
             return (
               <div
                 key={group.contactId}
                 style={{
                   borderBottom: '1px solid var(--border-color)',
-                  backgroundColor: isGroupSelected ? 'rgba(0, 230, 153, 0.04)' : 'transparent',
+                  backgroundColor: isGroupSelected ? 'rgba(0, 230, 153, 0.04)' : (isGroupPinned ? 'rgba(234, 179, 8, 0.03)' : 'transparent'),
                   transition: 'var(--transition-fast)'
                 }}
               >
@@ -404,7 +436,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                   onClick={() => onSelectConversation(primaryConv)}
                   style={{
                     padding: '12px 14px',
-                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'),
+                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isGroupPinned ? '3px solid #eab308' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent')),
                     cursor: 'pointer',
                     backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
                     display: 'flex',
@@ -426,7 +458,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         });
                       }}
                       title="Clique para expandir a foto de perfil"
-                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
+                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: isGroupPinned ? '1.5px solid #eab308' : '1.5px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
                       onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
                       onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                     />
@@ -445,7 +477,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         width: '38px',
                         height: '38px',
                         borderRadius: '50%',
-                        background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                        background: isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
                         color: '#051a12',
                         fontWeight: '700',
                         fontSize: '15px',
@@ -453,7 +485,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         alignItems: 'center',
                         justifyContent: 'center',
                         flexShrink: 0,
-                        boxShadow: '0 2px 6px rgba(0, 230, 153, 0.25)',
+                        boxShadow: isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)',
                         cursor: 'pointer'
                       }}
                     >
@@ -473,8 +505,13 @@ export const ChatList: React.FC<ChatListProps> = ({
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        maxWidth: '150px'
+                        maxWidth: '140px'
                       }}>
+                        {isGroupPinned && (
+                          <span title="Conversa Fixada no Topo" style={{ display: 'inline-flex', alignItems: 'center', color: '#eab308', flexShrink: 0 }}>
+                            <Pin size={12} fill="#eab308" />
+                          </span>
+                        )}
                         {group.contactName}
                         {group.hasUnread && (
                           <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} title="Mensagem não lida do cliente" />
@@ -491,6 +528,27 @@ export const ChatList: React.FC<ChatListProps> = ({
                       </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      {/* Pin / Fix Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => handleTogglePin(e, primaryConv)}
+                        title={isGroupPinned ? "Desafixar do topo" : "Fixar no topo"}
+                        style={{
+                          background: isGroupPinned ? 'rgba(234, 179, 8, 0.18)' : 'transparent',
+                          border: isGroupPinned ? '1px solid rgba(234, 179, 8, 0.45)' : '1px solid rgba(255,255,255,0.1)',
+                          borderRadius: '4px',
+                          color: isGroupPinned ? '#eab308' : 'var(--text-muted)',
+                          padding: '2px 4px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <Pin size={10} fill={isGroupPinned ? '#eab308' : 'none'} />
+                      </button>
+
                       <button
                         onClick={(e) => handleToggleStatus(e, primaryConv)}
                         title={primaryConv.status === 'com_ia' ? 'Alternar para Humano' : 'Alternar para IA'}
@@ -666,6 +724,9 @@ export const ChatList: React.FC<ChatListProps> = ({
                         >
                           <div>
                             <div style={{ fontSize: '11px', fontWeight: '600', color: isSubActive ? 'var(--accent-primary)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              {Boolean(subConv.dados_adicionais?.is_pinned) && (
+                                <Pin size={10} fill="#eab308" color="#eab308" />
+                              )}
                               <span>#{subConv.id} • {subConv.whatsapp_number?.nome_departamento || 'Geral'}</span>
                             </div>
                             <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>
@@ -673,12 +734,30 @@ export const ChatList: React.FC<ChatListProps> = ({
                             </div>
                           </div>
 
-                          <div style={{ textAlign: 'right' }}>
-                            <span className={`badge badge-${subConv.status}`} style={{ fontSize: '9px', padding: '1px 5px' }}>
-                              {subConv.status.replace('_', ' ')}
-                            </span>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              {formatTime(subConv.ultima_interacao_em)}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <button
+                              type="button"
+                              onClick={(e) => handleTogglePin(e, subConv)}
+                              title={Boolean(subConv.dados_adicionais?.is_pinned) ? "Desafixar do topo" : "Fixar no topo"}
+                              style={{
+                                background: Boolean(subConv.dados_adicionais?.is_pinned) ? 'rgba(234, 179, 8, 0.18)' : 'transparent',
+                                border: 'none',
+                                color: Boolean(subConv.dados_adicionais?.is_pinned) ? '#eab308' : 'var(--text-muted)',
+                                padding: '2px',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center'
+                              }}
+                            >
+                              <Pin size={10} fill={Boolean(subConv.dados_adicionais?.is_pinned) ? '#eab308' : 'none'} />
+                            </button>
+                            <div style={{ textAlign: 'right' }}>
+                              <span className={`badge badge-${subConv.status}`} style={{ fontSize: '9px', padding: '1px 5px' }}>
+                                {subConv.status.replace('_', ' ')}
+                              </span>
+                              <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                {formatTime(subConv.ultima_interacao_em)}
+                              </div>
                             </div>
                           </div>
                         </div>
