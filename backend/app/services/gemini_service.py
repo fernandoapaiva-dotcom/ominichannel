@@ -37,6 +37,36 @@ def sanitize_customer_name(name: Optional[str]) -> str:
 
     return clean
 
+def is_bot_or_menu_message(text: str) -> bool:
+    """
+    Detects if the incoming message is an automated IVR/URA menu, bot, or other company's automated system
+    to avoid infinite loops between AIs.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    lower = text.lower()
+    patterns = [
+        r'digite\s+\d+',
+        r'escolha\s+(?:uma\s+)?(?:das\s+)?opç(?:ão|ões)',
+        r'menu\s+principal',
+        r'autoatendimento',
+        r'assistente\s+virtual',
+        r'sou\s+a\s+(?:ia|robô|assistente|inteligência)',
+        r'atendimento\s+eletr[oô]nico',
+        r'n[aã]o\s+responda\s+a\s+est[ea]\s+mensagem',
+        r'\[\s*\d+\s*\]\s*[-–—:]\s*\w+',
+        r'1\s*[-–—:]\s*\w+.*\n.*2\s*[-–—:]\s*\w+',
+        r'protocolo\s+de\s+atendimento\s*:\s*\d{4,}',
+        r'para\s+(?:falar|solicitar|consultar).*\s+digite',
+        r'hor[aá]rio\s+de\s+atendimento.*das\s+\d+h\s+às\s+\d+h',
+        r'selecione\s+uma\s+das\s+opções',
+        r'opção\s+\d+:'
+    ]
+    for p in patterns:
+        if re.search(p, lower):
+            return True
+    return False
+
 CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE = (
     "=== REGRA MANDATÓRIA CENTRAL: NOME DO CLIENTE & ANTI-ALUCINAÇÃO ===\n"
     "1. NUNCA invente, deduza ou adicione títulos profissionais, honoríficos ou acadêmicos (tais como 'Eng.', 'Dr.', 'Engenheiro', 'Doutor', 'Sr.', 'Sra.', 'Prof.', 'Advogado', etc.).\n"
@@ -308,11 +338,29 @@ class GeminiService:
             "     * NUNCA adie para o dia seguinte nem informe que a loja está fechada se a IA puder resolver a solicitação sozinha!\n"
             "   - SOMENTE defina 'ESCALAR_HUMANO: SIM' quando a demanda genuinamente exigir intervenção humana (ex: negociação de preços/descontos, fechamento de contrato complexo, liberação de crédito ou quando o cliente pedir explicitamente para falar com uma pessoa).\n"
             "12. COLETA CORDIAL DE NOME:\n"
-            "   - Se o cliente ainda não informou o nome (nome está como 'Cliente' ou número), dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n\n"
+            "   - Se o cliente ainda não informou o nome (nome está como 'Cliente' ou número), dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n"
+            "13. DETECÇÃO DE BOT / URA / MENU AUTOMÁTICO DE OUTRA EMPRESA (ANTI-LOOP ETERNO):\n"
+            "   - Se a mensagem recebida for um MENU AUTOMÁTICO, URA, BOT, AUTOATENDIMENTO ou IA de outra empresa (ex: 'Digite 1 para Suporte', 'Escolha uma opção', 'Menu principal', 'Sou a assistente virtual', etc.):\n"
+            "     * DEFINA 'RESPOSTA: [SILENCIAR_IA]'\n"
+            "     * DEFINA 'ESCALAR_HUMANO: SIM'\n"
+            "     * NUNCA responda a outro robô para evitar um loop eterno de mensagens redundantes!\n\n"
             f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}\n\n"
             f"HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA:\n{memory_summary or 'Nenhum histórico anterior.'}\n\n"
             f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}"
         )
+
+        # Early check for Bot / URA / Menu of another company
+        if is_bot_or_menu_message(user_message):
+            logger.info(f"[ANTI-LOOP BOT] Mensagem identificada como menu/bot de outra empresa: '{user_message[:60]}...'. Silenciando IA.")
+            return {
+                "resposta": "",
+                "escalar_humano": True,
+                "is_bot_or_menu": True,
+                "transferir_setor": None,
+                "nova_memoria": "Mensagem recebida é um menu/bot automático de outra empresa. IA silenciada para evitar loop.",
+                "finalizar_conversa": False,
+                "enviar_localizacao": False
+            }
 
         messages_text = []
         for msg in conversation_history[-6:]:

@@ -1258,6 +1258,31 @@ async def receive_evolution_webhook(
                     }
                 )
 
+        # Anti-Loop Guard: If incoming message is a bot, menu, or URA from another company, silence AI
+        is_bot_detected = bool(ai_output.get("is_bot_or_menu")) or ai_reply.strip() in ["[SILENCIAR_IA]", ""]
+        if is_bot_detected:
+            logger.info(f"[ANTI-LOOP BOT] Mensagem identificada como menu/bot de outra empresa. Silenciando IA e passando para COM_HUMANO.")
+            conversation.status = ConversationStatus.COM_HUMANO
+            sys_bot_note = Message(
+                conversation_id=conversation.id,
+                remetente="sistema",
+                conteudo="🤖 *Menu/Bot Automático Detectado:* A mensagem recebida pertence a uma URA/Menu de outra empresa. A IA foi silenciada para evitar redundância e loops infinitos.",
+                tipo=MessageType.TEXTO,
+                timestamp=datetime.utcnow()
+            )
+            db.add(sys_bot_note)
+            await db.commit()
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                message_data={
+                    "type": "STATUS_CHANGE",
+                    "conversation_id": conversation.id,
+                    "status": "com_humano"
+                }
+            )
+            return {"status": "success", "action": "bot_silenced"}
+
         # Save AI Response Text Message
         ai_msg = Message(
             conversation_id=conversation.id,

@@ -287,6 +287,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           setActiveConversationId(convId);
           setActiveTab('chats');
         }}
+        onRefreshConversations={fetchConversations}
       />
 
       {(activeTab === 'chats' || activeTab === 'groups') && (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck } from 'lucide-react';
 import { User, Conversation } from '../types';
+import { apiFetch } from '../services/api';
 
 interface SidebarProps {
   user: User;
@@ -11,6 +12,7 @@ interface SidebarProps {
   onToggleCollapse?: () => void;
   conversations?: Conversation[];
   onSelectConversation?: (convId: number) => void;
+  onRefreshConversations?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -21,7 +23,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed = false,
   onToggleCollapse,
   conversations = [],
-  onSelectConversation
+  onSelectConversation,
+  onRefreshConversations
 }) => {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('omni_theme') as 'dark' | 'light') || 'dark';
@@ -59,8 +62,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
     
     if (conv.status === 'encerrada' || conv.status === 'expirada_por_inatividade') return false;
 
+    // Skip if marked as read or dismissed by attendant
+    const extra = conv.dados_adicionais || {};
+    if (extra.marked_as_read || extra.pending_dismissed) return false;
+
     const msgs = conv.messages || [];
-    if (msgs.length === 0) return true;
+    if (msgs.length === 0) return false;
 
     let lastAttendantMsgIndex = -1;
     let lastClientMsgIndex = -1;
@@ -69,11 +76,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       if (msgs[i].remetente === 'atendente') {
         lastAttendantMsgIndex = i;
       } else if (msgs[i].remetente === 'cliente') {
-        lastClientMsgIndex = i;
+        if (msgs[i].status !== 'read') {
+          lastClientMsgIndex = i;
+        }
       }
     }
 
-    // If attendant has never sent a message in this conversation, it is strictly pending
+    if (lastClientMsgIndex === -1) return false;
+
+    // If attendant has never sent a message in this conversation, it is pending
     if (lastAttendantMsgIndex === -1) return true;
 
     // If client sent a new message after the attendant's last reply, it is pending again
@@ -89,6 +100,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [conversations, user]);
 
   const pendingBadgeCount = pendingConversations.length;
+
+  const handleMarkSingleAsRead = async (e: React.MouseEvent, convId: number) => {
+    e.stopPropagation();
+    try {
+      await apiFetch(`/conversations/${convId}/mark_read`, { method: 'POST' });
+      const target = conversations?.find(c => c.id === convId);
+      if (target) {
+        target.dados_adicionais = { ...(target.dados_adicionais || {}), marked_as_read: true, pending_dismissed: true };
+      }
+      if (onRefreshConversations) onRefreshConversations();
+    } catch (err) {
+      console.error('Error marking conversation read:', err);
+    }
+  };
+
+  const handleMarkAllPendingAsRead = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await apiFetch('/conversations/mark_all_read', { method: 'POST' });
+      conversations?.forEach(c => {
+        c.dados_adicionais = { ...(c.dados_adicionais || {}), marked_as_read: true, pending_dismissed: true };
+      });
+      if (onRefreshConversations) onRefreshConversations();
+    } catch (err) {
+      console.error('Error marking all read:', err);
+    }
+  };
 
   // Extract short summary / reason for the transfer
   const getConversationReason = (conv: Conversation): string => {
@@ -231,16 +269,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <MessageCircle size={16} color={pendingBadgeCount > 0 ? '#ef4444' : 'var(--accent-primary)'} />
             <span>Mensagens Pendentes de Resposta</span>
           </div>
-          <span style={{
-            fontSize: '11px',
-            backgroundColor: pendingBadgeCount > 0 ? '#ef4444' : 'var(--border-color)',
-            color: '#fff',
-            padding: '2px 8px',
-            borderRadius: '12px',
-            fontWeight: '800'
-          }}>
-            {pendingBadgeCount}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {pendingBadgeCount > 0 && (
+              <button
+                onClick={handleMarkAllPendingAsRead}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: '#cbd5e1',
+                  borderRadius: '6px',
+                  padding: '2px 8px',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+                title="Marcar todas as conversas pendentes como lidas/resolvidas"
+              >
+                <CheckCheck size={13} color="var(--accent-primary)" /> Limpar Todas
+              </button>
+            )}
+            <span style={{
+              fontSize: '11px',
+              backgroundColor: pendingBadgeCount > 0 ? '#ef4444' : 'var(--border-color)',
+              color: '#fff',
+              padding: '2px 8px',
+              borderRadius: '12px',
+              fontWeight: '800'
+            }}>
+              {pendingBadgeCount}
+            </span>
+          </div>
         </div>
 
         {/* Submenu List */}
@@ -324,6 +385,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}>
                     <strong style={{ color: 'var(--text-main)', fontWeight: '600' }}>Motivo: </strong>
                     {reason}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontWeight: '600' }}>
+                      👉 Abrir chat
+                    </span>
+                    <button
+                      onClick={(e) => handleMarkSingleAsRead(e, conv.id)}
+                      style={{
+                        background: 'rgba(52, 211, 153, 0.15)',
+                        border: '1px solid rgba(52, 211, 153, 0.4)',
+                        color: '#34d399',
+                        borderRadius: '6px',
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'pointer',
+                        transition: 'all 0.15s ease'
+                      }}
+                      title="Marcar como lido/resolvido e dispensar deste alerta"
+                    >
+                      <CheckCheck size={13} /> Marcar Lido
+                    </button>
                   </div>
                 </div>
               );

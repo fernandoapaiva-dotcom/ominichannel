@@ -355,6 +355,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
+
+  const handleMarkAsRead = async () => {
+    if (!conversation || isMarkingRead) return;
+    try {
+      setIsMarkingRead(true);
+      await apiFetch(`/conversations/${conversation.id}/mark_read`, { method: 'POST' });
+      const extra = (conversation as any).dados_adicionais || {};
+      extra.marked_as_read = true;
+      extra.pending_dismissed = true;
+      (conversation as any).dados_adicionais = extra;
+      if (onStatusToggle) onStatusToggle();
+    } catch (err: any) {
+      console.error('Error marking conversation as read:', err);
+    } finally {
+      setIsMarkingRead(false);
+    }
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const selected = Array.from(e.target.files);
@@ -1365,6 +1384,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <FileText size={15} /> Abrir Protocolo
             </button>
           )}
+
+          <button
+            onClick={handleMarkAsRead}
+            disabled={isMarkingRead}
+            className="btn-secondary"
+            style={{
+              height: '34px',
+              padding: '0 12px',
+              fontSize: '11px',
+              fontWeight: '600',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              color: '#34d399',
+              border: '1px solid rgba(52, 211, 153, 0.4)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '5px',
+              cursor: 'pointer'
+            }}
+            title="Marcar todas as mensagens deste cliente como lidas/resolvidas sem precisar responder"
+          >
+            <CheckCheck size={14} /> {isMarkingRead ? '...' : 'Marcar Lido'}
+          </button>
 
           <button
             onClick={handleToggleStatus}
