@@ -95,6 +95,7 @@ class InactivityService:
                         conv.status = ConversationStatus.EXPIRADA_POR_INATIVIDADE
                         extra["expired_by_inactivity_at"] = now.isoformat()
                         conv.dados_adicionais = extra
+                        conv.protocol_number = None
 
                         # Closing WhatsApp message
                         closing_msg = (
