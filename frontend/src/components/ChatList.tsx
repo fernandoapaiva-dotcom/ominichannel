@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
@@ -118,8 +118,12 @@ export const ChatList: React.FC<ChatListProps> = ({
       const contact = primary.contact;
 
       const hasUnread = matchingConvs.some(conv => {
+        const extra = conv.dados_adicionais || {};
+        if (extra.marked_as_read) return false;
         const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
-        return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+        if (!lastMsg) return false;
+        if (lastMsg.status === 'read') return false;
+        return lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
       });
 
       groups.push({
@@ -148,9 +152,31 @@ export const ChatList: React.FC<ChatListProps> = ({
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
 
   const totalUnread = conversations.filter(conv => {
+    const extra = conv.dados_adicionais || {};
+    if (extra.marked_as_read) return false;
     const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
-    return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+    if (!lastMsg) return false;
+    if (lastMsg.status === 'read') return false;
+    return lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
   }).length;
+
+  const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
+
+  const handleMarkAllAsRead = async () => {
+    setIsMarkingAllRead(true);
+    try {
+      const payload = selectedDepartmentId !== 'all' ? { whatsapp_number_id: Number(selectedDepartmentId) } : {};
+      await apiFetch('/conversations/mark_all_read', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err) {
+      console.error('Failed to mark all conversations as read:', err);
+    } finally {
+      setIsMarkingAllRead(false);
+    }
+  };
 
   if (isCollapsed) return null;
 
@@ -188,6 +214,30 @@ export const ChatList: React.FC<ChatListProps> = ({
           </h2>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              onClick={handleMarkAllAsRead}
+              disabled={isMarkingAllRead || totalUnread === 0}
+              style={{
+                background: totalUnread > 0 ? 'rgba(0, 230, 153, 0.12)' : 'rgba(255,255,255,0.04)',
+                border: totalUnread > 0 ? '1px solid rgba(0, 230, 153, 0.4)' : '1px solid var(--border-color)',
+                color: totalUnread > 0 ? 'var(--accent-primary)' : 'var(--text-muted)',
+                borderRadius: 'var(--radius-md)',
+                padding: '5px 8px',
+                fontSize: '11px',
+                fontWeight: '600',
+                cursor: totalUnread > 0 ? 'pointer' : 'default',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.2s ease',
+                opacity: totalUnread === 0 ? 0.6 : 1
+              }}
+              title="Marcar todas as mensagens como lidas"
+            >
+              <CheckCheck size={14} />
+              {isMarkingAllRead ? '...' : 'Lidas'}
+            </button>
+
             {onOpenNewConversationModal && (
               <button
                 onClick={onOpenNewConversationModal}

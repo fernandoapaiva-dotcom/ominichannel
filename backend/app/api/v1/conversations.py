@@ -110,6 +110,83 @@ async def list_conversations(
 
     return response_list
 
+class MarkAllReadPayload(BaseModel):
+    whatsapp_number_id: Optional[int] = None
+
+@router.post("/mark_all_read")
+async def mark_all_conversations_read(
+    payload: Optional[MarkAllReadPayload] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Marks all client messages as read and flags conversations as read across the tenant (or selected department).
+    """
+    conv_stmt = select(Conversation).where(Conversation.tenant_id == current_user.tenant_id)
+    if payload and payload.whatsapp_number_id:
+        conv_stmt = conv_stmt.where(Conversation.whatsapp_number_id == payload.whatsapp_number_id)
+
+    conv_res = await db.execute(conv_stmt)
+    convs = conv_res.scalars().all()
+    conv_ids = [c.id for c in convs]
+
+    if conv_ids:
+        from sqlalchemy import update
+        upd_msgs = (
+            update(Message)
+            .where(
+                Message.conversation_id.in_(conv_ids),
+                Message.remetente == MessageSender.CLIENTE
+            )
+            .values(status="read")
+        )
+        await db.execute(upd_msgs)
+
+        for c in convs:
+            extra = dict(c.dados_adicionais or {})
+            extra["marked_as_read"] = True
+            c.dados_adicionais = extra
+
+        await db.commit()
+
+    return {
+        "success": True,
+        "marked_conversations_count": len(convs),
+        "message": f"{len(convs)} conversas marcadas como lidas com sucesso!"
+    }
+
+@router.post("/{conversation_id}/mark_read")
+async def mark_single_conversation_read(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    from sqlalchemy import update
+    upd_msgs = (
+        update(Message)
+        .where(
+            Message.conversation_id == conv.id,
+            Message.remetente == MessageSender.CLIENTE
+        )
+        .values(status="read")
+    )
+    await db.execute(upd_msgs)
+
+    extra = dict(conv.dados_adicionais or {})
+    extra["marked_as_read"] = True
+    conv.dados_adicionais = extra
+
+    await db.commit()
+    return {"success": True, "conversation_id": conv.id}
 
 @router.post("/start", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def start_new_conversation(

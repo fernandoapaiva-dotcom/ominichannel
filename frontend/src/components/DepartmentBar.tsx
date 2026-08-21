@@ -37,8 +37,12 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   const getUnreadCount = (numberId: number | 'all') => {
     return conversations.filter(c => {
       if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
+      const extra = c.dados_adicionais || {};
+      if (extra.marked_as_read) return false;
       const lastMsg = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
-      return lastMsg && lastMsg.remetente.toLowerCase() === 'cliente';
+      if (!lastMsg) return false;
+      if (lastMsg.status === 'read') return false;
+      return lastMsg.remetente.toLowerCase() === 'cliente';
     }).length;
   };
 
