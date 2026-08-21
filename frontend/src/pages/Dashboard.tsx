@@ -281,6 +281,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         onLogout={onLogout}
         isCollapsed={isMainSidebarCollapsed}
         onToggleCollapse={() => setIsMainSidebarCollapsed(!isMainSidebarCollapsed)}
+        conversations={conversations}
+        onSelectConversation={(convId) => {
+          setActiveConversationId(convId);
+          setActiveTab('chats');
+        }}
       />
 
       {(activeTab === 'chats' || activeTab === 'groups') && (
