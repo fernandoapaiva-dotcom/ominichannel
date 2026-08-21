@@ -155,10 +155,12 @@ export const ChatList: React.FC<ChatListProps> = ({
       const hasUnread = matchingConvs.some(conv => {
         const extra = conv.dados_adicionais || {};
         if (extra.marked_as_read) return false;
-        const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
+        const msgs = conv.messages || [];
+        if (msgs.length === 0) return false;
+        const lastMsg = msgs[msgs.length - 1];
         if (!lastMsg) return false;
         if (lastMsg.status === 'read') return false;
-        return lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+        return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
       });
 
       if (statusFilter === 'nao_lidas' && !hasUnread) return;
@@ -197,10 +199,12 @@ export const ChatList: React.FC<ChatListProps> = ({
   const totalUnread = conversations.filter(conv => {
     const extra = conv.dados_adicionais || {};
     if (extra.marked_as_read) return false;
-    const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
+    const msgs = conv.messages || [];
+    if (msgs.length === 0) return false;
+    const lastMsg = msgs[msgs.length - 1];
     if (!lastMsg) return false;
     if (lastMsg.status === 'read') return false;
-    return lastMsg.remetente.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+    return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
   }).length;
 
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
@@ -637,7 +641,10 @@ export const ChatList: React.FC<ChatListProps> = ({
                     )}
 
                     {/* Pending / Unreplied Alert Badge */}
-                    {((primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') && (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente'))) && (
+                    {(!primaryConv.dados_adicionais?.marked_as_read &&
+                      !primaryConv.dados_adicionais?.pending_dismissed &&
+                      (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
+                      (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente' && lastMessage.status !== 'read'))) && (
                       <span style={{
                         fontSize: '9px',
                         fontWeight: '800',

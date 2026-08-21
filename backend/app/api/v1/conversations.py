@@ -119,15 +119,14 @@ async def mark_all_conversations_read(
     conv_res = await db.execute(conv_stmt)
     convs = conv_res.scalars().all()
     conv_ids = [c.id for c in convs]
-
     if conv_ids:
-        from sqlalchemy import update
+        from sqlalchemy import update, func
         from sqlalchemy.orm.attributes import flag_modified
         upd_msgs = (
             update(Message)
             .where(
                 Message.conversation_id.in_(conv_ids),
-                Message.remetente == MessageSender.CLIENTE
+                func.lower(Message.remetente) == "cliente"
             )
             .values(status="read")
         )
@@ -141,6 +140,18 @@ async def mark_all_conversations_read(
             flag_modified(c, "dados_adicionais")
 
         await db.commit()
+
+        # Broadcast WebSocket notification
+        from app.services.websocket_manager import ws_manager
+        await ws_manager.broadcast_to_department(
+            tenant_id=current_user.tenant_id,
+            whatsapp_number_id=payload.whatsapp_number_id if payload else None,
+            message_data={
+                "type": "CONVERSATIONS_MARKED_READ",
+                "whatsapp_number_id": payload.whatsapp_number_id if payload else None,
+                "count": len(convs)
+            }
+        )
 
     return {
         "success": True,
@@ -163,13 +174,13 @@ async def mark_single_conversation_read(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    from sqlalchemy import update
+    from sqlalchemy import update, func
     from sqlalchemy.orm.attributes import flag_modified
     upd_msgs = (
         update(Message)
         .where(
             Message.conversation_id == conv.id,
-            Message.remetente == MessageSender.CLIENTE
+            func.lower(Message.remetente) == "cliente"
         )
         .values(status="read")
     )
@@ -180,9 +191,20 @@ async def mark_single_conversation_read(
     extra["pending_dismissed"] = True
     conv.dados_adicionais = extra
     flag_modified(conv, "dados_adicionais")
-
     await db.commit()
-    return {"success": True, "conversation_id": conv.id}
+
+    from app.services.websocket_manager import ws_manager
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "MESSAGE_STATUS_UPDATE",
+            "conversation_id": conv.id,
+            "status": "read"
+        }
+    )
+
+    return {"success": True, "message": "Conversa marcada como lida"}
 
 @router.post("/start", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def start_new_conversation(

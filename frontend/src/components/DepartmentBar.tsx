@@ -39,10 +39,12 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
       const extra = c.dados_adicionais || {};
       if (extra.marked_as_read) return false;
-      const lastMsg = c.messages && c.messages.length > 0 ? c.messages[c.messages.length - 1] : null;
+      const msgs = c.messages || [];
+      if (msgs.length === 0) return false;
+      const lastMsg = msgs[msgs.length - 1];
       if (!lastMsg) return false;
       if (lastMsg.status === 'read') return false;
-      return lastMsg.remetente.toLowerCase() === 'cliente';
+      return lastMsg.remetente?.toLowerCase() === 'cliente';
     }).length;
   };
 
