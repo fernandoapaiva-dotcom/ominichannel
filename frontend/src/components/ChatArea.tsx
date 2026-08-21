@@ -426,9 +426,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         setInputText('');
         setIsSending(false);
       } else if (textToSend) {
-        // INSTANT UI CLEAR (0ms Delay)
+        const textCopy = textToSend;
         setInputText('');
-        onSendMessage(textToSend);
+        
+        // Immediate 0ms synchronous optimistic append
+        if (conversation) {
+          const tempMsg: Message = {
+            id: -Date.now(),
+            conversation_id: conversation.id,
+            remetente: 'atendente',
+            conteudo: textCopy,
+            tipo: 'texto' as any,
+            timestamp: new Date().toISOString(),
+            status: 'sending'
+          };
+          if (!conversation.messages) {
+            conversation.messages = [];
+          }
+          conversation.messages.push(tempMsg);
+          scrollToBottom();
+        }
+
+        onSendMessage(textCopy);
       }
     } catch (err: any) {
       console.error('Send error:', err);
@@ -2526,6 +2545,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               placeholder={isGroupChat ? 'Enviar mensagem no grupo...' : 'Digite sua mensagem para o cliente...'}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend(e);
+                }
+              }}
               style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
             />
             <button
