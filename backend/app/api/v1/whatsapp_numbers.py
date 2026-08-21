@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.security import get_admin_user, get_current_user, encrypt_data, decrypt_data, mask_sensitive_string
 from app.models.models import WhatsAppNumber, User, user_number_access
 from app.schemas.schemas import WhatsAppNumberCreate, WhatsAppNumberResponse
+from app.services.whatsapp_sync_service import whatsapp_sync_service
 
 router = APIRouter(prefix="/whatsapp-numbers", tags=["WhatsApp Numbers & Departments"])
 
@@ -75,6 +76,19 @@ async def create_whatsapp_number(
     db.add(wn)
     await db.commit()
     await db.refresh(wn)
+
+    # Automatic history sync if evolution instance is configured
+    if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
+        from app.services.settings_service import settings_service
+        decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+        whatsapp_sync_service.trigger_background_sync(
+            tenant_id=admin_user.tenant_id,
+            whatsapp_number_id=wn.id,
+            instance_name=wn.instancia_evolution_api,
+            custom_base_url=decrypted.get("evolution_api_url"),
+            custom_api_key=decrypted.get("evolution_api_key")
+        )
+
     return _to_response_schema(wn)
 
 @router.put("/{number_id}", response_model=WhatsAppNumberResponse)
@@ -121,7 +135,87 @@ async def update_whatsapp_number(
 
     await db.commit()
     await db.refresh(wn)
+
+    # Automatic history sync on modification if evolution instance is active
+    if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
+        from app.services.settings_service import settings_service
+        decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+        whatsapp_sync_service.trigger_background_sync(
+            tenant_id=admin_user.tenant_id,
+            whatsapp_number_id=wn.id,
+            instance_name=wn.instancia_evolution_api,
+            custom_base_url=decrypted.get("evolution_api_url"),
+            custom_api_key=decrypted.get("evolution_api_key")
+        )
+
     return _to_response_schema(wn)
+
+@router.post("/{number_id}/sync_history")
+async def trigger_number_sync(
+    number_id: int,
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.id == number_id,
+        WhatsAppNumber.tenant_id == admin_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    wn = res.scalar_one_or_none()
+    if not wn:
+        raise HTTPException(status_code=404, detail="Número de WhatsApp não encontrado")
+
+    if not wn.instancia_evolution_api or (wn.provider_type or "evolution") == "meta":
+        raise HTTPException(status_code=400, detail="Instância Evolution não configurada neste número")
+
+    from app.services.settings_service import settings_service
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+    
+    whatsapp_sync_service.trigger_background_sync(
+        tenant_id=admin_user.tenant_id,
+        whatsapp_number_id=wn.id,
+        instance_name=wn.instancia_evolution_api,
+        custom_base_url=decrypted.get("evolution_api_url"),
+        custom_api_key=decrypted.get("evolution_api_key")
+    )
+    return {
+        "success": True,
+        "message": f"Sincronização automática em massa iniciada para '{wn.nome_departamento}' ({wn.instancia_evolution_api})!"
+    }
+
+@router.post("/sync_all")
+async def trigger_sync_all_numbers(
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.tenant_id == admin_user.tenant_id,
+        WhatsAppNumber.status == True
+    )
+    res = await db.execute(stmt)
+    numbers = res.scalars().all()
+
+    from app.services.settings_service import settings_service
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+
+    synced_instances = []
+    for wn in numbers:
+        if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
+            whatsapp_sync_service.trigger_background_sync(
+                tenant_id=admin_user.tenant_id,
+                whatsapp_number_id=wn.id,
+                instance_name=wn.instancia_evolution_api,
+                custom_base_url=decrypted.get("evolution_api_url"),
+                custom_api_key=decrypted.get("evolution_api_key")
+            )
+            synced_instances.append(wn.instancia_evolution_api)
+
+    return {
+        "success": True,
+        "synced_count": len(synced_instances),
+        "instances": synced_instances,
+        "message": f"Sincronização automática iniciada para {len(synced_instances)} instâncias conectadas!"
+    }
 
 @router.delete("/{number_id}", status_code=status.HTTP_200_OK)
 async def delete_whatsapp_number(

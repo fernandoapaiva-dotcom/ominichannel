@@ -3,7 +3,7 @@ import {
   Search, User, Phone, Calendar, MessageSquare, Clock, Building, Bot,
   ChevronRight, FileText, Lock, X, Maximize2, Download, Printer, Copy,
   Check, Play, Volume2, Image as ImageIcon, Video, File, ExternalLink,
-  ChevronDown, ChevronUp, Share2, ShieldCheck, ArrowLeft
+  ChevronDown, ChevronUp, Share2, ShieldCheck, ArrowLeft, RefreshCw
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, Message } from '../types';
@@ -38,6 +38,10 @@ export const ContactsPanel: React.FC = () => {
   const [loadingContacts, setLoadingContacts] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
+  // Sync state
+  const [syncingHistory, setSyncingHistory] = useState(false);
+  const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+
   // Modals state
   const [expandedSession, setExpandedSession] = useState<ProtocolSession | null>(null);
   const [documentExportSession, setDocumentExportSession] = useState<ProtocolSession | null>(null);
@@ -65,6 +69,24 @@ export const ContactsPanel: React.FC = () => {
       console.error('Error fetching contacts:', err);
     } finally {
       setLoadingContacts(false);
+    }
+  };
+
+  const handleSyncAllHistory = async () => {
+    setSyncingHistory(true);
+    setSyncFeedback('Iniciando sincronização automática em massa de todas as instâncias do WhatsApp...');
+    try {
+      const res = await apiFetch('/whatsapp-numbers/sync_all', { method: 'POST' });
+      setSyncFeedback(res.message || 'Sincronização iniciada com sucesso!');
+      setTimeout(() => {
+        fetchContacts(search);
+      }, 3000);
+      setTimeout(() => setSyncFeedback(null), 6000);
+    } catch (err: any) {
+      setSyncFeedback('Erro ao sincronizar: ' + (err.message || 'Falha na conexão'));
+      setTimeout(() => setSyncFeedback(null), 6000);
+    } finally {
+      setSyncingHistory(false);
     }
   };
 
@@ -319,9 +341,51 @@ export const ContactsPanel: React.FC = () => {
         flexShrink: 0
       }}>
         <div style={{ padding: '24px 20px', borderBottom: '1px solid var(--border-color)' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', marginBottom: '14px', color: 'var(--text-main)' }}>
-            Histórico de Clientes
-          </h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+            <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', margin: 0, color: 'var(--text-main)' }}>
+              Histórico de Clientes
+            </h2>
+            <button
+              onClick={handleSyncAllHistory}
+              disabled={syncingHistory}
+              className="btn-secondary"
+              style={{
+                height: '30px',
+                padding: '0 8px',
+                fontSize: '11px',
+                fontWeight: '600',
+                color: 'var(--accent-primary)',
+                borderColor: 'rgba(0, 230, 153, 0.4)',
+                backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+              title="Puxar todo o histórico antigo e contatos dos WhatsApps conectados automaticamente"
+            >
+              <RefreshCw size={12} className={syncingHistory ? 'spin' : ''} />
+              {syncingHistory ? 'Sincronizando...' : 'Sincronizar WA'}
+            </button>
+          </div>
+
+          {syncFeedback && (
+            <div style={{
+              padding: '8px 12px',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(0, 230, 153, 0.12)',
+              border: '1px solid rgba(0, 230, 153, 0.3)',
+              color: 'var(--accent-primary)',
+              fontSize: '11px',
+              fontWeight: '600',
+              marginBottom: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}>
+              <Check size={13} /> {syncFeedback}
+            </div>
+          )}
+
           <div style={{ position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
             <input

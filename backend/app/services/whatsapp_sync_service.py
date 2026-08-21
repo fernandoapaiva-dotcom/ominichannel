@@ -1,0 +1,279 @@
+import asyncio
+import logging
+from datetime import datetime
+from typing import Dict, Any, Optional, List
+import httpx
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import settings
+from app.core.database import AsyncSessionLocal
+from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus
+
+logger = logging.getLogger("whatsapp_sync_service")
+
+class WhatsAppSyncService:
+    def __init__(self):
+        self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
+        self.default_api_key = settings.EVOLUTION_API_KEY
+        self.syncing_instances = set()
+
+    def _get_headers_and_url(self, custom_base_url: Optional[str] = None, custom_api_key: Optional[str] = None):
+        base_url = (custom_base_url or self.default_base_url).rstrip('/')
+        if "localhost" in base_url:
+            base_url = base_url.replace("localhost", "127.0.0.1")
+        api_key = custom_api_key or self.default_api_key
+        headers = {
+            "apikey": api_key,
+            "Content-Type": "application/json"
+        }
+        return base_url, headers
+
+    def _clean_phone_from_jid(self, jid: str) -> str:
+        if not jid:
+            return ""
+        clean = jid.split('@')[0]
+        clean = clean.split(':')[0]
+        return clean
+
+    def _parse_message_content(self, msg_obj: Dict[str, Any]) -> tuple[str, MessageType]:
+        msg_payload = msg_obj.get("message") or {}
+        msg_type_str = msg_obj.get("messageType", "conversation")
+
+        if "conversation" in msg_payload:
+            return msg_payload["conversation"], MessageType.TEXTO
+
+        if "extendedTextMessage" in msg_payload:
+            text = msg_payload["extendedTextMessage"].get("text", "")
+            return text, MessageType.TEXTO
+
+        if "imageMessage" in msg_payload:
+            caption = msg_payload["imageMessage"].get("caption", "")
+            url = msg_payload["imageMessage"].get("url", "")
+            return f"{url}|{caption}" if (url and caption) else (url or caption or "[Imagem]"), MessageType.IMAGEM
+
+        if "audioMessage" in msg_payload:
+            url = msg_payload["audioMessage"].get("url", "")
+            return url or "[Áudio]", MessageType.AUDIO
+
+        if "videoMessage" in msg_payload:
+            caption = msg_payload["videoMessage"].get("caption", "")
+            url = msg_payload["videoMessage"].get("url", "")
+            return f"{url}|{caption}" if (url and caption) else (url or caption or "[Vídeo]"), MessageType.VIDEO
+
+        if "documentMessage" in msg_payload or "documentWithCaptionMessage" in msg_payload:
+            doc = msg_payload.get("documentMessage") or msg_payload.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {})
+            title = doc.get("title") or doc.get("fileName") or "[Documento]"
+            url = doc.get("url", "")
+            return f"{url}|{title}" if url else title, MessageType.ARQUIVO
+
+        if "stickerMessage" in msg_payload:
+            url = msg_payload["stickerMessage"].get("url", "")
+            return url or "[Figurinha]", MessageType.IMAGEM
+
+        return f"[{msg_type_str}]", MessageType.TEXTO
+
+    async def sync_instance_history(
+        self,
+        tenant_id: int,
+        whatsapp_number_id: int,
+        instance_name: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None,
+        limit_chats: int = 200,
+        limit_msgs: int = 150
+    ) -> Dict[str, Any]:
+        """
+        Scans connected instance chats & message history, automatically importing and deduplicating
+        into the tenant's database.
+        """
+        if instance_name in self.syncing_instances:
+            logger.info(f"Sync already running for instance '{instance_name}'. Skipping duplicate trigger.")
+            return {"success": True, "message": "Sincronização já em andamento."}
+
+        self.syncing_instances.add(instance_name)
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+
+        stats = {
+            "instance": instance_name,
+            "chats_found": 0,
+            "contacts_synced": 0,
+            "conversations_synced": 0,
+            "messages_synced": 0,
+            "errors": []
+        }
+
+        try:
+            logger.info(f"=== INICIANDO SINCRONIZAÇÃO AUTOMÁTICA DE HISTÓRICO: {instance_name} (Tenant {tenant_id}) ===")
+            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=25.0) as client:
+                chats_res = await client.post(f"/chat/findChats/{instance_name}", json={})
+                if chats_res.status_code != 200:
+                    err_msg = f"Falha ao buscar chats da instância {instance_name}: HTTP {chats_res.status_code}"
+                    logger.warning(err_msg)
+                    stats["errors"].append(err_msg)
+                    return {"success": False, "stats": stats, "error": err_msg}
+
+                chats_list = chats_res.json()
+                if not isinstance(chats_list, list):
+                    chats_list = []
+
+                stats["chats_found"] = len(chats_list)
+                logger.info(f"[{instance_name}] {len(chats_list)} chats encontrados na sessão do WhatsApp.")
+
+                async with AsyncSessionLocal() as session:
+                    for chat in chats_list[:limit_chats]:
+                        jid = chat.get("remoteJid", "")
+                        if not jid or "status@broadcast" in jid:
+                            continue
+
+                        phone = self._clean_phone_from_jid(jid)
+                        if not phone:
+                            continue
+
+                        is_group = jid.endswith("@g.us")
+                        name = chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
+                        profile_pic = chat.get("profilePicUrl")
+
+                        # 2. Get or create Contact
+                        contact_stmt = select(Contact).where(
+                            Contact.tenant_id == tenant_id,
+                            Contact.telefone == phone
+                        )
+                        c_res = await session.execute(contact_stmt)
+                        contact = c_res.scalars().first()
+
+                        if not contact:
+                            contact = Contact(
+                                tenant_id=tenant_id,
+                                telefone=phone,
+                                nome=name,
+                                foto_perfil_url=profile_pic
+                            )
+                            session.add(contact)
+                            await session.flush()
+                            stats["contacts_synced"] += 1
+                        else:
+                            if (not contact.nome or contact.nome == phone) and name != phone:
+                                contact.nome = name
+                            if not contact.foto_perfil_url and profile_pic:
+                                contact.foto_perfil_url = profile_pic
+
+                        # 3. Get or create Conversation
+                        conv_stmt = select(Conversation).where(
+                            Conversation.tenant_id == tenant_id,
+                            Conversation.contact_id == contact.id,
+                            Conversation.whatsapp_number_id == whatsapp_number_id
+                        )
+                        conv_res = await session.execute(conv_stmt)
+                        conv = conv_res.scalars().first()
+
+                        if not conv:
+                            conv = Conversation(
+                                tenant_id=tenant_id,
+                                whatsapp_number_id=whatsapp_number_id,
+                                contact_id=contact.id,
+                                status=ConversationStatus.COM_HUMANO,
+                                criado_em=datetime.utcnow(),
+                                ultima_interacao_em=datetime.utcnow()
+                            )
+                            session.add(conv)
+                            await session.flush()
+                            stats["conversations_synced"] += 1
+
+                        # 4. Fetch messages for this chat
+                        try:
+                            msgs_payload = {
+                                "where": {
+                                    "key": {
+                                        "remoteJid": jid
+                                    }
+                                },
+                                "limit": limit_msgs
+                            }
+                            msgs_res = await client.post(f"/chat/findMessages/{instance_name}", json=msgs_payload)
+                            if msgs_res.status_code == 200:
+                                msgs_json = msgs_res.json()
+                                records = (
+                                    msgs_json.get("messages", {}).get("records", [])
+                                    if isinstance(msgs_json, dict) and "messages" in msgs_json
+                                    else msgs_json.get("records", []) if isinstance(msgs_json, dict)
+                                    else msgs_json if isinstance(msgs_json, list)
+                                    else []
+                                )
+
+                                for m_obj in records:
+                                    key_obj = m_obj.get("key", {})
+                                    msg_wa_id = key_obj.get("id")
+                                    if not msg_wa_id:
+                                        continue
+
+                                    existing_msg_stmt = select(Message.id).where(
+                                        Message.conversation_id == conv.id,
+                                        Message.whatsapp_msg_id == msg_wa_id
+                                    )
+                                    existing_res = await session.execute(existing_msg_stmt)
+                                    if existing_res.scalars().first():
+                                        continue
+
+                                    from_me = key_obj.get("fromMe", False)
+                                    remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
+                                    content_text, msg_type = self._parse_message_content(m_obj)
+
+                                    ts_raw = m_obj.get("messageTimestamp")
+                                    msg_dt = datetime.utcnow()
+                                    if ts_raw:
+                                        try:
+                                            ts_int = int(ts_raw)
+                                            if ts_int > 1e11:
+                                                ts_int = ts_int / 1000.0
+                                            msg_dt = datetime.fromtimestamp(ts_int)
+                                        except Exception:
+                                            pass
+
+                                    db_msg = Message(
+                                        conversation_id=conv.id,
+                                        remetente=remetente,
+                                        conteudo=content_text,
+                                        tipo=msg_type,
+                                        status="delivered",
+                                        whatsapp_msg_id=msg_wa_id,
+                                        timestamp=msg_dt
+                                    )
+                                    session.add(db_msg)
+                                    stats["messages_synced"] += 1
+
+                        except Exception as chat_err:
+                            logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
+
+                    await session.commit()
+                    logger.info(f"=== SINCRONIZAÇÃO CONCLUÍDA [{instance_name}]: {stats['contacts_synced']} contatos, {stats['conversations_synced']} conversas, {stats['messages_synced']} mensagens. ===")
+
+            return {"success": True, "stats": stats}
+
+        except Exception as e:
+            logger.error(f"Erro fatal na sincronização de histórico da instância {instance_name}: {e}", exc_info=True)
+            stats["errors"].append(str(e))
+            return {"success": False, "stats": stats, "error": str(e)}
+        finally:
+            self.syncing_instances.discard(instance_name)
+
+    def trigger_background_sync(
+        self,
+        tenant_id: int,
+        whatsapp_number_id: int,
+        instance_name: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ):
+        """Spawns an asynchronous background task to sync instance history non-blockingly."""
+        asyncio.create_task(
+            self.sync_instance_history(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number_id,
+                instance_name=instance_name,
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key
+            )
+        )
+
+whatsapp_sync_service = WhatsAppSyncService()

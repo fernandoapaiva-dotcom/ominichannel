@@ -467,6 +467,33 @@ export const AdminPanel: React.FC = () => {
     setMetaAccessToken('');
   };
 
+  const [syncingNumberId, setSyncingNumberId] = useState<number | null>(null);
+  const [syncingAllNumbers, setSyncingAllNumbers] = useState(false);
+
+  const handleSyncNumberHistory = async (num: WhatsAppNumber) => {
+    setSyncingNumberId(num.id);
+    try {
+      const res = await apiFetch(`/whatsapp-numbers/${num.id}/sync_history`, { method: 'POST' });
+      alert(res.message || `Sincronização do departamento ${num.nome_departamento} iniciada com sucesso!`);
+    } catch (err: any) {
+      alert(`Erro ao sincronizar: ${err.message}`);
+    } finally {
+      setSyncingNumberId(null);
+    }
+  };
+
+  const handleSyncAllWhatsAppNumbers = async () => {
+    setSyncingAllNumbers(true);
+    try {
+      const res = await apiFetch('/whatsapp-numbers/sync_all', { method: 'POST' });
+      alert(res.message || 'Sincronização em massa de todos os números iniciada com sucesso!');
+    } catch (err: any) {
+      alert(`Erro ao sincronizar: ${err.message}`);
+    } finally {
+      setSyncingAllNumbers(false);
+    }
+  };
+
   // --- User Handlers ---
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -919,7 +946,30 @@ export const AdminPanel: React.FC = () => {
             </div>
 
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
-              <h3 style={{ fontSize: '18px', marginBottom: '16px' }}>Números Ativos ({numbers.length})</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', margin: 0 }}>Números Ativos ({numbers.length})</h3>
+                <button
+                  onClick={handleSyncAllWhatsAppNumbers}
+                  disabled={syncingAllNumbers}
+                  className="btn-secondary"
+                  style={{
+                    height: '32px',
+                    padding: '0 10px',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    color: 'var(--accent-primary)',
+                    borderColor: 'rgba(0, 230, 153, 0.4)',
+                    backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                  title="Sincronizar histórico e contatos de todas as conexões ativas"
+                >
+                  <RefreshCw size={13} className={syncingAllNumbers ? 'spin' : ''} />
+                  {syncingAllNumbers ? 'Sincronizando...' : 'Sincronizar Histórico de Todos'}
+                </button>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {numbers.map(num => (
                   <div key={num.id} style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(255, 255, 255, 0.02)' }}>
@@ -977,6 +1027,27 @@ export const AdminPanel: React.FC = () => {
                             >
                               <QrCode size={14} />
                               Conectar WhatsApp
+                            </button>
+                            <button
+                              onClick={() => handleSyncNumberHistory(num)}
+                              disabled={syncingNumberId === num.id}
+                              title="Sincronizar todo o histórico antigo e contatos deste WhatsApp"
+                              style={{
+                                background: 'rgba(0, 230, 153, 0.1)',
+                                color: 'var(--accent-primary)',
+                                border: '1px solid rgba(0, 230, 153, 0.3)',
+                                padding: '6px 10px',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <RefreshCw size={12} className={syncingNumberId === num.id ? 'spin' : ''} />
+                              {syncingNumberId === num.id ? 'Sincronizando...' : 'Sincronizar WA'}
                             </button>
                             <button
                               onClick={() => handleResetQrConnection(num)}
