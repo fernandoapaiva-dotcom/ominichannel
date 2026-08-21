@@ -3,7 +3,8 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
+  Lock, Unlock
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -294,6 +295,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setSendError(null);
   }, [conversation?.messages]);
 
+  const [isOperatingProtocol, setIsOperatingProtocol] = useState(false);
+
   const handleToggleStatus = async () => {
     if (!conversation || isTogglingStatus) return;
     const nextStatus = conversation.status === 'com_ia' ? 'com_humano' : 'com_ia';
@@ -308,6 +311,47 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       console.error('Failed to toggle conversation status:', err);
     } finally {
       setIsTogglingStatus(false);
+    }
+  };
+
+  const handleOpenProtocol = async () => {
+    if (!conversation || isOperatingProtocol) return;
+    try {
+      setIsOperatingProtocol(true);
+      const res = await apiFetch(`/conversations/${conversation.id}/open_protocol`, {
+        method: 'POST'
+      });
+      if (res && res.protocol_number) {
+        (conversation as any).protocol_number = res.protocol_number;
+        conversation.status = 'com_humano';
+      }
+      if (onStatusToggle) onStatusToggle();
+    } catch (err: any) {
+      console.error('Failed to open protocol:', err);
+      alert('Erro ao abrir protocolo: ' + (err.message || err));
+    } finally {
+      setIsOperatingProtocol(false);
+    }
+  };
+
+  const handleCloseProtocol = async () => {
+    if (!conversation || isOperatingProtocol) return;
+    const currentProto = (conversation as any).protocol_number || '';
+    const confirmClose = window.confirm(`Deseja realmente finalizar o Protocolo #${currentProto}?\n\nA conversa continuará aberta normalmente para você enviar mensagens quando quiser.`);
+    if (!confirmClose) return;
+
+    try {
+      setIsOperatingProtocol(true);
+      await apiFetch(`/conversations/${conversation.id}/close_protocol`, {
+        method: 'POST'
+      });
+      (conversation as any).protocol_number = undefined;
+      if (onStatusToggle) onStatusToggle();
+    } catch (err: any) {
+      console.error('Failed to close protocol:', err);
+      alert('Erro ao fechar protocolo: ' + (err.message || err));
+    } finally {
+      setIsOperatingProtocol(false);
     }
   };
 
@@ -1252,6 +1296,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
 
+          {/* Protocol Management Button (Abrir / Fechar Protocolo) */}
+          {(conversation as any).protocol_number ? (
+            <button
+              onClick={handleCloseProtocol}
+              disabled={isOperatingProtocol}
+              className="btn-secondary"
+              style={{
+                height: '34px',
+                padding: '0 12px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '11px',
+                fontWeight: '700',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                color: '#f87171',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+              title="Finalizar este atendimento e registrar marco do protocolo"
+            >
+              <Lock size={14} /> Fechar Protocolo
+            </button>
+          ) : (
+            <button
+              onClick={handleOpenProtocol}
+              disabled={isOperatingProtocol}
+              className="btn-secondary"
+              style={{
+                height: '34px',
+                padding: '0 12px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '11px',
+                fontWeight: '700',
+                border: '1px solid rgba(0, 230, 153, 0.4)',
+                backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                color: 'var(--accent-primary)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                cursor: 'pointer'
+              }}
+              title="Iniciar protocolo formal para este atendimento (associa mensagens retroativas)"
+            >
+              <FileText size={14} /> Abrir Protocolo
+            </button>
+          )}
+
           <button
             onClick={handleToggleStatus}
             disabled={isTogglingStatus}
@@ -1551,23 +1646,97 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               )}
 
-              {isSystem ? (
-                <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
-                  alignSelf: 'center',
-                  margin: '8px 0',
-                  padding: '6px 14px',
-                  borderRadius: 'var(--radius-full)',
-                  backgroundColor: 'rgba(59, 130, 246, 0.12)',
-                  border: '1px solid rgba(59, 130, 246, 0.25)',
-                  color: '#3b82f6',
-                  fontSize: '12px',
-                  fontWeight: '600',
-                  textAlign: 'center',
-                  maxWidth: '85%'
-                }}>
-                  {renderMediaContent(msg)}
-                </div>
-              ) : (() => {
+              {isSystem ? (() => {
+                const textContent = typeof msg.conteudo === 'string' ? msg.conteudo : '';
+                const isProtocolClosed = textContent.includes('FINALIZADO') || textContent.includes('ENCERRADO') || textContent.includes('finalizado automaticamente');
+                const isProtocolOpened = textContent.includes('PROTOCOLO FORMAL ABERTO');
+
+                if (isProtocolClosed) {
+                  return (
+                    <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '18px 0',
+                      gap: '12px',
+                      width: '100%'
+                    }}>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.12)' }} />
+                      <div style={{
+                        padding: '8px 16px',
+                        borderRadius: 'var(--radius-full)',
+                        backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                        color: '#f59e0b',
+                        fontSize: '12px',
+                        fontWeight: '600',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                        textAlign: 'center',
+                        maxWidth: '80%'
+                      }}>
+                        <Lock size={15} style={{ flexShrink: 0 }} />
+                        <span>{textContent.replace(/[*_]/g, '')}</span>
+                      </div>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.12)' }} />
+                    </div>
+                  );
+                }
+
+                if (isProtocolOpened) {
+                  return (
+                    <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '18px 0',
+                      gap: '12px',
+                      width: '100%'
+                    }}>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: 'rgba(0, 230, 153, 0.25)' }} />
+                      <div style={{
+                        padding: '8px 16px',
+                        borderRadius: 'var(--radius-full)',
+                        backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                        border: '1px solid rgba(0, 230, 153, 0.4)',
+                        color: 'var(--accent-primary)',
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+                        textAlign: 'center',
+                        maxWidth: '80%'
+                      }}>
+                        <FileText size={15} style={{ flexShrink: 0 }} />
+                        <span>{textContent.replace(/[*_]/g, '')}</span>
+                      </div>
+                      <div style={{ flex: 1, height: '1px', backgroundColor: 'rgba(0, 230, 153, 0.25)' }} />
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                    alignSelf: 'center',
+                    margin: '8px 0',
+                    padding: '6px 14px',
+                    borderRadius: 'var(--radius-full)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                    border: '1px solid rgba(59, 130, 246, 0.25)',
+                    color: '#3b82f6',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    textAlign: 'center',
+                    maxWidth: '85%'
+                  }}>
+                    {renderMediaContent(msg)}
+                  </div>
+                );
+              })() : (() => {
                 const bubbleBg = isCustomer ? 'var(--bubble-incoming)' : isAI ? 'var(--bubble-ai)' : 'var(--bubble-outgoing)';
                 const bubbleColor = isCustomer ? 'var(--bubble-incoming-text)' : isAI ? 'var(--bubble-ai-text)' : 'var(--bubble-outgoing-text)';
                 const border = isCustomer ? '1px solid var(--bubble-incoming-border)' : isAI ? '1px solid var(--bubble-ai-border)' : '1px solid var(--bubble-outgoing-border)';
@@ -2333,7 +2502,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
           conversation.contact?.nome?.includes('Servweld/Servsolda')
         );
-        const isExpired = conversation.status === 'expirada_por_inatividade' && !isGroupChat;
 
         return (
           <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, position: 'relative' }}>
@@ -2344,7 +2512,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 setShowEmojiPicker(!showEmojiPicker);
               }}
               className="btn-secondary"
-              disabled={isExpired}
               style={{
                 padding: '10px 12px',
                 color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)'
@@ -2353,19 +2520,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               <Smile size={18} />
             </button>
-            <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" disabled={isExpired} style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
+            <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
             <input
               type="text"
-              placeholder={isExpired ? 'Conversa expirada...' : (isGroupChat ? 'Enviar mensagem no grupo...' : 'Digite sua mensagem...')}
+              placeholder={isGroupChat ? 'Enviar mensagem no grupo...' : 'Digite sua mensagem para o cliente...'}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              disabled={isExpired}
               style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
             />
             <button
               type="button"
               onClick={handleConsultarIA}
-              disabled={isExpired || isConsultingIA}
+              disabled={isConsultingIA}
               className="btn-secondary"
               style={{
                 padding: '10px 14px',
@@ -2383,7 +2549,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Bot size={16} className={isConsultingIA ? 'animate-spin' : ''} />
               <span>{isConsultingIA ? 'Gerando...' : 'Consultar IA'}</span>
             </button>
-            <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending || isExpired}>
+            <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending}>
               <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
             </button>
           </form>

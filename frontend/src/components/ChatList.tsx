@@ -103,7 +103,12 @@ export const ChatList: React.FC<ChatListProps> = ({
         const matchesStatus = statusFilter === 'all' || conv.status === statusFilter;
         const contactName = conv.contact?.nome || '';
         const contactPhone = conv.contact?.telefone || '';
-        const matchesSearch = contactName.toLowerCase().includes(searchTerm.toLowerCase()) || contactPhone.includes(searchTerm);
+        const protoNumber = (conv as any).protocol_number || '';
+        const term = searchTerm.toLowerCase().trim();
+        const matchesSearch = !term ||
+                              contactName.toLowerCase().includes(term) ||
+                              contactPhone.includes(term) ||
+                              protoNumber.toLowerCase().includes(term);
         return matchesDept && matchesStatus && matchesSearch;
       });
 

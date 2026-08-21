@@ -1408,3 +1408,123 @@ async def suggest_reply_for_conversation(
         "suggested_reply": suggestion
     }
 
+
+@router.post("/{conversation_id}/open_protocol")
+async def open_conversation_protocol(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually opens a formal service protocol on the ongoing conversation.
+    Retroactively marks/registers the protocol for this dialogue phase.
+    """
+    stmt = (
+        select(Conversation)
+        .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+        .where(Conversation.id == conversation_id, Conversation.tenant_id == current_user.tenant_id)
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    new_protocol = await generate_daily_protocol(db, current_user.tenant_id)
+    conv.protocol_number = new_protocol
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    # System marker message in chat
+    system_msg_content = f"📋 *PROTOCOLO FORMAL ABERTO: #{new_protocol}*\nAtendimento formal iniciado por {current_user.nome}. Todas as mensagens deste atendimento estão associadas a este protocolo."
+    sys_msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.SISTEMA,
+        conteudo=system_msg_content,
+        tipo=MessageType.TEXTO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(sys_msg)
+    await db.commit()
+    await db.refresh(conv)
+
+    # Broadcast real-time update
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "conversation_updated",
+            "conversation_id": conv.id,
+            "protocol_number": new_protocol,
+            "status": conv.status.value,
+            "assigned_user_id": conv.assigned_user_id
+        }
+    )
+
+    return {
+        "success": True,
+        "protocol_number": new_protocol,
+        "message": f"Protocolo #{new_protocol} aberto com sucesso!"
+    }
+
+
+@router.post("/{conversation_id}/close_protocol")
+async def close_conversation_protocol(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Manually closes/finalizes the active protocol on the ongoing conversation.
+    Inserts a visual divider milestone and leaves the chat freely available for the attendant.
+    """
+    stmt = (
+        select(Conversation)
+        .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+        .where(Conversation.id == conversation_id, Conversation.tenant_id == current_user.tenant_id)
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    current_proto = conv.protocol_number or "ATUAL"
+    now_str = datetime.now().strftime("%d/%m/%Y às %H:%M")
+
+    # Visual closing divider message in chat
+    system_msg_content = f"🔒 *PROTOCOLO #{current_proto} FINALIZADO*\nAtendimento concluído em {now_str} por {current_user.nome}. O canal de conversa permanece aberto e disponível para novas mensagens."
+    sys_msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.SISTEMA,
+        conteudo=system_msg_content,
+        tipo=MessageType.TEXTO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(sys_msg)
+
+    # Clear active protocol number on ongoing conversation so new protocol can be opened in the future
+    conv.protocol_number = None
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(conv)
+
+    # Broadcast real-time update
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "conversation_updated",
+            "conversation_id": conv.id,
+            "protocol_number": None,
+            "status": conv.status.value,
+            "assigned_user_id": conv.assigned_user_id
+        }
+    )
+
+    return {
+        "success": True,
+        "message": f"Protocolo #{current_proto} finalizado com sucesso!"
+    }
+
+
