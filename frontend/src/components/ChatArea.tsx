@@ -99,7 +99,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
-  const [activeCallUrl, setActiveCallUrl] = useState<string | null>(null);
+  const [activeTabMedia, setActiveTabMedia] = useState<'all' | 'imagem' | 'video' | 'audio' | 'arquivo'>('all');
+  const [dismissedSummaries, setDismissedSummaries] = useState<number[]>([]);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
@@ -377,6 +378,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         method: 'POST'
       });
       (conversation as any).protocol_number = undefined;
+      (conversation as any).resumo_ia = undefined;
+      setDismissedSummaries(prev => [...prev, conversation.id]);
       if (onStatusToggle) onStatusToggle();
     } catch (err: any) {
       console.error('Failed to close protocol:', err);
@@ -1296,17 +1299,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Right Section: Action Buttons Toolbar (All strictly 34px height on 1 single line!) */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+        {/* Right Section: Action Buttons Toolbar (Responsive, sleek 32px height without overflow clipping) */}
+        <div style={{
+          display: 'flex',
+          gap: '5px',
+          alignItems: 'center',
+          flexShrink: 1,
+          minWidth: 0,
+          overflowX: 'auto',
+          scrollbarWidth: 'none',
+          padding: '2px 0',
+          justifyContent: 'flex-end'
+        }}>
           {/* Thread Switcher Dropdown */}
           {contactConversations.length > 1 && onSelectConversation && (
-            <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
               <button
                 type="button"
                 onClick={() => setShowThreadDropdown(!showThreadDropdown)}
                 style={{
-                  height: '34px',
-                  padding: '0 10px',
+                  height: '32px',
+                  padding: '0 8px',
                   background: 'rgba(0, 230, 153, 0.12)',
                   border: '1px solid var(--accent-primary)',
                   color: 'var(--accent-primary)',
@@ -1316,12 +1329,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   cursor: 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px'
+                  gap: '4px',
+                  whiteSpace: 'nowrap'
                 }}
                 title="Alternar entre chamados deste cliente"
               >
-                <span>📁 Chamado #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
-                <ChevronDown size={13} />
+                <span>📁 #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
+                <ChevronDown size={12} />
               </button>
 
               {showThreadDropdown && (
@@ -1397,10 +1411,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={handleCloseProtocol}
               disabled={isOperatingProtocol}
               style={{
-                height: '34px',
-                padding: '0 14px',
+                height: '32px',
+                padding: '0 10px',
                 borderRadius: 'var(--radius-md)',
-                fontSize: '12px',
+                fontSize: '11px',
                 fontWeight: '700',
                 border: '1px solid #ef4444',
                 backgroundColor: 'rgba(239, 68, 68, 0.25)',
@@ -1408,23 +1422,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
+                gap: '5px',
                 cursor: 'pointer',
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
                 boxShadow: '0 0 10px rgba(239, 68, 68, 0.3)'
               }}
               title="Finalizar este atendimento e registrar marco do protocolo"
             >
-              <Lock size={15} /> Fechar Protocolo
+              <Lock size={13} /> Fechar Protocolo
             </button>
           ) : (
             <button
               onClick={handleOpenProtocol}
               disabled={isOperatingProtocol}
               style={{
-                height: '34px',
-                padding: '0 14px',
+                height: '32px',
+                padding: '0 10px',
                 borderRadius: 'var(--radius-md)',
-                fontSize: '12px',
+                fontSize: '11px',
                 fontWeight: '800',
                 border: '1px solid var(--accent-primary)',
                 backgroundColor: 'rgba(0, 230, 153, 0.22)',
@@ -1432,13 +1448,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '6px',
+                gap: '5px',
                 cursor: 'pointer',
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
                 boxShadow: '0 0 12px rgba(0, 230, 153, 0.3)'
               }}
               title="Iniciar protocolo formal para este atendimento (associa mensagens retroativas)"
             >
-              <FileText size={15} /> Abrir Protocolo
+              <FileText size={13} /> Abrir Protocolo
             </button>
           )}
 
@@ -1451,8 +1469,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 disabled={isTogglingPin}
                 className="btn-secondary"
                 style={{
-                  height: '34px',
-                  padding: '0 12px',
+                  height: '32px',
+                  padding: '0 9px',
                   fontSize: '11px',
                   fontWeight: '600',
                   borderRadius: 'var(--radius-md)',
@@ -1462,12 +1480,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: '5px',
-                  cursor: 'pointer'
+                  gap: '4px',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                  whiteSpace: 'nowrap'
                 }}
                 title={isPinned ? "Desafixar esta conversa do topo" : "Fixar esta conversa no topo da lista"}
               >
-                <Pin size={13} fill={isPinned ? '#eab308' : 'none'} color={isPinned ? '#eab308' : 'currentColor'} />
+                <Pin size={12} fill={isPinned ? '#eab308' : 'none'} color={isPinned ? '#eab308' : 'currentColor'} />
                 {isPinned ? 'Fixado' : 'Fixar'}
               </button>
             );
@@ -1478,8 +1498,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             disabled={isMarkingRead}
             className="btn-secondary"
             style={{
-              height: '34px',
-              padding: '0 12px',
+              height: '32px',
+              padding: '0 9px',
               fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
@@ -1489,20 +1509,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
+              gap: '4px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
             }}
             title="Marcar todas as mensagens deste cliente como lidas/resolvidas sem precisar responder"
           >
-            <CheckCheck size={14} /> {isMarkingRead ? '...' : 'Marcar Lido'}
+            <CheckCheck size={13} /> {isMarkingRead ? '...' : 'Lido'}
           </button>
 
           <button
             onClick={handleToggleStatus}
             disabled={isTogglingStatus}
             style={{
-              height: '34px',
-              padding: '0 12px',
+              height: '32px',
+              padding: '0 9px',
               borderRadius: 'var(--radius-md)',
               fontSize: '11px',
               fontWeight: '700',
@@ -1512,11 +1534,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
+              gap: '4px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
             }}
           >
-            {conversation.status === 'com_ia' ? <><Bot size={14} /> COM IA</> : <><Headphones size={14} /> COM HUMANO</>}
+            {conversation.status === 'com_ia' ? <><Bot size={13} /> COM IA</> : <><Headphones size={13} /> HUMANO</>}
           </button>
 
           {conversation.status === 'com_ia' && (
@@ -1524,8 +1548,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={handleAssumeControl}
               disabled={isAssumingControl}
               style={{
-                height: '34px',
-                padding: '0 12px',
+                height: '32px',
+                padding: '0 10px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '11px',
                 fontWeight: '800',
@@ -1535,14 +1559,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '5px',
+                gap: '4px',
                 cursor: 'pointer',
+                flexShrink: 0,
+                whiteSpace: 'nowrap',
                 boxShadow: '0 0 10px rgba(245, 158, 11, 0.25)'
               }}
               title="Intervir no atendimento da IA e assumir o controle da conversa agora"
             >
-              <Zap size={14} className={isAssumingControl ? "animate-spin" : ""} />
-              <span>{isAssumingControl ? 'Assumindo...' : 'Assumir Controle'}</span>
+              <Zap size={13} className={isAssumingControl ? "animate-spin" : ""} />
+              <span>{isAssumingControl ? '...' : 'Assumir'}</span>
             </button>
           )}
 
@@ -1550,8 +1576,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             onClick={handleStartVideoCall}
             className="btn-secondary"
             style={{
-              height: '34px',
-              padding: '0 12px',
+              height: '32px',
+              padding: '0 9px',
               fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
@@ -1561,12 +1587,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: '5px',
-              cursor: 'pointer'
+              gap: '4px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
             }}
             title="Iniciar chamada de vídeo / voz WebRTC e enviar link para o cliente"
           >
-            <Video size={14} /> Chamada Vídeo/Voz
+            <Video size={13} /> Vídeo/Voz
           </button>
 
           {onOpenMediaGallery && (
@@ -1574,31 +1602,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={onOpenMediaGallery}
               className="btn-secondary"
               style={{
-                height: '34px',
-                padding: '0 12px',
-                fontSize: '11px',
-                fontWeight: '600',
-                borderRadius: 'var(--radius-md)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '5px',
-                cursor: 'pointer'
-              }}
-            >
-              <Paperclip size={14} /> Arquivos ({conversationMedia.length})
-            </button>
-          )}
-
-          {/* Mais Ações Dropdown */}
-          <div style={{ position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setShowMoreMenu(!showMoreMenu)}
-              className="btn-secondary"
-              style={{
-                height: '34px',
-                padding: '0 10px',
+                height: '32px',
+                padding: '0 9px',
                 fontSize: '11px',
                 fontWeight: '600',
                 borderRadius: 'var(--radius-md)',
@@ -1606,12 +1611,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '4px',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                flexShrink: 0,
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <Paperclip size={13} /> Mídia ({conversationMedia.length})
+            </button>
+          )}
+
+          {/* Mais Ações Dropdown */}
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setShowMoreMenu(!showMoreMenu)}
+              className="btn-secondary"
+              style={{
+                height: '32px',
+                padding: '0 8px',
+                fontSize: '11px',
+                fontWeight: '600',
+                borderRadius: 'var(--radius-md)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '3px',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap'
               }}
               title="Mais ações do atendimento"
             >
               <span>Mais</span>
-              <ChevronDown size={13} />
+              <ChevronDown size={12} />
             </button>
 
             {showMoreMenu && (
@@ -1738,24 +1769,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {conversation.resumo_ia && (
+      {Boolean((conversation as any).protocol_number && conversation.resumo_ia && !dismissedSummaries.includes(conversation.id)) && (
         <div style={{
-          padding: '12px 20px',
+          padding: '10px 16px',
           backgroundColor: 'rgba(245, 158, 11, 0.12)',
           borderBottom: '1px solid rgba(245, 158, 11, 0.3)',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'space-between',
           gap: '12px',
         }}>
-          <Bot size={22} style={{ color: '#d97706', flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: '12px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '3px', color: '#d97706' }}>
-              📌 Resumo da Transferência da IA:
-            </div>
-            <div style={{ fontSize: '13px', color: 'var(--text-main)', lineHeight: '1.5', fontWeight: '500' }}>
-              {conversation.resumo_ia}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
+            <Bot size={20} style={{ color: '#d97706', flexShrink: 0 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '11px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px', color: '#d97706' }}>
+                📌 Resumo da Transferência da IA:
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-main)', lineHeight: '1.4', fontWeight: '500' }}>
+                {conversation.resumo_ia}
+              </div>
             </div>
           </div>
+          <button
+            onClick={() => setDismissedSummaries(prev => [...prev, conversation.id])}
+            title="Ocultar resumo da IA"
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#d97706',
+              cursor: 'pointer',
+              padding: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              borderRadius: '4px'
+            }}
+          >
+            <X size={15} />
+          </button>
         </div>
       )}
 

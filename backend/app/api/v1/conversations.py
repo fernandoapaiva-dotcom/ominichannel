@@ -1772,6 +1772,16 @@ async def close_conversation_protocol(
     conv.protocol_number = None
     conv.ultima_interacao_em = datetime.utcnow()
 
+    if conv.contact_id:
+        from app.models.models import ConversationMemory
+        from sqlalchemy import delete
+        await db.execute(
+            delete(ConversationMemory).where(
+                ConversationMemory.tenant_id == current_user.tenant_id,
+                ConversationMemory.contact_id == conv.contact_id
+            )
+        )
+
     await db.commit()
     await db.refresh(conv)
 
@@ -1784,6 +1794,7 @@ async def close_conversation_protocol(
             "conversation_id": conv.id,
             "protocol_number": None,
             "status": conv.status.value,
+            "resumo_ia": None,
             "assigned_user_id": conv.assigned_user_id
         }
     )
