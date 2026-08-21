@@ -302,6 +302,7 @@ class GeminiService:
         rag_context: Optional[str] = None,
         tenant_prompt: Optional[str] = None,
         available_departments: Optional[List[str]] = None,
+        available_attendants: Optional[List[str]] = None,
         department_descriptions: Optional[Dict[str, str]] = None,
         protocol_number: Optional[str] = None,
         should_announce_protocol: bool = False,
@@ -310,7 +311,7 @@ class GeminiService:
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
         clean_name = sanitize_customer_name(customer_name)
 
         dept_desc_prompt = ""
@@ -320,33 +321,40 @@ class GeminiService:
             ]) + "\n"
 
         dept_list_str = ", ".join(available_departments) if available_departments else department_name
+        attendants_list_str = ", ".join(available_attendants) if available_attendants else "Equipe de Atendimento Servweld"
 
         proto_prompt = ""
         if protocol_number:
             if should_announce_protocol:
-                proto_prompt = f"PROTOCOLO OFICIAL DESTE ATENDIMENTO: #{protocol_number}\n- REGRA OBRIGATÓRIA: Como é a abertura deste atendimento, mencione o protocolo formal logo no início da mensagem (ex: '📋 Protocolo: #{protocol_number}').\n\n"
+                proto_prompt = (
+                    f"PROTOCOLO DE ATENDIMENTO:\n"
+                    f"- O número de protocolo deste chamado é: #{protocol_number}\n"
+                    f"- OBRIGATÓRIO: Inicie sua resposta informando gentilmente o protocolo ao interlocutor (ex: 'Olá, {clean_name}! Seja bem-vindo à Servweld. Seu número de protocolo para este atendimento é #{protocol_number}. Como posso te ajudar hoje?').\n"
+                )
             else:
-                proto_prompt = f"PROTOCOLO OFICIAL DESTE ATENDIMENTO: #{protocol_number}\n\n"
+                proto_prompt = (
+                    f"PROTOCOLO DE ATENDIMENTO:\n"
+                    f"- O protocolo já foi informado anteriormente: #{protocol_number}. Não precisa repetir o número a cada mensagem, a menos que o interlocutor pergunte.\n"
+                )
+        else:
+            proto_prompt = "PROTOCOLO DE ATENDIMENTO: Nenhum protocolo necessário para este tipo de contato interno/conversa contínua.\n"
 
+        tech_directive = ""
         if is_technician_or_admin:
             tech_directive = (
-                "\n"
                 "=========================================================================================\n"
-                f"🛡️ MODO COPILOTO TÉCNICO INTERNO / ENGENHARIA DE BANCADA ATIVADO (USUÁRIO: {clean_name})\n"
-                "=========================================================================================\n"
-                "- Você está conversando com um TÉCNICO AUTORIZADO DA SERVWELD OU ADMINISTRADOR DO SISTEMA.\n"
-                "- SEU PAPEL: Atue como Engenheiro Eletrônico Especialista e Copiloto Técnico de Bancada.\n"
-                "- LIBERAÇÃO COMPLETA DE DIAGNÓSTICO E REPARO: Ajude o técnico em todos os procedimentos de bancada, testes de circuito, leitura de diagramas e esquemas elétricos, medição de componentes (IGBTs, MOSFETs, pontes retificadoras, osciladores PWM, transformadores, sensores Hall, shunts, circuitos snubber), calibração e análise de falhas.\n"
-                "- USO DA BASE RAG E MANUAIS: Extraia da base de conhecimento RAG todos os manuais técnicos, diagramas esquemáticos, pinagens, tensões de gate e testes passo a passo para orientar o técnico de forma precisa e aprofundada.\n"
-                "- Responda com linguagem técnica profissional (eletrônica de potência, circuitos de controle, formas de onda, pontos de teste).\n"
+                "🛡️ MODO COPILOTO TÉCNICO INTERNO / ENGENHARIA DE BANCADA (INTERLOCUTOR É TÉCNICO AUTORIZADO / ADMIN):\n"
+                "- O interlocutor é um TÉCNICO / ENGENHEIRO DA LOJA SERVWEELD trabalhando na bancada de manutenção!\n"
+                "- FORNEÇA AJUDA TÉCNICA APROFUNDADA, DIAGNÓSTICOS DE DEFEITOS, ROTEIROS DE TESTE E DADOS DE MANUAIS / DIAGRAMAS ELETRÔNICOS.\n"
+                "- Auxilie em: medições com multímetro (tensão, diodo, continuidade), interpretação de códigos de erro (ex: falhas de barramento DC, erro 11, IGBTs, resistores de gate, fontes auxiliares +15V/-15V/+5V, sensores Hall, relés de pré-carga, optoacopladores).\n"
+                "- Identifique pinagens de conectores (ex: J18, J19), estado de chicotes e oriente o passo a passo seguro para o conserto do equipamento.\n"
+                "- Seja um Orientador Técnico Master experiente, técnico e prático de bancada.\n"
                 "=========================================================================================\n"
             )
         else:
             tech_directive = (
-                "\n"
                 "=========================================================================================\n"
-                "🔒 REGRA ESTRITA DE PROTEÇÃO DE NEGÓCIO E SEGURANÇA - ATENDIMENTO A CLIENTE EXTERNO\n"
-                "=========================================================================================\n"
+                "🛡️ MODO ATENDIMENTO AO CLIENTE EXTERNO (NÃO É TÉCNICO INTERNO):\n"
                 "- Você está atendendo um CLIENTE COMUM / EXTERNO da Servweld.\n"
                 "- PROIBIÇÃO ABSOLUTA DE INSTRUÇÕES DE REPARO/CONSERTO: NUNCA ensine o cliente a abrir máquinas, consertar placas, medir circuitos eletrônicos internos ou trocar peças por conta própria. Isso traz risco severo de acidentes elétricos graves e elimina a demanda de serviços da assistência técnica da loja.\n"
                 "- PROCEDIMENTO PERMITIDO COM O CLIENTE:\n"
@@ -384,23 +392,30 @@ class GeminiService:
             "   - NUNCA transfira de setor com base no nome salvo na agenda do cliente!\n"
             "   - SOMENTE defina 'TRANSFERIR_SETOR: <NomeDoSetor>' se a mensagem do cliente contiver expressamente palavras-chave e intenção clara de OUTRO setor (ex: problema em máquina alugada -> Locação; comprar produtos novos -> Vendas; dúvida de boleto -> Financeiro).\n"
             "   - SE VOCÊ FOR TRANSFERIR DE SETOR: Você DEVE OBRIGATORIAMENTE informar o cliente no texto da resposta ('Com certeza! Estou transferindo seu atendimento para a nossa equipe de [NomeDoSetor], que é o setor responsável por...')!\n"
-            "5. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano, PERGUNTE PRIMEIRO:\n"
+            "5. PREFERÊNCIA DE ATENDENTE HUMANO (DIRECIONAMENTO DIRETO):\n"
+            f"   - Atendentes cadastrados na empresa: [{attendants_list_str}].\n"
+            "   - Se o cliente ou técnico solicitar expressamente falar com um atendente de sua preferência (ex: 'Quero falar com o José Eduardo', 'Pode me passar para o Eduardo?', 'Me transfere pro Fernando', 'Quero falar com a Giovanna', 'Alan está aí?'):\n"
+            "     * Reconheça gentilmente na sua resposta que está direcionando o atendimento diretamente para o atendente solicitado ('Com certeza! Já estou te transferindo para o(a) [NomeDoAtendente]...').\n"
+            "     * DEFINA 'ESCALAR_HUMANO: SIM'.\n"
+            "     * DEFINA 'ATENDENTE_PREFERENCIAL: <NomeExatoDoAtendente>'.\n"
+            "   - Se o interlocutor não citar nome de atendente de preferência, defina 'ATENDENTE_PREFERENCIAL: NAO'.\n"
+            "6. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano genérico sem preferência, PERGUNTE PRIMEIRO:\n"
             "   'Antes de te encaminhar para o especialista humano do setor, teria mais alguma informação ou detalhe que você gostaria de acrescentar ao seu chamado?'\n"
-            "6. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações), encerre a resposta com a fala conclusiva final e defina 'ESCALAR_HUMANO: SIM'.\n"
-            "7. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
-            "8. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço ou localização, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'.\n"
-            "9. ENDEREÇO OFICIAL DA SERVWELD: 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS: Latitude -15.820418, Longitude -47.956467.\n"
-            "10. FLUXO DE PAGAMENTO VIA PIX: Se o cliente pedir Pix, pergunte a nota/assunto e valor antes de enviar os dados oficiais CNPJ 54.804.458/0001-22.\n"
-            "11. ATENDIMENTO 24/7 E RESOLUÇÃO AUTÔNOMA DA IA (NÃO ADIAR O QUE A IA PODE RESOLVER):\n"
+            "7. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações / pedido atendente específico), encerre a resposta com a fala conclusiva final e defina 'ESCALAR_HUMANO: SIM'.\n"
+            "8. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
+            "9. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço ou localização, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'.\n"
+            "10. ENDEREÇO OFICIAL DA SERVWELD: 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS: Latitude -15.820418, Longitude -47.956467.\n"
+            "11. FLUXO DE PAGAMENTO VIA PIX: Se o cliente pedir Pix, pergunte a nota/assunto e valor antes de enviar os dados oficiais CNPJ 54.804.458/0001-22.\n"
+            "12. ATENDIMENTO 24/7 E RESOLUÇÃO AUTÔNOMA DA IA (NÃO ADIAR O QUE A IA PODE RESOLVER):\n"
             "   - Você opera 24 horas por dia, 7 dias por semana.\n"
             "   - Se o cliente fizer perguntas que você ou a base de conhecimento RAG podem resolver (ex: endereço da loja, horário de funcionamento, dúvidas técnicas sobre solda, catálogo de produtos, assistência ou formas de pagamento):\n"
             "     * RESPONDA A DÚVIDA IMEDIATAMENTE DE FORMA COMPLETA, NATURAL E CORDIAL.\n"
             "     * DEFINA 'ESCALAR_HUMANO: NAO'.\n"
             "     * NUNCA adie para o dia seguinte nem informe que a loja está fechada se a IA puder resolver a solicitação sozinha!\n"
             "   - SOMENTE defina 'ESCALAR_HUMANO: SIM' quando a demanda genuinamente exigir intervenção humana (ex: negociação de preços/descontos, fechamento de contrato complexo, liberação de crédito ou quando o cliente pedir explicitamente para falar com uma pessoa).\n"
-            "12. COLETA CORDIAL DE NOME:\n"
+            "13. COLETA CORDIAL DE NOME:\n"
             "   - Se o cliente ainda não informou o nome (nome está como 'Cliente' ou número), dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n"
-            "13. DETECÇÃO DE BOT / URA / MENU AUTOMÁTICO DE OUTRA EMPRESA (ANTI-LOOP ETERNO):\n"
+            "14. DETECÇÃO DE BOT / URA / MENU AUTOMÁTICO DE OUTRA EMPRESA (ANTI-LOOP ETERNO):\n"
             "   - Se a mensagem recebida for um MENU AUTOMÁTICO, URA, BOT, AUTOATENDIMENTO ou IA de outra empresa (ex: 'Digite 1 para Suporte', 'Escolha uma opção', 'Menu principal', 'Sou a assistente virtual', etc.):\n"
             "     * DEFINA 'RESPOSTA: [SILENCIAR_IA]'\n"
             "     * DEFINA 'ESCALAR_HUMANO: SIM'\n"
@@ -417,6 +432,7 @@ class GeminiService:
                 "resposta": "",
                 "escalar_humano": True,
                 "is_bot_or_menu": True,
+                "atendente_preferencial": None,
                 "transferir_setor": None,
                 "nova_memoria": "Mensagem recebida é um menu/bot automático de outra empresa. IA silenciada para evitar loop.",
                 "finalizar_conversa": False,
@@ -435,6 +451,7 @@ class GeminiService:
             "Responda no seguinte formato exato:\n"
             "RESPOSTA: <mensagem em português natural para o cliente>\n"
             "ESCALAR_HUMANO: <SIM ou NAO>\n"
+            "ATENDENTE_PREFERENCIAL: <NomeDoAtendente ou NAO>\n"
             "TRANSFERIR_SETOR: <NomeDoNovoSetor ou NAO>\n"
             "NOVA_MEMORIA: <resumo factual dos fatos relevantes>\n"
             "FINALIZAR_CONVERSA: <SIM ou NAO>\n"
@@ -444,6 +461,7 @@ class GeminiService:
         default_res = {
             "resposta": f"Olá, {clean_name}! Como posso te ajudar hoje?",
             "escalar_humano": False,
+            "atendente_preferencial": None,
             "transferir_setor": None,
             "nova_memoria": memory_summary or "",
             "finalizar_conversa": False,
@@ -484,6 +502,7 @@ class GeminiService:
                 
                 resposta = ""
                 escalar_humano = False
+                atendente_preferencial = None
                 transferir_setor = None
                 nova_memoria = memory_summary or ""
                 finalizar_conversa = False
@@ -501,6 +520,11 @@ class GeminiService:
                         current_field = "ESCALAR_HUMANO"
                         val = line.replace("ESCALAR_HUMANO:", "").strip().upper()
                         escalar_humano = "SIM" in val or "TRUE" in val
+                    elif line.startswith("ATENDENTE_PREFERENCIAL:"):
+                        current_field = "ATENDENTE_PREFERENCIAL"
+                        val = line.replace("ATENDENTE_PREFERENCIAL:", "").strip()
+                        if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
+                            atendente_preferencial = val
                     elif line.startswith("TRANSFERIR_SETOR:"):
                         current_field = "TRANSFERIR_SETOR"
                         val = line.replace("TRANSFERIR_SETOR:", "").strip()
@@ -531,7 +555,8 @@ class GeminiService:
 
                 return {
                     "resposta": resposta,
-                    "escalar_humano": False if is_technician_or_admin else escalar_humano,
+                    "escalar_humano": False if is_technician_or_admin else (escalar_humano or bool(atendente_preferencial)),
+                    "atendente_preferencial": atendente_preferencial,
                     "transferir_setor": None if is_technician_or_admin else transferir_setor,
                     "nova_memoria": nova_memoria,
                     "finalizar_conversa": finalizar_conversa,

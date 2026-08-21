@@ -425,6 +425,12 @@ export const ChatList: React.FC<ChatListProps> = ({
               primaryConv.dados_adicionais?.is_pinned ||
               group.allConversations.some(c => c.dados_adicionais?.is_pinned)
             );
+            const isWaitingAttendant = Boolean(
+              !primaryConv.dados_adicionais?.marked_as_read &&
+              !primaryConv.dados_adicionais?.pending_dismissed &&
+              (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
+              (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente' && lastMessage.status !== 'read'))
+            );
 
             return (
               <div
@@ -440,7 +446,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                   onClick={() => onSelectConversation(primaryConv)}
                   style={{
                     padding: '12px 14px',
-                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isGroupPinned ? '3px solid #eab308' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent')),
+                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isGroupPinned ? '3px solid #eab308' : (isWaitingAttendant ? '3px solid #ef4444' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'))),
                     cursor: 'pointer',
                     backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
                     display: 'flex',
@@ -448,54 +454,93 @@ export const ChatList: React.FC<ChatListProps> = ({
                     gap: '12px'
                   }}
                 >
-                  {/* WhatsApp Profile Avatar with Click-to-Zoom */}
-                  {primaryConv.contact?.foto_perfil_url ? (
-                    <img
-                      src={primaryConv.contact.foto_perfil_url}
-                      alt={group.contactName}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setAvatarModalData({
-                          name: group.contactName,
-                          phone: group.contactPhone,
-                          avatarUrl: primaryConv.contact?.foto_perfil_url
-                        });
-                      }}
-                      title="Clique para expandir a foto de perfil"
-                      style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: isGroupPinned ? '1.5px solid #eab308' : '1.5px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-                    />
-                  ) : (
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setAvatarModalData({
-                          name: group.contactName,
-                          phone: group.contactPhone,
-                          avatarUrl: null
-                        });
-                      }}
-                      title="Clique para expandir a foto de perfil"
-                      style={{
-                        width: '38px',
-                        height: '38px',
-                        borderRadius: '50%',
-                        background: isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
-                        color: '#051a12',
-                        fontWeight: '700',
-                        fontSize: '15px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        flexShrink: 0,
-                        boxShadow: isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {group.contactName.charAt(0).toUpperCase()}
-                    </div>
-                  )}
+                  {/* WhatsApp Profile Avatar with Click-to-Zoom & Waiting Indicator */}
+                  <div style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
+                    {primaryConv.contact?.foto_perfil_url ? (
+                      <img
+                        src={primaryConv.contact.foto_perfil_url}
+                        alt={group.contactName}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAvatarModalData({
+                            name: group.contactName,
+                            phone: group.contactPhone,
+                            avatarUrl: primaryConv.contact?.foto_perfil_url
+                          });
+                        }}
+                        title={isWaitingAttendant ? "⚠️ Aguardando resposta de atendente humano! Clique para expandir foto" : "Clique para expandir a foto de perfil"}
+                        style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '50%',
+                          objectFit: 'cover',
+                          border: isWaitingAttendant ? '2.5px solid #ef4444' : (isGroupPinned ? '1.5px solid #eab308' : '1.5px solid var(--accent-primary)'),
+                          boxShadow: isWaitingAttendant ? '0 0 10px rgba(239, 68, 68, 0.7)' : 'none',
+                          flexShrink: 0,
+                          cursor: 'pointer',
+                          transition: 'transform 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                      />
+                    ) : (
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setAvatarModalData({
+                            name: group.contactName,
+                            phone: group.contactPhone,
+                            avatarUrl: null
+                          });
+                        }}
+                        title={isWaitingAttendant ? "⚠️ Aguardando resposta de atendente humano! Clique para expandir foto" : "Clique para expandir a foto de perfil"}
+                        style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '50%',
+                          background: isWaitingAttendant ? 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)' : (isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)'),
+                          color: isWaitingAttendant ? '#ffffff' : '#051a12',
+                          fontWeight: '700',
+                          fontSize: '15px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          boxShadow: isWaitingAttendant ? '0 0 10px rgba(239, 68, 68, 0.7)' : (isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)'),
+                          border: isWaitingAttendant ? '2.5px solid #ef4444' : 'none',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {group.contactName.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+
+                    {/* Visual Waiting Indicator Flag on Avatar */}
+                    {isWaitingAttendant && (
+                      <span
+                        title="Aguardando resposta do atendente humano"
+                        style={{
+                          position: 'absolute',
+                          bottom: '-2px',
+                          right: '-2px',
+                          backgroundColor: '#ef4444',
+                          color: '#ffffff',
+                          border: '2px solid #0f172a',
+                          borderRadius: '50%',
+                          width: '15px',
+                          height: '15px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '9px',
+                          fontWeight: '900',
+                          boxShadow: '0 0 8px rgba(239, 68, 68, 0.9)'
+                        }}
+                      >
+                        !
+                      </span>
+                    )}
+                  </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>

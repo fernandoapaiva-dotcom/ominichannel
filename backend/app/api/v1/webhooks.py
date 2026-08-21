@@ -1083,6 +1083,12 @@ async def receive_evolution_webhook(
         all_wns = dept_res.scalars().all()
         available_dept_names = [wn_item.nome_departamento for wn_item in all_wns if wn_item.nome_departamento]
 
+        # Fetch all active users/attendants for tenant to support preferred attendant routing
+        u_stmt = select(User).where(User.tenant_id == tenant_id)
+        u_res = await db.execute(u_stmt)
+        tenant_users = u_res.scalars().all()
+        available_attendants = [u.nome for u in tenant_users if u.nome]
+
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
 
         # Check if conversation was waiting for customer confirmation on sector transfer
@@ -1100,6 +1106,7 @@ async def receive_evolution_webhook(
                 memory_summary=memory_summary,
                 rag_context=rag_context,
                 available_departments=available_dept_names,
+                available_attendants=available_attendants,
                 protocol_number=None,
                 should_announce_protocol=False,
                 is_technician_or_admin=True,
@@ -1267,6 +1274,7 @@ async def receive_evolution_webhook(
                         memory_summary=memory_summary,
                         rag_context=rag_context,
                         available_departments=available_dept_names,
+                        available_attendants=available_attendants,
                         protocol_number=conversation.protocol_number,
                         should_announce_protocol=should_announce_proto,
                         is_technician_or_admin=False,
@@ -1286,6 +1294,7 @@ async def receive_evolution_webhook(
                     memory_summary=memory_summary,
                     rag_context=rag_context,
                     available_departments=available_dept_names,
+                    available_attendants=available_attendants,
                     protocol_number=conversation.protocol_number,
                     should_announce_protocol=should_announce_proto,
                     is_technician_or_admin=False,
@@ -1541,22 +1550,38 @@ async def receive_evolution_webhook(
         # Check Human Escalation
         if escalar_humano:
             is_open = business_hours_service.is_within_business_hours()
+            atendente_pref = ai_output.get("atendente_preferencial")
+            preferred_user = None
+
+            if atendente_pref:
+                clean_pref = atendente_pref.strip().lower()
+                for u in tenant_users:
+                    if u.nome and (clean_pref in u.nome.lower() or u.nome.lower() in clean_pref):
+                        preferred_user = u
+                        break
+
             if is_open:
-                # Find and assign the least loaded eligible operator in this department
-                assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
-                if assigned_user:
+                if preferred_user:
                     conversation.status = ConversationStatus.COM_HUMANO
-                    conversation.assigned_user_id = assigned_user.id
-                    assigned_user_name = assigned_user.nome
+                    conversation.assigned_user_id = preferred_user.id
+                    assigned_user_name = f"{preferred_user.nome} (Solicitado pelo cliente)"
+                    logger.info(f"[ROTEAMENTO PREFERENCIAL] Conversa #{conversation.id} direcionada especificamente para o atendente {preferred_user.nome} (ID {preferred_user.id})")
                 else:
-                    conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
-                    conversation.assigned_user_id = None
-                    assigned_user_name = "Fila Geral (Aguardando Atendente)"
+                    # Find and assign the least loaded eligible operator in this department
+                    assigned_user = await assign_least_busy_attendant(db, tenant_id, whatsapp_number.id)
+                    if assigned_user:
+                        conversation.status = ConversationStatus.COM_HUMANO
+                        conversation.assigned_user_id = assigned_user.id
+                        assigned_user_name = assigned_user.nome
+                    else:
+                        conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
+                        conversation.assigned_user_id = None
+                        assigned_user_name = "Fila Geral (Aguardando Atendente)"
             else:
                 # Outside business hours (after 18:00 or weekends)
                 conversation.status = ConversationStatus.AGUARDANDO_ATENDENTE
-                conversation.assigned_user_id = None
-                assigned_user_name = "Fila Matutina (Fora do Expediente)"
+                conversation.assigned_user_id = preferred_user.id if preferred_user else None
+                assigned_user_name = f"Fila Matutina ({preferred_user.nome if preferred_user else 'Geral'})"
                 ai_reply += (
                     f"\n\n⏰ *Aviso de Expediente:* Informamos que nosso expediente comercial é de Segunda a Sexta das 08:00 às 18:00. "
                     f"Seu chamado foi registrado com prioridade sob o protocolo *{conversation.protocol_number}* e será atendido pela nossa equipe no próximo dia útil a partir das 08:00!"

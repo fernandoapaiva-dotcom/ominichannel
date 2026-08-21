@@ -894,7 +894,7 @@ export const AdminPanel: React.FC = () => {
             <Users size={16} /> Atendentes & Permissões
           </button>
           <button
-            onClick={() => { setActiveSubTab('rag'); loadRagDocuments(); }}
+            onClick={() => { setActiveSubTab('rag'); loadRagDocuments(); loadData(); }}
             className={activeSubTab === 'rag' ? 'btn-primary' : 'btn-secondary'}
           >
             <Database size={16} /> Base RAG (IA Concierge)
@@ -1684,21 +1684,53 @@ export const AdminPanel: React.FC = () => {
 
               {/* Department Dropdown if Setor is selected */}
               {ragScope === 'setor' && (
-                <div style={{ marginBottom: '20px', padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
-                  <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px', display: 'block' }}>
-                    Selecione o Setor / Departamento Alvo:
-                  </label>
-                  <select
-                    value={ragDeptId}
-                    onChange={(e) => setRagDeptId(Number(e.target.value))}
-                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
-                  >
-                    {numbers.map(num => (
-                      <option key={num.id} value={num.id}>
-                        Setor: {num.nome_departamento} ({num.numero})
-                      </option>
-                    ))}
-                  </select>
+                <div style={{ marginBottom: '20px', padding: '14px 18px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <label style={{ fontSize: '13px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Building size={15} /> Selecione o Setor / Departamento Alvo:
+                    </label>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      {numbers.length} setor(es) disponível(is)
+                    </span>
+                  </div>
+                  
+                  {numbers.length === 0 ? (
+                    <div style={{ padding: '10px', fontSize: '12px', color: '#fca5a5', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '6px' }}>
+                      Nenhum setor/número cadastrado. Cadastre um número na aba "Números / Departamentos" primeiro.
+                    </div>
+                  ) : (
+                    <select
+                      value={ragDeptId || numbers[0]?.id}
+                      onChange={(e) => setRagDeptId(Number(e.target.value))}
+                      style={{
+                        width: '100%',
+                        padding: '12px 14px',
+                        backgroundColor: '#0f172a',
+                        border: '1.5px solid var(--accent-primary)',
+                        borderRadius: 'var(--radius-md)',
+                        color: '#ffffff',
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        outline: 'none',
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(0, 230, 153, 0.15)'
+                      }}
+                    >
+                      {numbers.map(num => (
+                        <option
+                          key={num.id}
+                          value={num.id}
+                          style={{
+                            backgroundColor: '#0f172a',
+                            color: '#ffffff',
+                            padding: '8px'
+                          }}
+                        >
+                          🏢 Setor: {num.nome_departamento} ({num.numero || num.instancia_evolution_api})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
               )}
 
