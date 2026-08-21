@@ -1,24 +1,24 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, cast, String
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.models.models import Contact, Conversation, User
+from app.models.models import Contact, Conversation, Message, User
 from app.schemas.schemas import ContactWithHistoryResponse, ConversationResponse
 
 router = APIRouter(prefix="/contacts", tags=["Histórico de Clientes & Contatos"])
 
 @router.get("/", response_model=List[ContactWithHistoryResponse])
 async def list_contacts(
-    q: Optional[str] = Query(None, description="Busca por nome ou telefone"),
+    q: Optional[str] = Query(None, description="Busca por nome, telefone ou número de protocolo"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Lists tenant contacts with conversation counts and search filter.
+    Lists tenant contacts with conversation counts and universal search filter (nome, telefone ou protocolo).
     """
     stmt = (
         select(
@@ -32,11 +32,37 @@ async def list_contacts(
     )
 
     if q and q.strip():
-        search = f"%{q.strip()}%"
+        clean_q = q.strip()
+        search = f"%{clean_q}%"
+        proto_clean = clean_q.replace('#', '').strip()
+        proto_search = f"%{proto_clean}%"
+
+        proto_conv_subq = (
+            select(Conversation.contact_id)
+            .where(
+                Conversation.tenant_id == current_user.tenant_id,
+                or_(
+                    Conversation.protocol_number.ilike(proto_search),
+                    cast(Conversation.dados_adicionais, String).ilike(proto_search)
+                )
+            )
+        )
+
+        proto_msg_subq = (
+            select(Conversation.contact_id)
+            .join(Message, Message.conversation_id == Conversation.id)
+            .where(
+                Conversation.tenant_id == current_user.tenant_id,
+                Message.conteudo.ilike(proto_search)
+            )
+        )
+
         stmt = stmt.where(
             or_(
                 Contact.nome.ilike(search),
-                Contact.telefone.like(search)
+                Contact.telefone.like(search),
+                Contact.id.in_(proto_conv_subq),
+                Contact.id.in_(proto_msg_subq)
             )
         )
 

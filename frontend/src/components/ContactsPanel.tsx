@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, User, Phone, Calendar, MessageSquare, Clock, Building, Bot, ChevronRight } from 'lucide-react';
+import { Search, User, Phone, Calendar, MessageSquare, Clock, Building, Bot, ChevronRight, FileText, Lock, X } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation } from '../types';
 
@@ -27,11 +27,17 @@ export const ContactsPanel: React.FC = () => {
       const url = query.trim() ? `/contacts/?q=${encodeURIComponent(query.trim())}` : '/contacts/';
       const data = await apiFetch(url);
       setContacts(data);
-      if (data.length > 0 && !selectedContact) {
-        handleSelectContact(data[0]);
+      if (data.length > 0) {
+        const currentStillExists = data.find((c: ContactItem) => c.id === selectedContact?.id);
+        if (!currentStillExists) {
+          handleSelectContact(data[0]);
+        }
+      } else {
+        setSelectedContact(null);
+        setContactHistory([]);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching contacts:', err);
     } finally {
       setLoadingContacts(false);
     }
@@ -47,6 +53,11 @@ export const ContactsPanel: React.FC = () => {
     fetchContacts(val);
   };
 
+  const handleClearSearch = () => {
+    setSearch('');
+    fetchContacts('');
+  };
+
   const handleSelectContact = async (contact: ContactItem) => {
     setSelectedContact(contact);
     try {
@@ -60,31 +71,45 @@ export const ContactsPanel: React.FC = () => {
     }
   };
 
+  const extractProtocolFromConv = (conv: Conversation): string | null => {
+    if ((conv as any).protocol_number) return (conv as any).protocol_number;
+    if (conv.messages) {
+      for (const m of conv.messages) {
+        if (typeof m.conteudo === 'string') {
+          const match = m.conteudo.match(/PROTOCOLO\s*#?([0-9]{8}-[0-9]{4,5})/i) || m.conteudo.match(/Protocolo:\s*#?([0-9]{8}-[0-9]{4,5})/i);
+          if (match) return match[1];
+        }
+      }
+    }
+    return null;
+  };
+
   return (
     <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: 'var(--bg-primary)', overflow: 'hidden' }}>
       {/* Left List Pane: Contacts Directory */}
       <div style={{
-        width: '380px',
+        width: '400px',
         height: '100%',
         borderRight: '1px solid var(--border-color)',
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: 'var(--bg-primary)'
+        backgroundColor: 'var(--bg-primary)',
+        flexShrink: 0
       }}>
         <div style={{ padding: '24px 20px', borderBottom: '1px solid var(--border-color)' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '22px', fontWeight: '700', marginBottom: '16px' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '20px', fontWeight: '700', marginBottom: '14px', color: 'var(--text-main)' }}>
             Histórico de Clientes
           </h2>
           <div style={{ position: 'relative' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '12px', color: 'var(--text-muted)' }} />
             <input
               type="text"
-              placeholder="Buscar cliente por nome ou telefone..."
+              placeholder="Buscar por nome, telefone ou protocolo..."
               value={search}
               onChange={handleSearchChange}
               style={{
                 width: '100%',
-                padding: '10px 12px 10px 36px',
+                padding: '10px 36px 10px 36px',
                 backgroundColor: 'var(--bg-secondary)',
                 border: '1px solid var(--border-color)',
                 borderRadius: 'var(--radius-md)',
@@ -93,6 +118,24 @@ export const ContactsPanel: React.FC = () => {
                 outline: 'none'
               }}
             />
+            {search && (
+              <button
+                onClick={handleClearSearch}
+                style={{
+                  position: 'absolute',
+                  right: '10px',
+                  top: '10px',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '2px'
+                }}
+                title="Limpar busca"
+              >
+                <X size={16} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -104,7 +147,7 @@ export const ContactsPanel: React.FC = () => {
             </p>
           ) : contacts.length === 0 ? (
             <p style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>
-              Nenhum cliente encontrado.
+              Nenhum cliente ou protocolo encontrado.
             </p>
           ) : (
             contacts.map(c => {
@@ -197,50 +240,120 @@ export const ContactsPanel: React.FC = () => {
               <p style={{ color: 'var(--text-muted)' }}>Nenhum histórico de conversa registrado para este cliente.</p>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                {contactHistory.map(conv => (
-                  <div key={conv.id} className="glass-panel" style={{ padding: '20px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)' }}>
-                    {/* Conversation Info Header */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)', marginBottom: '14px' }}>
-                      <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                        <span className={`badge badge-${conv.status}`}>
-                          {conv.status.replace('_', ' ')}
-                        </span>
-                        <span style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Building size={14} /> Dpto: <strong>{conv.whatsapp_number?.nome_departamento || 'Geral'}</strong>
-                        </span>
-                        <span style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <Calendar size={14} /> {new Date(conv.criado_em).toLocaleDateString('pt-BR')} às {new Date(conv.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                {contactHistory.map(conv => {
+                  const protocolNumber = extractProtocolFromConv(conv);
+                  return (
+                    <div key={conv.id} className="glass-panel" style={{ padding: '20px', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border-color)' }}>
+                      {/* Conversation Info Header */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: '12px', borderBottom: '1px solid var(--border-color)', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span className={`badge badge-${conv.status}`}>
+                            {conv.status.replace('_', ' ')}
+                          </span>
+                          {protocolNumber && (
+                            <span style={{
+                              fontSize: '11px',
+                              fontWeight: '700',
+                              color: 'var(--accent-primary)',
+                              backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                              border: '1px solid rgba(0, 230, 153, 0.35)',
+                              padding: '3px 8px',
+                              borderRadius: '6px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}>
+                              <FileText size={12} /> #{protocolNumber}
+                            </span>
+                          )}
+                          <span style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Building size={14} /> Dpto: <strong>{conv.whatsapp_number?.nome_departamento || 'Geral'}</strong>
+                          </span>
+                          <span style={{ fontSize: '13px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <Calendar size={14} /> {new Date(conv.criado_em).toLocaleDateString('pt-BR')} às {new Date(conv.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {conv.messages.length} mensagem{conv.messages.length !== 1 ? 'ns' : ''}
                         </span>
                       </div>
-                      <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        {conv.messages.length} mensagem{conv.messages.length !== 1 ? 'ns' : ''}
-                      </span>
-                    </div>
 
-                    {/* Messages Transcript inside Conversation */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
-                      {conv.messages.map(msg => (
-                        <div
-                          key={msg.id}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: 'var(--radius-md)',
-                            backgroundColor: msg.remetente === 'cliente' ? '#1c283e' : 'rgba(0, 230, 153, 0.12)',
-                            alignSelf: msg.remetente === 'cliente' ? 'flex-start' : 'flex-end',
-                            maxWidth: '80%',
-                            fontSize: '13px'
-                          }}
-                        >
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-                            <span>{msg.remetente === 'cliente' ? 'Cliente' : msg.remetente === 'ia' ? 'IA Concierge' : 'Atendente'}</span>
-                            <span>{new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                          <div>{msg.conteudo}</div>
-                        </div>
-                      ))}
+                      {/* Messages Transcript inside Conversation */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' }}>
+                        {conv.messages.map(msg => {
+                          const isSystem = msg.remetente === 'sistema';
+                          const textContent = typeof msg.conteudo === 'string' ? msg.conteudo : '';
+                          const isProtocolClosed = textContent.includes('FINALIZADO') || textContent.includes('ENCERRADO') || textContent.includes('finalizado automaticamente');
+                          const isProtocolOpened = textContent.includes('PROTOCOLO FORMAL ABERTO');
+
+                          if (isProtocolClosed) {
+                            return (
+                              <div key={msg.id} style={{
+                                alignSelf: 'center',
+                                margin: '8px 0',
+                                padding: '6px 14px',
+                                borderRadius: 'var(--radius-full)',
+                                backgroundColor: 'rgba(245, 158, 11, 0.12)',
+                                border: '1px solid rgba(245, 158, 11, 0.3)',
+                                color: '#f59e0b',
+                                fontSize: '11px',
+                                fontWeight: '600',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}>
+                                <Lock size={12} />
+                                <span>{textContent.replace(/[*_]/g, '')}</span>
+                              </div>
+                            );
+                          }
+
+                          if (isProtocolOpened) {
+                            return (
+                              <div key={msg.id} style={{
+                                alignSelf: 'center',
+                                margin: '8px 0',
+                                padding: '6px 14px',
+                                borderRadius: 'var(--radius-full)',
+                                backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                                border: '1px solid rgba(0, 230, 153, 0.3)',
+                                color: 'var(--accent-primary)',
+                                fontSize: '11px',
+                                fontWeight: '700',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px'
+                              }}>
+                                <FileText size={12} />
+                                <span>{textContent.replace(/[*_]/g, '')}</span>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div
+                              key={msg.id}
+                              style={{
+                                padding: '8px 12px',
+                                borderRadius: 'var(--radius-md)',
+                                backgroundColor: msg.remetente === 'cliente' ? '#1c283e' : isSystem ? 'rgba(59, 130, 246, 0.12)' : 'rgba(0, 230, 153, 0.12)',
+                                alignSelf: msg.remetente === 'cliente' ? 'flex-start' : isSystem ? 'center' : 'flex-end',
+                                maxWidth: '80%',
+                                fontSize: '13px'
+                              }}
+                            >
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '2px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                                <span>{msg.remetente === 'cliente' ? 'Cliente' : msg.remetente === 'ia' ? 'IA Concierge' : msg.remetente === 'sistema' ? 'Sistema' : 'Atendente'}</span>
+                                <span>{new Date(msg.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
+                              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.conteudo}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
