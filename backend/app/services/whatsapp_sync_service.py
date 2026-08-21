@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus
+from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("whatsapp_sync_service")
 
@@ -17,6 +18,7 @@ class WhatsAppSyncService:
         self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
         self.default_api_key = settings.EVOLUTION_API_KEY
         self.syncing_instances = set()
+        self.sync_progress: Dict[str, Dict[str, Any]] = {}
 
     def _get_headers_and_url(self, custom_base_url: Optional[str] = None, custom_api_key: Optional[str] = None):
         base_url = (custom_base_url or self.default_base_url).rstrip('/')
@@ -73,6 +75,21 @@ class WhatsAppSyncService:
 
         return f"[{msg_type_str}]", MessageType.TEXTO
 
+    def get_tenant_progress(self, tenant_id: int) -> List[Dict[str, Any]]:
+        prefix = f"{tenant_id}_"
+        return [prog for k, prog in self.sync_progress.items() if k.startswith(prefix)]
+
+    async def _emit_progress(self, tenant_id: int, progress_data: Dict[str, Any]):
+        key = f"{tenant_id}_{progress_data['instance']}"
+        self.sync_progress[key] = progress_data
+        try:
+            await ws_manager.broadcast_to_tenant(tenant_id, {
+                "type": "whatsapp_sync_progress",
+                "data": progress_data
+            })
+        except Exception as e:
+            logger.debug(f"Error broadcasting sync progress via websocket: {e}")
+
     async def sync_instance_history(
         self,
         tenant_id: int,
@@ -80,12 +97,12 @@ class WhatsAppSyncService:
         instance_name: str,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None,
-        limit_chats: int = 200,
-        limit_msgs: int = 150
+        limit_chats: int = 5000,
+        limit_msgs: int = 500
     ) -> Dict[str, Any]:
         """
         Scans connected instance chats & message history, automatically importing and deduplicating
-        into the tenant's database.
+        into the tenant's database with real-time live progress tracking.
         """
         if instance_name in self.syncing_instances:
             logger.info(f"Sync already running for instance '{instance_name}'. Skipping duplicate trigger.")
@@ -96,43 +113,71 @@ class WhatsAppSyncService:
 
         stats = {
             "instance": instance_name,
-            "chats_found": 0,
+            "whatsapp_number_id": whatsapp_number_id,
+            "status": "running",
+            "total_chats": 0,
+            "processed_chats": 0,
             "contacts_synced": 0,
             "conversations_synced": 0,
             "messages_synced": 0,
+            "percentage": 0,
+            "current_contact": "Iniciando varredura...",
+            "started_at": datetime.utcnow().isoformat(),
             "errors": []
         }
 
+        await self._emit_progress(tenant_id, stats)
+
         try:
             logger.info(f"=== INICIANDO SINCRONIZAÇÃO AUTOMÁTICA DE HISTÓRICO: {instance_name} (Tenant {tenant_id}) ===")
-            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=25.0) as client:
+            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=30.0) as client:
                 chats_res = await client.post(f"/chat/findChats/{instance_name}", json={})
                 if chats_res.status_code != 200:
-                    err_msg = f"Falha ao buscar chats da instância {instance_name}: HTTP {chats_res.status_code}"
+                    err_msg = f"Instância {instance_name} não respondeu (HTTP {chats_res.status_code}). Verifique se o QR Code está conectado."
                     logger.warning(err_msg)
+                    stats["status"] = "error"
                     stats["errors"].append(err_msg)
+                    await self._emit_progress(tenant_id, stats)
                     return {"success": False, "stats": stats, "error": err_msg}
 
                 chats_list = chats_res.json()
                 if not isinstance(chats_list, list):
                     chats_list = []
 
-                stats["chats_found"] = len(chats_list)
+                total_chats = min(len(chats_list), limit_chats)
+                stats["total_chats"] = total_chats
                 logger.info(f"[{instance_name}] {len(chats_list)} chats encontrados na sessão do WhatsApp.")
 
+                if total_chats == 0:
+                    stats["status"] = "completed"
+                    stats["percentage"] = 100
+                    stats["current_contact"] = "Nenhum chat encontrado na instância."
+                    await self._emit_progress(tenant_id, stats)
+                    return {"success": True, "stats": stats}
+
                 async with AsyncSessionLocal() as session:
-                    for chat in chats_list[:limit_chats]:
+                    for idx, chat in enumerate(chats_list[:total_chats]):
                         jid = chat.get("remoteJid", "")
                         if not jid or "status@broadcast" in jid:
+                            stats["processed_chats"] = idx + 1
+                            stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
                             continue
 
                         phone = self._clean_phone_from_jid(jid)
                         if not phone:
+                            stats["processed_chats"] = idx + 1
+                            stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
                             continue
 
-                        is_group = jid.endswith("@g.us")
                         name = chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
                         profile_pic = chat.get("profilePicUrl")
+
+                        stats["current_contact"] = f"{name} ({phone})"
+                        stats["processed_chats"] = idx + 1
+                        stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
+
+                        if idx % 3 == 0 or idx == total_chats - 1:
+                            await self._emit_progress(tenant_id, stats)
 
                         # 2. Get or create Contact
                         contact_stmt = select(Contact).where(
@@ -245,14 +290,23 @@ class WhatsAppSyncService:
                         except Exception as chat_err:
                             logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
 
+                        if idx % 10 == 0:
+                            await session.commit()
+
                     await session.commit()
+                    stats["status"] = "completed"
+                    stats["percentage"] = 100
+                    stats["current_contact"] = "Sincronização concluída com sucesso!"
+                    await self._emit_progress(tenant_id, stats)
                     logger.info(f"=== SINCRONIZAÇÃO CONCLUÍDA [{instance_name}]: {stats['contacts_synced']} contatos, {stats['conversations_synced']} conversas, {stats['messages_synced']} mensagens. ===")
 
             return {"success": True, "stats": stats}
 
         except Exception as e:
             logger.error(f"Erro fatal na sincronização de histórico da instância {instance_name}: {e}", exc_info=True)
+            stats["status"] = "error"
             stats["errors"].append(str(e))
+            await self._emit_progress(tenant_id, stats)
             return {"success": False, "stats": stats, "error": str(e)}
         finally:
             self.syncing_instances.discard(instance_name)

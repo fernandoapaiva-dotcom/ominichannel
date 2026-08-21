@@ -10,6 +10,7 @@ import { ContactsPanel } from '../components/ContactsPanel';
 import { SegmentationPanel } from '../components/SegmentationPanel';
 import { NewConversationModal } from '../components/NewConversationModal';
 import { MediaGalleryModal } from '../components/MediaGalleryModal';
+import { SyncTaskbar } from '../components/SyncTaskbar';
 
 import { DepartmentBar } from '../components/DepartmentBar';
 
@@ -378,6 +379,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           setSelectedDeptId('all');
         }}
       />
+
+      {/* Global Real-time WhatsApp Sync Progress Taskbar */}
+      <SyncTaskbar />
     </div>
   );
 };

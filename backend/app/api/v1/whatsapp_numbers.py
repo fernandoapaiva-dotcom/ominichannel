@@ -48,6 +48,46 @@ async def list_accessible_whatsapp_numbers(
     numbers = result.scalars().all()
     return [_to_response_schema(wn) for wn in numbers]
 
+@router.get("/sync_progress")
+async def get_sync_progress(
+    current_user: User = Depends(get_current_user)
+):
+    return whatsapp_sync_service.get_tenant_progress(current_user.tenant_id)
+
+@router.post("/sync_all")
+async def trigger_sync_all_numbers(
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.tenant_id == admin_user.tenant_id,
+        WhatsAppNumber.status == True
+    )
+    res = await db.execute(stmt)
+    numbers = res.scalars().all()
+
+    from app.services.settings_service import settings_service
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+
+    synced_instances = []
+    for wn in numbers:
+        if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
+            whatsapp_sync_service.trigger_background_sync(
+                tenant_id=admin_user.tenant_id,
+                whatsapp_number_id=wn.id,
+                instance_name=wn.instancia_evolution_api,
+                custom_base_url=decrypted.get("evolution_api_url"),
+                custom_api_key=decrypted.get("evolution_api_key")
+            )
+            synced_instances.append(wn.instancia_evolution_api)
+
+    return {
+        "success": True,
+        "synced_count": len(synced_instances),
+        "instances": synced_instances,
+        "message": f"Sincronização automática iniciada para {len(synced_instances)} instâncias conectadas!"
+    }
+
 @router.post("/", response_model=WhatsAppNumberResponse, status_code=status.HTTP_201_CREATED)
 async def create_whatsapp_number(
     wn_in: WhatsAppNumberCreate,
@@ -181,40 +221,6 @@ async def trigger_number_sync(
     return {
         "success": True,
         "message": f"Sincronização automática em massa iniciada para '{wn.nome_departamento}' ({wn.instancia_evolution_api})!"
-    }
-
-@router.post("/sync_all")
-async def trigger_sync_all_numbers(
-    admin_user: User = Depends(get_admin_user),
-    db: AsyncSession = Depends(get_db)
-):
-    stmt = select(WhatsAppNumber).where(
-        WhatsAppNumber.tenant_id == admin_user.tenant_id,
-        WhatsAppNumber.status == True
-    )
-    res = await db.execute(stmt)
-    numbers = res.scalars().all()
-
-    from app.services.settings_service import settings_service
-    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
-
-    synced_instances = []
-    for wn in numbers:
-        if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
-            whatsapp_sync_service.trigger_background_sync(
-                tenant_id=admin_user.tenant_id,
-                whatsapp_number_id=wn.id,
-                instance_name=wn.instancia_evolution_api,
-                custom_base_url=decrypted.get("evolution_api_url"),
-                custom_api_key=decrypted.get("evolution_api_key")
-            )
-            synced_instances.append(wn.instancia_evolution_api)
-
-    return {
-        "success": True,
-        "synced_count": len(synced_instances),
-        "instances": synced_instances,
-        "message": f"Sincronização automática iniciada para {len(synced_instances)} instâncias conectadas!"
     }
 
 @router.delete("/{number_id}", status_code=status.HTTP_200_OK)
