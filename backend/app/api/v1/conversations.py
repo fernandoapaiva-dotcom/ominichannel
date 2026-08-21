@@ -45,18 +45,8 @@ async def list_conversations(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    is_admin = current_user.role == "admin" or str(getattr(current_user.role, 'value', current_user.role)).lower() == "admin"
-    if is_admin:
-        wn_stmt = select(WhatsAppNumber.id).where(WhatsAppNumber.tenant_id == current_user.tenant_id)
-    else:
-        wn_stmt = (
-            select(WhatsAppNumber.id)
-            .join(user_number_access)
-            .where(
-                WhatsAppNumber.tenant_id == current_user.tenant_id,
-                user_number_access.c.user_id == current_user.id
-            )
-        )
+    # All attendants can view conversations across all departments of their tenant
+    wn_stmt = select(WhatsAppNumber.id).where(WhatsAppNumber.tenant_id == current_user.tenant_id)
     wn_res = await db.execute(wn_stmt)
     accessible_wn_ids = wn_res.scalars().all()
 
@@ -604,6 +594,19 @@ async def send_agent_message(
 
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    is_admin = current_user.role == "admin" or str(getattr(current_user.role, 'value', current_user.role)).lower() == "admin"
+    if conv.status == ConversationStatus.COM_HUMANO and conv.assigned_user_id and conv.assigned_user_id != current_user.id and not is_admin:
+        u_stmt = select(User.nome).where(User.id == conv.assigned_user_id)
+        u_res = await db.execute(u_stmt)
+        assigned_name = u_res.scalar_one_or_none() or "outro atendente"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Este chamado está sendo atendido pelo atendente {assigned_name}. Apenas visualização permitida."
+        )
+
+    if not conv.assigned_user_id:
+        conv.assigned_user_id = current_user.id
 
     raw_content = (msg_in.conteudo or "").strip()
     is_sticker = (
@@ -1416,6 +1419,76 @@ async def update_conversation_status(
     )
 
     return {"status": "success", "new_status": conv.status.value}
+
+@router.post("/{conversation_id}/assume", response_model=ConversationResponse)
+async def assume_conversation_control(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Allows an attendant (or admin) to intervene and assume control of an AI-handled or unassigned conversation.
+    """
+    stmt = (
+        select(Conversation)
+        .options(
+            selectinload(Conversation.contact),
+            selectinload(Conversation.whatsapp_number),
+            selectinload(Conversation.messages)
+        )
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+
+    # Insert system audit message in the chat
+    sys_msg = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.SISTEMA,
+        conteudo=f"👤 *{current_user.nome}* assumiu o controle do atendimento.",
+        tipo=MessageType.TEXTO,
+        timestamp=datetime.utcnow()
+    )
+    db.add(sys_msg)
+    await db.commit()
+    await db.refresh(conv)
+
+    # Broadcast WebSocket events
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "STATUS_CHANGE",
+            "conversation_id": conv.id,
+            "status": "com_humano",
+            "assigned_user_id": current_user.id,
+            "assigned_user_name": current_user.nome
+        }
+    )
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "remetente": "sistema",
+            "conteudo": sys_msg.conteudo,
+            "timestamp": str(sys_msg.timestamp)
+        }
+    )
+
+    c_dict = ConversationResponse.model_validate(conv).model_dump()
+    c_dict["assigned_user_name"] = current_user.nome
+    return c_dict
 
 @router.post("/{conversation_id}/suggest-reply")
 async def suggest_reply_for_conversation(

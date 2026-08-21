@@ -20,7 +20,7 @@ from app.models.models import (
 
 from app.services.evolution_service import evolution_service
 from app.services.whatsapp_sync_service import whatsapp_sync_service
-from app.services.gemini_service import gemini_service, sanitize_customer_name
+from app.services.gemini_service import gemini_service, sanitize_customer_name, is_bot_or_menu_message
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol

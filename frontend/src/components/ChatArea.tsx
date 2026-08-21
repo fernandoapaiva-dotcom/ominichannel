@@ -106,6 +106,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showPixModal, setShowPixModal] = useState(false);
   const [showAvatarZoom, setShowAvatarZoom] = useState(false);
   const [isConsultingIA, setIsConsultingIA] = useState(false);
+  const [isAssumingControl, setIsAssumingControl] = useState(false);
+
+  const isAdmin = currentUser.role === 'admin' || (currentUser.role as any)?.value === 'admin';
+  const isAssignedToOther = Boolean(
+    conversation &&
+    conversation.status === 'com_humano' &&
+    conversation.assigned_user_id &&
+    conversation.assigned_user_id !== currentUser.id &&
+    !isAdmin
+  );
+  const assignedAttendantName = conversation?.assigned_user_name || (conversation?.assigned_user ? conversation.assigned_user.nome : (conversation?.assigned_user_id ? `Atendente #${conversation.assigned_user_id}` : 'outro atendente'));
+
+  const handleAssumeControl = async () => {
+    if (!conversation) return;
+    try {
+      setIsAssumingControl(true);
+      const updated = await apiFetch(`/conversations/${conversation.id}/assume`, {
+        method: 'POST'
+      });
+      if (updated) {
+        conversation.status = 'com_humano';
+        conversation.assigned_user_id = currentUser.id;
+        conversation.assigned_user_name = currentUser.nome;
+        if (onStatusToggle) onStatusToggle();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Erro ao assumir controle do atendimento');
+    } finally {
+      setIsAssumingControl(false);
+    }
+  };
 
   const handleConsultarIA = async () => {
     if (!conversation?.id || isConsultingIA) return;
@@ -1431,6 +1462,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             {conversation.status === 'com_ia' ? <><Bot size={14} /> COM IA</> : <><Headphones size={14} /> COM HUMANO</>}
           </button>
 
+          {conversation.status === 'com_ia' && (
+            <button
+              onClick={handleAssumeControl}
+              disabled={isAssumingControl}
+              style={{
+                height: '34px',
+                padding: '0 12px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '11px',
+                fontWeight: '800',
+                border: '1px solid #f59e0b',
+                backgroundColor: 'rgba(245, 158, 11, 0.22)',
+                color: '#fbbf24',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                cursor: 'pointer',
+                boxShadow: '0 0 10px rgba(245, 158, 11, 0.25)'
+              }}
+              title="Intervir no atendimento da IA e assumir o controle da conversa agora"
+            >
+              <Zap size={14} className={isAssumingControl ? "animate-spin" : ""} />
+              <span>{isAssumingControl ? 'Assumindo...' : 'Assumir Controle'}</span>
+            </button>
+          )}
+
           <button
             onClick={handleStartVideoCall}
             className="btn-secondary"
@@ -1598,6 +1656,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
       </div>
+
+      {isAssignedToOther && (
+        <div style={{
+          backgroundColor: 'rgba(245, 158, 11, 0.15)',
+          borderBottom: '1px solid rgba(245, 158, 11, 0.35)',
+          padding: '10px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          color: '#fef3c7',
+          fontSize: '12px',
+          fontWeight: '600'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Lock size={16} color="#fbbf24" style={{ flexShrink: 0 }} />
+            <span>
+              🔒 <strong>Chamado atendido pelo atendente {assignedAttendantName}</strong> — Você pode acompanhar o teor da conversa em tempo real, mas o envio de mensagens está bloqueado.
+            </span>
+          </div>
+          <span style={{ fontSize: '11px', opacity: 0.9, backgroundColor: 'rgba(0,0,0,0.3)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(245,158,11,0.3)', flexShrink: 0 }}>
+            Modo Espectador
+          </span>
+        </div>
+      )}
 
       {conversation.resumo_ia && (
         <div style={{
@@ -2557,6 +2639,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span>Encaminhar ({selectedMessagesForForward.length})</span>
             </button>
           </div>
+        </div>
+      ) : isAssignedToOther ? (
+        <div style={{
+          width: '100%',
+          boxSizing: 'border-box',
+          padding: '16px 20px',
+          borderTop: '1px solid rgba(245, 158, 11, 0.3)',
+          backgroundColor: 'rgba(245, 158, 11, 0.08)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '10px',
+          color: '#fbbf24',
+          fontSize: '13px',
+          fontWeight: '600'
+        }}>
+          <Lock size={16} />
+          <span>Chamado em atendimento por <strong>{assignedAttendantName}</strong>. Apenas visualização em tempo real permitida.</span>
         </div>
       ) : (() => {
         const isGroupChat = Boolean(
