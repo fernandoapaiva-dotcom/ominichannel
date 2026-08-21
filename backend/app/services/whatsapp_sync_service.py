@@ -136,6 +136,11 @@ class WhatsAppSyncService:
                 address_book_map: Dict[str, Dict[str, Any]] = {}
                 try:
                     contacts_res = await client.post(f"/chat/findContacts/{instance_name}", json={})
+                    if contacts_res.status_code in [401, 403] and headers.get("apikey") != self.default_api_key:
+                        headers["apikey"] = self.default_api_key
+                        client.headers["apikey"] = self.default_api_key
+                        contacts_res = await client.post(f"/chat/findContacts/{instance_name}", json={})
+
                     if contacts_res.status_code == 200:
                         raw_contacts = contacts_res.json()
                         if isinstance(raw_contacts, list):
@@ -155,6 +160,11 @@ class WhatsAppSyncService:
 
                 # 2. Fetch chats from Evolution API
                 chats_res = await client.post(f"/chat/findChats/{instance_name}", json={})
+                if chats_res.status_code in [401, 403] and headers.get("apikey") != self.default_api_key:
+                    headers["apikey"] = self.default_api_key
+                    client.headers["apikey"] = self.default_api_key
+                    chats_res = await client.post(f"/chat/findChats/{instance_name}", json={})
+
                 if chats_res.status_code != 200:
                     err_msg = f"Instância {instance_name} não respondeu (HTTP {chats_res.status_code}). Verifique se o QR Code está conectado."
                     logger.warning(err_msg)
