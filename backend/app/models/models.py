@@ -262,3 +262,18 @@ class TenantPixKey(Base):
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+# Authorized Technicians for Advanced RAG Copilot Assistance
+class AuthorizedTechnician(Base):
+    __tablename__ = "authorized_technicians"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    nome: Mapped[str] = mapped_column(String(150), nullable=False)
+    telefone: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    especialidade: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # Ex: "Inversores, MIG/MAG, TIG, Placas Eletrônicas"
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    tenant: Mapped["Tenant"] = relationship("Tenant")

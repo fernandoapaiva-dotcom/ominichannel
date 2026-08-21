@@ -305,6 +305,7 @@ class GeminiService:
         department_descriptions: Optional[Dict[str, str]] = None,
         protocol_number: Optional[str] = None,
         should_announce_protocol: bool = False,
+        is_technician_or_admin: bool = False,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -327,12 +328,41 @@ class GeminiService:
             else:
                 proto_prompt = f"PROTOCOLO OFICIAL DESTE ATENDIMENTO: #{protocol_number}\n\n"
 
+        if is_technician_or_admin:
+            tech_directive = (
+                "\n"
+                "=========================================================================================\n"
+                f"🛡️ MODO COPILOTO TÉCNICO INTERNO / ENGENHARIA DE BANCADA ATIVADO (USUÁRIO: {clean_name})\n"
+                "=========================================================================================\n"
+                "- Você está conversando com um TÉCNICO AUTORIZADO DA SERVWELD OU ADMINISTRADOR DO SISTEMA.\n"
+                "- SEU PAPEL: Atue como Engenheiro Eletrônico Especialista e Copiloto Técnico de Bancada.\n"
+                "- LIBERAÇÃO COMPLETA DE DIAGNÓSTICO E REPARO: Ajude o técnico em todos os procedimentos de bancada, testes de circuito, leitura de diagramas e esquemas elétricos, medição de componentes (IGBTs, MOSFETs, pontes retificadoras, osciladores PWM, transformadores, sensores Hall, shunts, circuitos snubber), calibração e análise de falhas.\n"
+                "- USO DA BASE RAG E MANUAIS: Extraia da base de conhecimento RAG todos os manuais técnicos, diagramas esquemáticos, pinagens, tensões de gate e testes passo a passo para orientar o técnico de forma precisa e aprofundada.\n"
+                "- Responda com linguagem técnica profissional (eletrônica de potência, circuitos de controle, formas de onda, pontos de teste).\n"
+                "=========================================================================================\n"
+            )
+        else:
+            tech_directive = (
+                "\n"
+                "=========================================================================================\n"
+                "🔒 REGRA ESTRITA DE PROTEÇÃO DE NEGÓCIO E SEGURANÇA - ATENDIMENTO A CLIENTE EXTERNO\n"
+                "=========================================================================================\n"
+                "- Você está atendendo um CLIENTE COMUM / EXTERNO da Servweld.\n"
+                "- PROIBIÇÃO ABSOLUTA DE INSTRUÇÕES DE REPARO/CONSERTO: NUNCA ensine o cliente a abrir máquinas, consertar placas, medir circuitos eletrônicos internos ou trocar peças por conta própria. Isso traz risco severo de acidentes elétricos graves e elimina a demanda de serviços da assistência técnica da loja.\n"
+                "- PROCEDIMENTO PERMITIDO COM O CLIENTE:\n"
+                "  1. Se o cliente relatar um código de erro ou defeito (ex: LED de sobreaquecimento aceso, código E01/E02, máquina desarmando disjuntor): Você pode apenas explicar brevemente o significado geral do erro em alto nível (ex: 'O código E01 indica uma proteção ativada por sobreaquecimento ou anomalia no circuito de potência').\n"
+                "  2. CONVITE PARA ASSISTÊNCIA TÉCNICA: Convide e oriente o cliente a trazer ou enviar a máquina para o laboratório especializado da Servweld, onde nossos técnicos qualificados farão o teste e orçamento com garantia e peças originais.\n"
+                "  3. Forneça o endereço da loja e horários de recebimento de equipamentos.\n"
+                "=========================================================================================\n"
+            )
+
         system_instruction = (
             f"Você é a IA Concierge de atendimento da empresa Servweld.\n"
             f"Setor atual do atendimento: '{department_name}'. Setores ativos na empresa: [{dept_list_str}].\n"
             f"{dept_desc_prompt}"
             f"{proto_prompt}"
-            f"Atenda o cliente '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
+            f"{tech_directive}"
+            f"Atenda o interlocutor '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"

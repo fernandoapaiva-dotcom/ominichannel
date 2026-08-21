@@ -15,7 +15,8 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
-    ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog
+    ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog,
+    AuthorizedTechnician
 )
 
 from app.services.evolution_service import evolution_service
@@ -54,6 +55,39 @@ def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
             except ValueError:
                 pass
     return None
+
+async def check_is_authorized_technician_or_admin(db: AsyncSession, tenant_id: int, phone_number: str) -> tuple[bool, Optional[str]]:
+    if not phone_number:
+        return False, None
+    clean_digits = re.sub(r'\D', '', phone_number)
+    
+    # 1. Check in AuthorizedTechnician table
+    tech_stmt = select(AuthorizedTechnician).where(
+        AuthorizedTechnician.tenant_id == tenant_id,
+        AuthorizedTechnician.ativo == True
+    )
+    tech_res = await db.execute(tech_stmt)
+    technicians = tech_res.scalars().all()
+    for tech in technicians:
+        t_digits = re.sub(r'\D', '', str(tech.telefone))
+        if t_digits and (clean_digits == t_digits or (len(clean_digits) >= 8 and len(t_digits) >= 8 and clean_digits[-8:] == t_digits[-8:])):
+            return True, tech.nome
+
+    # 2. Check in Users table (if user has role 'admin')
+    user_stmt = select(User).where(
+        User.tenant_id == tenant_id,
+        User.status == True
+    )
+    user_res = await db.execute(user_stmt)
+    users = user_res.scalars().all()
+    for u in users:
+        is_admin = u.role == "admin" or str(getattr(u.role, 'value', u.role)).lower() == "admin"
+        if is_admin:
+            u_login_digits = re.sub(r'\D', '', str(u.login))
+            if u_login_digits and len(u_login_digits) >= 8 and (clean_digits == u_login_digits or clean_digits[-8:] == u_login_digits[-8:]):
+                return True, u.nome
+
+    return False, None
 
 async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
     return await distribution_service.assign_least_loaded_attendant(db, tenant_id, whatsapp_number_id)
@@ -1199,9 +1233,10 @@ async def receive_evolution_webhook(
                         "nova_memoria": f"Aguardando confirmação do cliente para transferir para {target_wn.nome_departamento}"
                     }
                 else:
+                    is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
                     should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                     ai_output = await gemini_service.generate_concierge_response(
-                        customer_name=contact.nome or "Cliente",
+                        customer_name=tech_name or contact.nome or "Cliente",
                         department_name=whatsapp_number.nome_departamento,
                         user_message=text_content,
                         conversation_history=history,
@@ -1210,6 +1245,7 @@ async def receive_evolution_webhook(
                         available_departments=available_dept_names,
                         protocol_number=conversation.protocol_number,
                         should_announce_protocol=should_announce_proto,
+                        is_technician_or_admin=is_tech,
                         tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                         tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                     )
@@ -1217,9 +1253,10 @@ async def receive_evolution_webhook(
                     extra["protocol_announced"] = True
                     conversation.dados_adicionais = extra
             else:
+                is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
                 should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                 ai_output = await gemini_service.generate_concierge_response(
-                    customer_name=contact.nome or "Cliente",
+                    customer_name=tech_name or contact.nome or "Cliente",
                     department_name=whatsapp_number.nome_departamento,
                     user_message=text_content,
                     conversation_history=history,
@@ -1228,6 +1265,7 @@ async def receive_evolution_webhook(
                     available_departments=available_dept_names,
                     protocol_number=conversation.protocol_number,
                     should_announce_protocol=should_announce_proto,
+                    is_technician_or_admin=is_tech,
                     tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                     tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                 )

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera } from 'lucide-react';
-import { WhatsAppNumber, User, WhatsAppGroup } from '../types';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench } from 'lucide-react';
+import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../types';
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
 
 export const AdminPanel: React.FC = () => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'integrations' | 'groups' | 'pix'>('numbers');
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix'>('numbers');
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
@@ -175,6 +175,88 @@ export const AdminPanel: React.FC = () => {
     setPixCidade(item.cidade || 'BRASILIA');
     setPixDescricao(item.descricao || '');
     setPixAtivo(item.ativo);
+  };
+
+  // --- Technicians (RAG Copilot) State & Handlers ---
+  const [technicians, setTechnicians] = useState<AuthorizedTechnician[]>([]);
+  const [techLoading, setTechLoading] = useState(false);
+  const [editingTechId, setEditingTechId] = useState<number | null>(null);
+  const [techName, setTechName] = useState('');
+  const [techPhone, setTechPhone] = useState('');
+  const [techSpecialty, setTechSpecialty] = useState('');
+  const [techAtivo, setTechAtivo] = useState(true);
+
+  const loadTechnicians = async () => {
+    try {
+      setTechLoading(true);
+      const data = await apiFetch('/technicians/');
+      setTechnicians(data || []);
+    } catch (err) {
+      console.error('Error loading technicians:', err);
+    } finally {
+      setTechLoading(false);
+    }
+  };
+
+  const resetTechForm = () => {
+    setEditingTechId(null);
+    setTechName('');
+    setTechPhone('');
+    setTechSpecialty('');
+    setTechAtivo(true);
+  };
+
+  const handleSaveTechnician = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!techName.trim() || !techPhone.trim()) {
+      alert('Por favor, preencha o Nome e o Telefone do Técnico.');
+      return;
+    }
+    try {
+      if (editingTechId) {
+        await apiFetch(`/technicians/${editingTechId}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            nome: techName,
+            telefone: techPhone,
+            especialidade: techSpecialty || null,
+            ativo: techAtivo
+          })
+        });
+      } else {
+        await apiFetch('/technicians/', {
+          method: 'POST',
+          body: JSON.stringify({
+            nome: techName,
+            telefone: techPhone,
+            especialidade: techSpecialty || null,
+            ativo: techAtivo
+          })
+        });
+      }
+      resetTechForm();
+      await loadTechnicians();
+    } catch (err: any) {
+      alert('Erro ao salvar técnico: ' + (err.message || err));
+    }
+  };
+
+  const handleEditTechnician = (t: AuthorizedTechnician) => {
+    setEditingTechId(t.id);
+    setTechName(t.nome);
+    setTechPhone(t.telefone);
+    setTechSpecialty(t.especialidade || '');
+    setTechAtivo(t.ativo);
+  };
+
+  const handleDeleteTechnician = async (id: number) => {
+    if (!confirm('Deseja realmente remover este técnico autorizado?')) return;
+    try {
+      await apiFetch(`/technicians/${id}`, { method: 'DELETE' });
+      await loadTechnicians();
+    } catch (err: any) {
+      alert('Erro ao remover técnico: ' + err.message);
+    }
   };
 
   const fetchAllStatuses = async (numList: WhatsAppNumber[]) => {
@@ -812,10 +894,16 @@ export const AdminPanel: React.FC = () => {
             <Users size={16} /> Atendentes & Permissões
           </button>
           <button
-            onClick={() => setActiveSubTab('rag')}
+            onClick={() => { setActiveSubTab('rag'); loadRagDocuments(); }}
             className={activeSubTab === 'rag' ? 'btn-primary' : 'btn-secondary'}
           >
             <Database size={16} /> Base RAG (IA Concierge)
+          </button>
+          <button
+            onClick={() => { setActiveSubTab('technicians'); loadTechnicians(); }}
+            className={activeSubTab === 'technicians' ? 'btn-primary' : 'btn-secondary'}
+          >
+            <Cpu size={16} /> Técnicos (Copiloto RAG)
           </button>
           <button
             onClick={() => setActiveSubTab('integrations')}
@@ -2417,6 +2505,200 @@ export const AdminPanel: React.FC = () => {
                           className="btn-secondary"
                           style={{ padding: '6px 10px', fontSize: '12px', color: '#f87171' }}
                           title="Excluir Chave"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 7. Authorized Technicians Tab (RAG Copilot) */}
+        {activeSubTab === 'technicians' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '24px' }}>
+            {/* Form */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Cpu size={20} color="var(--accent-primary)" />
+                  {editingTechId ? 'Editar Técnico Autorizado' : 'Cadastrar Técnico da Loja (Copiloto RAG)'}
+                </h3>
+                {editingTechId && (
+                  <button onClick={resetTechForm} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', border: 'none', cursor: 'pointer' }}>
+                    <X size={14} /> Cancelar Edição
+                  </button>
+                )}
+              </div>
+
+              {/* Informational Guidance Banner */}
+              <div style={{
+                backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                border: '1px solid rgba(0, 230, 153, 0.25)',
+                borderRadius: 'var(--radius-md)',
+                padding: '12px 14px',
+                marginBottom: '16px',
+                fontSize: '12px',
+                lineHeight: '1.5',
+                color: '#d1fae5'
+              }}>
+                <strong>🧠 Como Funciona o Copiloto Técnico:</strong>
+                <ul style={{ margin: '6px 0 0 0', paddingLeft: '18px', fontSize: '11px', color: '#a7f3d0' }}>
+                  <li><strong>Técnicos Cadastrados & Admins:</strong> Ao conversarem com o WhatsApp da Assistência Técnica, a IA atua como Engenheiro Copiloto, fornecendo testes de componentes (IGBTs, PWM, fontes), esquemas elétricos e passo a passo de conserto extraídos dos manuais RAG.</li>
+                  <li><strong>Clientes Comuns:</strong> A IA <u>nunca</u> fornece instruções de conserto para clientes (para proteger o faturamento e segurança), orientando-os a trazer a máquina para a loja.</li>
+                </ul>
+              </div>
+
+              <form onSubmit={handleSaveTechnician} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Nome do Técnico *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Carlos Oliveira (Laboratório)"
+                    value={techName}
+                    onChange={(e) => setTechName(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Telefone WhatsApp (com DDD) *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: 5561999998888 ou 61999998888"
+                    value={techPhone}
+                    onChange={(e) => setTechPhone(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Especialidade / Equipamentos (Opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Inversores de Solda MIG/MAG, TIG, Corte Plasma e Placas Inversoras"
+                    value={techSpecialty}
+                    onChange={(e) => setTechSpecialty(e.target.value)}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                  <input
+                    type="checkbox"
+                    id="techAtivo"
+                    checked={techAtivo}
+                    onChange={(e) => setTechAtivo(e.target.checked)}
+                  />
+                  <label htmlFor="techAtivo" style={{ fontSize: '13px', color: 'var(--text-main)', cursor: 'pointer' }}>
+                    Técnico Ativo (Receber assistência avançada de conserto)
+                  </label>
+                </div>
+
+                <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                  <button type="submit" className="btn-primary" style={{ flex: 1 }}>
+                    <Check size={16} /> {editingTechId ? 'Atualizar Técnico' : 'Salvar Técnico Autorizado'}
+                  </button>
+                  {editingTechId && (
+                    <button type="button" onClick={resetTechForm} className="btn-secondary">
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* List */}
+            <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <h3 style={{ fontSize: '18px', fontWeight: '700', margin: 0 }}>
+                  Técnicos Autorizados ({technicians.length})
+                </h3>
+                <button onClick={loadTechnicians} className="btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}>
+                  <RefreshCw size={12} className={techLoading ? "animate-spin" : ""} /> Atualizar
+                </button>
+              </div>
+
+              {techLoading ? (
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando técnicos...</div>
+              ) : technicians.length === 0 ? (
+                <div style={{ padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', lineHeight: '1.6' }}>
+                  Nenhum técnico cadastrado ainda. Adicione o telefone dos técnicos de bancada da sua empresa no formulário ao lado!
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '550px', overflowY: 'auto' }}>
+                  {technicians.map(item => (
+                    <div
+                      key={item.id}
+                      style={{
+                        padding: '14px 16px',
+                        backgroundColor: 'var(--bg-secondary)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: 'var(--radius-md)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{
+                          width: '38px',
+                          height: '38px',
+                          borderRadius: '50%',
+                          backgroundColor: item.ativo ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                          color: item.ativo ? 'var(--accent-primary)' : 'var(--text-muted)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          <Wrench size={18} />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {item.nome}
+                            {item.ativo ? (
+                              <span style={{ fontSize: '10px', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}>
+                                Autorizado
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '10px', backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}>
+                                Inativo
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            📞 <strong>WhatsApp:</strong> {item.telefone}
+                          </div>
+                          {item.especialidade && (
+                            <div style={{ fontSize: '11px', color: '#93c5fd', marginTop: '2px' }}>
+                              ⚡ {item.especialidade}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => handleEditTechnician(item)}
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px' }}
+                          title="Editar Técnico"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTechnician(item.id)}
+                          className="btn-secondary"
+                          style={{ padding: '6px 10px', fontSize: '12px', color: '#f87171' }}
+                          title="Remover Técnico"
                         >
                           <Trash2 size={14} />
                         </button>

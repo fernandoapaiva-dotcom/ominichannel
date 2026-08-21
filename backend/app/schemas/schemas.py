@@ -317,7 +317,29 @@ class PixKeyResponse(BaseModel):
     chave: str
     favorecido: str
     cidade: str
-    descricao: Optional[str] = None
+    ativo: bool
+    criado_em: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+# Authorized Technician Schemas (Copiloto RAG)
+class AuthorizedTechnicianCreate(BaseModel):
+    nome: str
+    telefone: str
+    especialidade: Optional[str] = None
+    ativo: bool = True
+
+class AuthorizedTechnicianUpdate(BaseModel):
+    nome: Optional[str] = None
+    telefone: Optional[str] = None
+    especialidade: Optional[str] = None
+    ativo: Optional[bool] = None
+
+class AuthorizedTechnicianResponse(BaseModel):
+    id: int
+    tenant_id: int
+    nome: str
+    telefone: str
+    especialidade: Optional[str] = None
     ativo: bool
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)

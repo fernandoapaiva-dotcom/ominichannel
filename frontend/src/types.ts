@@ -77,3 +77,13 @@ export interface WhatsAppGroup {
   numero?: string;
 }
 
+export interface AuthorizedTechnician {
+  id: number;
+  tenant_id: number;
+  nome: string;
+  telefone: string;
+  especialidade?: string;
+  ativo: boolean;
+  criado_em: string;
+}
+

@@ -20,6 +20,7 @@ from app.api.v1.rag import router as rag_router
 from app.api.v1.settings import router as settings_router
 from app.api.v1.whatsapp_groups import router as whatsapp_groups_router
 from app.api.v1.pix_keys import router as pix_keys_router
+from app.api.v1.technicians import router as technicians_router
 from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
@@ -94,6 +95,7 @@ app.include_router(rag_router, prefix=settings.API_V1_STR)
 app.include_router(settings_router, prefix=settings.API_V1_STR)
 app.include_router(whatsapp_groups_router, prefix=settings.API_V1_STR)
 app.include_router(pix_keys_router, prefix=settings.API_V1_STR)
+app.include_router(technicians_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router)
 
 
