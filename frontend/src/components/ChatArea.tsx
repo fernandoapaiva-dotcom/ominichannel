@@ -535,9 +535,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const normalizeIsoDate = (ts: string | Date | undefined): Date => {
+    if (!ts) return new Date();
+    if (ts instanceof Date) return isNaN(ts.getTime()) ? new Date() : ts;
+    let str = String(ts).trim();
+    if (str.includes(' ') && !str.includes('T')) {
+      str = str.replace(' ', 'T');
+    }
+    if (!str.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(str)) {
+      str = str + 'Z';
+    }
+    const d = new Date(str);
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
+
   const formatDateDivider = (timestampStr: string): string => {
     try {
-      const msgDate = new Date(timestampStr);
+      const msgDate = normalizeIsoDate(timestampStr);
       const today = new Date();
       const yesterday = new Date();
       yesterday.setDate(today.getDate() - 1);
@@ -564,7 +578,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const getMessageDateKey = (timestampStr: string): string => {
     try {
-      const d = new Date(timestampStr);
+      const d = normalizeIsoDate(timestampStr);
       return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
     } catch {
       return '';
@@ -835,14 +849,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const formatTime = (ts: string | Date | undefined) => {
     if (!ts) return '';
-    let str = String(ts).trim();
-    if (str.includes(' ') && !str.includes('T')) {
-      str = str.replace(' ', 'T');
-    }
-    if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
-      str = str + 'Z';
-    }
-    const d = new Date(str);
+    const d = normalizeIsoDate(ts);
     return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 

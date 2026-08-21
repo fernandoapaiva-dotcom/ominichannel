@@ -125,7 +125,20 @@ class BusinessHoursService:
                     if conv.contact and ("@g.us" in str(conv.contact.telefone) or len(str(conv.contact.telefone)) > 15):
                         continue
 
-                    proto = conv.protocol_number or "S/N"
+                    # CRITICAL SAFEGUARD: Closing message MUST ONLY be sent to conversations with an ACTIVE OPEN PROTOCOL!
+                    # NEVER send closing messages to migrated chats, historical WhatsApp conversations, or chats without an open protocol!
+                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
+                        continue
+
+                    extra = dict(conv.dados_adicionais or {})
+                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
+                        continue
+
+                    # Also ensure the conversation was active TODAY (within the last 12 hours)
+                    if not conv.ultima_interacao_em or (datetime.utcnow() - conv.ultima_interacao_em).total_seconds() > 12 * 3600:
+                        continue
+
+                    proto = conv.protocol_number
                     closing_text = self.get_shift_closing_message(proto)
 
                     # 1. Send WhatsApp message to customer
@@ -247,7 +260,14 @@ class BusinessHoursService:
                 convs = res.scalars().all()
 
                 for conv in convs:
-                    proto = conv.protocol_number or "S/N"
+                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
+                        continue
+
+                    extra = dict(conv.dados_adicionais or {})
+                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
+                        continue
+
+                    proto = conv.protocol_number
                     morning_text = self.get_shift_opening_message(proto)
 
                     # 1. Send WhatsApp message

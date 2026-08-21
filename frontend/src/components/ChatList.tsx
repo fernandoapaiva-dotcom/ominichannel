@@ -4,16 +4,23 @@ import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
 
-const formatTime = (ts: string | Date | undefined) => {
-  if (!ts) return '';
+export const parseIsoDate = (ts: string | Date | undefined): Date => {
+  if (!ts) return new Date();
+  if (ts instanceof Date) return isNaN(ts.getTime()) ? new Date() : ts;
   let str = String(ts).trim();
   if (str.includes(' ') && !str.includes('T')) {
     str = str.replace(' ', 'T');
   }
-  if (!str.endsWith('Z') && !str.includes('+') && !str.includes('-')) {
+  if (!str.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(str)) {
     str = str + 'Z';
   }
   const d = new Date(str);
+  return isNaN(d.getTime()) ? new Date() : d;
+};
+
+const formatTime = (ts: string | Date | undefined) => {
+  if (!ts) return '';
+  const d = parseIsoDate(ts);
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
@@ -176,12 +183,17 @@ export const ChatList: React.FC<ChatListProps> = ({
       });
     });
 
-    const getLatestInteraction = (g: ContactGroup) => {
-      let maxTime = new Date(g.primaryConv.ultima_interacao_em).getTime();
+    const getLatestInteraction = (g: ContactGroup): number => {
+      let maxTime = parseIsoDate(g.primaryConv.ultima_interacao_em).getTime();
       for (const c of g.allConversations) {
-        const t = new Date(c.ultima_interacao_em).getTime();
-        if (!isNaN(t) && t > maxTime) {
-          maxTime = t;
+        const t = parseIsoDate(c.ultima_interacao_em).getTime();
+        if (t > maxTime) maxTime = t;
+        if (c.messages && c.messages.length > 0) {
+          const lastMsg = c.messages[c.messages.length - 1];
+          if (lastMsg && lastMsg.timestamp) {
+            const mt = parseIsoDate(lastMsg.timestamp).getTime();
+            if (mt > maxTime) maxTime = mt;
+          }
         }
       }
       return isNaN(maxTime) ? 0 : maxTime;
