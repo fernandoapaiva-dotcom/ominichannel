@@ -915,7 +915,11 @@ async def receive_evolution_webhook(
             db.add(conversation)
             await db.flush()
 
-    if not conversation.protocol_number:
+    # Check if contact is an authorized technician or system admin
+    is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
+    if is_tech:
+        conversation.protocol_number = None
+    elif not conversation.protocol_number:
         conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
 
     # Reset inactivity warning flags and restart timer
@@ -1086,7 +1090,23 @@ async def receive_evolution_webhook(
         transfer_executed = False
         ai_output = None
 
-        if is_pending_transfer:
+        if is_tech:
+            logger.info(f"[COPILOTO TECNICO] Atendimento direto ao técnico autorizado/admin {tech_name} ({phone_number}) no modo Master.")
+            ai_output = await gemini_service.generate_concierge_response(
+                customer_name=tech_name or "Técnico",
+                department_name=whatsapp_number.nome_departamento,
+                user_message=text_content,
+                conversation_history=history,
+                memory_summary=memory_summary,
+                rag_context=rag_context,
+                available_departments=available_dept_names,
+                protocol_number=None,
+                should_announce_protocol=False,
+                is_technician_or_admin=True,
+                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+            )
+        elif is_pending_transfer:
             parts = conversation.assunto_atual.split(":", 2)
             target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
             intent_sum = parts[2] if len(parts) > 2 else "Assunto em confirmação"
@@ -1165,7 +1185,7 @@ async def receive_evolution_webhook(
                 }
                 transfer_executed = True
 
-        if not transfer_executed:
+        if not transfer_executed and not is_tech:
             dept_dicts = [
                 {
                     "id": wn_item.id,
@@ -1238,10 +1258,9 @@ async def receive_evolution_webhook(
                         "nova_memoria": f"Aguardando confirmação do cliente para transferir para {target_wn.nome_departamento}"
                     }
                 else:
-                    is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
                     should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                     ai_output = await gemini_service.generate_concierge_response(
-                        customer_name=tech_name or contact.nome or "Cliente",
+                        customer_name=contact.nome or "Cliente",
                         department_name=whatsapp_number.nome_departamento,
                         user_message=text_content,
                         conversation_history=history,
@@ -1250,7 +1269,7 @@ async def receive_evolution_webhook(
                         available_departments=available_dept_names,
                         protocol_number=conversation.protocol_number,
                         should_announce_protocol=should_announce_proto,
-                        is_technician_or_admin=is_tech,
+                        is_technician_or_admin=False,
                         tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                         tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                     )
@@ -1258,10 +1277,9 @@ async def receive_evolution_webhook(
                     extra["protocol_announced"] = True
                     conversation.dados_adicionais = extra
             else:
-                is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
                 should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
                 ai_output = await gemini_service.generate_concierge_response(
-                    customer_name=tech_name or contact.nome or "Cliente",
+                    customer_name=contact.nome or "Cliente",
                     department_name=whatsapp_number.nome_departamento,
                     user_message=text_content,
                     conversation_history=history,
@@ -1270,7 +1288,7 @@ async def receive_evolution_webhook(
                     available_departments=available_dept_names,
                     protocol_number=conversation.protocol_number,
                     should_announce_protocol=should_announce_proto,
-                    is_technician_or_admin=is_tech,
+                    is_technician_or_admin=False,
                     tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                     tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                 )
@@ -1282,11 +1300,11 @@ async def receive_evolution_webhook(
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
         enviar_localizacao = ai_output.get("enviar_localizacao", False)
         enviar_pix = ai_output.get("enviar_pix", False)
-        escalar_humano = ai_output.get("escalar_humano", False)
+        escalar_humano = ai_output.get("escalar_humano", False) if not is_tech else False
         nova_memoria = ai_output.get("nova_memoria", "")
 
-        # Guarantee Protocol Number is ALWAYS explicitly present in customer response
-        if conversation.protocol_number:
+        # Guarantee Protocol Number is ALWAYS explicitly present in customer response (only for standard customers)
+        if not is_tech and conversation.protocol_number:
             proto_str = str(conversation.protocol_number).strip()
             if proto_str not in ai_reply:
                 ai_reply = f"📋 *Protocolo:* #{proto_str}\n\n{ai_reply}"

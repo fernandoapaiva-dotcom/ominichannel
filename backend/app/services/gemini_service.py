@@ -453,81 +453,90 @@ class GeminiService:
         if not client:
             return default_res
 
-        models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        models_to_try = [primary_model] if primary_model in ["gemini-3.1-flash-lite", "gemini-3.6-flash"] else ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
+        for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
         for m_name in models_to_try:
-            try:
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=m_name,
-                    contents=full_prompt
-                )
+            for attempt in range(2):
+                try:
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=m_name,
+                        contents=full_prompt
+                    )
+                    if response and response.text:
+                        break
+                except Exception as e:
+                    err_str = str(e)
+                    if "429" in err_str and attempt == 0:
+                        logger.warning(f"Rate limit 429 on {m_name}, retrying in 1.5s...")
+                        await asyncio.sleep(1.5)
+                        continue
+                    logger.warning(f"Error calling Gemini with model '{m_name}': {e}")
+                    response = None
+                    break
+            
+            if response and response.text:
+                text = response.text.strip()
+                lines = text.split("\n")
                 
-                if response and response.text:
-                    text = response.text.strip()
-                    lines = text.split("\n")
-                    
-                    resposta = ""
-                    escalar_humano = False
-                    transferir_setor = None
-                    nova_memoria = memory_summary or ""
-                    finalizar_conversa = False
-                    enviar_localizacao = False
+                resposta = ""
+                escalar_humano = False
+                transferir_setor = None
+                nova_memoria = memory_summary or ""
+                finalizar_conversa = False
+                enviar_localizacao = False
 
-                    current_field = None
-                    resposta_lines = []
-                    memoria_lines = []
+                current_field = None
+                resposta_lines = []
+                memoria_lines = []
 
-                    for line in lines:
-                        if line.startswith("RESPOSTA:"):
-                            current_field = "RESPOSTA"
-                            resposta_lines.append(line.replace("RESPOSTA:", "").strip())
-                        elif line.startswith("ESCALAR_HUMANO:"):
-                            current_field = "ESCALAR_HUMANO"
-                            val = line.replace("ESCALAR_HUMANO:", "").strip().upper()
-                            escalar_humano = "SIM" in val or "TRUE" in val
-                        elif line.startswith("TRANSFERIR_SETOR:"):
-                            current_field = "TRANSFERIR_SETOR"
-                            val = line.replace("TRANSFERIR_SETOR:", "").strip()
-                            if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
-                                transferir_setor = val
-                        elif line.startswith("NOVA_MEMORIA:"):
-                            current_field = "NOVA_MEMORIA"
-                            memoria_lines.append(line.replace("NOVA_MEMORIA:", "").strip())
-                        elif line.startswith("FINALIZAR_CONVERSA:"):
-                            current_field = "FINALIZAR_CONVERSA"
-                            val = line.replace("FINALIZAR_CONVERSA:", "").strip().upper()
-                            finalizar_conversa = "SIM" in val or "TRUE" in val
-                        elif line.startswith("ENVIAR_LOCALIZACAO:"):
-                            current_field = "ENVIAR_LOCALIZACAO"
-                            val = line.replace("ENVIAR_LOCALIZACAO:", "").strip().upper()
-                            enviar_localizacao = "SIM" in val or "TRUE" in val
-                        else:
-                            if current_field == "RESPOSTA":
-                                resposta_lines.append(line)
-                            elif current_field == "NOVA_MEMORIA":
-                                memoria_lines.append(line)
+                for line in lines:
+                    if line.startswith("RESPOSTA:"):
+                        current_field = "RESPOSTA"
+                        resposta_lines.append(line.replace("RESPOSTA:", "").strip())
+                    elif line.startswith("ESCALAR_HUMANO:"):
+                        current_field = "ESCALAR_HUMANO"
+                        val = line.replace("ESCALAR_HUMANO:", "").strip().upper()
+                        escalar_humano = "SIM" in val or "TRUE" in val
+                    elif line.startswith("TRANSFERIR_SETOR:"):
+                        current_field = "TRANSFERIR_SETOR"
+                        val = line.replace("TRANSFERIR_SETOR:", "").strip()
+                        if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
+                            transferir_setor = val
+                    elif line.startswith("NOVA_MEMORIA:"):
+                        current_field = "NOVA_MEMORIA"
+                        memoria_lines.append(line.replace("NOVA_MEMORIA:", "").strip())
+                    elif line.startswith("FINALIZAR_CONVERSA:"):
+                        current_field = "FINALIZAR_CONVERSA"
+                        val = line.replace("FINALIZAR_CONVERSA:", "").strip().upper()
+                        finalizar_conversa = "SIM" in val or "TRUE" in val
+                    elif line.startswith("ENVIAR_LOCALIZACAO:"):
+                        current_field = "ENVIAR_LOCALIZACAO"
+                        val = line.replace("ENVIAR_LOCALIZACAO:", "").strip().upper()
+                        enviar_localizacao = "SIM" in val or "TRUE" in val
+                    else:
+                        if current_field == "RESPOSTA":
+                            resposta_lines.append(line)
+                        elif current_field == "NOVA_MEMORIA":
+                            memoria_lines.append(line)
 
-                    resposta = "\n".join(resposta_lines).strip()
-                    nova_memoria = "\n".join(memoria_lines).strip()
+                resposta = "\n".join(resposta_lines).strip()
+                nova_memoria = "\n".join(memoria_lines).strip()
 
-                    if not resposta:
-                        resposta = text
+                if not resposta:
+                    resposta = text
 
-                    return {
-                        "resposta": resposta,
-                        "escalar_humano": escalar_humano,
-                        "transferir_setor": transferir_setor,
-                        "nova_memoria": nova_memoria,
-                        "finalizar_conversa": finalizar_conversa,
-                        "enviar_localizacao": enviar_localizacao
-                    }
-            except Exception as e:
-                logger.warning(f"Error calling Gemini with model '{m_name}': {e}")
-                await asyncio.sleep(0.5)
+                return {
+                    "resposta": resposta,
+                    "escalar_humano": False if is_technician_or_admin else escalar_humano,
+                    "transferir_setor": None if is_technician_or_admin else transferir_setor,
+                    "nova_memoria": nova_memoria,
+                    "finalizar_conversa": finalizar_conversa,
+                    "enviar_localizacao": enviar_localizacao
+                }
 
         return default_res
 
