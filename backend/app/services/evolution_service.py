@@ -174,6 +174,17 @@ class EvolutionService:
                 logger.error(f"Error fetching connection state for instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    def _format_target_number(self, number: str) -> str:
+        raw_num = str(number).strip()
+        if "@" in raw_num:
+            return raw_num
+        digits = "".join(filter(str.isdigit, raw_num))
+        if raw_num.startswith("120363") or len(digits) > 15:
+            return f"{digits}@g.us"
+        if len(digits) >= 14 and not digits.startswith("55"):
+            return f"{digits}@lid"
+        return digits
+
     async def send_text_message(
         self,
         instance_name: str,
@@ -184,7 +195,7 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, str(number)))
+        clean_number = self._format_target_number(number)
         payload = {
             "number": clean_number,
             "textOptions": {
@@ -196,6 +207,15 @@ class EvolutionService:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=15.0)
                 res_data = response.json()
+                if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
+                    digits = "".join(filter(str.isdigit, clean_number))
+                    lid_payload = {**payload, "number": f"{digits}@lid"}
+                    retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=15.0)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
+
                 if response.status_code >= 400:
                     return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
                 res_data["success"] = True
@@ -306,7 +326,7 @@ class EvolutionService:
         """
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendLocation/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, str(number)))
+        clean_number = self._format_target_number(number)
         payload = {
             "number": clean_number,
             "name": name or "Localização da Loja",
@@ -318,6 +338,15 @@ class EvolutionService:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=15.0)
                 res_data = response.json()
+                if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
+                    digits = "".join(filter(str.isdigit, clean_number))
+                    lid_payload = {**payload, "number": f"{digits}@lid"}
+                    retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=15.0)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
+
                 if response.status_code >= 400:
                     return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
                 res_data["success"] = True
@@ -340,8 +369,7 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendMedia/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, str(number)))
-
+        clean_number = self._format_target_number(number)
 
         payload = {
             "number": clean_number,
@@ -355,6 +383,15 @@ class EvolutionService:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=30.0)
                 res_data = response.json()
+                if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
+                    digits = "".join(filter(str.isdigit, clean_number))
+                    lid_payload = {**payload, "number": f"{digits}@lid"}
+                    retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=30.0)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
+
                 if response.status_code >= 400:
                     return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
                 res_data["success"] = True
@@ -377,7 +414,7 @@ class EvolutionService:
         """
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendSticker/{instance_name}"
-        clean_number = "".join(filter(str.isdigit, str(number)))
+        clean_number = self._format_target_number(number)
         payload = {
             "number": clean_number,
             "sticker": sticker_media
@@ -386,6 +423,15 @@ class EvolutionService:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=30.0)
                 res_data = response.json()
+                if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
+                    digits = "".join(filter(str.isdigit, clean_number))
+                    lid_payload = {**payload, "number": f"{digits}@lid"}
+                    retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=30.0)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
+
                 if response.status_code >= 400:
                     return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
                 res_data["success"] = True

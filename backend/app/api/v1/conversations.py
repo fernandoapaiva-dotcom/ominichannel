@@ -784,11 +784,15 @@ async def send_agent_message(
 
     # 2. If delivery failed on the department's instance, raise HTTP error and do not commit message
     if not send_res.get("success", False):
-        error_detail = send_res.get("error", "Instância desconectada ou indisponível")
+        error_detail = send_res.get("error", "Erro no envio")
         dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
+        if "close" in str(error_detail).lower() or "desconectad" in str(error_detail).lower() or "401" in str(error_detail):
+            msg = f"A instância do departamento '{dept_name}' está desconectada. Por favor, conecte o QR Code no Painel de Administração."
+        else:
+            msg = f"Falha no envio pelo WhatsApp ({dept_name}): {error_detail}"
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}. A instância do departamento '{dept_name}' não está conectada. Por favor, conecte o QR Code no Painel de Administração."
+            detail=msg
         )
 
     conv.status = ConversationStatus.COM_HUMANO
