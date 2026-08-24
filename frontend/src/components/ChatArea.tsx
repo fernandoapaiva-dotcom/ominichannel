@@ -271,6 +271,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Extract all media items in conversation for universal gallery navigation (Images, Videos, Audios, Files)
   const conversationMedia = (conversation?.messages || [])
@@ -584,10 +585,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }
         setPendingFiles([]);
         setInputText('');
+        if (textareaRef.current) textareaRef.current.style.height = '42px';
         setIsSending(false);
       } else if (textToSend) {
         const textCopy = textToSend;
         setInputText('');
+        if (textareaRef.current) textareaRef.current.style.height = '42px';
         
         // Immediate 0ms synchronous optimistic append
         if (conversation) {
@@ -979,7 +982,132 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
       case 'arquivo':
-        const fileName = mediaPath.split('/').pop() || 'Arquivo';
+        const rawFileName = mediaPath.split('/').pop() || 'Arquivo';
+        const isPdf = fullUrl.toLowerCase().endsWith('.pdf') || fullUrl.toLowerCase().includes('.pdf') || rawFileName.toLowerCase().endsWith('.pdf');
+        
+        let displayFileName = caption && !caption.startsWith('http') ? caption : rawFileName;
+        if (displayFileName.length > 32 && !displayFileName.includes(' ')) {
+          displayFileName = displayFileName.substring(0, 24) + '...' + (isPdf ? '.pdf' : '');
+        }
+
+        if (isPdf) {
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '340px' }}>
+              <div
+                style={{
+                  borderRadius: '10px',
+                  overflow: 'hidden',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                  boxShadow: '0 4px 14px rgba(0, 0, 0, 0.3)',
+                  cursor: 'pointer',
+                  transition: 'transform 0.15s ease, border-color 0.15s ease'
+                }}
+                onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}
+                onMouseEnter={e => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+                }}
+              >
+                {/* 1st Page Live Preview of PDF */}
+                <div style={{ position: 'relative', width: '100%', height: '170px', backgroundColor: '#ffffff', overflow: 'hidden' }}>
+                  <iframe
+                    src={`${fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+                    title="Pré-visualização do PDF"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      border: 'none',
+                      pointerEvents: 'none',
+                      display: 'block'
+                    }}
+                  />
+                  {/* Hover Overlay Badge */}
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <div style={{
+                      position: 'absolute',
+                      bottom: '8px',
+                      right: '8px',
+                      backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                      color: '#fff',
+                      fontSize: '11px',
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      <Eye size={12} /> 1ª Página • Abrir
+                    </div>
+                  </div>
+                </div>
+
+                {/* Footer bar with file title and download button */}
+                <div style={{
+                  padding: '10px 14px',
+                  backgroundColor: 'rgba(20, 20, 20, 0.95)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '10px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                    <span style={{
+                      backgroundColor: '#ef4444',
+                      color: '#fff',
+                      fontSize: '10px',
+                      fontWeight: 'bold',
+                      padding: '2px 5px',
+                      borderRadius: '4px',
+                      letterSpacing: '0.5px'
+                    }}>
+                      PDF
+                    </span>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {displayFileName}
+                    </span>
+                  </div>
+
+                  <a
+                    href={fullUrl}
+                    download
+                    onClick={e => e.stopPropagation()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Baixar PDF"
+                    style={{
+                      color: 'var(--accent-primary)',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '4px'
+                    }}
+                  >
+                    <Download size={16} />
+                  </a>
+                </div>
+              </div>
+              {caption && caption !== displayFileName && (
+                <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>
+                  {caption}
+                </p>
+              )}
+            </div>
+          );
+        }
+
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div
@@ -999,7 +1127,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <FileText size={28} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontSize: '13px', fontWeight: '600', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {fileName}
+                  {displayFileName}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
                   Clique para ver detalhes
@@ -3465,7 +3593,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
         return (
-          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '16px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'center', flexShrink: 0, position: 'relative' }}>
+          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
             <button
               type="button"
               onClick={() => {
@@ -3474,33 +3602,91 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               className="btn-secondary"
               style={{
-                padding: '10px 12px',
-                color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)'
+                height: '42px',
+                padding: '0 12px',
+                color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
               }}
               title="Emojis, GIFs e Figurinhas do WhatsApp"
             >
               <Smile size={18} />
             </button>
-            <button type="button" onClick={() => setShowAttachmentMenu(!showAttachmentMenu)} className="btn-secondary" style={{ padding: '10px 12px' }} title="Menu de Anexos e Ações Rápidas"><Paperclip size={18} /></button>
-            <input
-              type="text"
-              placeholder={isGroupChat ? 'Enviar mensagem no grupo...' : 'Digite sua mensagem para o cliente...'}
+            <button
+              type="button"
+              onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+              className="btn-secondary"
+              style={{ height: '42px', padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              title="Menu de Anexos e Ações Rápidas"
+            >
+              <Paperclip size={18} />
+            </button>
+            
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              placeholder={isGroupChat ? 'Enviar mensagem no grupo... (Shift+Enter ou Ctrl+Enter quebra linha)' : 'Digite sua mensagem... (Shift+Enter ou Ctrl+Enter quebra linha)'}
               value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
+              onChange={(e) => {
+                setInputText(e.target.value);
+                e.target.style.height = 'auto';
+                const nextH = Math.min(e.target.scrollHeight, 140);
+                e.target.style.height = `${Math.max(nextH, 42)}px`;
+              }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend(e);
+                if (e.key === 'Enter') {
+                  if (e.ctrlKey || e.shiftKey) {
+                    if (e.ctrlKey && !e.shiftKey) {
+                      e.preventDefault();
+                      const target = e.currentTarget;
+                      const start = target.selectionStart;
+                      const end = target.selectionEnd;
+                      const val = target.value;
+                      const newVal = val.substring(0, start) + '\n' + val.substring(end);
+                      setInputText(newVal);
+                      setTimeout(() => {
+                        target.selectionStart = target.selectionEnd = start + 1;
+                        target.style.height = 'auto';
+                        const nextH = Math.min(target.scrollHeight, 140);
+                        target.style.height = `${Math.max(nextH, 42)}px`;
+                      }, 0);
+                    }
+                  } else {
+                    e.preventDefault();
+                    handleSend(e);
+                  }
                 }
               }}
-              style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+              style={{
+                flex: 1,
+                minHeight: '42px',
+                maxHeight: '140px',
+                height: '42px',
+                padding: '10px 14px',
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                color: 'var(--text-main)',
+                fontSize: '14px',
+                lineHeight: '1.4',
+                fontFamily: 'inherit',
+                resize: 'none',
+                outline: 'none',
+                overflowY: 'auto',
+                boxSizing: 'border-box',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word'
+              }}
             />
+
             <button
               type="button"
               onClick={() => setShowCopilotModal(true)}
               className="btn-secondary"
               style={{
-                padding: '10px 14px',
+                height: '42px',
+                padding: '0 14px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -3518,7 +3704,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Bot size={16} />
               <span>Consultar IA</span>
             </button>
-            <button type="submit" className="btn-primary" disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending}>
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending}
+              style={{ height: '42px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
               <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
             </button>
           </form>
