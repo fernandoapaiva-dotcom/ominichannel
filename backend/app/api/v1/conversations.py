@@ -2160,17 +2160,24 @@ async def toggle_pin_conversation(
         pinned_users.append(user_id)
         new_pinned = True
 
-    extra["pinned_by_users"] = pinned_users
-    extra[f"pinned_user_{user_id}"] = new_pinned
-    
-    # Remove global is_pinned to ensure isolation per user
-    extra.pop("is_pinned", None)
+    # Find all conversations of this contact to sync the pin across all threads
+    sibling_stmt = select(Conversation).where(
+        Conversation.tenant_id == current_user.tenant_id,
+        Conversation.contact_id == conv.contact_id
+    )
+    sibling_res = await db.execute(sibling_stmt)
+    all_convs = sibling_res.scalars().all() or [conv]
 
-    conv.dados_adicionais = extra
     from sqlalchemy.orm.attributes import flag_modified
-    flag_modified(conv, "dados_adicionais")
+    for c in all_convs:
+        c_extra = dict(c.dados_adicionais or {})
+        c_extra["pinned_by_users"] = pinned_users
+        c_extra[f"pinned_user_{user_id}"] = new_pinned
+        c_extra.pop("is_pinned", None)
+        c.dados_adicionais = c_extra
+        flag_modified(c, "dados_adicionais")
+
     await db.commit()
-    await db.refresh(conv)
 
     # Broadcast WebSocket update
     await ws_manager.broadcast_to_department(
@@ -2179,6 +2186,7 @@ async def toggle_pin_conversation(
         message_data={
             "type": "conversation_pinned_toggled",
             "conversation_id": conv.id,
+            "contact_id": conv.contact_id,
             "user_id": user_id,
             "is_pinned": new_pinned
         }
@@ -2187,6 +2195,7 @@ async def toggle_pin_conversation(
     return {
         "success": True,
         "conversation_id": conv.id,
+        "contact_id": conv.contact_id,
         "user_id": user_id,
         "is_pinned": new_pinned,
         "pinned_by_users": pinned_users,

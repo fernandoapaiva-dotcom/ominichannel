@@ -198,11 +198,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             if (payload.remetente === 'cliente') {
               playNotificationSound();
             }
+          } else if (payload.type === 'conversation_pinned_toggled') {
+            setConversations(prev => prev.map(c => {
+              if (c.id === payload.conversation_id || (payload.contact_id && c.contact_id === payload.contact_id)) {
+                const extra = { ...(c.dados_adicionais || {}) };
+                let pinnedUsers = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
+                if (payload.is_pinned) {
+                  if (!pinnedUsers.includes(payload.user_id)) pinnedUsers.push(payload.user_id);
+                } else {
+                  pinnedUsers = pinnedUsers.filter((id: number) => id !== payload.user_id);
+                }
+                extra.pinned_by_users = pinnedUsers;
+                extra[`pinned_user_${payload.user_id}`] = payload.is_pinned;
+                delete extra.is_pinned;
+                return { ...c, dados_adicionais: extra };
+              }
+              return c;
+            }));
+            fetchConversations();
           } else if (
             payload.type === 'MESSAGE_STATUS_UPDATE' ||
             payload.type === 'MESSAGE_REACTION_UPDATE' ||
-            payload.type === 'CONVERSATIONS_MARKED_READ' ||
-            payload.type === 'conversation_pinned_toggled'
+            payload.type === 'CONVERSATIONS_MARKED_READ'
           ) {
             fetchConversations();
           }
