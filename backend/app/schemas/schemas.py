@@ -343,3 +343,54 @@ class AuthorizedTechnicianResponse(BaseModel):
     ativo: bool
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
+
+# Calendar & Task Event Schemas (Google Calendar Style)
+class CalendarEventCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    all_day: bool = False
+    color: str = "#10b981"
+    priority: str = "media" # baixa, media, alta, urgente
+    status: str = "pendente" # pendente, em_progresso, concluido, cancelado
+    reminder_minutes: Optional[int] = None
+    contact_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    message_id: Optional[int] = None
+
+class CalendarEventUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    all_day: Optional[bool] = None
+    color: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    reminder_minutes: Optional[int] = None
+    contact_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+
+class CalendarEventResponse(BaseModel):
+    id: int
+    tenant_id: int
+    user_id: int
+    contact_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    message_id: Optional[int] = None
+    title: str
+    description: Optional[str] = None
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    all_day: bool
+    color: str
+    priority: str
+    status: str
+    reminder_minutes: Optional[int] = None
+    criado_em: datetime
+    atualizado_em: datetime
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    model_config = ConfigDict(from_attributes=True)
+

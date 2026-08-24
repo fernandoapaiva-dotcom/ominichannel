@@ -11,6 +11,7 @@ import { SegmentationPanel } from '../components/SegmentationPanel';
 import { NewConversationModal } from '../components/NewConversationModal';
 import { MediaGalleryModal } from '../components/MediaGalleryModal';
 import { SyncTaskbar } from '../components/SyncTaskbar';
+import { CalendarModal } from '../components/CalendarModal';
 
 import { DepartmentBar } from '../components/DepartmentBar';
 
@@ -26,6 +27,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all' | 'nao_lidas'>('all');
+  const [isCalendarOpen, setIsCalendarOpen] = useState<boolean>(false);
+  const [calendarPrefill, setCalendarPrefill] = useState<any>(null);
+  const [calendarSummary, setCalendarSummary] = useState<{ today_pending: number; overdue: number; total_pending: number } | null>(null);
 
   const displayedConversations = React.useMemo(() => {
     return conversations.filter(c => {
@@ -96,10 +100,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   };
 
+  const fetchCalendarSummary = useCallback(async () => {
+    try {
+      const data = await apiFetch('/calendar/summary');
+      setCalendarSummary(data);
+    } catch (err) {
+      console.debug('Error fetching calendar summary:', err);
+    }
+  }, []);
+
   useEffect(() => {
     fetchConversations();
     fetchNumbers();
-  }, [fetchConversations]);
+    fetchCalendarSummary();
+  }, [fetchConversations, fetchCalendarSummary]);
 
   const [notificationAlert, setNotificationAlert] = useState<string | null>(null);
 
@@ -367,6 +381,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             selectedDepartmentId={selectedDeptId}
             onSelectDepartment={(id) => setSelectedDeptId(id)}
             conversations={displayedConversations}
+            onOpenCalendar={() => {
+              setCalendarPrefill(null);
+              setIsCalendarOpen(true);
+            }}
+            calendarSummary={calendarSummary}
           />
           <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', overflow: 'hidden', boxSizing: 'border-box' }}>
             <div
@@ -405,6 +424,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onSendMessage={handleSendMessage}
                 onOpenTransferModal={() => setIsTransferModalOpen(true)}
                 onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}
+                onOpenScheduleTask={(prefill) => {
+                  setCalendarPrefill(prefill);
+                  setIsCalendarOpen(true);
+                }}
                 onStatusToggle={fetchConversations}
                 onBack={() => setActiveConversationId(null)}
                 isChatListCollapsed={isChatListCollapsed}
@@ -448,6 +471,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         onTransferSuccess={() => {
           fetchConversations();
           setSelectedDeptId('all');
+        }}
+      />
+
+      {/* Google-Calendar-style Personal Tasks & Appointments Modal */}
+      <CalendarModal
+        isOpen={isCalendarOpen}
+        onClose={() => {
+          setIsCalendarOpen(false);
+          setCalendarPrefill(null);
+          fetchCalendarSummary();
+        }}
+        currentUser={user}
+        initialEventData={calendarPrefill}
+        onSelectConversation={(convId) => {
+          setActiveConversationId(convId);
+          setActiveTab('chats');
         }}
       />
 

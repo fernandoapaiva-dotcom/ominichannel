@@ -296,3 +296,33 @@ class AICorrection(Base):
     tenant: Mapped["Tenant"] = relationship("Tenant")
     conversation: Mapped[Optional["Conversation"]] = relationship("Conversation")
 
+# User Tasks & Calendar Events (Google Calendar Style)
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    message_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    color: Mapped[str] = mapped_column(String(50), default="#10b981") # Hex color code
+    priority: Mapped[str] = mapped_column(String(50), default="media") # baixa, media, alta, urgente
+    status: Mapped[str] = mapped_column(String(50), default="pendente") # pendente, em_progresso, concluido, cancelado
+    reminder_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    tenant: Mapped["Tenant"] = relationship("Tenant")
+    user: Mapped["User"] = relationship("User")
+    contact: Mapped[Optional["Contact"]] = relationship("Contact")
+    conversation: Mapped[Optional["Conversation"]] = relationship("Conversation")
+
+

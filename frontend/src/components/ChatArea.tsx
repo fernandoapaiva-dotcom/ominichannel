@@ -4,7 +4,7 @@ import {
   AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
-  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink
+  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -15,7 +15,7 @@ import { ForwardModal } from './ForwardModal';
 import { MessageInfoModal } from './MessageInfoModal';
 import { EmojiGifStickerPicker } from './EmojiGifStickerPicker';
 import { AICopilotModal } from './AICopilotModal';
-import { Conversation, User, Message } from '../types';
+import { Conversation, User, Message, CalendarEvent } from '../types';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -25,6 +25,7 @@ interface ChatAreaProps {
   onSendMessage: (text: string, tipo?: string) => Promise<void>;
   onOpenTransferModal: () => void;
   onOpenMediaGallery?: () => void;
+  onOpenScheduleTask?: (prefill: Partial<CalendarEvent>) => void;
   onStatusToggle?: () => void;
   onBack?: () => void;
   isChatListCollapsed?: boolean;
@@ -39,6 +40,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onSendMessage,
   onOpenTransferModal,
   onOpenMediaGallery,
+  onOpenScheduleTask,
   onStatusToggle,
   onBack,
   isChatListCollapsed = false,
@@ -2856,6 +2858,55 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <CornerUpRight size={15} style={{ color: 'var(--accent-primary)' }} />
                         <span>Encaminhar</span>
                       </button>
+
+                      {/* 7. Agendar no Calendário / Criar Tarefa */}
+                      {onOpenScheduleTask && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveActionMenuMsgId(null);
+                            const customerName = conversation?.contact?.nome || 'Cliente';
+                            const rawMsg = msg.conteudo || '';
+                            const cleanText = rawMsg.replace(/^https?:\/\/\S+/i, '').replace(/\|.*/, '').trim();
+                            const summaryText = cleanText
+                              ? (cleanText.length > 40 ? cleanText.substring(0, 40) + '...' : cleanText)
+                              : `Mensagem ${msg.tipo}`;
+
+                            onOpenScheduleTask({
+                              title: `Atendimento ${customerName} - ${summaryText}`,
+                              description: `💬 Mensagem do WhatsApp:\n"${rawMsg}"\n\n👤 Cliente: ${customerName}\n📞 Telefone: ${conversation?.contact?.telefone || ''}\n📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}`,
+                              contact_id: conversation?.contact_id || conversation?.contact?.id,
+                              conversation_id: conversation?.id,
+                              message_id: msg.id,
+                              contact_name: customerName,
+                              contact_phone: conversation?.contact?.telefone,
+                              start_time: new Date().toISOString(),
+                              color: '#10b981',
+                              priority: 'media',
+                              status: 'pendente'
+                            });
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.15)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <Calendar size={15} style={{ color: 'var(--accent-primary)' }} />
+                          <span>Agendar no Calendário</span>
+                        </button>
+                      )}
 
                       {isMediaMsg && (
                         <button

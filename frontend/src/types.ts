@@ -89,3 +89,26 @@ export interface AuthorizedTechnician {
   criado_em: string;
 }
 
+export interface CalendarEvent {
+  id: number;
+  tenant_id: number;
+  user_id: number;
+  contact_id?: number | null;
+  conversation_id?: number | null;
+  message_id?: number | null;
+  title: string;
+  description?: string | null;
+  start_time: string;
+  end_time?: string | null;
+  all_day: boolean;
+  color: string;
+  priority: 'baixa' | 'media' | 'alta' | 'urgente';
+  status: 'pendente' | 'em_progresso' | 'concluido' | 'cancelado';
+  reminder_minutes?: number | null;
+  criado_em: string;
+  atualizado_em: string;
+  contact_name?: string | null;
+  contact_phone?: string | null;
+}
+
+

@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutGrid, ShoppingBag, Key, Wrench, CreditCard,
-  MessageSquare, Building, Headphones, Truck, HelpCircle, Layers
+  MessageSquare, Building, Headphones, Truck, HelpCircle, Layers, Calendar
 } from 'lucide-react';
 import { WhatsAppNumber, Conversation } from '../types';
 
@@ -10,13 +10,17 @@ interface DepartmentBarProps {
   selectedDepartmentId: number | 'all';
   onSelectDepartment: (id: number | 'all') => void;
   conversations: Conversation[];
+  onOpenCalendar?: () => void;
+  calendarSummary?: { today_pending: number; overdue: number; total_pending: number } | null;
 }
 
 export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   whatsappNumbers,
   selectedDepartmentId,
   onSelectDepartment,
-  conversations
+  conversations,
+  onOpenCalendar,
+  calendarSummary
 }) => {
 
   // Helper to pick context icon based on department name
@@ -224,6 +228,84 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
           </button>
         );
       })}
+
+      {/* Spacer to push Calendar button to the right */}
+      <div style={{ flex: 1 }} />
+
+      {/* Agenda & Tarefas Button (Marked in User Screenshot) */}
+      {onOpenCalendar && (
+        <button
+          onClick={onOpenCalendar}
+          title="Abrir Agenda & Tarefas (Google Calendar)"
+          style={{
+            height: '72px',
+            padding: '0 16px',
+            borderRadius: '12px',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+            backgroundColor: 'rgba(16, 185, 129, 0.08)',
+            color: 'var(--accent-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            cursor: 'pointer',
+            position: 'relative',
+            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.2)',
+            flexShrink: 0
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = 'translateY(-2px)';
+            e.currentTarget.style.borderColor = 'var(--accent-primary)';
+            e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.16)';
+            e.currentTarget.style.boxShadow = '0 6px 20px rgba(16, 185, 129, 0.25)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+            e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.08)';
+            e.currentTarget.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.2)';
+          }}
+        >
+          <div style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '10px',
+            backgroundColor: 'rgba(16, 185, 129, 0.2)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--accent-primary)'
+          }}>
+            <Calendar size={22} />
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
+            <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>
+              Minha Agenda
+            </span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              {calendarSummary && calendarSummary.today_pending > 0
+                ? `${calendarSummary.today_pending} pendente(s) hoje`
+                : 'Tarefas & Lembretes'}
+            </span>
+          </div>
+
+          {calendarSummary && calendarSummary.today_pending > 0 && (
+            <span style={{
+              backgroundColor: '#ef4444',
+              color: '#fff',
+              fontSize: '11px',
+              fontWeight: 'bold',
+              borderRadius: '12px',
+              padding: '2px 8px',
+              marginLeft: '4px',
+              boxShadow: '0 2px 6px rgba(239, 68, 68, 0.4)'
+            }}>
+              {calendarSummary.today_pending}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   );
 };
