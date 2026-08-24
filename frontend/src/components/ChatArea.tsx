@@ -726,25 +726,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const textCopy = textToSend;
         setInputText('');
         if (textareaRef.current) textareaRef.current.style.height = '42px';
-        
-        // Immediate 0ms synchronous optimistic append
-        if (conversation) {
-          const tempMsg: Message = {
-            id: -Date.now(),
-            conversation_id: conversation.id,
-            remetente: 'atendente',
-            conteudo: textCopy,
-            tipo: 'texto' as any,
-            timestamp: new Date().toISOString(),
-            status: 'sending'
-          };
-          if (!conversation.messages) {
-            conversation.messages = [];
-          }
-          conversation.messages.push(tempMsg);
-          scrollToBottom();
-        }
-
         onSendMessage(textCopy);
       }
     } catch (err: any) {

@@ -775,15 +775,52 @@ async def send_agent_message(
         agent_name = current_user.nome or "Atendente"
         formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
 
-        # Extract mentions in text (e.g. @todos, @everyone, @55...)
+        # Extract mentions in text (e.g. @todos, @everyone, @Nome, @55...)
         mentioned_list = []
         c_text = msg_in.conteudo or ""
-        if "@todos" in c_text.lower() or "@everyone" in c_text.lower() or "@all" in c_text.lower():
-            mentioned_list.append("all")
         import re
+
+        is_group_chat = bool(
+            conv.contact and (
+                conv.contact.telefone.startswith("120363") or
+                len("".join(filter(str.isdigit, conv.contact.telefone))) > 15
+            )
+        )
+        if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
+            try:
+                g_info = await evolution_service.fetch_group_info(
+                    instance_name=conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None,
+                    group_jid=conv.contact.telefone if "@g.us" in conv.contact.telefone else f"{conv.contact.telefone}@g.us"
+                )
+                if g_info and "participants" in g_info:
+                    for p in g_info["participants"]:
+                        raw_p = p.get("phoneNumber") or p.get("id") or ""
+                        digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
+                        if len(digits) >= 8 and digits not in mentioned_list:
+                            mentioned_list.append(digits)
+            except Exception as ex:
+                logger.warning(f"Error resolving @todos participants: {ex}")
+
+        # Extract direct phone numbers @55...
         phone_mentions = re.findall(r"@(\d{10,15})", c_text)
         for pm in phone_mentions:
-            mentioned_list.append(f"{pm}@s.whatsapp.net")
+            if pm not in mentioned_list:
+                mentioned_list.append(pm)
+
+        # Extract name mentions @Nome Sobrenome
+        name_mentions = re.findall(r"@([a-zA-ZÀ-ÿ\s]{2,30})", c_text)
+        for nm in name_mentions:
+            clean_nm = nm.strip()
+            if clean_nm and clean_nm.lower() not in ["todos", "everyone", "all"]:
+                c_stmt = select(Contact).where(
+                    Contact.tenant_id == current_user.tenant_id,
+                    Contact.nome.ilike(f"%{clean_nm}%")
+                )
+                c_match = (await db.execute(c_stmt)).scalars().first()
+                if c_match and c_match.telefone:
+                    digits = "".join(filter(str.isdigit, c_match.telefone))
+                    if len(digits) >= 8 and digits not in mentioned_list:
+                        mentioned_list.append(digits)
 
         send_res = await provider.send_text_message(
             number=conv.contact.telefone,
