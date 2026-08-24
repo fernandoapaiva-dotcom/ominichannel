@@ -1099,10 +1099,17 @@ async def receive_evolution_webhook(
                     f"[{getattr(m.remetente, 'value', str(m.remetente))}]: {m.conteudo}" for m in past_msgs if m.conteudo
                 ])
 
+        ai_input_text = text_content
+        if text_content and text_content.startswith("/uploads/"):
+            if "|" in text_content:
+                ai_input_text = text_content.split("|", 1)[1].strip()
+            else:
+                ai_input_text = "[Foto/Mídia enviada pelo cliente para análise]"
+
         # Fetch RAG Context (Geral + Department Specific)
         rag_context = await rag_service.search_context(
             tenant_id=tenant_id,
-            query=text_content,
+            query=ai_input_text,
             department_id=whatsapp_number.id
         )
 
@@ -1686,9 +1693,10 @@ async def receive_evolution_webhook(
 
         # Send AI reply back to WhatsApp via Evolution API with header
         formatted_ai_text = f"*🤖 IA Concierge:*\n\n{ai_reply}"
+        target_dest = remote_jid if ("@lid" in str(remote_jid) or "@g.us" in str(remote_jid)) else phone_number
         await evolution_service.send_text_message(
             instance_name=instance_name,
-            number=phone_number,
+            number=target_dest,
             text=formatted_ai_text
         )
 

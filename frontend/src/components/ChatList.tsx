@@ -666,9 +666,6 @@ export const ChatList: React.FC<ChatListProps> = ({
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                         <Phone size={11} /> {group.contactPhone}
-                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(255, 255, 255, 0.08)', color: 'var(--accent-primary)', fontWeight: '600' }}>
-                          🏢 {primaryConv.whatsapp_number?.nome_departamento || 'Dept'}
-                        </span>
                       </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>

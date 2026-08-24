@@ -1856,9 +1856,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '10px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Building size={11} /> {conversation.whatsapp_number?.nome_departamento || 'Geral'}</span>
               {conversation.assigned_user_name && (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
                   <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
@@ -1868,17 +1867,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Right Section: Action Buttons Toolbar (Responsive, sleek 32px height without overflow clipping) */}
+        {/* Right Section: Action Buttons Toolbar (All buttons visible, 32px height, no clipping) */}
         <div style={{
           display: 'flex',
           gap: '5px',
           alignItems: 'center',
-          flexShrink: 1,
-          minWidth: 0,
-          overflowX: 'auto',
-          scrollbarWidth: 'none',
+          flexShrink: 0,
           padding: '2px 0',
-          justifyContent: 'flex-end'
+          justifyContent: 'flex-end',
+          flexWrap: 'nowrap'
         }}>
           {/* Thread Switcher Dropdown */}
           {contactConversations.length > 1 && onSelectConversation && (
@@ -3648,6 +3645,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               rows={1}
               placeholder={isGroupChat ? 'Enviar mensagem no grupo... (Shift+Enter ou Ctrl+Enter quebra linha)' : 'Digite sua mensagem... (Shift+Enter ou Ctrl+Enter quebra linha)'}
               value={inputText}
+              spellCheck={true}
+              lang="pt-BR"
+              autoCorrect="on"
+              autoCapitalize="sentences"
+              autoComplete="on"
               onChange={(e) => {
                 setInputText(e.target.value);
                 e.target.style.height = 'auto';

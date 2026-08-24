@@ -2121,6 +2121,8 @@ async def toggle_pin_conversation(
     extra.pop("is_pinned", None)
 
     conv.dados_adicionais = extra
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(conv, "dados_adicionais")
     await db.commit()
     await db.refresh(conv)
 
