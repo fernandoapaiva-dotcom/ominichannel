@@ -143,7 +143,6 @@ async def mark_all_conversations_read(
         await db.commit()
 
         # Broadcast WebSocket notification
-        from app.services.websocket_manager import ws_manager
         await ws_manager.broadcast_to_department(
             tenant_id=current_user.tenant_id,
             whatsapp_number_id=payload.whatsapp_number_id if payload else None,
@@ -194,7 +193,6 @@ async def mark_single_conversation_read(
     flag_modified(conv, "dados_adicionais")
     await db.commit()
 
-    from app.services.websocket_manager import ws_manager
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
         whatsapp_number_id=conv.whatsapp_number_id,
@@ -773,6 +771,10 @@ async def send_agent_message(
             file_name="animacao.mp4"
         )
     else:
+        provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+        agent_name = current_user.nome or "Atendente"
+        formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+
         # Extract mentions in text (e.g. @todos, @everyone, @55...)
         mentioned_list = []
         c_text = msg_in.conteudo or ""
