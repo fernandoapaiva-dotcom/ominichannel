@@ -570,18 +570,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setShowMentionMenu(false);
       return;
     }
-    const start = target.selectionStart || 0;
-    const end = target.selectionEnd || 0;
+    const cursor = target.selectionStart || inputText.length;
     const val = inputText;
+    const textBeforeCursor = val.substring(0, cursor);
+    const lastAtIndex = textBeforeCursor.lastIndexOf('@');
 
     let newVal = '';
     let newCursorPos = 0;
-    if (start > 0 && val.charAt(start - 1) === '@') {
-      newVal = val.substring(0, start - 1) + mentionTag + val.substring(end);
-      newCursorPos = start - 1 + mentionTag.length;
+    if (lastAtIndex !== -1) {
+      newVal = val.substring(0, lastAtIndex) + mentionTag + val.substring(cursor);
+      newCursorPos = lastAtIndex + mentionTag.length;
     } else {
-      newVal = val.substring(0, start) + mentionTag + val.substring(end);
-      newCursorPos = start + mentionTag.length;
+      newVal = val + mentionTag;
+      newCursorPos = newVal.length;
     }
 
     setInputText(newVal);
@@ -3802,117 +3803,116 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               @
             </button>
 
-            {showMentionMenu && (
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: 'calc(100% + 8px)',
-                  left: '20px',
-                  backgroundColor: '#0f172a',
-                  border: '1px solid rgba(0, 230, 153, 0.3)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
-                  zIndex: 1000,
-                  width: '320px',
-                  maxHeight: '260px',
-                  overflowY: 'auto',
-                  padding: '6px'
-                }}
-              >
-                <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{isGroupChat ? `Integrantes do Grupo (${groupParticipants.length}):` : 'Mencionar no WhatsApp:'}</span>
-                  <span style={{ fontSize: '10px', color: 'var(--accent-primary)', cursor: 'pointer' }} onClick={() => setShowMentionMenu(false)}>Fechar [Esc]</span>
-                </div>
-                {/* Option 1: @todos (for group chats) */}
-                {isGroupChat && (
-                  <div
-                    onClick={() => handleInsertMention('@todos ')}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      color: 'var(--accent-primary)',
-                      fontWeight: '700',
-                      fontSize: '13px',
-                      borderBottom: '1px solid rgba(255,255,255,0.05)',
-                      transition: 'background 0.15s ease'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
-                    <Users size={16} />
-                    <div>
-                      <div>@todos</div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos os {groupParticipants.length} membros no grupo</div>
-                    </div>
-                  </div>
-                )}
+            {showMentionMenu && (() => {
+              const cursor = textareaRef.current ? (textareaRef.current.selectionStart || inputText.length) : inputText.length;
+              const textBeforeCursor = inputText.substring(0, cursor);
+              const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+              const mentionQuery = lastAtIndex !== -1 ? textBeforeCursor.substring(lastAtIndex + 1).toLowerCase() : '';
 
-                {/* Option 2: Group participants */}
-                {groupParticipants.length > 0 ? (
-                  groupParticipants.map(p => (
+              const filteredParticipants = groupParticipants.filter(p => {
+                if (!mentionQuery) return true;
+                const nameMatch = p.name && p.name.toLowerCase().includes(mentionQuery);
+                const phoneMatch = p.phone && p.phone.includes(mentionQuery);
+                const lidMatch = p.lid && p.lid.includes(mentionQuery);
+                return nameMatch || phoneMatch || lidMatch;
+              });
+
+              const showTodos = isGroupChat && (!mentionQuery || 'todos'.includes(mentionQuery) || 'all'.includes(mentionQuery) || 'everyone'.includes(mentionQuery));
+
+              return (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: 'calc(100% + 8px)',
+                    left: '20px',
+                    backgroundColor: '#0f172a',
+                    border: '1px solid rgba(0, 230, 153, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
+                    zIndex: 1000,
+                    width: '320px',
+                    maxHeight: '260px',
+                    overflowY: 'auto',
+                    padding: '6px'
+                  }}
+                >
+                  <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>{isGroupChat ? `Integrantes do Grupo (${filteredParticipants.length}):` : 'Mencionar no WhatsApp:'}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--accent-primary)', cursor: 'pointer' }} onClick={() => setShowMentionMenu(false)}>Fechar [Esc]</span>
+                  </div>
+                  {/* Option 1: @todos (for group chats) */}
+                  {showTodos && (
                     <div
-                      key={p.id || p.phone}
-                      onClick={() => handleInsertMention(`@${p.name} `)}
+                      onClick={() => handleInsertMention('@todos ')}
                       style={{
-                        padding: '7px 10px',
+                        padding: '8px 10px',
                         borderRadius: 'var(--radius-sm)',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
                         gap: '8px',
-                        color: 'var(--text-main)',
-                        fontSize: '12px',
+                        color: 'var(--accent-primary)',
+                        fontWeight: '700',
+                        fontSize: '13px',
+                        borderBottom: '1px solid rgba(255,255,255,0.05)',
                         transition: 'background 0.15s ease'
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
                       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '700', flexShrink: 0 }}>
-                          {(p.name || 'M').charAt(0).toUpperCase()}
-                        </div>
-                        <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis' }}>@{p.name}</div>
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>+{p.phone}</div>
-                        </div>
+                      <Users size={16} />
+                      <div>
+                        <div>@todos</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos os {groupParticipants.length} membros no grupo</div>
                       </div>
-                      {p.is_admin && (
-                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#eab308', fontWeight: '700' }}>
-                          Admin
-                        </span>
-                      )}
                     </div>
-                  ))
-                ) : conversation?.contact ? (
-                  <div
-                    onClick={() => handleInsertMention(`@${conversation.contact?.nome || conversation.contact?.telefone} `)}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      color: 'var(--text-main)',
-                      fontSize: '13px'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  >
-                    <UserIcon size={16} color="#60a5fa" />
-                    <div>
-                      <div style={{ fontWeight: '600' }}>@{conversation.contact.nome || 'Cliente'}</div>
-                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{conversation.contact.telefone}</div>
+                  )}
+
+                  {/* Option 2: Filtered Group participants */}
+                  {filteredParticipants.length > 0 ? (
+                    filteredParticipants.map(p => (
+                      <div
+                        key={p.id || p.phone}
+                        onClick={() => handleInsertMention(`@${p.name} `)}
+                        style={{
+                          padding: '7px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: '8px',
+                          color: 'var(--text-main)',
+                          fontSize: '12px',
+                          transition: 'background 0.15s ease'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                          <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '700', flexShrink: 0 }}>
+                            {(p.name || 'M').charAt(0).toUpperCase()}
+                          </div>
+                          <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis' }}>@{p.name}</div>
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>+{p.phone}</div>
+                          </div>
+                        </div>
+                        {p.is_admin && (
+                          <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#eab308', fontWeight: '700' }}>
+                            Admin
+                          </span>
+                        )}
+                      </div>
+                    ))
+                  ) : !showTodos ? (
+                    <div style={{ padding: '12px 10px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                      Nenhum integrante encontrado para "{mentionQuery}"
                     </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
+                  ) : null}
+                </div>
+              );
+            })()}
             
             <textarea
               ref={textareaRef}
