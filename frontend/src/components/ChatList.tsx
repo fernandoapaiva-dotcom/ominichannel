@@ -167,8 +167,21 @@ export const ChatList: React.FC<ChatListProps> = ({
           if (extra.marked_as_read) {
             matchesStatus = false;
           } else {
-            const lastMsg = conv.messages && conv.messages.length > 0 ? conv.messages[conv.messages.length - 1] : null;
-            matchesStatus = Boolean(lastMsg && lastMsg.status !== 'read' && lastMsg.remetente?.toLowerCase() === 'cliente');
+            const msgs = conv.messages || [];
+            let lastAttendantIdx = -1;
+            for (let i = 0; i < msgs.length; i++) {
+              if (String(msgs[i].remetente || '').toLowerCase() === 'atendente') {
+                lastAttendantIdx = i;
+              }
+            }
+            let hasClientAfterAttendant = false;
+            for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
+              if (String(msgs[i].remetente || '').toLowerCase() === 'cliente') {
+                hasClientAfterAttendant = true;
+                break;
+              }
+            }
+            matchesStatus = hasClientAfterAttendant || msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
           }
         } else if (statusFilter !== 'all') {
           matchesStatus = conv.status === statusFilter;
@@ -197,7 +210,6 @@ export const ChatList: React.FC<ChatListProps> = ({
       matchingConvs.forEach(conv => {
         const extra = conv.dados_adicionais || {};
         if (extra.marked_as_read) return;
-        if (activeConversation?.id === conv.id) return;
         const msgs = conv.messages || [];
         if (msgs.length === 0) return;
 
@@ -213,19 +225,13 @@ export const ChatList: React.FC<ChatListProps> = ({
         for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
           const r = String(msgs[i].remetente || '').toLowerCase();
           if (r === 'cliente') {
-            const mTime = msgs[i].timestamp ? parseIsoDate(msgs[i].timestamp).getTime() : 0;
-            const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
-            if (isRecent) {
-              convUnread++;
-            }
+            convUnread++;
           }
         }
-        groupUnreadCount += convUnread;
+        groupUnreadCount += Math.max(convUnread, msgs.some(m => m.remetente === 'cliente' && m.status !== 'read') ? 1 : 0);
       });
 
-      const hasUnread = groupUnreadCount > 0;
-
-      if (statusFilter === 'nao_lidas' && !hasUnread) return;
+      const hasUnread = groupUnreadCount > 0 || statusFilter === 'nao_lidas';
 
       groups.push({
         contactId: cid,
@@ -266,9 +272,10 @@ export const ChatList: React.FC<ChatListProps> = ({
 
   const totalUnread = useMemo(() => {
     return conversations.filter(conv => {
+      const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
+      if (!matchesDept) return false;
       const extra = conv.dados_adicionais || {};
       if (extra.marked_as_read) return false;
-      if (activeConversation?.id === conv.id) return false;
       const msgs = conv.messages || [];
       if (msgs.length === 0) return false;
 
@@ -283,14 +290,12 @@ export const ChatList: React.FC<ChatListProps> = ({
       for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
         if (r === 'cliente') {
-          const mTime = msgs[i].timestamp ? parseIsoDate(msgs[i].timestamp).getTime() : 0;
-          const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
-          if (isRecent) return true;
+          return true;
         }
       }
-      return false;
+      return msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
     }).length;
-  }, [conversations, activeConversation]);
+  }, [conversations, selectedDepartmentId]);
 
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
 
