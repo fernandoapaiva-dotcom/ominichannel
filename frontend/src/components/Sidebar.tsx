@@ -59,11 +59,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
     if (dismissedConvIds.has(conv.id)) return false;
-
-    const isAssigned = conv.assigned_user_id === user.id || (user.role === 'admin' && conv.status === 'aguardando_atendente');
-    if (!isAssigned) return false;
-    
     if (conv.status === 'encerrada' || conv.status === 'expirada_por_inatividade') return false;
+
+    const isAssigned = conv.assigned_user_id === user.id ||
+                       (user.role === 'admin') ||
+                       (conv.status === 'aguardando_atendente');
+    if (!isAssigned) return false;
 
     // Skip if marked as read or dismissed by attendant
     const extra = conv.dados_adicionais || {};
@@ -76,21 +77,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
     let lastClientMsgIndex = -1;
 
     for (let i = 0; i < msgs.length; i++) {
-      if (msgs[i].remetente === 'atendente') {
+      const r = String(msgs[i].remetente || '').toLowerCase();
+      if (r === 'atendente') {
         lastAttendantMsgIndex = i;
-      } else if (msgs[i].remetente === 'cliente') {
-        if (msgs[i].status !== 'read') {
-          lastClientMsgIndex = i;
-        }
+      } else if (r === 'cliente') {
+        lastClientMsgIndex = i;
       }
     }
 
     if (lastClientMsgIndex === -1) return false;
 
+    // Recency check (last client message within 7 days or active protocol)
+    const lastClientMsg = msgs[lastClientMsgIndex];
+    if (lastClientMsg && lastClientMsg.timestamp) {
+      const t = new Date(lastClientMsg.timestamp).getTime();
+      if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000 && !conv.protocol_number) {
+        return false;
+      }
+    }
+
     // If attendant has never sent a message in this conversation, it is pending
     if (lastAttendantMsgIndex === -1) return true;
 
-    // If client sent a new message after the attendant's last reply, it is pending again
+    // If client sent a new message after the attendant's last reply, it is pending
     if (lastClientMsgIndex > lastAttendantMsgIndex) return true;
 
     return false;
@@ -777,6 +786,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('chats')}
           title="Conversas com Clientes"
           style={{
+            position: 'relative',
             width: '48px',
             height: '48px',
             borderRadius: 'var(--radius-md)',
@@ -791,6 +801,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
         >
           <MessageSquare size={22} />
+          {pendingBadgeCount > 0 && (
+            <span style={{
+              position: 'absolute',
+              top: '4px',
+              right: '4px',
+              backgroundColor: '#ef4444',
+              color: '#ffffff',
+              fontSize: '10px',
+              fontWeight: '800',
+              borderRadius: '10px',
+              minWidth: '16px',
+              height: '16px',
+              padding: '0 3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 0 6px rgba(239,68,68,0.7)'
+            }}>
+              {pendingBadgeCount > 99 ? '99+' : pendingBadgeCount}
+            </span>
+          )}
         </button>
 
         <button

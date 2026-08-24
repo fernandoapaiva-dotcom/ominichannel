@@ -41,13 +41,24 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       if (extra.marked_as_read) return false;
       const msgs = c.messages || [];
       if (msgs.length === 0) return false;
-      const lastMsg = msgs[msgs.length - 1];
-      if (!lastMsg) return false;
-      if (lastMsg.status === 'read') return false;
-      const lastMsgTime = lastMsg.timestamp ? new Date(lastMsg.timestamp).getTime() : 0;
-      const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
-      if (!isRecent && !c.protocol_number) return false;
-      return lastMsg.remetente?.toLowerCase() === 'cliente';
+
+      let lastAttendantIdx = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        const r = String(msgs[i].remetente || '').toLowerCase();
+        if (r === 'atendente') {
+          lastAttendantIdx = i;
+        }
+      }
+
+      for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
+        const r = String(msgs[i].remetente || '').toLowerCase();
+        if (r === 'cliente') {
+          const mTime = msgs[i].timestamp ? new Date(msgs[i].timestamp).getTime() : 0;
+          const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
+          if (isRecent) return true;
+        }
+      }
+      return false;
     }).length;
   };
 

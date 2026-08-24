@@ -46,6 +46,7 @@ interface ContactGroup {
   primaryConv: Conversation;
   allConversations: Conversation[];
   hasUnread: boolean;
+  unreadCount: number;
   activeCount: number;
 }
 
@@ -159,19 +160,37 @@ export const ChatList: React.FC<ChatListProps> = ({
       const primary = matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
       const contact = primary.contact;
 
-      const hasUnread = matchingConvs.some(conv => {
+      let groupUnreadCount = 0;
+      matchingConvs.forEach(conv => {
         const extra = conv.dados_adicionais || {};
-        if (extra.marked_as_read) return false;
+        if (extra.marked_as_read) return;
+        if (activeConversation?.id === conv.id) return;
         const msgs = conv.messages || [];
-        if (msgs.length === 0) return false;
-        const lastMsg = msgs[msgs.length - 1];
-        if (!lastMsg) return false;
-        if (lastMsg.status === 'read') return false;
-        const lastMsgTime = lastMsg.timestamp ? parseIsoDate(lastMsg.timestamp).getTime() : 0;
-        const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
-        if (!isRecent && !conv.protocol_number) return false;
-        return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
+        if (msgs.length === 0) return;
+
+        let lastAttendantIdx = -1;
+        for (let i = 0; i < msgs.length; i++) {
+          const r = String(msgs[i].remetente || '').toLowerCase();
+          if (r === 'atendente') {
+            lastAttendantIdx = i;
+          }
+        }
+
+        let convUnread = 0;
+        for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
+          const r = String(msgs[i].remetente || '').toLowerCase();
+          if (r === 'cliente') {
+            const mTime = msgs[i].timestamp ? parseIsoDate(msgs[i].timestamp).getTime() : 0;
+            const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
+            if (isRecent) {
+              convUnread++;
+            }
+          }
+        }
+        groupUnreadCount += convUnread;
       });
+
+      const hasUnread = groupUnreadCount > 0;
 
       if (statusFilter === 'nao_lidas' && !hasUnread) return;
 
@@ -182,6 +201,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         primaryConv: primary,
         allConversations: matchingConvs,
         hasUnread,
+        unreadCount: groupUnreadCount,
         activeCount: matchingConvs.filter(c => c.status === 'com_ia' || c.status === 'com_humano').length
       });
     });
@@ -211,19 +231,33 @@ export const ChatList: React.FC<ChatListProps> = ({
     });
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
 
-  const totalUnread = conversations.filter(conv => {
-    const extra = conv.dados_adicionais || {};
-    if (extra.marked_as_read) return false;
-    const msgs = conv.messages || [];
-    if (msgs.length === 0) return false;
-    const lastMsg = msgs[msgs.length - 1];
-    if (!lastMsg) return false;
-    if (lastMsg.status === 'read') return false;
-    const lastMsgTime = lastMsg.timestamp ? parseIsoDate(lastMsg.timestamp).getTime() : 0;
-    const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
-    if (!isRecent && !conv.protocol_number) return false;
-    return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
-  }).length;
+  const totalUnread = useMemo(() => {
+    return conversations.filter(conv => {
+      const extra = conv.dados_adicionais || {};
+      if (extra.marked_as_read) return false;
+      if (activeConversation?.id === conv.id) return false;
+      const msgs = conv.messages || [];
+      if (msgs.length === 0) return false;
+
+      let lastAttendantIdx = -1;
+      for (let i = 0; i < msgs.length; i++) {
+        const r = String(msgs[i].remetente || '').toLowerCase();
+        if (r === 'atendente') {
+          lastAttendantIdx = i;
+        }
+      }
+
+      for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
+        const r = String(msgs[i].remetente || '').toLowerCase();
+        if (r === 'cliente') {
+          const mTime = msgs[i].timestamp ? parseIsoDate(msgs[i].timestamp).getTime() : 0;
+          const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
+          if (isRecent) return true;
+        }
+      }
+      return false;
+    }).length;
+  }, [conversations, activeConversation]);
 
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
 
@@ -727,20 +761,43 @@ export const ChatList: React.FC<ChatListProps> = ({
                     )}
                   </div>
 
-                  {/* Last Message Preview */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  {/* Last Message Preview & WhatsApp Unread Badge */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                     <p style={{
                       fontSize: '11px',
-                      color: group.hasUnread ? 'var(--text-main)' : 'var(--text-dim)',
-                      fontWeight: group.hasUnread ? '600' : 'normal',
+                      color: group.hasUnread ? '#ffffff' : 'var(--text-dim)',
+                      fontWeight: group.hasUnread ? '700' : 'normal',
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      maxWidth: '220px',
+                      flex: 1,
                       margin: 0
                     }}>
                       {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
                     </p>
+
+                    {group.unreadCount > 0 && (
+                      <span
+                        title={`${group.unreadCount} mensagem(ns) não lida(s)`}
+                        style={{
+                          backgroundColor: '#22c55e',
+                          color: '#ffffff',
+                          fontSize: '10px',
+                          fontWeight: '800',
+                          borderRadius: '10px',
+                          minWidth: '18px',
+                          height: '18px',
+                          padding: '0 5px',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0,
+                          boxShadow: '0 2px 6px rgba(34, 197, 94, 0.45)'
+                        }}
+                      >
+                        {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                      </span>
+                    )}
                   </div>
                   </div>
                 </div>

@@ -987,13 +987,17 @@ async def receive_evolution_webhook(
         logger.info(f"[OUTGOING MOBILE SYNC] Mensagem/Foto enviada pelo celular sincronizada na conversa #{conversation.id} ({contact.nome})")
         return {"status": "success", "action": "synced_attendant_mobile_message"}
 
-    # 4. Save Customer Message with WhatsApp Message ID
+    # 4. Save Customer Message with WhatsApp Message ID (status received/unread)
+    extra_conv = dict(conversation.dados_adicionais or {})
+    extra_conv["marked_as_read"] = False
+    conversation.dados_adicionais = extra_conv
+
     user_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
         conteudo=text_content,
         tipo=msg_type,
-        status="read",
+        status="received",
         whatsapp_msg_id=msg_id if msg_id else None,
         timestamp=datetime.utcnow()
     )
