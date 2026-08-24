@@ -1793,6 +1793,7 @@ async def dispatch_whatsapp_notification(
         send_res = await provider.send_text_message(
             number=conv.contact.telefone,
             text=text
+        )
         return send_res
     except Exception as e:
         logger.warning(f"Error dispatching WhatsApp protocol message: {e}")
