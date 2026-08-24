@@ -4,7 +4,7 @@ import {
   AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
-  Lock, Unlock, Pin
+  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -133,6 +133,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [reportLastAIReply, setReportLastAIReply] = useState('');
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
+
+  // Lightbox Zoom, Pan & Rotation State
+  const [zoomScale, setZoomScale] = useState<number>(1);
+  const [imageRotation, setImageRotation] = useState<number>(0);
+  const [panPosition, setPanPosition] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDraggingImage, setIsDraggingImage] = useState<boolean>(false);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const isAdmin = currentUser.role === 'admin' || (currentUser.role as any)?.value === 'admin';
   const isAssignedToOther = Boolean(
@@ -283,6 +290,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       };
     });
 
+  useEffect(() => {
+    setZoomScale(1);
+    setImageRotation(0);
+    setPanPosition({ x: 0, y: 0 });
+    setIsDraggingImage(false);
+  }, [previewMediaIndex]);
+
+  const handleZoomIn = () => {
+    setZoomScale(prev => Math.min(Number((prev + 0.35).toFixed(2)), 5));
+  };
+  const handleZoomOut = () => {
+    setZoomScale(prev => {
+      const next = Math.max(Number((prev - 0.35).toFixed(2)), 1);
+      if (next === 1) setPanPosition({ x: 0, y: 0 });
+      return next;
+    });
+  };
+  const handleResetZoom = () => {
+    setZoomScale(1);
+    setImageRotation(0);
+    setPanPosition({ x: 0, y: 0 });
+  };
+  const handleRotateImage = () => {
+    setImageRotation(prev => (prev + 90) % 360);
+  };
+
   const handlePrevMedia = () => {
     if (previewMediaIndex === null || conversationMedia.length === 0) return;
     setPreviewMediaIndex(prev => (prev! > 0 ? prev! - 1 : conversationMedia.length - 1));
@@ -296,13 +329,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (previewMediaIndex === null) return;
-      if (e.key === 'ArrowLeft') handlePrevMedia();
-      if (e.key === 'ArrowRight') handleNextMedia();
+      if (e.key === 'ArrowLeft' && zoomScale <= 1) handlePrevMedia();
+      if (e.key === 'ArrowRight' && zoomScale <= 1) handleNextMedia();
       if (e.key === 'Escape') setPreviewMediaIndex(null);
+      if (e.key === '+' || e.key === '=') handleZoomIn();
+      if (e.key === '-' || e.key === '_') handleZoomOut();
+      if (e.key === '0') handleResetZoom();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewMediaIndex, conversationMedia.length]);
+  }, [previewMediaIndex, conversationMedia.length, zoomScale]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1072,7 +1108,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             justifyContent: 'space-between',
             alignItems: 'center',
             padding: '0 20px',
-            color: '#fff'
+            color: '#fff',
+            zIndex: 10
           }}>
             <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ textTransform: 'capitalize', color: 'var(--accent-primary)', fontWeight: 'bold' }}>
@@ -1081,9 +1118,151 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span>•</span>
               <span>Mídia {previewMediaIndex + 1} de {conversationMedia.length}</span>
             </div>
+
+            {/* Floating Zoom & Action Toolbar for Images */}
+            {currentMedia.tipo === 'imagem' && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: 'rgba(20, 20, 20, 0.85)',
+                padding: '6px 14px',
+                borderRadius: '30px',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
+              }}>
+                <button
+                  type="button"
+                  onClick={handleZoomOut}
+                  disabled={zoomScale <= 1}
+                  title="Diminuir Zoom (-)"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: zoomScale <= 1 ? 'rgba(255,255,255,0.3)' : '#fff',
+                    cursor: zoomScale <= 1 ? 'not-allowed' : 'pointer',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  <ZoomOut size={18} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetZoom}
+                  title="Redefinir Zoom (100% ou Tecla 0)"
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    border: 'none',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '4px 10px',
+                    borderRadius: '12px',
+                    fontSize: '12px',
+                    fontWeight: 'bold',
+                    minWidth: '52px',
+                    textAlign: 'center'
+                  }}
+                >
+                  {Math.round(zoomScale * 100)}%
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleZoomIn}
+                  disabled={zoomScale >= 5}
+                  title="Aumentar Zoom (+)"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: zoomScale >= 5 ? 'rgba(255,255,255,0.3)' : '#fff',
+                    cursor: zoomScale >= 5 ? 'not-allowed' : 'pointer',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'all 0.15s'
+                  }}
+                >
+                  <ZoomIn size={18} />
+                </button>
+
+                <div style={{ width: '1px', height: '18px', backgroundColor: 'rgba(255,255,255,0.2)', margin: '0 4px' }} />
+
+                <button
+                  type="button"
+                  onClick={handleRotateImage}
+                  title="Girar Imagem 90°"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <RotateCw size={18} />
+                </button>
+
+                <a
+                  href={currentMedia.url}
+                  download
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Baixar Imagem"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textDecoration: 'none'
+                  }}
+                >
+                  <Download size={18} />
+                </a>
+
+                <a
+                  href={currentMedia.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Abrir em Nova Aba"
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '6px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textDecoration: 'none'
+                  }}
+                >
+                  <ExternalLink size={18} />
+                </a>
+              </div>
+            )}
+
             <button
               onClick={() => setPreviewMediaIndex(null)}
               style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '8px' }}
+              title="Fechar (Esc)"
             >
               <X size={28} />
             </button>
@@ -1114,6 +1293,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   justifyContent: 'center',
                   cursor: 'pointer',
                   margin: '0 16px',
+                  zIndex: 10,
                   transition: 'background 0.2s'
                 }}
               >
@@ -1121,13 +1301,85 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </button>
             ) : <div style={{ width: '48px' }} />}
 
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', maxHeight: '80vh', maxWidth: '85vw' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '75vh',
+                width: '85vw',
+                overflow: 'hidden',
+                position: 'relative'
+              }}
+              onWheel={(e) => {
+                if (currentMedia.tipo === 'imagem') {
+                  e.preventDefault();
+                  if (e.deltaY < 0) {
+                    setZoomScale(prev => Math.min(Number((prev + 0.25).toFixed(2)), 5));
+                  } else {
+                    setZoomScale(prev => {
+                      const next = Math.max(Number((prev - 0.25).toFixed(2)), 1);
+                      if (next === 1) setPanPosition({ x: 0, y: 0 });
+                      return next;
+                    });
+                  }
+                }
+              }}
+            >
               {currentMedia.tipo === 'imagem' && (
-                <img
-                  src={currentMedia.url}
-                  alt="Imagem"
-                  style={{ maxHeight: '72vh', maxWidth: '85vw', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 8px 30px rgba(0,0,0,0.8)' }}
-                />
+                <div
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                    cursor: zoomScale > 1 ? (isDraggingImage ? 'grabbing' : 'grab') : 'zoom-in'
+                  }}
+                  onMouseDown={(e) => {
+                    if (zoomScale > 1) {
+                      e.preventDefault();
+                      setIsDraggingImage(true);
+                      setDragStart({ x: e.clientX - panPosition.x, y: e.clientY - panPosition.y });
+                    }
+                  }}
+                  onMouseMove={(e) => {
+                    if (isDraggingImage && zoomScale > 1) {
+                      setPanPosition({
+                        x: e.clientX - dragStart.x,
+                        y: e.clientY - dragStart.y
+                      });
+                    }
+                  }}
+                  onMouseUp={() => setIsDraggingImage(false)}
+                  onMouseLeave={() => setIsDraggingImage(false)}
+                  onDoubleClick={() => {
+                    if (zoomScale > 1) {
+                      handleResetZoom();
+                    } else {
+                      setZoomScale(2.5);
+                    }
+                  }}
+                >
+                  <img
+                    src={currentMedia.url}
+                    alt="Imagem"
+                    draggable={false}
+                    style={{
+                      maxHeight: '72vh',
+                      maxWidth: '85vw',
+                      objectFit: 'contain',
+                      borderRadius: '8px',
+                      boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                      transform: `translate(${panPosition.x}px, ${panPosition.y}px) scale(${zoomScale}) rotate(${imageRotation}deg)`,
+                      transformOrigin: 'center center',
+                      transition: isDraggingImage ? 'none' : 'transform 0.15s cubic-bezier(0.2, 0, 0.2, 1)',
+                      userSelect: 'none'
+                    }}
+                  />
+                </div>
               )}
               {currentMedia.tipo === 'video' && (
                 <video
