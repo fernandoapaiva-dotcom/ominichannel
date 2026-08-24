@@ -98,6 +98,8 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   }, []);
 
+  const [, setTick] = useState(0);
+
   const isConvPinned = (conv: Conversation | null | undefined): boolean => {
     if (!conv || !conv.dados_adicionais) return false;
     const extra = conv.dados_adicionais;
@@ -109,27 +111,34 @@ export const ChatList: React.FC<ChatListProps> = ({
     return Boolean(extra.is_pinned);
   };
 
-  const handleTogglePin = async (e: React.MouseEvent, conv: Conversation) => {
+  const handleTogglePin = async (e: React.MouseEvent, conv: Conversation, allConvs?: Conversation[]) => {
+    e.preventDefault();
     e.stopPropagation();
     const currentPinned = isConvPinned(conv);
     const nextPinned = !currentPinned;
     
-    // Optimistic local state update per user
-    const extra = { ...(conv.dados_adicionais || {}) };
-    let pinnedUsers: number[] = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
-    if (currentUserId) {
-      if (nextPinned) {
-        if (!pinnedUsers.includes(currentUserId)) pinnedUsers.push(currentUserId);
+    // Optimistic local state update per user for all sibling conversations
+    const targets = allConvs && allConvs.length > 0 ? allConvs : [conv];
+    targets.forEach(target => {
+      const extra = { ...(target.dados_adicionais || {}) };
+      let pinnedUsers: number[] = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
+      if (currentUserId) {
+        if (nextPinned) {
+          if (!pinnedUsers.includes(currentUserId)) pinnedUsers.push(currentUserId);
+        } else {
+          pinnedUsers = pinnedUsers.filter(id => id !== currentUserId);
+        }
+        extra.pinned_by_users = pinnedUsers;
+        extra[`pinned_user_${currentUserId}`] = nextPinned;
       } else {
-        pinnedUsers = pinnedUsers.filter(id => id !== currentUserId);
+        extra.is_pinned = nextPinned;
       }
-      extra.pinned_by_users = pinnedUsers;
-      extra[`pinned_user_${currentUserId}`] = nextPinned;
-    } else {
-      extra.is_pinned = nextPinned;
-    }
-    delete extra.is_pinned;
-    conv.dados_adicionais = extra;
+      delete extra.is_pinned;
+      target.dados_adicionais = extra;
+    });
+
+    // Force instant React re-render with new pinned sorting
+    setTick(t => t + 1);
 
     try {
       await apiFetch(`/conversations/${conv.id}/toggle-pin`, {
@@ -668,26 +677,37 @@ export const ChatList: React.FC<ChatListProps> = ({
                         <Phone size={11} /> {group.contactPhone}
                       </span>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
                       {/* Pin / Fix Button */}
                       <button
                         type="button"
-                        onClick={(e) => handleTogglePin(e, primaryConv)}
+                        onClick={(e) => handleTogglePin(e, primaryConv, group.allConversations)}
                         title={isGroupPinned ? "Desafixar do topo" : "Fixar no topo"}
                         style={{
-                          background: isGroupPinned ? 'rgba(234, 179, 8, 0.18)' : 'transparent',
-                          border: isGroupPinned ? '1px solid rgba(234, 179, 8, 0.45)' : '1px solid rgba(255,255,255,0.1)',
-                          borderRadius: '4px',
+                          background: isGroupPinned ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                          border: isGroupPinned ? '1px solid rgba(234, 179, 8, 0.6)' : '1px solid rgba(255, 255, 255, 0.15)',
+                          borderRadius: '5px',
                           color: isGroupPinned ? '#eab308' : 'var(--text-muted)',
-                          padding: '2px 4px',
+                          padding: '2px 6px',
                           cursor: 'pointer',
-                          display: 'flex',
+                          display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
+                          gap: '3px',
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          zIndex: 5,
                           transition: 'all 0.15s ease'
                         }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = isGroupPinned ? 'rgba(234, 179, 8, 0.35)' : 'rgba(255, 255, 255, 0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = isGroupPinned ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)';
+                        }}
                       >
-                        <Pin size={10} fill={isGroupPinned ? '#eab308' : 'none'} />
+                        <Pin size={11} fill={isGroupPinned ? '#eab308' : 'none'} color={isGroupPinned ? '#eab308' : 'currentColor'} />
+                        <span>{isGroupPinned ? 'Fixado' : 'Fixar'}</span>
                       </button>
 
                       <button
@@ -891,9 +911,33 @@ export const ChatList: React.FC<ChatListProps> = ({
                               </div>
                             </div>
 
-                            <span className={`badge badge-${subGroupConv.status}`} style={{ fontSize: '8px', padding: '1px 4px' }}>
-                              {subGroupConv.status.replace('_', ' ')}
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                type="button"
+                                onClick={(e) => handleTogglePin(e, subGroupConv)}
+                                title={isConvPinned(subGroupConv) ? "Desafixar grupo do topo" : "Fixar grupo no topo"}
+                                style={{
+                                  background: isConvPinned(subGroupConv) ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                                  border: isConvPinned(subGroupConv) ? '1px solid rgba(234, 179, 8, 0.6)' : '1px solid rgba(255, 255, 255, 0.15)',
+                                  borderRadius: '4px',
+                                  color: isConvPinned(subGroupConv) ? '#eab308' : 'var(--text-muted)',
+                                  padding: '2px 5px',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                  fontSize: '9px',
+                                  fontWeight: '700'
+                                }}
+                              >
+                                <Pin size={10} fill={isConvPinned(subGroupConv) ? '#eab308' : 'none'} color={isConvPinned(subGroupConv) ? '#eab308' : 'currentColor'} />
+                                <span>{isConvPinned(subGroupConv) ? 'Fixado' : 'Fixar'}</span>
+                              </button>
+
+                              <span className={`badge badge-${subGroupConv.status}`} style={{ fontSize: '8px', padding: '1px 4px' }}>
+                                {subGroupConv.status.replace('_', ' ')}
+                              </span>
+                            </div>
                           </div>
                         );
                       })}
