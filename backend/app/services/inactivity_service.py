@@ -342,6 +342,8 @@ class InactivityService:
                                 user_message=last_msg.conteudo,
                                 conversation_history=history,
                                 rag_context=rag_context,
+                                protocol_number=conv.protocol_number,
+                                customer_phone=conv.contact.telefone if conv.contact else None,
                                 tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                                 tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                             )

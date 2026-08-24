@@ -84,6 +84,56 @@ CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE = (
     "===================================================================\n"
 )
 
+STRICT_CONTEXT_AND_ANTI_HALLUCINATION_DIRECTIVE = (
+    "=== REGRA MANDATÓRIA CENTRAL: CONTEXTO ESTATUTÁRIO & ANTI-ALUCINAÇÃO ===\n"
+    "1. USO EXCLUSIVO DAS INFORMAÇÕES DO CONTEXTO: Você SÓ pode usar informações que estiverem explicitamente no CONTEXTO abaixo (nome do cliente, telefone, protocolo, histórico, RAG).\n"
+    "2. SE UM DADO NÃO ESTIVER NO CONTEXTO, NUNCA INVENTE: Diga 'não tenho esse dado' ou simplesmente não mencione o campo. NUNCA invente nomes, telefones, protocolos ou situações hipotéticas.\n"
+    "3. NUNCA AFIRME TER CONVERSADO ANTES COM O CLIENTE A MENOS QUE EXISTA HISTÓRICO EXPLÍCITO no CONTEXTO com timestamp anterior. Se o histórico do cliente estiver vazio ou 'nenhum', trate SEMPRE como primeiro contato.\n"
+    "4. NOME DO CLIENTE: Se o nome estiver como '(vazio - não usar)', NUNCA use nem invente nomes ou títulos (Eng., Dr., Sr.). Dê as boas-vindas e pergunte gentilmente o nome dele para personalizar o atendimento.\n"
+    "=========================================================================\n"
+)
+
+def format_clean_client_context(
+    customer_name: Optional[str] = None,
+    customer_phone: Optional[str] = None,
+    protocol_number: Optional[str] = None,
+    memory_summary: Optional[str] = None
+) -> str:
+    """
+    Estrutura o contexto do cliente de forma limpa e explícita antes de enviar ao modelo:
+    CONTEXTO_CLIENTE:
+    nome: (vazio - não usar)
+    telefone: 556199842757
+    protocolo_atual: #20260824-0005
+    historico_anterior: nenhum
+    """
+    clean_name = sanitize_customer_name(customer_name)
+    has_real_name = bool(customer_name and clean_name not in ["Cliente", ""])
+    name_str = clean_name if has_real_name else "(vazio - não usar)"
+    
+    clean_digits = "".join(filter(str.isdigit, str(customer_phone or "")))
+    phone_str = clean_digits if clean_digits else "(não informado)"
+    
+    proto_clean = str(protocol_number or "").strip()
+    if proto_clean and proto_clean not in ["None", "S/N", ""]:
+        proto_str = proto_clean if proto_clean.startswith("#") else f"#{proto_clean}"
+    else:
+        proto_str = "(nenhum)"
+    
+    clean_mem = (memory_summary or "").strip()
+    if not clean_mem or clean_mem.lower() in ["nenhum histórico anterior.", "nenhum", "none", "vazio", "sem histórico"]:
+        hist_str = "nenhum"
+    else:
+        hist_str = clean_mem
+
+    return (
+        "CONTEXTO_CLIENTE:\n"
+        f"nome: {name_str}\n"
+        f"telefone: {phone_str}\n"
+        f"protocolo_atual: {proto_str}\n"
+        f"historico_anterior: {hist_str}"
+    )
+
 RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE = (
     "=== REGRA MANDATÓRIA CENTRAL: PREÇOS, PRODUTOS & ANTI-ALUCINAÇÃO DE VALORES ===\n"
     "1. PREÇOS E CONDIÇÕES SÓ COM FONTE REAL: Você SOMENTE pode informar valores em R$, preços de venda, locação ou condições comerciais se constarem EXPRESSAMENTE na 'BASE DE CONHECIMENTO RAG' fornecida.\n"
@@ -307,6 +357,7 @@ class GeminiService:
         protocol_number: Optional[str] = None,
         should_announce_protocol: bool = False,
         is_technician_or_admin: bool = False,
+        customer_phone: Optional[str] = None,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -323,13 +374,20 @@ class GeminiService:
         dept_list_str = ", ".join(available_departments) if available_departments else department_name
         attendants_list_str = ", ".join(available_attendants) if available_attendants else "Equipe de Atendimento Servweld"
 
+        contexto_cliente_block = format_clean_client_context(
+            customer_name=customer_name,
+            customer_phone=customer_phone,
+            protocol_number=protocol_number,
+            memory_summary=memory_summary
+        )
+
         proto_prompt = ""
         if protocol_number:
             if should_announce_protocol:
                 proto_prompt = (
                     f"PROTOCOLO DE ATENDIMENTO:\n"
                     f"- O número de protocolo deste chamado é: #{protocol_number}\n"
-                    f"- OBRIGATÓRIO: Inicie sua resposta informando gentilmente o protocolo ao interlocutor (ex: 'Olá, {clean_name}! Seja bem-vindo à Servweld. Seu número de protocolo para este atendimento é #{protocol_number}. Como posso te ajudar hoje?').\n"
+                    f"- OBRIGATÓRIO: Inicie sua resposta informando gentilmente o protocolo ao interlocutor (ex: 'Olá! Seja bem-vindo à Servweld. Seu número de protocolo para este atendimento é #{protocol_number}. Como posso te ajudar hoje?').\n"
                 )
             else:
                 proto_prompt = (
@@ -370,17 +428,17 @@ class GeminiService:
             f"{dept_desc_prompt}"
             f"{proto_prompt}"
             f"{tech_directive}"
-            f"Atenda o interlocutor '{clean_name}' com extrema polidez, fluidez, objetividade e empatia.\n\n"
+            f"{STRICT_CONTEXT_AND_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
             "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
             "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
             "2. ANÁLISE DE HISTÓRICO ANTERIOR E REABERTURA EM ATÉ 5 DIAS (OBRIGATÓRIO NA RESPOSTA):\n"
-            "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' fornecido abaixo.\n"
-            "   - SE HOUVER HISTÓRICO ANTERIOR RECENTE E A MENSAGEM DO CLIENTE FOR APENAS UMA SAUDAÇÃO VAGA (ex: 'Oi', 'Olá', 'Bom dia', 'Tudo bem?'):\n"
+            "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' no CONTEXTO_CLIENTE.\n"
+            "   - SE O HISTÓRICO ESTIVER VAZIO OU 'nenhum': Trate estritamente como primeiro contato! NUNCA afirme que já conversaram antes.\n"
+            "   - SE HOUVER HISTÓRICO ANTERIOR EXPLÍCITO RECENTE E A MENSAGEM DO CLIENTE FOR APENAS UMA SAUDAÇÃO VAGA (ex: 'Oi', 'Olá', 'Bom dia', 'Tudo bem?'):\n"
             "     * SUA RESPOSTA AO CLIENTE DEVE OBRIGATORIAMENTE CITAR O ASSUNTO ANTERIOR E FAZER A PERGUNTA DE RETOMADA!\n"
-            f"     * Formato obrigatório: 'Olá, {clean_name}! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
-            "     * NUNCA envie apenas uma saudação vazia se houver histórico anterior recente!\n"
+            f"     * Formato obrigatório: 'Olá! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
             "   - CONTINUIDADE DIRETA: Se o cliente já indicar continuidade explícita daquele assunto, reconheça imediatamente sem pedir para repetir.\n"
             "   - NOVO ASSUNTO: Se o cliente indicar um novo tema, faça a recepção do novo assunto normalmente.\n"
             "3. FORA DO ESCOPO: Se o cliente fizer perguntas totalmente desconexas com a empresa (ex: 'Vocês vendem pizza?'), esclareça gentilmente os serviços e produtos que a Servweld atende (equipamentos de solda, corte, assistência, locação e financeiro).\n"
@@ -414,15 +472,13 @@ class GeminiService:
             "     * NUNCA adie para o dia seguinte nem informe que a loja está fechada se a IA puder resolver a solicitação sozinha!\n"
             "   - SOMENTE defina 'ESCALAR_HUMANO: SIM' quando a demanda genuinamente exigir intervenção humana (ex: negociação de preços/descontos, fechamento de contrato complexo, liberação de crédito ou quando o cliente pedir explicitamente para falar com uma pessoa).\n"
             "13. COLETA CORDIAL DE NOME:\n"
-            "   - Se o cliente ainda não informou o nome (nome está como 'Cliente' ou número), dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n"
+            "   - Se o nome do cliente for '(vazio - não usar)', dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n"
             "14. DETECÇÃO DE BOT / URA / MENU AUTOMÁTICO DE OUTRA EMPRESA (ANTI-LOOP ETERNO):\n"
             "   - Se a mensagem recebida for um MENU AUTOMÁTICO, URA, BOT, AUTOATENDIMENTO ou IA de outra empresa (ex: 'Digite 1 para Suporte', 'Escolha uma opção', 'Menu principal', 'Sou a assistente virtual', etc.):\n"
             "     * DEFINA 'RESPOSTA: [SILENCIAR_IA]'\n"
             "     * DEFINA 'ESCALAR_HUMANO: SIM'\n"
             "     * NUNCA responda a outro robô para evitar um loop eterno de mensagens redundantes!\n\n"
-            f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}\n\n"
-            f"HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA:\n{memory_summary or 'Nenhum histórico anterior.'}\n\n"
-            f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}"
+            f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}"
         )
 
         # Early check for Bot / URA / Menu of another company
@@ -446,7 +502,9 @@ class GeminiService:
         
         full_prompt = (
             f"{system_instruction}\n\n"
-            f"Diálogo Recente:\n" + "\n".join(messages_text) + "\n\n"
+            f"{contexto_cliente_block}\n\n"
+            f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}\n\n"
+            f"Diálogo Recente:\n" + ("\n".join(messages_text) if messages_text else "nenhum") + "\n\n"
             f"Mensagem Atual do Cliente: {user_message}\n\n"
             "Responda no seguinte formato exato:\n"
             "RESPOSTA: <mensagem em português natural para o cliente>\n"
@@ -919,6 +977,8 @@ class GeminiService:
         messages_history: List[Dict[str, str]],
         memory_summary: Optional[str] = None,
         rag_context: Optional[str] = None,
+        customer_phone: Optional[str] = None,
+        protocol_number: Optional[str] = None,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
@@ -942,15 +1002,22 @@ class GeminiService:
             if conteudo:
                 messages_text.append(f"[{remetente}]: {conteudo}")
 
+        contexto_cliente_block = format_clean_client_context(
+            customer_name=customer_name,
+            customer_phone=customer_phone,
+            protocol_number=protocol_number,
+            memory_summary=memory_summary
+        )
+
         rag_prompt = f"\nINFORMAÇÕES DA BASE DE CONHECIMENTO DA EMPRESA (RAG):\n{rag_context}\n" if rag_context else ""
-        memory_prompt = f"\nRESUMO CONTEXTUAL ANTERIOR DO CLIENTE:\n{memory_summary}\n" if memory_summary else ""
 
         prompt = (
             "Você é um consultor assistente de atendimento da empresa Servweld (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
-            f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente '{clean_name}'.\n\n"
+            f"O atendente humano do setor '{department_name}' solicitou uma SUGESTÃO DE RESPOSTA para enviar ao cliente.\n\n"
+            f"{STRICT_CONTEXT_AND_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
-            f"{memory_prompt}"
+            f"{contexto_cliente_block}\n"
             f"{rag_prompt}"
             "DIRETRIZES DA RESPOSTA:\n"
             "1. Escreva uma mensagem pronta para envio, redigida em primeira pessoa (como se você fosse o atendente humano da Servweld).\n"
@@ -958,11 +1025,11 @@ class GeminiService:
             "3. Não use introduções explicativas como 'Aqui está uma sugestão:' ou 'Você pode dizer:'. Retorne APENAS o texto exato da resposta a ser colocada no chat.\n"
             "4. Dê continuidade imediata ao diálogo, respondendo à última dúvida ou solicitação do cliente com base no histórico real.\n"
             "5. Se for necessária uma informação técnica ou valor que não conste na base, sugira verificar com o setor responsável em vez de inventar números.\n\n"
-            f"HISTÓRICO DA CONVERSA:\n" + "\n".join(messages_text)
+            f"HISTÓRICO DA CONVERSA:\n" + ("\n".join(messages_text) if messages_text else "nenhum")
         )
 
         if not client:
-            return f"Olá {clean_name}, boa tarde! Como posso te ajudar hoje?"
+            return f"Olá! Como posso te ajudar hoje?"
 
         models_to_try = [primary_model]
         for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
@@ -982,7 +1049,7 @@ class GeminiService:
                 logger.warning(f"Error generating suggested reply with '{m_name}': {e}")
                 await asyncio.sleep(0.3)
 
-        return f"Olá {clean_name}! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
+        return f"Olá! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
 
     async def generate_copilot_consultation(
         self,
@@ -994,6 +1061,8 @@ class GeminiService:
         user_question: str,
         rag_context: Optional[str] = None,
         memory_summary: Optional[str] = None,
+        customer_phone: Optional[str] = None,
+        protocol_number: Optional[str] = None,
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -1028,17 +1097,24 @@ class GeminiService:
             role = "Atendente" if ch.get("role") == "user" else "Copiloto IA"
             copilot_history_text.append(f"{role}: {ch.get('content', '')}")
 
+        contexto_cliente_block = format_clean_client_context(
+            customer_name=customer_name,
+            customer_phone=customer_phone,
+            protocol_number=protocol_number,
+            memory_summary=memory_summary
+        )
+
         rag_block = f"\n📚 BASE DE CONHECIMENTO TÉCNICO & PROCEDIMENTOS DA EMPRESA (RAG):\n{rag_context}\n" if rag_context else ""
-        mem_block = f"\n🧠 MEMÓRIA ANTERIOR DO CLIENTE:\n{memory_summary}\n" if memory_summary else ""
         copilot_block = f"\n💬 HISTÓRICO DE CONSULTA ENTRE VOCÊ E O ATENDENTE:\n" + "\n".join(copilot_history_text) + "\n" if copilot_history_text else ""
 
         system_instruction = (
             "Você é o COPILOTO IA ESPECIALISTA DA SERVWELD (Equipamentos de Solda, Corte, Assistência Técnica e Locação).\n"
             f"Você está prestando consultoria em tempo real diretamente para o ATENDENTE HUMANO ({attendant_name}) do setor '{department_name}'.\n\n"
             f"O atendente está em atendimento com o cliente '{clean_name}'.\n\n"
+            f"{STRICT_CONTEXT_AND_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
-            f"{mem_block}"
+            f"{contexto_cliente_block}\n"
             f"{rag_block}"
             "SUAS ATRIBUIÇÕES:\n"
             "1. Analise todo o histórico da conversa entre o cliente e a empresa.\n"

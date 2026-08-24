@@ -1663,6 +1663,8 @@ async def copilot_chat_for_conversation(
         user_question=payload.user_prompt,
         rag_context=rag_context,
         memory_summary=memory_summary,
+        customer_phone=conv.contact.telefone if conv.contact else None,
+        protocol_number=conv.protocol_number,
         tenant_gemini_api_key=decrypted.get("gemini_api_key"),
         tenant_gemini_model_name=decrypted.get("gemini_model_name")
     )

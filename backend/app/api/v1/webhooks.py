@@ -1144,6 +1144,7 @@ async def receive_evolution_webhook(
                 protocol_number=None,
                 should_announce_protocol=False,
                 is_technician_or_admin=True,
+                customer_phone=phone_number,
                 tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                 tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
             )
@@ -1312,6 +1313,7 @@ async def receive_evolution_webhook(
                         protocol_number=conversation.protocol_number,
                         should_announce_protocol=should_announce_proto,
                         is_technician_or_admin=False,
+                        customer_phone=phone_number,
                         tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                         tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                     )
@@ -1332,6 +1334,7 @@ async def receive_evolution_webhook(
                     protocol_number=conversation.protocol_number,
                     should_announce_protocol=should_announce_proto,
                     is_technician_or_admin=False,
+                    customer_phone=phone_number,
                     tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                     tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                 )
