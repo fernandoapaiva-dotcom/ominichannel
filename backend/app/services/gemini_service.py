@@ -342,9 +342,60 @@ class GeminiService:
 
         return f"Olá {clean_name}! Em que posso te ajudar hoje?"
 
+def validate_and_sanitize_ai_response(
+    raw_ai_message: str,
+    had_null_name: bool,
+    had_empty_history: bool,
+    store_name: str = "Servweld"
+) -> str:
+    """
+    Camada de validação pós-resposta (Backend Anti-Hallucination Guard):
+    1. Se nome_cliente do contexto era null/desconhecido, confere se mensagem_cliente
+       contém algum nome próprio alucinado ou saudações com apelidos/títulos estranhos.
+       Se sim, substitui por saudação neutra ("Olá! Seja bem-vindo(a) à {store_name}.").
+    2. Se historico_anterior estava vazio, confere se mensagem_cliente contém expressões
+       de histórico inventado ("conversamos antes", "vi que você", "recentemente", "no nosso último contato").
+       Se sim, limpa essas expressões e garante atendimento de primeiro contato.
+    """
+    if not raw_ai_message or not isinstance(raw_ai_message, str):
+        return f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+
+    text = raw_ai_message.strip()
+
+    # Checagem 1: Nome alucinado quando nome_cliente era null/não informado
+    if had_null_name:
+        # Padrões de saudações com nomes/apelidos/títulos indevidos (ex: "Olá, JOSA O.S 1778!", "Olá Eng. Marcos!", "Olá Cliente!")
+        hallucinated_name_patterns = [
+            r'^(?:ol[áa]|bom\s+dia|boa\s+tarde|boa\s+noite)[,\s]+(?:eng(?:enheiro)?\.?|dr(?:a)?\.?|sr(?:a)?\.?|contato\s+\d+|cliente|[a-z0-9_\.\-]{3,}(?:\s+[a-z0-9_\.\-]+){0,4})[!\.,\s]+'
+        ]
+        for pat in hallucinated_name_patterns:
+            if re.search(pat, text, flags=re.IGNORECASE):
+                text = re.sub(pat, f"Olá! Seja bem-vindo(a) à {store_name}. ", text, count=1, flags=re.IGNORECASE).strip()
+                break
+
+    # Checagem 2: Expressões de histórico inventado quando historico_anterior era vazio
+    if had_empty_history:
+        fake_history_patterns = [
+            r'(?:vi\s+que\s+conversamos\s+recentemente[^\.\?!]*[\.\?!])',
+            r'(?:conforme\s+conversamos\s+anteriormente[^\.\?!]*[\.\?!])',
+            r'(?:como\s+falamos\s+no\s+nosso\s+[úu]ltimo\s+contato[^\.\?!]*[\.\?!])',
+            r'(?:em\s+continuidade\s+ao\s+nosso\s+atendimento\s+anterior[^\.\?!]*[\.\?!])',
+            r'(?:dando\s+sequ[êe]ncia\s+ao\s+que\s+falamos[^\.\?!]*[\.\?!])',
+            r'(?:conforme\s+nos\s+falamos\s+antes[^\.\?!]*[\.\?!])',
+            r'(?:vi\s+que\s+voc[êe]\s+já\s+havia\s+entrado\s+em\s+contato[^\.\?!]*[\.\?!])'
+        ]
+        for pat in fake_history_patterns:
+            text = re.sub(pat, "", text, flags=re.IGNORECASE).strip()
+
+        if not text or len(text) < 8:
+            text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+
+    return text
+
+
     async def generate_concierge_response(
         self,
-        customer_name: str,
+        customer_name: Optional[str],
         department_name: str,
         user_message: str,
         conversation_history: List[Dict[str, str]],
@@ -358,44 +409,57 @@ class GeminiService:
         should_announce_protocol: bool = False,
         is_technician_or_admin: bool = False,
         customer_phone: Optional[str] = None,
+        opened_at_str: Optional[str] = None,
+        store_name: str = "Servweld",
         tenant_gemini_api_key: Optional[str] = None,
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+
         clean_name = sanitize_customer_name(customer_name)
+        has_real_name = bool(customer_name and clean_name not in ["Cliente", ""])
+        had_null_name = not has_real_name
+        nome_cliente_val = clean_name if has_real_name else "null"
+
+        clean_digits = "".join(filter(str.isdigit, str(customer_phone or "")))
+        telefone_val = clean_digits if clean_digits else "não informado"
+        protocolo_val = str(protocol_number).strip() if (protocol_number and str(protocol_number) not in ["None", "S/N", ""]) else "não gerado"
+        if protocolo_val != "não gerado" and not protocolo_val.startswith("#"):
+            protocolo_val = f"#{protocolo_val}"
+
+        # Histórico anterior formatado com timestamps/ordem
+        had_empty_history = True
+        formatted_history_list = []
+        if conversation_history:
+            for m in conversation_history:
+                r_raw = str(m.get("remetente", "")).lower()
+                remetente = "Cliente" if r_raw == "cliente" else "Atendente/IA"
+                conteudo = str(m.get("conteudo", "")).strip()
+                ts = m.get("timestamp") or ""
+                if conteudo:
+                    had_empty_history = False
+                    if ts:
+                        formatted_history_list.append(f"[{ts}] {remetente}: {conteudo}")
+                    else:
+                        formatted_history_list.append(f"{remetente}: {conteudo}")
+
+        if memory_summary and memory_summary.strip() and memory_summary.strip().lower() not in ["nenhum histórico anterior.", "nenhum", "none", "vazio"]:
+            had_empty_history = False
+            formatted_history_list.insert(0, f"[MEMÓRIA ANTERIOR]: {memory_summary.strip()}")
+
+        if formatted_history_list:
+            historico_anterior_str = "\n".join(formatted_history_list[-10:])
+        else:
+            historico_anterior_str = "(nenhum — este é o primeiro contato do cliente)"
+
+        agentes_str = ", ".join(available_attendants) if available_attendants else "Equipe de Atendimento do Setor (disponível)"
 
         dept_desc_prompt = ""
         if department_descriptions:
-            dept_desc_prompt = "\nFRONTEIRAS DOS DEPARTAMENTOS (SEÇÃO 0):\n" + "\n".join([
+            dept_desc_prompt = "\nFRONTEIRAS DOS DEPARTAMENTOS:\n" + "\n".join([
                 f"- '{k}': {v}" for k, v in department_descriptions.items()
             ]) + "\n"
-
-        dept_list_str = ", ".join(available_departments) if available_departments else department_name
-        attendants_list_str = ", ".join(available_attendants) if available_attendants else "Equipe de Atendimento Servweld"
-
-        contexto_cliente_block = format_clean_client_context(
-            customer_name=customer_name,
-            customer_phone=customer_phone,
-            protocol_number=protocol_number,
-            memory_summary=memory_summary
-        )
-
-        proto_prompt = ""
-        if protocol_number:
-            if should_announce_protocol:
-                proto_prompt = (
-                    f"PROTOCOLO DE ATENDIMENTO:\n"
-                    f"- O número de protocolo deste chamado é: #{protocol_number}\n"
-                    f"- OBRIGATÓRIO: Inicie sua resposta informando gentilmente o protocolo ao interlocutor (ex: 'Olá! Seja bem-vindo à Servweld. Seu número de protocolo para este atendimento é #{protocol_number}. Como posso te ajudar hoje?').\n"
-                )
-            else:
-                proto_prompt = (
-                    f"PROTOCOLO DE ATENDIMENTO:\n"
-                    f"- O protocolo já foi informado anteriormente: #{protocol_number}. Não precisa repetir o número a cada mensagem, a menos que o interlocutor pergunte.\n"
-                )
-        else:
-            proto_prompt = "PROTOCOLO DE ATENDIMENTO: Nenhum protocolo necessário para este tipo de contato interno/conversa contínua.\n"
 
         tech_directive = ""
         if is_technician_or_admin:
@@ -423,69 +487,74 @@ class GeminiService:
             )
 
         system_instruction = (
-            f"Você é a IA Concierge de atendimento da empresa Servweld.\n"
-            f"Setor atual do atendimento: '{department_name}'. Setores ativos na empresa: [{dept_list_str}].\n"
-            f"{dept_desc_prompt}"
-            f"{proto_prompt}"
-            f"{tech_directive}"
-            f"{STRICT_CONTEXT_AND_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            f"Você é a IA Concierge da {store_name}, responsável pelo primeiro atendimento via WhatsApp no departamento de {department_name}.\n\n"
+            "# REGRAS DE OURO (NUNCA QUEBRE)\n\n"
+            "1. FONTE ÚNICA DE VERDADE: você só pode afirmar fatos que estejam explicitamente dentro do bloco CONTEXTO_ATENDIMENTO abaixo. Se um dado não estiver lá, trate como inexistente — não adivinhe, não complete, não invente.\n"
+            "2. NOME DO CLIENTE: use o campo `nome_cliente` exatamente como veio no contexto. Se `nome_cliente` for null ou '(vazio - não usar)', NÃO invente um nome. Trate o cliente de forma neutra ('Olá! Seja bem-vindo(a)') ou pergunte o nome, se for relevante para o atendimento.\n"
+            "3. HISTÓRICO: só mencione 'conversamos antes' ou 'vi que você...' se o campo `historico_anterior` contiver mensagens reais com timestamp anterior ao atendimento atual. Se `historico_anterior` for '(nenhum — este é o primeiro contato do cliente)', trate SEMPRE como primeiro contato.\n"
+            "4. PROTOCOLO: use exatamente o valor de `protocolo_atual`. Nunca gere, altere ou 'complete' um número de protocolo.\n"
+            "5. INCERTEZA: se você não tiver certeza de um dado, diga isso de forma natural ('não tenho essa informação aqui, mas posso confirmar com a equipe') em vez de preencher a lacuna com algo plausível.\n"
+            f"6. ESCOPO: você atende apenas assuntos do departamento {department_name}. Se o cliente trouxer um assunto de outro departamento, identifique isso e sinalize para transferência.\n\n"
+            "# SEU PAPEL NESTE ATENDIMENTO\n\n"
+            "1. Dar boas-vindas ao cliente de forma natural e breve.\n"
+            "2. Entender a necessidade dele (nova solicitação ou continuação de assunto — só considere 'continuação' se houver `historico_anterior` real).\n"
+            "3. Avaliar a 'temperatura' da conversa com base no conteúdo das mensagens:\n"
+            "   - BAIXA: dúvida simples, informação, primeiro contato tranquilo.\n"
+            "   - MÉDIA: cliente quer resolver algo específico, mas sem urgência.\n"
+            "   - ALTA: cliente frustrado, reclamando, pedindo humano, ou assunto sensível (financeiro, cancelamento, reclamação).\n"
+            "4. Se a temperatura for ALTA, ou o cliente pedir explicitamente um atendente humano, você deve sinalizar transferir_humano = true na sua resposta estruturada.\n"
+            "5. Se for MÉDIA/BAIXA e dentro do seu escopo, responda diretamente e consulte a Base RAG.\n\n"
             f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
             f"{RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE}\n"
-            "DIRETRIZES FUNDAMENTAIS DE CONVERSAÇÃO E FLUXO CONSTITUÍDO (COMEÇO, MEIO E FIM):\n"
-            "1. SEM MENUS ROBÓTICOS OU NUMÉRICOS: Proibido 'Digite 1 para X, 2 para Y'. Dialogue de forma 100% natural.\n"
-            "2. ANÁLISE DE HISTÓRICO ANTERIOR E REABERTURA EM ATÉ 5 DIAS (OBRIGATÓRIO NA RESPOSTA):\n"
-            "   - Verifique o 'HISTÓRICO ANTERIOR/MEMÓRIA RESUMIDA DA CONVERSA' no CONTEXTO_CLIENTE.\n"
-            "   - SE O HISTÓRICO ESTIVER VAZIO OU 'nenhum': Trate estritamente como primeiro contato! NUNCA afirme que já conversaram antes.\n"
-            "   - SE HOUVER HISTÓRICO ANTERIOR EXPLÍCITO RECENTE E A MENSAGEM DO CLIENTE FOR APENAS UMA SAUDAÇÃO VAGA (ex: 'Oi', 'Olá', 'Bom dia', 'Tudo bem?'):\n"
-            "     * SUA RESPOSTA AO CLIENTE DEVE OBRIGATORIAMENTE CITAR O ASSUNTO ANTERIOR E FAZER A PERGUNTA DE RETOMADA!\n"
-            f"     * Formato obrigatório: 'Olá! Tudo bem? Vi que conversamos recentemente sobre [resumo do assunto tratado antes]. Você gostaria de continuar esse assunto ou precisa de ajuda com uma nova solicitação?'\n"
-            "   - CONTINUIDADE DIRETA: Se o cliente já indicar continuidade explícita daquele assunto, reconheça imediatamente sem pedir para repetir.\n"
-            "   - NOVO ASSUNTO: Se o cliente indicar um novo tema, faça a recepção do novo assunto normalmente.\n"
-            "3. FORA DO ESCOPO: Se o cliente fizer perguntas totalmente desconexas com a empresa (ex: 'Vocês vendem pizza?'), esclareça gentilmente os serviços e produtos que a Servweld atende (equipamentos de solda, corte, assistência, locação e financeiro).\n"
-            "4. REGRAS DE SETOR & PROIBIÇÃO DE TRANSFERÊNCIAS INDEVIDAS:\n"
-            f"   - Se o cliente pedir para falar com um atendente humano, vendedor ou colaborador específico (ex: 'Consigo falar com o Fernando?', 'Quero falar com atendente', 'Pode me atender?'):\n"
-            f"     * O ATENDIMENTO DEVE PERMANECER NO SETOR ATUAL ('{department_name}')!\n"
-            "     * DEFINA 'TRANSFERIR_SETOR: NAO'.\n"
-            f"     * Tente adiantar as informações antes de transferir ('Com certeza! Para eu já adiantar o seu atendimento com a nossa equipe de {department_name}, você poderia me informar o que você precisa ou qual máquina tem interesse?').\n"
-            "   - NUNCA transfira de setor com base no nome salvo na agenda do cliente!\n"
-            "   - SOMENTE defina 'TRANSFERIR_SETOR: <NomeDoSetor>' se a mensagem do cliente contiver expressamente palavras-chave e intenção clara de OUTRO setor (ex: problema em máquina alugada -> Locação; comprar produtos novos -> Vendas; dúvida de boleto -> Financeiro).\n"
-            "   - SE VOCÊ FOR TRANSFERIR DE SETOR: Você DEVE OBRIGATORIAMENTE informar o cliente no texto da resposta ('Com certeza! Estou transferindo seu atendimento para a nossa equipe de [NomeDoSetor], que é o setor responsável por...')!\n"
-            "5. PREFERÊNCIA DE ATENDENTE HUMANO (DIRECIONAMENTO DIRETO):\n"
-            f"   - Atendentes cadastrados na empresa: [{attendants_list_str}].\n"
-            "   - Se o cliente ou técnico solicitar expressamente falar com um atendente de sua preferência (ex: 'Quero falar com o José Eduardo', 'Pode me passar para o Eduardo?', 'Me transfere pro Fernando', 'Quero falar com a Giovanna', 'Alan está aí?'):\n"
-            "     * Reconheça gentilmente na sua resposta que está direcionando o atendimento diretamente para o atendente solicitado ('Com certeza! Já estou te transferindo para o(a) [NomeDoAtendente]...').\n"
-            "     * DEFINA 'ESCALAR_HUMANO: SIM'.\n"
-            "     * DEFINA 'ATENDENTE_PREFERENCIAL: <NomeExatoDoAtendente>'.\n"
-            "   - Se o interlocutor não citar nome de atendente de preferência, defina 'ATENDENTE_PREFERENCIAL: NAO'.\n"
-            "6. PERGUNTA DE CHECAGEM PRÉ-TRANSFERÊNCIA: Quando você constatar que o RAG não tem a solução ou o cliente pedir atendente humano genérico sem preferência, PERGUNTE PRIMEIRO:\n"
-            "   'Antes de te encaminhar para o especialista humano do setor, teria mais alguma informação ou detalhe que você gostaria de acrescentar ao seu chamado?'\n"
-            "7. CONCLUSÃO DA IA E ESCALONAMENTO HUMANO: Assim que o cliente responder à pergunta de checagem (ou se já tiver fornecido todas as informações / pedido atendente específico), encerre a resposta com a fala conclusiva final e defina 'ESCALAR_HUMANO: SIM'.\n"
-            "8. RESUMO EXECUTIVO DO PROBLEMA: Quando definir 'ESCALAR_HUMANO: SIM', escreva em 'NOVA_MEMORIA' um RESUMO COMPLETO E ESTRUTURADO DO PROBLEMA ESPECÍFICO do cliente que o atendente humano precisará resolver.\n"
-            "9. SOLICITAÇÃO DE LOCALIZAÇÃO DA LOJA: Se o cliente pedir o endereço ou localização, além de fornecer o texto na resposta, defina 'ENVIAR_LOCALIZACAO: SIM'.\n"
-            "10. ENDEREÇO OFICIAL DA SERVWELD: 'SOF Sul (Setor de Oficinas Sul), Quadra 05, Conjunto A, Lote 05, Loja 02 - Guará, Brasília - DF - CEP 71215-226'. Coordenadas GPS: Latitude -15.820418, Longitude -47.956467.\n"
-            "11. FLUXO DE PAGAMENTO VIA PIX: Se o cliente pedir Pix, pergunte a nota/assunto e valor antes de enviar os dados oficiais CNPJ 54.804.458/0001-22.\n"
-            "12. ATENDIMENTO 24/7 E RESOLUÇÃO AUTÔNOMA DA IA (NÃO ADIAR O QUE A IA PODE RESOLVER):\n"
-            "   - Você opera 24 horas por dia, 7 dias por semana.\n"
-            "   - Se o cliente fizer perguntas que você ou a base de conhecimento RAG podem resolver (ex: endereço da loja, horário de funcionamento, dúvidas técnicas sobre solda, catálogo de produtos, assistência ou formas de pagamento):\n"
-            "     * RESPONDA A DÚVIDA IMEDIATAMENTE DE FORMA COMPLETA, NATURAL E CORDIAL.\n"
-            "     * DEFINA 'ESCALAR_HUMANO: NAO'.\n"
-            "     * NUNCA adie para o dia seguinte nem informe que a loja está fechada se a IA puder resolver a solicitação sozinha!\n"
-            "   - SOMENTE defina 'ESCALAR_HUMANO: SIM' quando a demanda genuinamente exigir intervenção humana (ex: negociação de preços/descontos, fechamento de contrato complexo, liberação de crédito ou quando o cliente pedir explicitamente para falar com uma pessoa).\n"
-            "13. COLETA CORDIAL DE NOME:\n"
-            "   - Se o nome do cliente for '(vazio - não usar)', dê as boas-vindas e pergunte gentilmente o nome dele para um atendimento personalizado.\n"
-            "14. DETECÇÃO DE BOT / URA / MENU AUTOMÁTICO DE OUTRA EMPRESA (ANTI-LOOP ETERNO):\n"
-            "   - Se a mensagem recebida for um MENU AUTOMÁTICO, URA, BOT, AUTOATENDIMENTO ou IA de outra empresa (ex: 'Digite 1 para Suporte', 'Escolha uma opção', 'Menu principal', 'Sou a assistente virtual', etc.):\n"
-            "     * DEFINA 'RESPOSTA: [SILENCIAR_IA]'\n"
-            "     * DEFINA 'ESCALAR_HUMANO: SIM'\n"
-            "     * NUNCA responda a outro robô para evitar um loop eterno de mensagens redundantes!\n\n"
-            f"{tenant_prompt or 'Resolva dúvidas com base no contexto fornecido.'}"
+            f"{dept_desc_prompt}"
+            f"{tech_directive}\n"
+            "# EXEMPLOS DE ERROS A EVITAR (FEW-SHOT LEARNING)\n\n"
+            f"Errado: \"Olá, JOSA O.S 1778! Vi que conversamos recentemente...\"\n"
+            f"Certo: \"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?\"\n"
+            "(motivo: nome_cliente estava nulo e historico_anterior estava vazio)\n\n"
+            f"Errado: \"Olá, Eng. Marcos! Conforme combinamos anteriormente sobre a máquina...\"\n"
+            f"Certo: \"Olá, Marcos! Seja bem-vindo(a) à {store_name}. Como posso ajudar hoje?\"\n"
+            "(motivo: nunca inventar títulos profissionais e historico_anterior estava vazio)\n\n"
+            "# FORMATO DE SAÍDA OBRIGATÓRIO (JSON PURO)\n\n"
+            "Responda SEMPRE como JSON estruturado:\n"
+            "{\n"
+            "  \"mensagem_cliente\": \"texto que será enviado ao cliente no WhatsApp\",\n"
+            "  \"temperatura\": \"baixa | media | alta\",\n"
+            "  \"transferir_humano\": true | false,\n"
+            "  \"motivo_transferencia\": null,\n"
+            "  \"atendente_preferencial\": null,\n"
+            "  \"transferir_setor\": null,\n"
+            "  \"enviar_localizacao\": false,\n"
+            "  \"enviar_pix\": false,\n"
+            "  \"dados_extraidos\": {\n"
+            "    \"nome_cliente\": null,\n"
+            "    \"resumo_necessidade\": \"resumo do que o cliente precisa\"\n"
+            "  }\n"
+            "}"
         )
+
+        contexto_atendimento = (
+            "CONTEXTO_ATENDIMENTO:\n"
+            f"loja: {store_name}\n"
+            f"departamento: {department_name}\n"
+            f"protocolo_atual: {protocolo_val}\n"
+            f"nome_cliente: {nome_cliente_val}\n"
+            f"telefone: {telefone_val}\n"
+            f"data_abertura: {opened_at_str or datetime.utcnow().strftime('%d/%m/%Y %H:%M')}\n\n"
+            f"historico_anterior:\n{historico_anterior_str}\n\n"
+            f"agentes_disponiveis_no_departamento:\n{agentes_str}\n\n"
+            f"BASE_DE_CONHECIMENTO_RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}\n\n"
+            f"mensagem_atual_do_cliente: \"{user_message}\""
+        )
+
+        full_prompt = f"{system_instruction}\n\n{contexto_atendimento}"
 
         # Early check for Bot / URA / Menu of another company
         if is_bot_or_menu_message(user_message):
             logger.info(f"[ANTI-LOOP BOT] Mensagem identificada como menu/bot de outra empresa: '{user_message[:60]}...'. Silenciando IA.")
             return {
                 "resposta": "",
+                "temperatura": "baixa",
                 "escalar_humano": True,
                 "is_bot_or_menu": True,
                 "atendente_preferencial": None,
@@ -495,29 +564,9 @@ class GeminiService:
                 "enviar_localizacao": False
             }
 
-        messages_text = []
-        for msg in conversation_history[-6:]:
-            role = "Cliente" if msg["remetente"] == "cliente" else "Atendente/IA"
-            messages_text.append(f"{role}: {msg['conteudo']}")
-        
-        full_prompt = (
-            f"{system_instruction}\n\n"
-            f"{contexto_cliente_block}\n\n"
-            f"BASE DE CONHECIMENTO RAG:\n{rag_context or 'Nenhum documento específico encontrado.'}\n\n"
-            f"Diálogo Recente:\n" + ("\n".join(messages_text) if messages_text else "nenhum") + "\n\n"
-            f"Mensagem Atual do Cliente: {user_message}\n\n"
-            "Responda no seguinte formato exato:\n"
-            "RESPOSTA: <mensagem em português natural para o cliente>\n"
-            "ESCALAR_HUMANO: <SIM ou NAO>\n"
-            "ATENDENTE_PREFERENCIAL: <NomeDoAtendente ou NAO>\n"
-            "TRANSFERIR_SETOR: <NomeDoNovoSetor ou NAO>\n"
-            "NOVA_MEMORIA: <resumo factual dos fatos relevantes>\n"
-            "FINALIZAR_CONVERSA: <SIM ou NAO>\n"
-            "ENVIAR_LOCALIZACAO: <SIM ou NAO>"
-        )
-
         default_res = {
-            "resposta": f"Olá, {clean_name}! Como posso te ajudar hoje?",
+            "resposta": f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?",
+            "temperatura": "baixa",
             "escalar_humano": False,
             "atendente_preferencial": None,
             "transferir_setor": None,
@@ -556,69 +605,99 @@ class GeminiService:
             
             if response and response.text:
                 text = response.text.strip()
-                lines = text.split("\n")
                 
+                # Try parsing JSON first
+                parsed_json = None
+                try:
+                    # Strip markdown code blocks if wrapped
+                    clean_json_str = text
+                    if clean_json_str.startswith("```"):
+                        clean_json_str = re.sub(r'^```(?:json)?\s*', '', clean_json_str)
+                        clean_json_str = re.sub(r'\s*```$', '', clean_json_str)
+                    clean_json_str = clean_json_str.strip()
+                    parsed_json = json.loads(clean_json_str)
+                except Exception:
+                    pass
+
                 resposta = ""
+                temperatura = "baixa"
                 escalar_humano = False
                 atendente_preferencial = None
                 transferir_setor = None
-                nova_memoria = memory_summary or ""
-                finalizar_conversa = False
                 enviar_localizacao = False
+                enviar_pix = False
+                nova_memoria = memory_summary or ""
 
-                current_field = None
-                resposta_lines = []
-                memoria_lines = []
+                if isinstance(parsed_json, dict):
+                    resposta = str(parsed_json.get("mensagem_cliente") or parsed_json.get("resposta") or "").strip()
+                    temperatura = str(parsed_json.get("temperatura") or "baixa").lower()
+                    escalar_humano = bool(parsed_json.get("transferir_humano") or parsed_json.get("escalar_humano") or temperatura == "alta")
+                    atendente_preferencial = parsed_json.get("atendente_preferencial") or None
+                    transferir_setor = parsed_json.get("transferir_setor") or None
+                    enviar_localizacao = bool(parsed_json.get("enviar_localizacao"))
+                    enviar_pix = bool(parsed_json.get("enviar_pix"))
+                    
+                    dados_ext = parsed_json.get("dados_extraidos") or {}
+                    if isinstance(dados_ext, dict):
+                        extracted_name = dados_ext.get("nome_cliente")
+                        resumo_nec = dados_ext.get("resumo_necessidade") or ""
+                        if resumo_nec:
+                            nova_memoria = f"Necessidade do Cliente: {resumo_nec}"
+                else:
+                    # Fallback key-value line parser
+                    lines = text.split("\n")
+                    resposta_lines = []
+                    current_field = None
+                    for line in lines:
+                        if line.startswith("RESPOSTA:") or line.startswith("mensagem_cliente:"):
+                            current_field = "RESPOSTA"
+                            resposta_lines.append(line.split(":", 1)[1].strip())
+                        elif line.startswith("ESCALAR_HUMANO:") or line.startswith("transferir_humano:"):
+                            current_field = "ESCALAR_HUMANO"
+                            val = line.split(":", 1)[1].strip().upper()
+                            escalar_humano = "SIM" in val or "TRUE" in val
+                        elif line.startswith("ATENDENTE_PREFERENCIAL:"):
+                            current_field = "ATENDENTE_PREFERENCIAL"
+                            val = line.split(":", 1)[1].strip()
+                            if val.upper() not in ["NAO", "NÃO", "NONE", "NULL", "FALSE", ""]:
+                                atendente_preferencial = val
+                        elif line.startswith("TRANSFERIR_SETOR:"):
+                            current_field = "TRANSFERIR_SETOR"
+                            val = line.split(":", 1)[1].strip()
+                            if val.upper() not in ["NAO", "NÃO", "NONE", "NULL", "FALSE", ""]:
+                                transferir_setor = val
+                        elif line.startswith("ENVIAR_LOCALIZACAO:"):
+                            val = line.split(":", 1)[1].strip().upper()
+                            enviar_localizacao = "SIM" in val or "TRUE" in val
+                        elif line.startswith("ENVIAR_PIX:"):
+                            val = line.split(":", 1)[1].strip().upper()
+                            enviar_pix = "SIM" in val or "TRUE" in val
+                        else:
+                            if current_field == "RESPOSTA":
+                                resposta_lines.append(line)
+                    resposta = "\n".join(resposta_lines).strip()
+                    if not resposta:
+                        resposta = text
 
-                for line in lines:
-                    if line.startswith("RESPOSTA:"):
-                        current_field = "RESPOSTA"
-                        resposta_lines.append(line.replace("RESPOSTA:", "").strip())
-                    elif line.startswith("ESCALAR_HUMANO:"):
-                        current_field = "ESCALAR_HUMANO"
-                        val = line.replace("ESCALAR_HUMANO:", "").strip().upper()
-                        escalar_humano = "SIM" in val or "TRUE" in val
-                    elif line.startswith("ATENDENTE_PREFERENCIAL:"):
-                        current_field = "ATENDENTE_PREFERENCIAL"
-                        val = line.replace("ATENDENTE_PREFERENCIAL:", "").strip()
-                        if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
-                            atendente_preferencial = val
-                    elif line.startswith("TRANSFERIR_SETOR:"):
-                        current_field = "TRANSFERIR_SETOR"
-                        val = line.replace("TRANSFERIR_SETOR:", "").strip()
-                        if val.upper() not in ["NAO", "NÃO", "NONE", "FALSE", ""]:
-                            transferir_setor = val
-                    elif line.startswith("NOVA_MEMORIA:"):
-                        current_field = "NOVA_MEMORIA"
-                        memoria_lines.append(line.replace("NOVA_MEMORIA:", "").strip())
-                    elif line.startswith("FINALIZAR_CONVERSA:"):
-                        current_field = "FINALIZAR_CONVERSA"
-                        val = line.replace("FINALIZAR_CONVERSA:", "").strip().upper()
-                        finalizar_conversa = "SIM" in val or "TRUE" in val
-                    elif line.startswith("ENVIAR_LOCALIZACAO:"):
-                        current_field = "ENVIAR_LOCALIZACAO"
-                        val = line.replace("ENVIAR_LOCALIZACAO:", "").strip().upper()
-                        enviar_localizacao = "SIM" in val or "TRUE" in val
-                    else:
-                        if current_field == "RESPOSTA":
-                            resposta_lines.append(line)
-                        elif current_field == "NOVA_MEMORIA":
-                            memoria_lines.append(line)
-
-                resposta = "\n".join(resposta_lines).strip()
-                nova_memoria = "\n".join(memoria_lines).strip()
-
-                if not resposta:
-                    resposta = text
+                # 🛡️ CAMADA DE VALIDAÇÃO PÓS-RESPOSTA (ANTI-HALLUCINATION POST-GUARD)
+                sanitized_reply = validate_and_sanitize_ai_response(
+                    raw_ai_message=resposta,
+                    had_null_name=had_null_name,
+                    had_empty_history=had_empty_history,
+                    store_name=store_name
+                )
 
                 return {
-                    "resposta": resposta,
+                    "resposta": sanitized_reply,
+                    "temperatura": temperatura,
                     "escalar_humano": False if is_technician_or_admin else (escalar_humano or bool(atendente_preferencial)),
                     "atendente_preferencial": atendente_preferencial,
                     "transferir_setor": None if is_technician_or_admin else transferir_setor,
                     "nova_memoria": nova_memoria,
-                    "finalizar_conversa": finalizar_conversa,
-                    "enviar_localizacao": enviar_localizacao
+                    "finalizar_conversa": False,
+                    "enviar_localizacao": enviar_localizacao,
+                    "enviar_pix": enviar_pix,
+                    "contexto_enviado": contexto_atendimento
                 }
 
         return default_res

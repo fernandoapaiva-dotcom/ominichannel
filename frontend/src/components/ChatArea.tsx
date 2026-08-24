@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
-  AlertCircle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
+  AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
   Lock, Unlock, Pin
@@ -110,6 +110,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showCopilotModal, setShowCopilotModal] = useState(false);
   const [isConsultingIA, setIsConsultingIA] = useState(false);
   const [isAssumingControl, setIsAssumingControl] = useState(false);
+  
+  // Feedback / Continuous improvement modal
+  const [showReportAIModal, setShowReportAIModal] = useState(false);
+  const [reportErrorCategory, setReportErrorCategory] = useState('alucinacao_nome');
+  const [reportCorrectResponse, setReportCorrectResponse] = useState('');
+  const [reportLastAIReply, setReportLastAIReply] = useState('');
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
 
   const isAdmin = currentUser.role === 'admin' || (currentUser.role as any)?.value === 'admin';
   const isAssignedToOther = Boolean(
@@ -1747,6 +1755,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   >
                     <ArrowRightLeft size={14} /> Transferir
                   </button>
+
+                  <button
+                    onClick={() => {
+                      setShowReportAIModal(true);
+                      setShowMoreMenu(false);
+                    }}
+                    style={{
+                      padding: '8px 12px',
+                      background: 'none',
+                      border: 'none',
+                      color: '#f87171',
+                      fontSize: '12px',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      borderTop: '1px solid rgba(255,255,255,0.05)'
+                    }}
+                  >
+                    <AlertTriangle size={14} /> Reportar Erro da IA
+                  </button>
                 </div>
               </>
             )}
@@ -3007,6 +3037,213 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           setInputText(prev => (prev ? prev + '\n' + text : text));
         }}
       />
+
+      {/* 9. Modal de Reportar Erro da IA (Loop de Melhoria Contínua) */}
+      {showReportAIModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1100,
+          padding: '16px'
+        }}>
+          <div style={{
+            backgroundColor: '#0f172a',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: '12px',
+            width: '100%',
+            maxWidth: '520px',
+            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.9)',
+            overflow: 'hidden'
+          }}>
+            <div style={{
+              padding: '16px 20px',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: 'rgba(239, 68, 68, 0.08)'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <AlertTriangle size={20} color="#f87171" />
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#f87171' }}>
+                  Marcar / Reportar Erro da IA
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowReportAIModal(false);
+                  setReportSuccessMessage(null);
+                }}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {reportSuccessMessage ? (
+                <div style={{
+                  padding: '14px',
+                  backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid #10b981',
+                  borderRadius: '8px',
+                  color: '#34d399',
+                  fontSize: '13px',
+                  textAlign: 'center'
+                }}>
+                  {reportSuccessMessage}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '6px', fontWeight: 'bold' }}>
+                      Categoria do Erro da IA:
+                    </label>
+                    <select
+                      value={reportErrorCategory}
+                      onChange={(e) => setReportErrorCategory(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        backgroundColor: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '8px',
+                        color: '#f8fafc',
+                        fontSize: '13px',
+                        outline: 'none'
+                      }}
+                    >
+                      <option value="alucinacao_nome">Alucinação de Nome (ex: inventou título, sobrenome ou nome estranho)</option>
+                      <option value="alucinacao_historico">Alucinação de Histórico (afirmou contato anterior que não existia)</option>
+                      <option value="tom_errado">Tom / Postura Inadequada</option>
+                      <option value="informacao_incorreta">Informação Incorreta / Erro de Preço ou Procedimento</option>
+                      <option value="outro">Outro Motivo</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '6px', fontWeight: 'bold' }}>
+                      O que a IA respondeu de errado (opcional):
+                    </label>
+                    <textarea
+                      value={reportLastAIReply}
+                      onChange={(e) => setReportLastAIReply(e.target.value)}
+                      placeholder="Cole aqui ou descreva a resposta que a IA deu..."
+                      rows={3}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        backgroundColor: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '8px',
+                        color: '#f8fafc',
+                        fontSize: '13px',
+                        resize: 'none',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '12px', color: '#94a3b8', marginBottom: '6px', fontWeight: 'bold' }}>
+                      Como ela DEVERIA ter respondido? (Resposta Correta):
+                    </label>
+                    <textarea
+                      value={reportCorrectResponse}
+                      onChange={(e) => setReportCorrectResponse(e.target.value)}
+                      placeholder="Ex: 'Olá! Seja bem-vindo à Servweld. Como posso te ajudar hoje?'"
+                      rows={4}
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        backgroundColor: '#1e293b',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '8px',
+                        color: '#f8fafc',
+                        fontSize: '13px',
+                        resize: 'none',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div style={{
+              padding: '14px 20px',
+              borderTop: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: '10px',
+              backgroundColor: 'rgba(0,0,0,0.2)'
+            }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReportAIModal(false);
+                  setReportSuccessMessage(null);
+                }}
+                className="btn-secondary"
+                style={{ padding: '8px 16px', fontSize: '13px' }}
+              >
+                Fechar
+              </button>
+
+              {!reportSuccessMessage && (
+                <button
+                  type="button"
+                  disabled={isSubmittingReport || !reportCorrectResponse.trim()}
+                  onClick={async () => {
+                    if (!conversation || !reportCorrectResponse.trim()) return;
+                    try {
+                      setIsSubmittingReport(true);
+                      await apiFetch(`/conversations/${conversation.id}/report-ai-error`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                          resposta_ia: reportLastAIReply || undefined,
+                          resposta_correta: reportCorrectResponse.trim(),
+                          categoria_erro: reportErrorCategory
+                        })
+                      });
+                      setReportSuccessMessage('Obrigado! A correção foi gravada com sucesso e servirá para treinar e aprimorar a IA.');
+                      setReportCorrectResponse('');
+                      setReportLastAIReply('');
+                      setTimeout(() => {
+                        setShowReportAIModal(false);
+                        setReportSuccessMessage(null);
+                      }, 2000);
+                    } catch (err: any) {
+                      alert('Erro ao registrar correção da IA: ' + (err.message || err));
+                    } finally {
+                      setIsSubmittingReport(false);
+                    }
+                  }}
+                  className="btn-primary"
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: '13px',
+                    backgroundColor: '#ef4444',
+                    borderColor: '#ef4444',
+                    opacity: (!reportCorrectResponse.trim() || isSubmittingReport) ? 0.6 : 1
+                  }}
+                >
+                  {isSubmittingReport ? 'Salvando...' : 'Gravar Correção'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1676,6 +1676,83 @@ async def copilot_chat_for_conversation(
     }
 
 
+class ReportAIErrorRequest(BaseModel):
+    resposta_ia: Optional[str] = None
+    resposta_correta: str
+    categoria_erro: str = "outro" # alucinacao_nome, alucinacao_historico, tom_errado, informacao_incorreta, outro
+    contexto_enviado: Optional[str] = None
+
+
+@router.post("/{conversation_id}/report-ai-error")
+async def report_ai_error(
+    conversation_id: int,
+    payload: ReportAIErrorRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Loop de melhoria contínua: Atendente marca erro em resposta da IA e informa a resposta correta.
+    Salva na tabela correcoes_ia para revisão e extração de exemplos few-shot.
+    """
+    from app.models.models import AICorrection
+    conv_stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    conv_res = await db.execute(conv_stmt)
+    conv = conv_res.scalar_one_or_none()
+
+    correction = AICorrection(
+        tenant_id=current_user.tenant_id,
+        conversation_id=conversation_id,
+        protocolo=conv.protocol_number if conv else None,
+        contexto_enviado=payload.contexto_enviado,
+        resposta_ia=payload.resposta_ia,
+        resposta_correta=payload.resposta_correta,
+        categoria_erro=payload.categoria_erro,
+        revisado=False,
+        criado_em=datetime.utcnow()
+    )
+    db.add(correction)
+    await db.commit()
+    await db.refresh(correction)
+
+    return {
+        "success": True,
+        "message": "Correção de IA registrada com sucesso no banco para revisão contínua.",
+        "id": correction.id
+    }
+
+
+@router.get("/ai-corrections/list")
+async def list_ai_corrections(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    from app.models.models import AICorrection
+    stmt = (
+        select(AICorrection)
+        .where(AICorrection.tenant_id == current_user.tenant_id)
+        .order_by(AICorrection.criado_em.desc())
+        .limit(100)
+    )
+    res = await db.execute(stmt)
+    items = res.scalars().all()
+    return [
+        {
+            "id": c.id,
+            "conversation_id": c.conversation_id,
+            "protocolo": c.protocolo,
+            "resposta_ia": c.resposta_ia,
+            "resposta_correta": c.resposta_correta,
+            "categoria_erro": c.categoria_erro,
+            "revisado": c.revisado,
+            "criado_em": c.criado_em.isoformat() if c.criado_em else None
+        }
+        for c in items
+    ]
+
+
 async def dispatch_whatsapp_notification(
     db: AsyncSession,
     conv: Conversation,

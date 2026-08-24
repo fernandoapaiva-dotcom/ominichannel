@@ -277,3 +277,22 @@ class AuthorizedTechnician(Base):
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     tenant: Mapped["Tenant"] = relationship("Tenant")
+
+# Continuous Improvement / Feedback Loop Table (correcoes_ia)
+class AICorrection(Base):
+    __tablename__ = "correcoes_ia"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    conversation_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    protocolo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    contexto_enviado: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resposta_ia: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resposta_correta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    categoria_erro: Mapped[str] = mapped_column(String(50), default="outro") # alucinacao_nome, alucinacao_historico, tom_errado, informacao_incorreta, outro
+    revisado: Mapped[bool] = mapped_column(Boolean, default=False)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    tenant: Mapped["Tenant"] = relationship("Tenant")
+    conversation: Mapped[Optional["Conversation"]] = relationship("Conversation")
+
