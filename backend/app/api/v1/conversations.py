@@ -1761,6 +1761,77 @@ async def list_ai_corrections(
     ]
 
 
+class EditMessageRequest(BaseModel):
+    new_text: str
+
+
+@router.put("/messages/{message_id}")
+async def edit_message_endpoint(
+    message_id: int,
+    payload: EditMessageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Edits a sent message both locally in database and on WhatsApp via Evolution API.
+    """
+    stmt = (
+        select(Message)
+        .options(
+            selectinload(Message.conversation).selectinload(Conversation.whatsapp_number),
+            selectinload(Message.conversation).selectinload(Conversation.contact)
+        )
+        .where(Message.id == message_id)
+    )
+    res = await db.execute(stmt)
+    msg = res.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+
+    conv = msg.conversation
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Acesso negado a esta conversa")
+
+    # Update in Evolution API if WhatsApp message id is present
+    if msg.whatsapp_msg_id and conv.whatsapp_number and conv.contact:
+        inst = conv.whatsapp_number.instancia_evolution_api
+        phone = conv.contact.telefone
+        try:
+            await evolution_service.edit_message(
+                instance_name=inst,
+                number=phone,
+                message_id=msg.whatsapp_msg_id,
+                new_text=payload.new_text
+            )
+        except Exception as err:
+            logger.warning(f"Could not edit message on WhatsApp instance: {err}")
+
+    # Update local DB
+    msg.conteudo = payload.new_text
+    msg.status = "edited"
+    await db.commit()
+
+    # Broadcast via WebSockets
+    await ws_manager.broadcast_to_department(
+        tenant_id=conv.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "MESSAGE_EDITED",
+            "conversation_id": conv.id,
+            "message_id": msg.id,
+            "new_text": payload.new_text,
+            "status": "edited"
+        }
+    )
+
+    return {
+        "success": True,
+        "message_id": msg.id,
+        "new_text": payload.new_text,
+        "status": "edited"
+    }
+
+
 async def dispatch_whatsapp_notification(
     db: AsyncSession,
     conv: Conversation,

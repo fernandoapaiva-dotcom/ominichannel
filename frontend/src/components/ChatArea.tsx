@@ -56,6 +56,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [replyingToMessage, setReplyingToMessage] = useState<Message | null>(null);
   const [messageReactions, setMessageReactions] = useState<{ [msgId: number]: string }>({});
 
+  // WhatsApp Message Edit State (Imagem 3)
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editingMessageText, setEditingMessageText] = useState<string>('');
+  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+
   const handleStartForwardSelection = (msg: Message) => {
     setIsSelectionMode(true);
     setSelectedMessagesForForward([msg]);
@@ -648,6 +653,120 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       } catch (err) {
         console.error('Error dispatching reaction to WhatsApp:', err);
       }
+    }
+  };
+
+  // WhatsApp Message Edit Handler (Imagem 3)
+  const handleStartEdit = (msg: Message) => {
+    let raw = msg.conteudo || '';
+    if (raw.includes('|') && ['imagem', 'video', 'audio', 'arquivo'].includes(msg.tipo)) {
+      raw = raw.split('|')[1] || raw;
+    }
+    setEditingMessage(msg);
+    setEditingMessageText(raw);
+    setActiveActionMenuMsgId(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingMessage || !editingMessageText.trim()) return;
+    setIsSavingEdit(true);
+    try {
+      await apiFetch(`/conversations/messages/${editingMessage.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ new_text: editingMessageText.trim() })
+      });
+
+      // Update message in conversation state in real-time
+      if (conversation?.messages) {
+        const target = conversation.messages.find(m => m.id === editingMessage.id);
+        if (target) {
+          target.conteudo = editingMessageText.trim();
+          target.status = 'edited';
+        }
+      }
+      setEditingMessage(null);
+      setEditingMessageText('');
+    } catch (err) {
+      console.error('Erro ao editar mensagem:', err);
+      alert('Não foi possível salvar a edição no momento.');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessage(null);
+    setEditingMessageText('');
+  };
+
+  // WhatsApp Group Private Reply (Imagem 1)
+  const handlePrivateReply = async (msg: Message, participantPhone?: string, participantName?: string) => {
+    setActiveActionMenuMsgId(null);
+    const phoneToUse = participantPhone || (msg as any).dados_adicionais?.participant_phone || (conversation?.contact?.telefone);
+    const nameToUse = participantName || (msg as any).dados_adicionais?.participant_name || 'Participante';
+    const cleanDigits = (phoneToUse || '').replace(/\D/g, '');
+
+    let targetConv = allConversations?.find(c => {
+      const p = (c.contact?.telefone || '').replace(/\D/g, '');
+      const isNotGroup = !c.contact?.telefone?.startsWith('120363') && !c.contact?.telefone?.includes('@g.us');
+      return isNotGroup && cleanDigits.length >= 8 && p.includes(cleanDigits.slice(-8));
+    });
+
+    if (!targetConv && onSelectConversation && phoneToUse) {
+      try {
+        targetConv = await apiFetch('/conversations/', {
+          method: 'POST',
+          body: JSON.stringify({
+            whatsapp_number_id: conversation?.whatsapp_number_id,
+            contact_phone: phoneToUse,
+            contact_name: nameToUse
+          })
+        });
+      } catch (err) {
+        console.error('Erro ao abrir conversa particular:', err);
+      }
+    }
+
+    if (targetConv && onSelectConversation) {
+      onSelectConversation(targetConv);
+      const quoteContent = msg.conteudo?.includes('|') ? (msg.conteudo.split('|')[1] || msg.conteudo) : msg.conteudo;
+      setReplyingToMessage({
+        ...msg,
+        conteudo: `[No grupo ${conversation?.contact?.nome || 'Grupo'}]: "${quoteContent}"`
+      });
+    }
+  };
+
+  // WhatsApp Group Start Direct Chat (Imagem 1)
+  const handleStartDirectChat = async (participantPhone?: string, participantName?: string) => {
+    setActiveActionMenuMsgId(null);
+    const phoneToUse = participantPhone || (msg as any)?.dados_adicionais?.participant_phone || (conversation?.contact?.telefone);
+    const nameToUse = participantName || (msg as any)?.dados_adicionais?.participant_name || 'Participante';
+    const cleanDigits = (phoneToUse || '').replace(/\D/g, '');
+
+    let targetConv = allConversations?.find(c => {
+      const p = (c.contact?.telefone || '').replace(/\D/g, '');
+      const isNotGroup = !c.contact?.telefone?.startsWith('120363') && !c.contact?.telefone?.includes('@g.us');
+      return isNotGroup && cleanDigits.length >= 8 && p.includes(cleanDigits.slice(-8));
+    });
+
+    if (!targetConv && onSelectConversation && phoneToUse) {
+      try {
+        targetConv = await apiFetch('/conversations/', {
+          method: 'POST',
+          body: JSON.stringify({
+            whatsapp_number_id: conversation?.whatsapp_number_id,
+            contact_phone: phoneToUse,
+            contact_name: nameToUse
+          })
+        });
+      } catch (err) {
+        console.error('Erro ao criar conversa direta:', err);
+      }
+    }
+
+    if (targetConv && onSelectConversation) {
+      onSelectConversation(targetConv);
     }
   };
 
@@ -2285,7 +2404,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         </button>
                       </div>
 
-                      {/* Menu Actions */}
+                      {/* Menu Actions (Idêntico ao WhatsApp Web) */}
+
+                      {/* 1. Responder (Imagem 1, 2, 3) */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2313,6 +2434,115 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         <span>Responder</span>
                       </button>
 
+                      {/* 2. Responder em particular (Imagem 1 - apenas em Grupos para mensagens do participante) */}
+                      {isGroupChat && isCustomer && (
+                        <button
+                          type="button"
+                          onClick={() => handlePrivateReply(msg, participantPhone, participantName)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(56, 189, 248, 0.15)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <UserCheck size={15} style={{ color: '#38bdf8' }} />
+                          <span>Responder em particular</span>
+                        </button>
+                      )}
+
+                      {/* 3. Conversar com [Nome do Participante] (Imagem 1 - apenas em Grupos para mensagens do participante) */}
+                      {isGroupChat && isCustomer && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartDirectChat(participantPhone, participantName)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(168, 85, 247, 0.15)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <MessageSquare size={15} style={{ color: '#c084fc' }} />
+                          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '180px' }}>
+                            Conversar com {participantName}
+                          </span>
+                        </button>
+                      )}
+
+                      {/* 4. Copiar Texto (Imagem 1, 2, 3) */}
+                      <button
+                        type="button"
+                        onClick={() => handleCopyMessage(msg)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          padding: '8px 12px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: 'var(--text-main)',
+                          fontSize: '13px',
+                          fontWeight: '500',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--radius-sm)'
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      >
+                        <Copy size={15} style={{ color: 'var(--accent-primary)' }} />
+                        <span>Copiar</span>
+                      </button>
+
+                      {/* 5. Editar Mensagem (Imagem 3 - para mensagens enviadas pelo atendente/sistema) */}
+                      {!isCustomer && (
+                        <button
+                          type="button"
+                          onClick={() => handleStartEdit(msg)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-main)',
+                            fontSize: '13px',
+                            fontWeight: '500',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(245, 158, 11, 0.15)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                        >
+                          <Pencil size={15} style={{ color: '#f59e0b' }} />
+                          <span>Editar</span>
+                        </button>
+                      )}
+
+                      {/* 6. Encaminhar / Compartilhar */}
                       <button
                         type="button"
                         onClick={() => handleStartForwardSelection(msg)}
@@ -2334,7 +2564,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                       >
                         <CornerUpRight size={15} style={{ color: 'var(--accent-primary)' }} />
-                        <span>Encaminhar / Compartilhar</span>
+                        <span>Encaminhar</span>
                       </button>
 
                       {isMediaMsg && (
@@ -2394,6 +2624,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                         </button>
                       )}
 
+                      {/* 7. Dados da mensagem */}
                       <button
                         type="button"
                         onClick={() => {
@@ -2419,30 +2650,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       >
                         <Info size={15} style={{ color: 'var(--accent-primary)' }} />
                         <span>Dados da mensagem</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleCopyMessage(msg)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '10px',
-                          padding: '8px 12px',
-                          background: 'transparent',
-                          border: 'none',
-                          color: 'var(--text-main)',
-                          fontSize: '13px',
-                          fontWeight: '500',
-                          textAlign: 'left',
-                          cursor: 'pointer',
-                          borderRadius: 'var(--radius-sm)'
-                        }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.1)')}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                      >
-                        <Copy size={15} style={{ color: 'var(--accent-primary)' }} />
-                        <span>Copiar Texto</span>
                       </button>
                     </div>
                   </>
@@ -2710,6 +2917,111 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <X size={14} />
           </button>
+        </div>
+      )}
+
+      {/* WhatsApp-Style Message Edit Bar (Imagem 3) */}
+      {editingMessage && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 18px',
+          backgroundColor: 'rgba(245, 158, 11, 0.12)',
+          borderTop: '1px solid rgba(245, 158, 11, 0.35)',
+          borderLeft: '4px solid #f59e0b',
+          boxShadow: '0 -4px 15px rgba(0,0,0,0.1)',
+          flexShrink: 0,
+          gap: '12px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}>
+            <div style={{
+              width: '34px',
+              height: '34px',
+              borderRadius: '50%',
+              backgroundColor: 'rgba(245, 158, 11, 0.2)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#f59e0b',
+              flexShrink: 0
+            }}>
+              <Pencil size={17} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                ✏️ Editando Mensagem Enviada
+              </div>
+              <input
+                type="text"
+                value={editingMessageText}
+                onChange={(e) => setEditingMessageText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSaveEdit();
+                  } else if (e.key === 'Escape') {
+                    handleCancelEdit();
+                  }
+                }}
+                autoFocus
+                placeholder="Edite o texto da mensagem e pressione Enter para salvar..."
+                style={{
+                  width: '100%',
+                  marginTop: '4px',
+                  padding: '7px 12px',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-main)',
+                  fontSize: '13px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              disabled={isSavingEdit || !editingMessageText.trim()}
+              className="btn-primary"
+              style={{
+                padding: '7px 14px',
+                fontSize: '12px',
+                fontWeight: '700',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: '#22c55e',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                boxShadow: '0 2px 8px rgba(34, 197, 94, 0.3)'
+              }}
+              title="Salvar alteração (Enter)"
+            >
+              <Check size={15} /> {isSavingEdit ? 'Salvando...' : 'Salvar'}
+            </button>
+            <button
+              type="button"
+              onClick={handleCancelEdit}
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                color: 'var(--text-muted)',
+                borderRadius: '50%',
+                width: '28px',
+                height: '28px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Cancelar edição (Esc)"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
       )}
 

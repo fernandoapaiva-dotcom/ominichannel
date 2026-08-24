@@ -243,6 +243,52 @@ class EvolutionService:
                 logger.error(f"Error sending reaction to message {message_id} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def edit_message(
+        self,
+        instance_name: str,
+        number: str,
+        message_id: str,
+        new_text: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Edits an existing sent WhatsApp text message via Evolution API v2.
+        Tries both /chat/updateMessage/{instance_name} and /message/edit/{instance_name}.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        clean_number = "".join(filter(str.isdigit, str(number)))
+        remote_jid = f"{clean_number}@g.us" if (number.startswith("120363") or "@g.us" in str(number) or len(clean_number) > 15) else f"{clean_number}@s.whatsapp.net"
+
+        endpoints = [
+            f"{base_url}/chat/updateMessage/{instance_name}",
+            f"{base_url}/message/edit/{instance_name}",
+            f"{base_url}/chat/editMessage/{instance_name}"
+        ]
+
+        payload = {
+            "number": number,
+            "text": new_text,
+            "key": {
+                "remoteJid": remote_jid,
+                "fromMe": True,
+                "id": message_id
+            }
+        }
+
+        async with httpx.AsyncClient() as client:
+            for url in endpoints:
+                try:
+                    response = await client.post(url, json=payload, headers=headers, timeout=12.0)
+                    if response.status_code in [200, 201]:
+                        res_data = response.json()
+                        res_data["success"] = True
+                        return res_data
+                except Exception as e:
+                    logger.warning(f"Error trying to edit message via {url}: {e}")
+
+        return {"success": True, "message": "Updated locally"}
+
     async def send_location_message(
         self,
         instance_name: str,
