@@ -399,28 +399,40 @@ class EvolutionService:
         instance_name: str,
         message_id: str,
         from_me: bool = False,
+        remote_jid: Optional[str] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Optional[str]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/chat/getBase64FromMediaMessage/{instance_name}"
+        key_obj: Dict[str, Any] = {
+            "id": message_id,
+            "fromMe": from_me
+        }
+        if remote_jid:
+            key_obj["remoteJid"] = remote_jid
+
         payload = {
             "message": {
-                "key": {
-                    "id": message_id,
-                    "fromMe": from_me
-                }
+                "key": key_obj
             },
             "convertToMp4": False
         }
         async with httpx.AsyncClient() as client:
             try:
-                res = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                res = await client.post(url, json=payload, headers=headers, timeout=20.0)
                 if res.status_code in (200, 201):
                     data = res.json()
                     return data.get("base64")
+                else:
+                    # If from_me failed, try the inverse
+                    key_obj["fromMe"] = not from_me
+                    res2 = await client.post(url, json=payload, headers=headers, timeout=20.0)
+                    if res2.status_code in (200, 201):
+                        data2 = res2.json()
+                        return data2.get("base64")
             except Exception as e:
-                logger.error(f"Error fetching media base64 for msg {message_id}: {e}")
+                logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {e}")
         return None
 
     async def fetch_chat_history(

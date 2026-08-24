@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 from sqlalchemy.orm import selectinload
@@ -591,6 +592,105 @@ async def get_conversation_media_files(
     
     res = await db.execute(stmt)
     return res.scalars().all()
+
+@router.get("/messages/{message_id}/media")
+async def get_message_media_stream(
+    message_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    On-demand resolver/proxy for WhatsApp media.
+    If message has a local /uploads/ URL, serves it.
+    If message has an encrypted mmg.whatsapp.net URL or is pending download,
+    automatically calls Evolution API to decrypt, downloads to /uploads/,
+    updates DB, and streams the media.
+    """
+    stmt = (
+        select(Message)
+        .options(
+            selectinload(Message.conversation).selectinload(Conversation.whatsapp_number),
+            selectinload(Message.conversation).selectinload(Conversation.contact)
+        )
+        .where(Message.id == message_id)
+    )
+    res = await db.execute(stmt)
+    msg = res.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+
+    raw = msg.conteudo or ""
+    media_path = raw.split("|")[0].strip() if "|" in raw else raw.strip()
+
+    # If already a valid local file
+    if media_path.startswith("/uploads/"):
+        lpath = media_path.lstrip("/")
+        if os.path.exists(lpath):
+            return FileResponse(lpath)
+
+    # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API
+    if msg.whatsapp_msg_id and msg.conversation and msg.conversation.whatsapp_number:
+        conv = msg.conversation
+        inst_name = conv.whatsapp_number.instancia_evolution_api or "instancia_financeiro"
+        remote_jid = conv.contact.telefone if conv.contact else None
+        if remote_jid and not remote_jid.endswith("@s.whatsapp.net") and not remote_jid.endswith("@g.us"):
+            remote_jid = f"{remote_jid}@g.us" if ("120363" in remote_jid or len(remote_jid) > 15) else f"{remote_jid}@s.whatsapp.net"
+
+        from_me = (msg.remetente == MessageSender.ATENDENTE.value or msg.remetente == "atendente" or msg.remetente == "ia")
+
+        instances_to_try = [inst_name, "instancia_financeiro", "instancia_tecnica", "instancia_vendas", "instancia_locacao"]
+        instances_to_try = list(dict.fromkeys(instances_to_try))
+
+        b64_data = None
+        for inst in instances_to_try:
+            try:
+                b64_data = await evolution_service.get_media_base64(
+                    instance_name=inst,
+                    message_id=msg.whatsapp_msg_id,
+                    from_me=from_me,
+                    remote_jid=remote_jid
+                )
+                if b64_data:
+                    break
+            except Exception as e:
+                logger.error(f"Error fetching base64 on {inst}: {e}")
+
+        if b64_data:
+            ext = ".png"
+            if msg.tipo == MessageType.VIDEO or msg.tipo == "video":
+                ext = ".mp4"
+            elif msg.tipo == MessageType.AUDIO or msg.tipo == "audio":
+                ext = ".ogg"
+            elif msg.tipo == MessageType.ARQUIVO or msg.tipo == "arquivo":
+                ext = ".pdf"
+            elif msg.tipo == MessageType.IMAGEM or msg.tipo == "imagem":
+                ext = ".jpeg"
+
+            try:
+                os.makedirs("uploads", exist_ok=True)
+                if "," in b64_data:
+                    raw_bytes = base64.b64decode(b64_data.split(",")[1])
+                else:
+                    raw_bytes = base64.b64decode(b64_data)
+
+                fname = f"{uuid.uuid4().hex}{ext}"
+                fpath = os.path.join("uploads", fname)
+                with open(fpath, "wb") as f:
+                    f.write(raw_bytes)
+
+                caption = raw.split("|", 1)[1] if "|" in raw else ""
+                new_conteudo = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
+                msg.conteudo = new_conteudo
+                await db.commit()
+
+                return FileResponse(fpath)
+            except Exception as e:
+                logger.error(f"Error caching media base64: {e}")
+
+    # Fallback redirect if still external http
+    if media_path.startswith("http") and not "mmg.whatsapp.net" in media_path:
+        return RedirectResponse(url=media_path)
+
+    raise HTTPException(status_code=404, detail="Mídia não disponível")
 
 @router.post("/{conversation_id}/messages", response_model=MessageResponse)
 async def send_agent_message(

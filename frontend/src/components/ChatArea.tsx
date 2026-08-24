@@ -838,7 +838,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '');
-    const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+    let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+    if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
+      fullUrl = `http://localhost:8000/api/v1/conversations/messages/${msg.id}/media`;
+    }
     const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
 
     switch (msg.tipo) {

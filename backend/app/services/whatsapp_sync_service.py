@@ -324,6 +324,31 @@ class WhatsAppSyncService:
                                     remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
                                     content_text, msg_type = self._parse_message_content(m_obj)
 
+                                    # If message is media and has mmg.whatsapp.net, download and save to /uploads/
+                                    if "mmg.whatsapp.net" in content_text or msg_type in [MessageType.IMAGEM, MessageType.VIDEO, MessageType.AUDIO, MessageType.ARQUIVO]:
+                                        try:
+                                            from app.services.evolution_service import evolution_service
+                                            import base64
+                                            import uuid
+                                            import os
+                                            b64_data = await evolution_service.get_media_base64(
+                                                instance_name=instance_name,
+                                                message_id=msg_wa_id,
+                                                from_me=from_me,
+                                                remote_jid=jid
+                                            )
+                                            if b64_data:
+                                                os.makedirs("uploads", exist_ok=True)
+                                                ext = ".jpeg" if msg_type == MessageType.IMAGEM else (".mp4" if msg_type == MessageType.VIDEO else (".ogg" if msg_type == MessageType.AUDIO else ".pdf"))
+                                                raw_b = base64.b64decode(b64_data.split(",")[1] if "," in b64_data else b64_data)
+                                                fname = f"{uuid.uuid4().hex}{ext}"
+                                                with open(os.path.join("uploads", fname), "wb") as f:
+                                                    f.write(raw_b)
+                                                caption = content_text.split("|", 1)[1] if "|" in content_text else ""
+                                                content_text = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
+                                        except Exception as media_err:
+                                            logger.debug(f"Could not auto-download media for {msg_wa_id}: {media_err}")
+
                                     ts_raw = m_obj.get("messageTimestamp")
                                     msg_dt = datetime.utcnow()
                                     if ts_raw:

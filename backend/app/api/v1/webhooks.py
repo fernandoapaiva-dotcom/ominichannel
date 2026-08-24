@@ -623,7 +623,7 @@ async def receive_evolution_webhook(
 
     if (img_msg or vid_msg or aud_msg or doc_msg or stk_msg) and not media_base64 and msg_id:
         try:
-            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id, from_me=from_me)
+            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id, from_me=from_me, remote_jid=remote_jid)
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
