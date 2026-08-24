@@ -167,6 +167,9 @@ export const ChatList: React.FC<ChatListProps> = ({
         const lastMsg = msgs[msgs.length - 1];
         if (!lastMsg) return false;
         if (lastMsg.status === 'read') return false;
+        const lastMsgTime = lastMsg.timestamp ? parseIsoDate(lastMsg.timestamp).getTime() : 0;
+        const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
+        if (!isRecent && !conv.protocol_number) return false;
         return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
       });
 
@@ -216,6 +219,9 @@ export const ChatList: React.FC<ChatListProps> = ({
     const lastMsg = msgs[msgs.length - 1];
     if (!lastMsg) return false;
     if (lastMsg.status === 'read') return false;
+    const lastMsgTime = lastMsg.timestamp ? parseIsoDate(lastMsg.timestamp).getTime() : 0;
+    const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
+    if (!isRecent && !conv.protocol_number) return false;
     return lastMsg.remetente?.toLowerCase() === 'cliente' && activeConversation?.id !== conv.id;
   }).length;
 
@@ -437,10 +443,15 @@ export const ChatList: React.FC<ChatListProps> = ({
               primaryConv.dados_adicionais?.is_pinned ||
               group.allConversations.some(c => c.dados_adicionais?.is_pinned)
             );
+            const lastMsgTime = lastMessage?.timestamp ? parseIsoDate(lastMessage.timestamp).getTime() : 0;
+            const isRecentMessage = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 24 * 60 * 60 * 1000;
+
             const isWaitingAttendant = Boolean(
+              !isSelected &&
               !primaryConv.dados_adicionais?.marked_as_read &&
               !primaryConv.dados_adicionais?.pending_dismissed &&
               (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
+              isRecentMessage &&
               (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente' && lastMessage.status !== 'read'))
             );
 
@@ -698,10 +709,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     )}
 
                     {/* Pending / Unreplied Alert Badge */}
-                    {(!primaryConv.dados_adicionais?.marked_as_read &&
-                      !primaryConv.dados_adicionais?.pending_dismissed &&
-                      (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
-                      (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente' && lastMessage.status !== 'read'))) && (
+                    {isWaitingAttendant && (
                       <span style={{
                         fontSize: '9px',
                         fontWeight: '800',

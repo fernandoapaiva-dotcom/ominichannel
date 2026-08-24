@@ -44,6 +44,9 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       const lastMsg = msgs[msgs.length - 1];
       if (!lastMsg) return false;
       if (lastMsg.status === 'read') return false;
+      const lastMsgTime = lastMsg.timestamp ? new Date(lastMsg.timestamp).getTime() : 0;
+      const isRecent = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 48 * 60 * 60 * 1000;
+      if (!isRecent && !c.protocol_number) return false;
       return lastMsg.remetente?.toLowerCase() === 'cliente';
     }).length;
   };
