@@ -4,7 +4,7 @@ import {
   AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
-  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar
+  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -534,6 +534,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } finally {
       setIsTogglingPin(false);
     }
+  };
+
+  const [showMentionMenu, setShowMentionMenu] = useState(false);
+
+  const handleInsertMention = (mentionTag: string) => {
+    const target = textareaRef.current;
+    if (!target) {
+      setInputText(prev => prev + mentionTag);
+      setShowMentionMenu(false);
+      return;
+    }
+    const start = target.selectionStart || 0;
+    const end = target.selectionEnd || 0;
+    const val = inputText;
+
+    let newVal = '';
+    let newCursorPos = 0;
+    if (start > 0 && val.charAt(start - 1) === '@') {
+      newVal = val.substring(0, start - 1) + mentionTag + val.substring(end);
+      newCursorPos = start - 1 + mentionTag.length;
+    } else {
+      newVal = val.substring(0, start) + mentionTag + val.substring(end);
+      newCursorPos = start + mentionTag.length;
+    }
+
+    setInputText(newVal);
+    setShowMentionMenu(false);
+    setTimeout(() => {
+      target.focus();
+      target.selectionStart = target.selectionEnd = newCursorPos;
+    }, 0);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3640,10 +3671,102 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Paperclip size={18} />
             </button>
             
+            <button
+              type="button"
+              onClick={() => setShowMentionMenu(!showMentionMenu)}
+              className="btn-secondary"
+              style={{
+                height: '42px',
+                padding: '0 12px',
+                color: showMentionMenu ? 'var(--accent-primary)' : 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: '700',
+                fontSize: '15px'
+              }}
+              title="Marcar pessoa (@) ou todos no grupo (@todos)"
+            >
+              @
+            </button>
+
+            {showMentionMenu && (
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: 'calc(100% + 8px)',
+                  left: '20px',
+                  backgroundColor: '#0f172a',
+                  border: '1px solid rgba(0, 230, 153, 0.3)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
+                  zIndex: 1000,
+                  width: '280px',
+                  maxHeight: '220px',
+                  overflowY: 'auto',
+                  padding: '6px'
+                }}
+              >
+                <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+                  Mencionar no WhatsApp:
+                </div>
+                {/* Option 1: @todos */}
+                <div
+                  onClick={() => handleInsertMention('@todos ')}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    color: 'var(--accent-primary)',
+                    fontWeight: '700',
+                    fontSize: '13px',
+                    transition: 'background 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                >
+                  <Users size={16} />
+                  <div>
+                    <div>@todos</div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos no grupo</div>
+                  </div>
+                </div>
+
+                {/* Option 2: Current Contact */}
+                {conversation?.contact && (
+                  <div
+                    onClick={() => handleInsertMention(`@${conversation.contact?.nome || conversation.contact?.telefone} `)}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      color: 'var(--text-main)',
+                      fontSize: '13px',
+                      transition: 'background 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <UserIcon size={16} color="#60a5fa" />
+                    <div>
+                      <div style={{ fontWeight: '600' }}>@{conversation.contact.nome || 'Cliente'}</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{conversation.contact.telefone}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             <textarea
               ref={textareaRef}
               rows={1}
-              placeholder={isGroupChat ? 'Enviar mensagem no grupo... (Shift+Enter ou Ctrl+Enter quebra linha)' : 'Digite sua mensagem... (Shift+Enter ou Ctrl+Enter quebra linha)'}
+              placeholder={isGroupChat ? 'Enviar mensagem no grupo... (@ menciona alguém ou @todos)' : 'Digite sua mensagem... (Shift+Enter ou Ctrl+Enter quebra linha)'}
               value={inputText}
               spellCheck={true}
               lang="pt-BR"
@@ -3651,12 +3774,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               autoCapitalize="sentences"
               autoComplete="on"
               onChange={(e) => {
-                setInputText(e.target.value);
+                const val = e.target.value;
+                setInputText(val);
                 e.target.style.height = 'auto';
                 const nextH = Math.min(e.target.scrollHeight, 140);
                 e.target.style.height = `${Math.max(nextH, 42)}px`;
+
+                // Detect if user typed '@'
+                const cursor = e.target.selectionStart || 0;
+                if (cursor > 0 && val.charAt(cursor - 1) === '@') {
+                  setShowMentionMenu(true);
+                } else if (showMentionMenu && !val.includes('@')) {
+                  setShowMentionMenu(false);
+                }
               }}
               onKeyDown={(e) => {
+                if (e.key === 'Escape' && showMentionMenu) {
+                  setShowMentionMenu(false);
+                  return;
+                }
                 if (e.key === 'Enter') {
                   if (e.ctrlKey || e.shiftKey) {
                     if (e.ctrlKey && !e.shiftKey) {

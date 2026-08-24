@@ -434,6 +434,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 setStatusFilter={setStatusFilter}
                 onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
                 onStatusToggle={fetchConversations}
+                currentUserId={user?.id}
               />
             </div>
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>

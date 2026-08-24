@@ -773,13 +773,20 @@ async def send_agent_message(
             file_name="animacao.mp4"
         )
     else:
-        provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
-        agent_name = current_user.nome or "Atendente"
-        formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+        # Extract mentions in text (e.g. @todos, @everyone, @55...)
+        mentioned_list = []
+        c_text = msg_in.conteudo or ""
+        if "@todos" in c_text.lower() or "@everyone" in c_text.lower() or "@all" in c_text.lower():
+            mentioned_list.append("all")
+        import re
+        phone_mentions = re.findall(r"@(\d{10,15})", c_text)
+        for pm in phone_mentions:
+            mentioned_list.append(f"{pm}@s.whatsapp.net")
 
         send_res = await provider.send_text_message(
             number=conv.contact.telefone,
-            text=formatted_whatsapp_text
+            text=formatted_whatsapp_text,
+            mentioned=mentioned_list if mentioned_list else None
         )
 
     # 2. If delivery failed on the department's instance, raise HTTP error and do not commit message

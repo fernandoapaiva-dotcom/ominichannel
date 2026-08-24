@@ -190,19 +190,19 @@ class EvolutionService:
         instance_name: str,
         number: str,
         text: str,
+        mentioned: Optional[List[str]] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
         clean_number = self._format_target_number(number)
-        payload = {
+        payload: Dict[str, Any] = {
             "number": clean_number,
-            "textOptions": {
-                "delay": 1200,
-            },
             "text": text
         }
+        if mentioned:
+            payload["mentioned"] = mentioned
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=15.0)

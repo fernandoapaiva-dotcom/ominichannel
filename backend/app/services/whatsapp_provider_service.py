@@ -11,7 +11,7 @@ logger = logging.getLogger("whatsapp_provider_service")
 
 class WhatsAppProviderInterface(ABC):
     @abstractmethod
-    async def send_text_message(self, number: str, text: str) -> Dict[str, Any]:
+    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None) -> Dict[str, Any]:
         """Sends text message to a specific phone number."""
         pass
 
@@ -24,13 +24,14 @@ class EvolutionProvider(WhatsAppProviderInterface):
     def __init__(self, instance_name: Optional[str]):
         self.instance_name = instance_name or ""
 
-    async def send_text_message(self, number: str, text: str) -> Dict[str, Any]:
+    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None) -> Dict[str, Any]:
         if not self.instance_name:
             return {"success": False, "error": "Nome da instância na Evolution API não configurado."}
         return await evolution_service.send_text_message(
             instance_name=self.instance_name,
             number=number,
-            text=text
+            text=text,
+            mentioned=mentioned
         )
 
     async def get_status(self) -> Dict[str, Any]:
