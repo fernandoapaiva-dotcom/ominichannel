@@ -535,10 +535,6 @@ async def receive_evolution_webhook(
     key = data.get("key", {}) if isinstance(data, dict) else {}
     from_me = key.get("fromMe", False) if isinstance(key, dict) else False
 
-    # Ignore messages sent by ourselves
-    if from_me:
-        return {"status": "ignored", "reason": "Outgoing message"}
-
     remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
     is_group = (
         "@g.us" in str(remote_jid).lower() or
@@ -627,7 +623,7 @@ async def receive_evolution_webhook(
 
     if (img_msg or vid_msg or aud_msg or doc_msg or stk_msg) and not media_base64 and msg_id:
         try:
-            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id)
+            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id, from_me=from_me)
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
@@ -952,6 +948,44 @@ async def receive_evolution_webhook(
         ("SOF Q 5" in text_content and "71215-226" in text_content) or
         is_bot_or_menu_message(text_content)
     )
+
+    # 4. If message was sent from mobile cellphone by attendant/staff (fromMe: True)
+    if from_me:
+        attendant_msg = Message(
+            conversation_id=conversation.id,
+            remetente=MessageSender.ATENDENTE,
+            conteudo=text_content,
+            tipo=msg_type,
+            status="read",
+            whatsapp_msg_id=msg_id if msg_id else None,
+            timestamp=datetime.utcnow()
+        )
+        db.add(attendant_msg)
+        conversation.ultima_interacao_em = datetime.utcnow()
+        conversation.status = ConversationStatus.COM_HUMANO
+        extra = dict(conversation.dados_adicionais or {})
+        extra["marked_as_read"] = True
+        extra["pending_dismissed"] = True
+        conversation.dados_adicionais = extra
+        await db.commit()
+
+        # Broadcast attendant mobile message via WebSockets to agents
+        await ws_manager.broadcast_to_department(
+            tenant_id=tenant_id,
+            whatsapp_number_id=whatsapp_number.id,
+            message_data={
+                "type": "NEW_MESSAGE",
+                "conversation_id": conversation.id,
+                "remetente": MessageSender.ATENDENTE.value,
+                "conteudo": text_content,
+                "timestamp": attendant_msg.timestamp.isoformat() + "Z" if hasattr(attendant_msg.timestamp, "isoformat") else str(attendant_msg.timestamp),
+                "contact_name": contact.nome,
+                "contact_phone": contact.telefone,
+                "department": whatsapp_number.nome_departamento
+            }
+        )
+        logger.info(f"[OUTGOING MOBILE SYNC] Mensagem/Foto enviada pelo celular sincronizada na conversa #{conversation.id} ({contact.nome})")
+        return {"status": "success", "action": "synced_attendant_mobile_message"}
 
     # 4. Save Customer Message with WhatsApp Message ID
     user_msg = Message(

@@ -352,6 +352,7 @@ class EvolutionService:
         self,
         instance_name: str,
         message_id: str,
+        from_me: bool = False,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Optional[str]:
@@ -360,7 +361,8 @@ class EvolutionService:
         payload = {
             "message": {
                 "key": {
-                    "id": message_id
+                    "id": message_id,
+                    "fromMe": from_me
                 }
             },
             "convertToMp4": False
