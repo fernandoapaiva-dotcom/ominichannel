@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User, Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { apiFetch } from '../services/api';
 import { Sidebar } from '../components/Sidebar';
