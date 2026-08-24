@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building } from 'lucide-react';
 import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../types';
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
