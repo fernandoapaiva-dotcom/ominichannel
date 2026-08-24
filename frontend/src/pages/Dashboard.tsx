@@ -109,6 +109,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
+  const handleSelectConversation = useCallback((convId: number) => {
+    setActiveConversationId(convId);
+    // Optimistically mark as read in conversations state
+    setConversations(prev => prev.map(c => {
+      if (c.id === convId) {
+        return {
+          ...c,
+          dados_adicionais: {
+            ...(c.dados_adicionais || {}),
+            marked_as_read: true,
+            pending_dismissed: true
+          }
+        };
+      }
+      return c;
+    }));
+    // Persist to backend silently
+    apiFetch(`/conversations/${convId}/mark_read`, { method: 'POST' })
+      .catch(err => console.debug('Error auto-marking conversation read:', err));
+  }, []);
+
   useEffect(() => {
     fetchConversations();
     fetchNumbers();
@@ -368,7 +389,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         onToggleCollapse={() => setIsMainSidebarCollapsed(!isMainSidebarCollapsed)}
         conversations={conversations}
         onSelectConversation={(convId) => {
-          setActiveConversationId(convId);
+          handleSelectConversation(convId);
           setActiveTab('chats');
         }}
         onRefreshConversations={fetchConversations}
@@ -405,7 +426,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               <ChatList
                 conversations={displayedConversations}
                 activeConversation={activeConversation}
-                onSelectConversation={(conv) => setActiveConversationId(conv.id)}
+                onSelectConversation={(conv) => handleSelectConversation(conv.id)}
                 whatsappNumbers={whatsappNumbers}
                 selectedDepartmentId={selectedDeptId}
                 setSelectedDepartmentId={setSelectedDeptId}
@@ -419,7 +440,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               <ChatArea
                 conversation={activeConversation}
                 allConversations={conversations}
-                onSelectConversation={(conv) => setActiveConversationId(conv.id)}
+                onSelectConversation={(conv) => handleSelectConversation(conv.id)}
                 currentUser={user}
                 onSendMessage={handleSendMessage}
                 onOpenTransferModal={() => setIsTransferModalOpen(true)}

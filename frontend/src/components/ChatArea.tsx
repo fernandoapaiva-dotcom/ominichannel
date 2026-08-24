@@ -379,10 +379,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 1500);
   };
 
+  // Auto-mark conversation as read on screen (WhatsApp Web standard behavior)
   useEffect(() => {
     setIsUserScrolledUp(false);
     scrollToBottom();
-  }, [conversation?.id]);
+
+    if (conversation?.id) {
+      const extra = (conversation as any).dados_adicionais || {};
+      const msgs = conversation.messages || [];
+      const hasUnread = !extra.marked_as_read || !extra.pending_dismissed || msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
+
+      if (hasUnread) {
+        extra.marked_as_read = true;
+        extra.pending_dismissed = true;
+        (conversation as any).dados_adicionais = extra;
+
+        // Call backend silently to persist read status
+        apiFetch(`/conversations/${conversation.id}/mark_read`, { method: 'POST' })
+          .then(() => {
+            if (onStatusToggle) onStatusToggle();
+          })
+          .catch(err => console.debug('Auto mark_read error:', err));
+      }
+    }
+  }, [conversation?.id, conversation?.messages?.length]);
 
   useEffect(() => {
     if (!isUserScrolledUp) {
