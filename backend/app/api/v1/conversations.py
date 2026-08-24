@@ -1726,13 +1726,21 @@ async def report_ai_error(
 
 @router.get("/ai-corrections/list")
 async def list_ai_corrections(
+    revisado: Optional[bool] = None,
+    categoria_erro: Optional[str] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     from app.models.models import AICorrection
+    conditions = [AICorrection.tenant_id == current_user.tenant_id]
+    if revisado is not None:
+        conditions.append(AICorrection.revisado == revisado)
+    if categoria_erro:
+        conditions.append(AICorrection.categoria_erro == categoria_erro)
+
     stmt = (
         select(AICorrection)
-        .where(AICorrection.tenant_id == current_user.tenant_id)
+        .where(*conditions)
         .order_by(AICorrection.criado_em.desc())
         .limit(100)
     )

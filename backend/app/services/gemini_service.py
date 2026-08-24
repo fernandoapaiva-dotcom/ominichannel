@@ -143,6 +143,56 @@ RAG_PRICE_AND_PRODUCT_ANTI_HALLUCINATION_DIRECTIVE = (
 )
 
 
+def validate_and_sanitize_ai_response(
+    raw_ai_message: str,
+    had_null_name: bool,
+    had_empty_history: bool,
+    store_name: str = "Servweld"
+) -> str:
+    """
+    Camada de validação pós-resposta (Backend Anti-Hallucination Guard):
+    1. Se nome_cliente do contexto era null/desconhecido, confere se mensagem_cliente
+       contém algum nome próprio alucinado ou saudações com apelidos/títulos estranhos.
+       Se sim, substitui por saudação neutra ("Olá! Seja bem-vindo(a) à {store_name}.").
+    2. Se historico_anterior estava vazio, confere se mensagem_cliente contém expressões
+       de histórico inventado ("conversamos antes", "vi que você", "recentemente", "no nosso último contato").
+       Se sim, limpa essas expressões e garante atendimento de primeiro contato.
+    """
+    if not raw_ai_message or not isinstance(raw_ai_message, str):
+        return f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+
+    text = raw_ai_message.strip()
+
+    # Checagem 1: Nome alucinado quando nome_cliente era null/não informado
+    if had_null_name:
+        hallucinated_name_patterns = [
+            r'^(?:ol[áa]|bom\s+dia|boa\s+tarde|boa\s+noite)[,\s]+(?:eng(?:enheiro)?\.?|dr(?:a)?\.?|sr(?:a)?\.?|contato\s+\d+|cliente|[a-z0-9_\.\-]{3,}(?:\s+[a-z0-9_\.\-]+){0,4})[!\.,\s]+'
+        ]
+        for pat in hallucinated_name_patterns:
+            if re.search(pat, text, flags=re.IGNORECASE):
+                text = re.sub(pat, f"Olá! Seja bem-vindo(a) à {store_name}. ", text, count=1, flags=re.IGNORECASE).strip()
+                break
+
+    # Checagem 2: Expressões de histórico inventado quando historico_anterior era vazio
+    if had_empty_history:
+        fake_history_patterns = [
+            r'(?:vi\s+que\s+conversamos\s+recentemente[^\.\?!]*[\.\?!])',
+            r'(?:conforme\s+conversamos\s+anteriormente[^\.\?!]*[\.\?!])',
+            r'(?:como\s+falamos\s+no\s+nosso\s+[úu]ltimo\s+contato[^\.\?!]*[\.\?!])',
+            r'(?:em\s+continuidade\s+ao\s+nosso\s+atendimento\s+anterior[^\.\?!]*[\.\?!])',
+            r'(?:dando\s+sequ[êe]ncia\s+ao\s+que\s+falamos[^\.\?!]*[\.\?!])',
+            r'(?:conforme\s+nos\s+falamos\s+antes[^\.\?!]*[\.\?!])',
+            r'(?:vi\s+que\s+voc[êe]\s+já\s+havia\s+entrado\s+em\s+contato[^\.\?!]*[\.\?!])'
+        ]
+        for pat in fake_history_patterns:
+            text = re.sub(pat, "", text, flags=re.IGNORECASE).strip()
+
+        if not text or len(text) < 8:
+            text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+
+    return text
+
+
 class GeminiService:
     def __init__(self):
         if settings.GEMINI_API_KEY:
@@ -341,57 +391,6 @@ class GeminiService:
                 await asyncio.sleep(0.5)
 
         return f"Olá {clean_name}! Em que posso te ajudar hoje?"
-
-def validate_and_sanitize_ai_response(
-    raw_ai_message: str,
-    had_null_name: bool,
-    had_empty_history: bool,
-    store_name: str = "Servweld"
-) -> str:
-    """
-    Camada de validação pós-resposta (Backend Anti-Hallucination Guard):
-    1. Se nome_cliente do contexto era null/desconhecido, confere se mensagem_cliente
-       contém algum nome próprio alucinado ou saudações com apelidos/títulos estranhos.
-       Se sim, substitui por saudação neutra ("Olá! Seja bem-vindo(a) à {store_name}.").
-    2. Se historico_anterior estava vazio, confere se mensagem_cliente contém expressões
-       de histórico inventado ("conversamos antes", "vi que você", "recentemente", "no nosso último contato").
-       Se sim, limpa essas expressões e garante atendimento de primeiro contato.
-    """
-    if not raw_ai_message or not isinstance(raw_ai_message, str):
-        return f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
-
-    text = raw_ai_message.strip()
-
-    # Checagem 1: Nome alucinado quando nome_cliente era null/não informado
-    if had_null_name:
-        # Padrões de saudações com nomes/apelidos/títulos indevidos (ex: "Olá, JOSA O.S 1778!", "Olá Eng. Marcos!", "Olá Cliente!")
-        hallucinated_name_patterns = [
-            r'^(?:ol[áa]|bom\s+dia|boa\s+tarde|boa\s+noite)[,\s]+(?:eng(?:enheiro)?\.?|dr(?:a)?\.?|sr(?:a)?\.?|contato\s+\d+|cliente|[a-z0-9_\.\-]{3,}(?:\s+[a-z0-9_\.\-]+){0,4})[!\.,\s]+'
-        ]
-        for pat in hallucinated_name_patterns:
-            if re.search(pat, text, flags=re.IGNORECASE):
-                text = re.sub(pat, f"Olá! Seja bem-vindo(a) à {store_name}. ", text, count=1, flags=re.IGNORECASE).strip()
-                break
-
-    # Checagem 2: Expressões de histórico inventado quando historico_anterior era vazio
-    if had_empty_history:
-        fake_history_patterns = [
-            r'(?:vi\s+que\s+conversamos\s+recentemente[^\.\?!]*[\.\?!])',
-            r'(?:conforme\s+conversamos\s+anteriormente[^\.\?!]*[\.\?!])',
-            r'(?:como\s+falamos\s+no\s+nosso\s+[úu]ltimo\s+contato[^\.\?!]*[\.\?!])',
-            r'(?:em\s+continuidade\s+ao\s+nosso\s+atendimento\s+anterior[^\.\?!]*[\.\?!])',
-            r'(?:dando\s+sequ[êe]ncia\s+ao\s+que\s+falamos[^\.\?!]*[\.\?!])',
-            r'(?:conforme\s+nos\s+falamos\s+antes[^\.\?!]*[\.\?!])',
-            r'(?:vi\s+que\s+voc[êe]\s+já\s+havia\s+entrado\s+em\s+contato[^\.\?!]*[\.\?!])'
-        ]
-        for pat in fake_history_patterns:
-            text = re.sub(pat, "", text, flags=re.IGNORECASE).strip()
-
-        if not text or len(text) < 8:
-            text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
-
-    return text
-
 
     async def generate_concierge_response(
         self,
@@ -963,14 +962,17 @@ def validate_and_sanitize_ai_response(
         client = self.get_client_for_key(tenant_gemini_api_key)
         primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
         clean_name = sanitize_customer_name(customer_name)
+        has_real_name = bool(customer_name and clean_name not in ["Cliente", ""])
+        display_name = clean_name if has_real_name else "Cliente (nome não informado)"
 
         if not messages_history:
             return (
                 f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-                f"👤 *Cliente:* {clean_name}\n"
+                f"👤 *Cliente:* {display_name}\n"
                 f"🔢 *Protocolo:* {protocol_number}\n"
                 f"🏢 *Departamento:* {department_name}\n"
                 f"🎯 *Motivo do Contato:* Novo chamado iniciado pelo cliente.\n"
+                f"⚙️ *Equipamento/Modelo:* Não informado pelo cliente\n"
                 f"📍 *Onde Parou:* Início do atendimento.\n"
                 f"👉 *Próxima Ação Sugerida:* Enviar saudação inicial e verificar a necessidade do cliente."
             )
@@ -994,29 +996,41 @@ def validate_and_sanitize_ai_response(
         prompt = (
             f"Você é o assistente de IA responsável pelo Onboarding do Atendente Humano da empresa Servweld.\n"
             f"Analise a conversa real abaixo entre o cliente e a IA no setor '{department_name}' (Protocolo: {protocol_number}).\n\n"
-            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
-            "Gere um resumo estruturado no seguinte formato exato:\n"
-            f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-            f"👤 *Cliente:* {clean_name}\n"
-            f"🔢 *Protocolo:* {protocol_number}\n"
-            f"🏢 *Departamento:* {department_name}\n"
-            "🎯 *Motivo do Contato:* <resumo em 1 frase factual sobre o que o cliente quer>\n"
-            "📍 *Onde Parou:* <o que a IA/cliente já falaram antes de passar para o humano>\n"
-            "👉 *Próxima Ação Sugerida:* <orientação prática e direta para o atendente continuar o atendimento sem repetir perguntas já respondidas>\n\n"
-            "DIRETRIZES ESTRITAS DE FACTUALIDADE:\n"
-            f"1. NOME DO CLIENTE: No campo 'Cliente', use EXATAMENTE '{clean_name}'. É PROIBIDO inventar títulos profissionais (Eng., Dr., etc.) ou sobrenomes que não constem expressamente na identificação.\n"
-            "2. BASE EXCLUSIVAMENTE FACTUAL: Use apenas o que foi dito nas mensagens reais. É proibido inventar valores, modelos de equipamentos, marcas ou problemas técnicos adicionais.\n"
-            "3. Seja direto, profissional e objetivo.\n\n"
+            "# DIRETRIZES MANDATÓRIAS DE FACTUALIDADE E RASTREABILIDADE DE ORIGEM (TAREFA 2):\n"
+            "1. FONTE EXCLUSIVA: Preencha cada campo usando APENAS o que o cliente escreveu literalmente.\n"
+            "2. NÃO INFERIR DETALHES TÉCNICOS: Se marca, modelo ou detalhe técnico não foi digitado expressamente pelo cliente, defina 'origem': 'nao_informado' e 'valor': 'Não informado pelo cliente'. NUNCA infira nem complete com algo plausível, mesmo que a IA Concierge tenha sugerido esse detalhe na conversa.\n"
+            "3. RASTREABILIDADE: Se um detalhe técnico ou defeito foi sugerido pela IA mas o cliente ainda não confirmou com todas as letras, defina 'origem': 'ia_sugeriu'. Se o próprio cliente digitou, defina 'origem': 'cliente'.\n"
+            f"4. NOME DO CLIENTE: Use '{display_name}'. Proibido inventar títulos (Eng., Dr.) ou sobrenomes.\n\n"
+            "Responda SEMPRE em JSON estruturado:\n"
+            "{\n"
+            "  \"motivo_contato\": {\"valor\": \"resumo curto da necessidade\", \"origem\": \"cliente | ia_sugeriu\"},\n"
+            "  \"equipamento_modelo\": {\"valor\": \"nome do equipamento ou Não informado pelo cliente\", \"origem\": \"cliente | ia_sugeriu | nao_informado\"},\n"
+            "  \"defeito\": {\"valor\": \"defeito relatado ou Não informado\", \"origem\": \"cliente | ia_sugeriu | nao_informado\"},\n"
+            "  \"onde_parou\": \"o que a IA/cliente falaram por último\",\n"
+            "  \"proxima_acao\": \"orientação prática e direta para o atendente continuar\"\n"
+            "}\n\n"
             f"HISTÓRICO REAL DA CONVERSA:\n" + "\n".join(messages_text)
         )
+
+        def format_field(field_obj: Dict[str, Any]) -> str:
+            if not isinstance(field_obj, dict):
+                return str(field_obj or "Não informado pelo cliente")
+            val = str(field_obj.get("valor", "")).strip()
+            orig = str(field_obj.get("origem", "")).strip().lower()
+            if orig == "nao_informado" or not val or val.lower() in ["não informado", "nao informado", "não informado pelo cliente", "nenhum", "null"]:
+                return "Não informado pelo cliente"
+            if orig == "ia_sugeriu":
+                return f"{val} ⚠️ (detalhe sugerido pela IA, não confirmado literalmente pelo cliente)"
+            return val
 
         if not client:
             return (
                 f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-                f"👤 *Cliente:* {clean_name}\n"
+                f"👤 *Cliente:* {display_name}\n"
                 f"🔢 *Protocolo:* {protocol_number}\n"
                 f"🏢 *Departamento:* {department_name}\n"
                 f"🎯 *Motivo do Contato:* Atendimento transferido para equipe humana.\n"
+                f"⚙️ *Equipamento/Modelo:* Não informado pelo cliente\n"
                 f"📍 *Onde Parou:* Transferência solicitada.\n"
                 f"👉 *Próxima Ação Sugerida:* Verifique a última mensagem do cliente e dê continuidade."
             )
@@ -1034,17 +1048,46 @@ def validate_and_sanitize_ai_response(
                     contents=prompt
                 )
                 if response and response.text:
-                    return response.text.strip()
+                    raw_text = response.text.strip()
+                    try:
+                        clean_json_str = raw_text
+                        if clean_json_str.startswith("```"):
+                            clean_json_str = re.sub(r'^```(?:json)?\s*', '', clean_json_str)
+                            clean_json_str = re.sub(r'\s*```$', '', clean_json_str)
+                        clean_json_str = clean_json_str.strip()
+                        parsed = json.loads(clean_json_str)
+                        
+                        motivo = format_field(parsed.get("motivo_contato", {}))
+                        equipamento = format_field(parsed.get("equipamento_modelo", {}))
+                        defeito = format_field(parsed.get("defeito", {}))
+                        onde_parou = str(parsed.get("onde_parou", "Transferência para operador")).strip()
+                        proxima_acao = str(parsed.get("proxima_acao", "Analisar histórico e responder o cliente")).strip()
+
+                        return (
+                            f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
+                            f"👤 *Cliente:* {display_name}\n"
+                            f"🔢 *Protocolo:* {protocol_number}\n"
+                            f"🏢 *Departamento:* {department_name}\n"
+                            f"🎯 *Motivo do Contato:* {motivo}\n"
+                            f"⚙️ *Equipamento/Modelo:* {equipamento}\n"
+                            f"🛠️ *Defeito Relatado:* {defeito}\n"
+                            f"📍 *Onde Parou:* {onde_parou}\n"
+                            f"👉 *Próxima Ação Sugerida:* {proxima_acao}"
+                        )
+                    except Exception:
+                        # Fallback text if json decode fails
+                        return raw_text
             except Exception as e:
                 logger.warning(f"Error generating onboarding summary with '{m_name}': {e}")
                 await asyncio.sleep(0.3)
 
         return (
             f"📋 *RESUMO DE ONBOARDING (ONDE PAROU)*\n"
-            f"👤 *Cliente:* {clean_name}\n"
+            f"👤 *Cliente:* {display_name}\n"
             f"🔢 *Protocolo:* {protocol_number}\n"
             f"🏢 *Departamento:* {department_name}\n"
             f"🎯 *Motivo do Contato:* Atendimento transferido para operador.\n"
+            f"⚙️ *Equipamento/Modelo:* Não informado pelo cliente\n"
             f"📍 *Onde Parou:* Transferência efetuada.\n"
             f"👉 *Próxima Ação Sugerida:* Analise o histórico e responda o cliente."
         )

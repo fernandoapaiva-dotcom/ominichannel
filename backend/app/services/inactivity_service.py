@@ -17,15 +17,60 @@ from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("inactivity_service")
 
+from zoneinfo import ZoneInfo
+from app.services.business_hours_service import BRASILIA_TZ
+
+TIMEOUT_INATIVIDADE = timedelta(hours=4)
+AVISO_1 = timedelta(minutes=30)   # 30 minutos antes do fechamento (210 min úteis)
+AVISO_2 = timedelta(minutes=10)   # 10 minutos antes do fechamento (230 min úteis)
+
+
+def esta_aberta(momento: datetime) -> bool:
+    """Verifica se o momento está dentro do horário de funcionamento comercial (08:00 às 18:00 seg-sex em Brasília)."""
+    if momento.tzinfo is None:
+        from datetime import timezone
+        local_dt = momento.replace(tzinfo=timezone.utc).astimezone(BRASILIA_TZ)
+    else:
+        local_dt = momento.astimezone(BRASILIA_TZ)
+
+    # Sábado (5) e Domingo (6) fechado
+    if local_dt.weekday() >= 5:
+        return False
+
+    hora = local_dt.time()
+    from datetime import time
+    return time(8, 0, 0) <= hora < time(18, 0, 0)
+
+
+def calcula_inatividade_util(ultima_mensagem_em: datetime, agora: datetime) -> timedelta:
+    """
+    Soma somente os minutos que caem dentro do horário de funcionamento comercial da loja.
+    """
+    if not ultima_mensagem_em or ultima_mensagem_em >= agora:
+        return timedelta(0)
+
+    total = timedelta()
+    cursor = ultima_mensagem_em
+    passo = timedelta(minutes=1)
+
+    while cursor < agora:
+        proximo = min(cursor + passo, agora)
+        if esta_aberta(cursor):
+            total += (proximo - cursor)
+        cursor = proximo
+
+    return total
+
+
 class InactivityService:
     async def check_and_expire_idle_conversations(self):
         """
-        Tiered Escalated Inactivity Monitor (Fase 6):
-        - Uses configurable tenant 'inatividade_minutos' (T) (e.g. 45 min).
-        - Tier 1 Warning: When (T - 10) min elapsed -> Friendly check-in warning (10 min remaining).
-        - Tier 2 Warning: When (T - 5) min elapsed -> Urgent notice (5 min remaining).
-        - Tier 3 Expiration: When T min elapsed -> Marks EXPIRADA_POR_INATIVIDADE, exports backup, frees attendant.
-        - If customer sends a message anytime, warnings are reset and timer restarts.
+        Inactivity Monitor Ciente do Horário de Funcionamento (Tarefa 3):
+        - Timeout total: 4 horas úteis (240 min) dentro do expediente (08:00 - 18:00 seg-sex).
+        - Aviso 1: 30 minutos restantes (210 min úteis decorridos).
+        - Aviso 2: 10 minutos restantes (230 min úteis decorridos).
+        - Encerramento: 4 horas úteis (240 min úteis decorridos).
+        - Mensagens fora do expediente não contam inatividade até a reabertura da loja.
         """
         async with AsyncSessionLocal() as db:
             try:
@@ -67,7 +112,6 @@ class InactivityService:
                         continue
 
                     # CRITICAL: Inactivity warnings and closing messages MUST ONLY EVER be sent to live active protocols!
-                    # NEVER send messages to migrated chats, historical WhatsApp conversations, or chats without an open protocol!
                     if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
                         continue
 
@@ -78,29 +122,19 @@ class InactivityService:
                     if not conv.ultima_interacao_em:
                         continue
 
-                    # Total timeout T configured on tenant
-                    t_total = float((tenant.config_geral or {}).get("inatividade_minutos", 45)) if isinstance(tenant.config_geral, dict) else 45.0
-                    
-                    # Calculate warning thresholds relative to T
-                    if t_total > 10.0:
-                        w1_threshold = t_total - 10.0  # 10 min remaining
-                        w2_threshold = t_total - 5.0   # 5 min remaining
-                    else:
-                        w1_threshold = t_total * 0.5
-                        w2_threshold = t_total * 0.8
+                    # Calcula inatividade útil (somente minutos dentro do expediente)
+                    inatividade_util = calcula_inatividade_util(conv.ultima_interacao_em, now)
+                    minutos_uteis = inatividade_util.total_seconds() / 60.0
 
-                    elapsed_minutes = (now - conv.ultima_interacao_em).total_seconds() / 60.0
-
-                    extra = dict(conv.dados_adicionais or {})
                     proto = conv.protocol_number or "S/N"
                     cust_name = conv.contact.nome if (conv.contact and conv.contact.nome) else "Cliente"
                     inst_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None
 
                     # ----------------------------------------------------
-                    # TIER 3: FINAL EXPIRATION (elapsed >= T)
+                    # TIER 3: FINAL EXPIRATION (inatividade_util >= 4 horas = 240 min)
                     # ----------------------------------------------------
-                    if elapsed_minutes >= t_total:
-                        logger.info(f"[INATIVIDADE] Conversa #{conv.id} atingiu limite total de {t_total} min sem interação. Expirando chamado...")
+                    if inatividade_util >= TIMEOUT_INATIVIDADE:
+                        logger.info(f"[INATIVIDADE ÚTIL] Conversa #{conv.id} atingiu limite de 4 horas úteis de expediente ({minutos_uteis:.1f} min). Expirando chamado...")
                         conv.status = ConversationStatus.EXPIRADA_POR_INATIVIDADE
                         extra["expired_by_inactivity_at"] = now.isoformat()
                         conv.dados_adicionais = extra
@@ -109,7 +143,7 @@ class InactivityService:
                         # Closing WhatsApp message
                         closing_msg = (
                             f"🔒 *Atendimento Finalizado por Inatividade*\n\n"
-                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) foi encerrado automaticamente após {int(t_total)} minutos de inatividade.\n\n"
+                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) foi encerrado automaticamente após 4 horas de inatividade durante o horário de expediente.\n\n"
                             f"Caso ainda precise de suporte, basta nos enviar uma nova mensagem a qualquer momento!"
                         )
                         if inst_name and conv.contact:
@@ -126,7 +160,7 @@ class InactivityService:
                         sys_msg = Message(
                             conversation_id=conv.id,
                             remetente="sistema",
-                            conteudo=f"🔒 Atendimento finalizado automaticamente por inatividade ({int(t_total)} minutos).",
+                            conteudo="🔒 Atendimento finalizado automaticamente por inatividade (4 horas úteis de expediente).",
                             tipo=MessageType.TEXTO,
                             timestamp=now
                         )
@@ -184,53 +218,15 @@ class InactivityService:
                         continue
 
                     # ----------------------------------------------------
-                    # TIER 2: WARNING 2 (5 min remaining / elapsed >= w2_threshold)
+                    # TIER 2: WARNING 2 (10 min restantes / inatividade >= 3h50 = 230 min)
                     # ----------------------------------------------------
-                    if elapsed_minutes >= w2_threshold and not extra.get("inactivity_warning_5m_sent"):
-                        rem_mins = max(1, int(round(t_total - elapsed_minutes)))
-                        logger.info(f"[INATIVIDADE] Enviando 2º aviso prévio ({rem_mins} min restantes) para conversa #{conv.id}...")
+                    if inatividade_util >= (TIMEOUT_INATIVIDADE - AVISO_2) and not extra.get("aviso_2_enviado") and not extra.get("inactivity_warning_10m_sent"):
+                        logger.info(f"[INATIVIDADE ÚTIL] Enviando 2º aviso prévio (10 min restantes) para conversa #{conv.id}...")
                         
                         warning_text = (
                             f"⚠️ *Aviso de Inatividade*\n\n"
-                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) será finalizado em aproximadamente {rem_mins} minutos por ausência de interação.\n\n"
+                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) será finalizado em aproximadamente 10 minutos por ausência de interação.\n\n"
                             f"Estamos à disposição caso queira dar continuidade!"
-                        )
-                        if inst_name and conv.contact:
-                            try:
-                                await evolution_service.send_text_message(
-                                    instance_name=inst_name,
-                                    number=conv.contact.telefone,
-                                    text=warning_text
-                                )
-                            except Exception as err:
-                                logger.warning(f"Failed to send 5m warning message to #{conv.id}: {err}")
-
-                        sys_msg = Message(
-                            conversation_id=conv.id,
-                            remetente="sistema",
-                            conteudo=f"⏳ Segundo aviso prévio de inatividade ({rem_mins} minutos restantes) enviado ao cliente.",
-                            tipo=MessageType.TEXTO,
-                            timestamp=now
-                        )
-                        db.add(sys_msg)
-
-                        extra["inactivity_warning_5m_sent"] = True
-                        extra["inactivity_warning_5m_at"] = now.isoformat()
-                        conv.dados_adicionais = extra
-                        changes_made = True
-                        continue
-
-                    # ----------------------------------------------------
-                    # TIER 1: WARNING 1 (10 min remaining / elapsed >= w1_threshold)
-                    # ----------------------------------------------------
-                    if elapsed_minutes >= w1_threshold and not extra.get("inactivity_warning_10m_sent"):
-                        rem_mins = max(1, int(round(t_total - elapsed_minutes)))
-                        logger.info(f"[INATIVIDADE] Enviando 1º aviso prévio ({rem_mins} min restantes) para conversa #{conv.id}...")
-                        
-                        warning_text = (
-                            f"⏳ *Aviso de Atendimento*\n\n"
-                            f"Olá, {cust_name}! Notamos que você está sem interagir há algum tempo. Ainda está por aí?\n\n"
-                            f"Seu atendimento (Protocolo: {proto}) será encerrado em aproximadamente {rem_mins} minutos caso não haja nova resposta."
                         )
                         if inst_name and conv.contact:
                             try:
@@ -245,16 +241,57 @@ class InactivityService:
                         sys_msg = Message(
                             conversation_id=conv.id,
                             remetente="sistema",
-                            conteudo=f"⏳ Primeiro aviso prévio de inatividade ({rem_mins} minutos restantes) enviado ao cliente.",
+                            conteudo="⏳ Segundo aviso prévio de inatividade (10 minutos restantes) enviado ao cliente.",
                             tipo=MessageType.TEXTO,
                             timestamp=now
                         )
                         db.add(sys_msg)
 
+                        extra["aviso_2_enviado"] = True
                         extra["inactivity_warning_10m_sent"] = True
                         extra["inactivity_warning_10m_at"] = now.isoformat()
                         conv.dados_adicionais = extra
                         changes_made = True
+                        continue
+
+                    # ----------------------------------------------------
+                    # TIER 1: WARNING 1 (30 min restantes / inatividade >= 3h30 = 210 min)
+                    # ----------------------------------------------------
+                    if inatividade_util >= (TIMEOUT_INATIVIDADE - AVISO_1) and not extra.get("aviso_1_enviado") and not extra.get("inactivity_warning_30m_sent"):
+                        logger.info(f"[INATIVIDADE ÚTIL] Enviando 1º aviso prévio (30 min restantes) para conversa #{conv.id}...")
+                        
+                        warning_text = (
+                            f"⏳ *Aviso de Atendimento*\n\n"
+                            f"Olá, {cust_name}! Notamos que você está sem interagir há algum tempo. Ainda está por aí?\n\n"
+                            f"Seu atendimento (Protocolo: {proto}) será encerrado em aproximadamente 30 minutos caso não haja nova resposta."
+                        )
+                        if inst_name and conv.contact:
+                            try:
+                                await evolution_service.send_text_message(
+                                    instance_name=inst_name,
+                                    number=conv.contact.telefone,
+                                    text=warning_text
+                                )
+                            except Exception as err:
+                                logger.warning(f"Failed to send 30m warning message to #{conv.id}: {err}")
+
+                        sys_msg = Message(
+                            conversation_id=conv.id,
+                            remetente="sistema",
+                            conteudo="⏳ Primeiro aviso prévio de inatividade (30 minutos restantes) enviado ao cliente.",
+                            tipo=MessageType.TEXTO,
+                            timestamp=now
+                        )
+                        db.add(sys_msg)
+
+                        extra["aviso_1_enviado"] = True
+                        extra["inactivity_warning_30m_sent"] = True
+                        extra["inactivity_warning_30m_at"] = now.isoformat()
+                        conv.dados_adicionais = extra
+                        changes_made = True
+
+                if changes_made:
+                    await db.commit()
 
                 if changes_made:
                     await db.commit()

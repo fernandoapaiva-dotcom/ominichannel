@@ -990,6 +990,11 @@ async def receive_evolution_webhook(
     # 4. Save Customer Message with WhatsApp Message ID (status received/unread)
     extra_conv = dict(conversation.dados_adicionais or {})
     extra_conv["marked_as_read"] = False
+    extra_conv["aviso_1_enviado"] = False
+    extra_conv["aviso_2_enviado"] = False
+    extra_conv["inactivity_warning_30m_sent"] = False
+    extra_conv["inactivity_warning_10m_sent"] = False
+    extra_conv["inactivity_warning_5m_sent"] = False
     conversation.dados_adicionais = extra_conv
 
     user_msg = Message(
@@ -1630,25 +1635,33 @@ async def receive_evolution_webhook(
 
             logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (business_hours={is_open}).")
 
-            # Generate structured Onboarding Summary (Resumo Onde Parou - Seção 2)
-            onboarding_summary = await gemini_service.generate_onboarding_summary(
-                customer_name=contact.nome or "Cliente",
-                protocol_number=conversation.protocol_number or "S/N",
-                department_name=whatsapp_number.nome_departamento,
-                messages_history=history + [{"remetente": "cliente", "conteudo": text_content}],
-                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
-                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
-            )
+            # Dedup check: Avoid duplicate onboarding summaries if already generated for this state
+            conv_extra = dict(conversation.dados_adicionais or {})
+            last_onboarding_hash = conv_extra.get("last_onboarding_msg_id")
+            current_msg_hash = f"{conversation.id}_{msg_id}_{len(history)}"
 
-            # Create pinned system transfer card with Onboarding Summary
-            sys_escalate_msg = Message(
-                conversation_id=conversation.id,
-                remetente="sistema",
-                conteudo=onboarding_summary,
-                tipo=MessageType.TEXTO,
-                timestamp=datetime.utcnow()
-            )
-            db.add(sys_escalate_msg)
+            if last_onboarding_hash != current_msg_hash:
+                # Generate structured Onboarding Summary with Provenance Tracking (Tarefa 2)
+                onboarding_summary = await gemini_service.generate_onboarding_summary(
+                    customer_name=contact.nome or "Cliente",
+                    protocol_number=conversation.protocol_number or "S/N",
+                    department_name=whatsapp_number.nome_departamento,
+                    messages_history=history + [{"remetente": "cliente", "conteudo": text_content}],
+                    tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                    tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+                )
+
+                # Create pinned system transfer card with Onboarding Summary
+                sys_escalate_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente="sistema",
+                    conteudo=onboarding_summary,
+                    tipo=MessageType.TEXTO,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(sys_escalate_msg)
+                conv_extra["last_onboarding_msg_id"] = current_msg_hash
+                conversation.dados_adicionais = conv_extra
 
             # Broadcast high-priority escalation alert with summary & assigned operator!
             await ws_manager.broadcast_to_department(
