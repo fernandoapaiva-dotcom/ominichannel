@@ -231,11 +231,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     if (!activeConversation) return;
 
     let targetConv = activeConversation;
+    const isGroup = Boolean(
+      targetConv.contact?.telefone?.startsWith('120363') ||
+      (targetConv.contact?.telefone && targetConv.contact.telefone.length > 15) ||
+      (targetConv.dados_adicionais as any)?.is_group
+    );
 
     // REGRA DE OURO DO DEPARTAMENTO SELECIONADO:
-    // Se o departamento está selecionado lá em cima (ex: Assistência Técnica),
+    // Se o departamento está selecionado lá em cima (ex: Assistência Técnica) e NÃO é um grupo,
     // a mensagem DEVE sair pelo número do departamento selecionado!
-    if (selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
+    if (!isGroup && selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
       const cid = targetConv.contact_id || targetConv.contact?.id;
       const cleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
       
