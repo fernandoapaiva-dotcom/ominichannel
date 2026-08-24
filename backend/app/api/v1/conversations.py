@@ -682,50 +682,13 @@ async def send_agent_message(
             text=formatted_whatsapp_text
         )
 
-        # If delivery failed and provider is Evolution, attempt failover to other active connected instances of the tenant
-        if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
-            wn_all_stmt = select(WhatsAppNumber).where(
-                WhatsAppNumber.tenant_id == current_user.tenant_id,
-                WhatsAppNumber.status == True
-            )
-            wn_all_res = await db.execute(wn_all_stmt)
-            all_wns = wn_all_res.scalars().all()
-
-            for alt_wn in all_wns:
-                if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
-                    continue
-                if is_sticker:
-                    alt_res = await evolution_service.send_sticker(
-                        instance_name=alt_wn.instancia_evolution_api,
-                        number=conv.contact.telefone,
-                        sticker_media=sticker_media
-                    )
-                elif is_gif:
-                    alt_res = await evolution_service.send_media_message(
-                        instance_name=alt_wn.instancia_evolution_api,
-                        number=conv.contact.telefone,
-                        media_type="video",
-                        mimetype="video/mp4",
-                        media=raw_content,
-                        file_name="animacao.mp4"
-                    )
-                else:
-                    alt_res = await evolution_service.send_text_message(
-                        instance_name=alt_wn.instancia_evolution_api,
-                        number=conv.contact.telefone,
-                        text=formatted_whatsapp_text
-                    )
-                if alt_res.get("success"):
-                    logger.info(f"Agent message delivered to {conv.contact.telefone} via failover instance '{alt_wn.instancia_evolution_api}'")
-                    send_res = alt_res
-                    break
-
-    # 2. If delivery failed across all instances, raise HTTP error and do not commit message
+    # 2. If delivery failed on the department's instance, raise HTTP error and do not commit message
     if not send_res.get("success", False):
-        error_detail = send_res.get("error", "Falha de conexão com o Provedor WhatsApp")
+        error_detail = send_res.get("error", "Instância desconectada ou indisponível")
+        dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}. Verifique se a instância de WhatsApp do setor está conectada (QR Code) no Painel Admin."
+            detail=f"Falha ao enviar mensagem no WhatsApp: {error_detail}. A instância do departamento '{dept_name}' não está conectada. Por favor, conecte o QR Code no Painel de Administração."
         )
 
     conv.status = ConversationStatus.COM_HUMANO
@@ -851,35 +814,25 @@ async def send_location_in_conversation(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    # Try primary department instance first, fallback to all active tenant instances
-    wn_all_stmt = select(WhatsAppNumber).where(
-        WhatsAppNumber.tenant_id == current_user.tenant_id,
-        WhatsAppNumber.status == True
-    )
-    wn_all_res = await db.execute(wn_all_stmt)
-    all_wns = wn_all_res.scalars().all()
-
     primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
-    instances_to_try = [primary_inst] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != primary_inst]
+    if not primary_inst:
+        raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
 
-    loc_sent = False
-    for inst in instances_to_try:
-        if not inst:
-            continue
-        res_loc = await evolution_service.send_location_message(
-            instance_name=inst,
-            number=conv.contact.telefone,
-            latitude=payload.latitude,
-            longitude=payload.longitude,
-            name=payload.name,
-            address=payload.address
+    res_loc = await evolution_service.send_location_message(
+        instance_name=primary_inst,
+        number=conv.contact.telefone,
+        latitude=payload.latitude,
+        longitude=payload.longitude,
+        name=payload.name,
+        address=payload.address
+    )
+
+    if not res_loc.get("success"):
+        dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao enviar card de localização no WhatsApp. A instância de '{dept_name}' não está conectada no Painel Admin."
         )
-        if res_loc.get("success"):
-            loc_sent = True
-            break
-
-    if not loc_sent:
-        raise HTTPException(status_code=502, detail="Falha ao enviar card de localização no WhatsApp. Verifique a conexão no Painel Admin.")
 
     conv.status = ConversationStatus.COM_HUMANO
     conv.assigned_user_id = current_user.id
@@ -1015,36 +968,26 @@ async def send_pix_in_conversation(
     agent_name = current_user.nome or "Atendente"
     formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}"
 
-    # Failover instance try
-    wn_all_stmt = select(WhatsAppNumber).where(
-        WhatsAppNumber.tenant_id == current_user.tenant_id,
-        WhatsAppNumber.status == True
-    )
-    wn_all_res = await db.execute(wn_all_stmt)
-    all_wns = wn_all_res.scalars().all()
-
     primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
-    instances_to_try = [primary_inst] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != primary_inst]
+    if not primary_inst:
+        raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
 
-    img_sent = False
-    for inst in instances_to_try:
-        if not inst:
-            continue
-        res_media = await evolution_service.send_media_message(
-            instance_name=inst,
-            number=conv.contact.telefone,
-            media_type="image",
-            mimetype="image/png",
-            media=base64_img,
-            file_name="qrcode_pix.png",
-            caption=formatted_caption
+    res_media = await evolution_service.send_media_message(
+        instance_name=primary_inst,
+        number=conv.contact.telefone,
+        media_type="image",
+        mimetype="image/png",
+        media=base64_img,
+        file_name="qrcode_pix.png",
+        caption=formatted_caption
+    )
+
+    if not res_media.get("success"):
+        dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
+        raise HTTPException(
+            status_code=502,
+            detail=f"Falha ao enviar o QR Code do Pix no WhatsApp. A instância de '{dept_name}' não está conectada no Painel Admin."
         )
-        if res_media.get("success"):
-            img_sent = True
-            break
-
-    if not img_sent:
-        raise HTTPException(status_code=502, detail="Falha ao enviar a imagem do Pix no WhatsApp. Verifique se a instância está conectada.")
 
     # Record message in DB
     conv.status = ConversationStatus.COM_HUMANO
@@ -1138,9 +1081,13 @@ async def send_agent_media(
     formatted_caption = f"*👤 {agent_name}:*\n\n{caption}" if caption else f"*👤 {agent_name}:*"
     base64_data = base64.b64encode(file_bytes).decode('utf-8')
 
+    primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
+    if not primary_inst:
+        raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
+
     from app.services.evolution_service import evolution_service
     send_res = await evolution_service.send_media_message(
-        instance_name=conv.whatsapp_number.instancia_evolution_api or "instancia_locacao",
+        instance_name=primary_inst,
         number=conv.contact.telefone,
         media_type=media_type,
         mimetype=mimetype,
@@ -1846,25 +1793,6 @@ async def dispatch_whatsapp_notification(
         send_res = await provider.send_text_message(
             number=conv.contact.telefone,
             text=text
-        )
-        if not send_res.get("success", False) and getattr(conv.whatsapp_number, "provider_type", "evolution") != "meta":
-            wn_all_stmt = select(WhatsAppNumber).where(
-                WhatsAppNumber.tenant_id == tenant_id,
-                WhatsAppNumber.status == True
-            )
-            wn_all_res = await db.execute(wn_all_stmt)
-            all_wns = wn_all_res.scalars().all()
-            for alt_wn in all_wns:
-                if not alt_wn.instancia_evolution_api or alt_wn.id == conv.whatsapp_number_id:
-                    continue
-                alt_res = await evolution_service.send_text_message(
-                    instance_name=alt_wn.instancia_evolution_api,
-                    number=conv.contact.telefone,
-                    text=text
-                )
-                if alt_res.get("success"):
-                    send_res = alt_res
-                    break
         return send_res
     except Exception as e:
         logger.warning(f"Error dispatching WhatsApp protocol message: {e}")
