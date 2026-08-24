@@ -136,6 +136,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [reportSuccessMessage, setReportSuccessMessage] = useState<string | null>(null);
 
+  // Group Participants State
+  const [groupParticipants, setGroupParticipants] = useState<any[]>([]);
+  const [showParticipantsModal, setShowParticipantsModal] = useState<boolean>(false);
+  const [participantsSearch, setParticipantsSearch] = useState<string>('');
+
+  useEffect(() => {
+    if (!conversation) {
+      setGroupParticipants([]);
+      return;
+    }
+    let isMounted = true;
+    const fetchParticipants = async () => {
+      try {
+        const res = await apiFetch(`/conversations/${conversation.id}/participants`);
+        if (isMounted && res && Array.isArray(res.participants)) {
+          setGroupParticipants(res.participants);
+        }
+      } catch (err) {
+        console.debug('Error fetching conversation participants:', err);
+      }
+    };
+    fetchParticipants();
+    return () => { isMounted = false; };
+  }, [conversation?.id]);
+
   // Lightbox Zoom, Pan & Rotation State
   const [zoomScale, setZoomScale] = useState<number>(1);
   const [imageRotation, setImageRotation] = useState<number>(0);
@@ -565,6 +590,64 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       target.focus();
       target.selectionStart = target.selectionEnd = newCursorPos;
     }, 0);
+  };
+
+  const renderFormattedMessageText = (text: string) => {
+    if (!text || typeof text !== 'string') return null;
+    if (!text.includes('@')) return text;
+
+    const mentionRegex = /@([a-zA-Z0-9À-ÿ_.-]+|\d{10,20})/g;
+    const participantMap: { [key: string]: string } = {};
+    groupParticipants.forEach(p => {
+      if (p.lid) participantMap[p.lid] = p.name;
+      if (p.phone) participantMap[p.phone] = p.name;
+      if (p.id) participantMap[String(p.id).split('@')[0]] = p.name;
+    });
+
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    let match;
+    let keyIdx = 0;
+
+    while ((match = mentionRegex.exec(text)) !== null) {
+      const matchStart = match.index;
+      const matchEnd = mentionRegex.lastIndex;
+      const rawTag = match[1];
+
+      if (matchStart > lastIndex) {
+        parts.push(text.substring(lastIndex, matchStart));
+      }
+
+      const isAll = ['todos', 'everyone', 'all'].includes(rawTag.toLowerCase());
+      const resolvedName = isAll ? 'todos' : (participantMap[rawTag] || rawTag);
+
+      parts.push(
+        <span
+          key={`mention-${keyIdx++}`}
+          style={{
+            color: isAll ? '#00e699' : '#38bdf8',
+            backgroundColor: isAll ? 'rgba(0, 230, 153, 0.18)' : 'rgba(56, 189, 248, 0.18)',
+            padding: '1px 5px',
+            borderRadius: '4px',
+            fontWeight: '700',
+            display: 'inline-flex',
+            alignItems: 'center',
+            margin: '0 2px'
+          }}
+          title={isAll ? 'Mencionou todos os membros' : `Mencionou @${resolvedName}`}
+        >
+          @{resolvedName}
+        </span>
+      );
+
+      lastIndex = matchEnd;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex));
+    }
+
+    return parts;
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1185,7 +1268,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               </div>
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{renderFormattedMessageText(caption)}</p>}
           </div>
         );
 
@@ -1218,7 +1301,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       default:
         return (
           <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'inherit', whiteSpace: 'pre-wrap' }}>
-            {raw}
+            {renderFormattedMessageText(raw)}
           </p>
         );
     }
@@ -1887,14 +1970,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: '10px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
-              {conversation.assigned_user_name && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
-                  <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
+            {isGroupChat ? (
+              <div
+                onClick={() => setShowParticipantsModal(true)}
+                title="Clique para ver todos os integrantes do grupo"
+                style={{
+                  display: 'flex',
+                  gap: '6px',
+                  fontSize: '11px',
+                  color: 'var(--text-muted)',
+                  marginTop: '2px',
+                  alignItems: 'center',
+                  cursor: 'pointer',
+                  maxWidth: '380px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: 'var(--accent-primary)', fontWeight: '700' }}>
+                  <Users size={12} /> {groupParticipants.length > 0 ? `${groupParticipants.length} participantes` : 'Grupo'}
                 </span>
-              )}
-            </div>
+                {groupParticipants.length > 0 && (
+                  <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    : {groupParticipants.slice(0, 4).map(p => p.name).join(', ')}{groupParticipants.length > 4 ? ` e +${groupParticipants.length - 4}` : ''}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '10px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
+                {conversation.assigned_user_name && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
+                    <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3701,42 +3813,82 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   borderRadius: 'var(--radius-md)',
                   boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
                   zIndex: 1000,
-                  width: '280px',
-                  maxHeight: '220px',
+                  width: '320px',
+                  maxHeight: '260px',
                   overflowY: 'auto',
                   padding: '6px'
                 }}
               >
-                <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                  Mencionar no WhatsApp:
+                <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{isGroupChat ? `Integrantes do Grupo (${groupParticipants.length}):` : 'Mencionar no WhatsApp:'}</span>
+                  <span style={{ fontSize: '10px', color: 'var(--accent-primary)', cursor: 'pointer' }} onClick={() => setShowMentionMenu(false)}>Fechar [Esc]</span>
                 </div>
-                {/* Option 1: @todos */}
-                <div
-                  onClick={() => handleInsertMention('@todos ')}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    color: 'var(--accent-primary)',
-                    fontWeight: '700',
-                    fontSize: '13px',
-                    transition: 'background 0.15s ease'
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                >
-                  <Users size={16} />
-                  <div>
-                    <div>@todos</div>
-                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos no grupo</div>
+                {/* Option 1: @todos (for group chats) */}
+                {isGroupChat && (
+                  <div
+                    onClick={() => handleInsertMention('@todos ')}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      color: 'var(--accent-primary)',
+                      fontWeight: '700',
+                      fontSize: '13px',
+                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                      transition: 'background 0.15s ease'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                  >
+                    <Users size={16} />
+                    <div>
+                      <div>@todos</div>
+                      <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos os {groupParticipants.length} membros no grupo</div>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Option 2: Current Contact */}
-                {conversation?.contact && (
+                {/* Option 2: Group participants */}
+                {groupParticipants.length > 0 ? (
+                  groupParticipants.map(p => (
+                    <div
+                      key={p.id || p.phone}
+                      onClick={() => handleInsertMention(`@${p.name} `)}
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 'var(--radius-sm)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '8px',
+                        color: 'var(--text-main)',
+                        fontSize: '12px',
+                        transition: 'background 0.15s ease'
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '700', flexShrink: 0 }}>
+                          {(p.name || 'M').charAt(0).toUpperCase()}
+                        </div>
+                        <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontWeight: '600', overflow: 'hidden', textOverflow: 'ellipsis' }}>@{p.name}</div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>+{p.phone}</div>
+                        </div>
+                      </div>
+                      {p.is_admin && (
+                        <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#eab308', fontWeight: '700' }}>
+                          Admin
+                        </span>
+                      )}
+                    </div>
+                  ))
+                ) : conversation?.contact ? (
                   <div
                     onClick={() => handleInsertMention(`@${conversation.contact?.nome || conversation.contact?.telefone} `)}
                     style={{
@@ -3747,8 +3899,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       alignItems: 'center',
                       gap: '8px',
                       color: 'var(--text-main)',
-                      fontSize: '13px',
-                      transition: 'background 0.15s ease'
+                      fontSize: '13px'
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
@@ -3759,7 +3910,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{conversation.contact.telefone}</div>
                     </div>
                   </div>
-                )}
+                ) : null}
               </div>
             )}
             
@@ -4242,6 +4393,173 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {isSubmittingReport ? 'Salvando...' : 'Gravar Correção'}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showParticipantsModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.8)',
+          zIndex: 1100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '20px'
+        }}>
+          <div style={{
+            backgroundColor: '#0f172a',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '12px',
+            width: '100%',
+            maxWidth: '480px',
+            maxHeight: '80vh',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxShadow: '0 20px 50px rgba(0,0,0,0.7)'
+          }}>
+            <div style={{
+              padding: '16px 20px',
+              borderBottom: '1px solid rgba(255,255,255,0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '16px', fontWeight: '700', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Users size={18} color="var(--accent-primary)" /> Integrantes do Grupo
+                </h3>
+                <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {groupParticipants.length} membros no WhatsApp • {conversation?.contact?.nome || 'Grupo'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowParticipantsModal(false)}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <input
+                type="text"
+                value={participantsSearch}
+                onChange={(e) => setParticipantsSearch(e.target.value)}
+                placeholder="Buscar por nome ou telefone..."
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  backgroundColor: '#1e293b',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: '6px',
+                  color: 'var(--text-main)',
+                  fontSize: '13px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 20px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {groupParticipants
+                .filter(p => {
+                  if (!participantsSearch) return true;
+                  const q = participantsSearch.toLowerCase();
+                  return (p.name && p.name.toLowerCase().includes(q)) || (p.phone && p.phone.includes(q));
+                })
+                .map((p, idx) => (
+                  <div
+                    key={p.id || idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.05)'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                      {p.avatar_url ? (
+                        <img src={p.avatar_url} alt={p.name} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }} />
+                      ) : (
+                        <div style={{
+                          width: '32px',
+                          height: '32px',
+                          borderRadius: '50%',
+                          backgroundColor: p.is_admin ? 'rgba(234, 179, 8, 0.2)' : 'rgba(0, 230, 153, 0.2)',
+                          color: p.is_admin ? '#eab308' : 'var(--accent-primary)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: '700',
+                          fontSize: '13px',
+                          flexShrink: 0
+                        }}>
+                          {(p.name || 'M').charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: '600', fontSize: '13px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+                          {p.is_admin && (
+                            <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#eab308', fontWeight: '700' }}>
+                              Admin
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>+{p.phone}</div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleInsertMention(`@${p.name} `);
+                          setShowParticipantsModal(false);
+                        }}
+                        className="btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-primary)' }}
+                        title="Mencionar participante no chat"
+                      >
+                        <AtSign size={12} /> Mencionar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowParticipantsModal(false);
+                          handlePrivateReply({ conteudo: '' } as any, p.phone, p.name);
+                        }}
+                        className="btn-secondary"
+                        style={{ padding: '4px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        title="Conversar no privado com este participante"
+                      >
+                        Privado
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            <div style={{ padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.08)', display: 'flex', justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.2)' }}>
+              <button
+                type="button"
+                onClick={() => setShowParticipantsModal(false)}
+                className="btn-secondary"
+                style={{ padding: '6px 16px', fontSize: '13px' }}
+              >
+                Fechar
+              </button>
             </div>
           </div>
         </div>

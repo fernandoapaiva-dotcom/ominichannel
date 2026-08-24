@@ -2154,4 +2154,106 @@ async def toggle_pin_conversation(
         "message": "Conversa fixada no topo com sucesso!" if new_pinned else "Conversa desfixada do topo!"
     }
 
+@router.get("/{conversation_id}/participants")
+async def get_conversation_participants(
+    conversation_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Fetches real WhatsApp Group participants and resolves their names from Contact database.
+    """
+    stmt = (
+        select(Conversation)
+        .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.tenant_id == current_user.tenant_id
+        )
+    )
+    res = await db.execute(stmt)
+    conv = res.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    raw_phone = conv.contact.telefone if conv.contact else ""
+    is_group = (
+        raw_phone.startswith("120363") or
+        len("".join(filter(str.isdigit, raw_phone))) > 15 or
+        (conv.contact and "Servweld/Servsolda" in (conv.contact.nome or "")) or
+        (conv.dados_adicionais or {}).get("is_group")
+    )
+
+    if not is_group:
+        # For direct 1-on-1 chats, return the single contact
+        return {
+            "conversation_id": conv.id,
+            "is_group": False,
+            "subject": conv.contact.nome if conv.contact else "Cliente",
+            "total_participants": 1,
+            "participants": [
+                {
+                    "id": conv.contact.telefone if conv.contact else "",
+                    "phone": conv.contact.telefone if conv.contact else "",
+                    "lid": "",
+                    "name": conv.contact.nome if conv.contact else "Cliente",
+                    "avatar_url": conv.contact.foto_perfil_url if conv.contact else None,
+                    "is_admin": False
+                }
+            ]
+        }
+
+    group_jid = raw_phone if "@g.us" in raw_phone else f"{raw_phone}@g.us"
+    instance_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None
+
+    group_info = await evolution_service.fetch_group_info(
+        instance_name=instance_name,
+        group_jid=group_jid
+    )
+
+    participants_raw = (group_info or {}).get("participants", [])
+    subject = (group_info or {}).get("subject") or (conv.contact.nome if conv.contact else "Grupo WhatsApp")
+
+    mapped_participants = []
+    for p in participants_raw:
+        p_raw = p.get("phoneNumber") or p.get("id") or ""
+        clean_digits = "".join(filter(str.isdigit, p_raw.split("@")[0]))
+        lid_id = p.get("id", "").split("@")[0] if "@lid" in str(p.get("id", "")) else ""
+
+        # Match contact by phone in DB
+        c_stmt = select(Contact).where(
+            Contact.tenant_id == current_user.tenant_id
+        )
+        if len(clean_digits) >= 8:
+            c_stmt = c_stmt.where(Contact.telefone.like(f"%{clean_digits[-8:]}%"))
+        else:
+            c_stmt = c_stmt.where(Contact.telefone == clean_digits)
+
+        c_res = await db.execute(c_stmt)
+        matched_contact = c_res.scalars().first()
+
+        name = matched_contact.nome if matched_contact and matched_contact.nome else None
+        if not name:
+            name = f"+{clean_digits}" if clean_digits else (p.get("id") or "Participante")
+
+        mapped_participants.append({
+            "id": p.get("id") or clean_digits,
+            "phone": clean_digits,
+            "lid": lid_id,
+            "name": name,
+            "avatar_url": matched_contact.foto_perfil_url if matched_contact else None,
+            "is_admin": p.get("admin") in ["admin", "superadmin"]
+        })
+
+    # Sort participants: admins first, then alphabetically by name
+    mapped_participants.sort(key=lambda x: (not x["is_admin"], x["name"].lower()))
+
+    return {
+        "conversation_id": conv.id,
+        "is_group": True,
+        "subject": subject,
+        "total_participants": len(mapped_participants),
+        "participants": mapped_participants
+    }
+
 
