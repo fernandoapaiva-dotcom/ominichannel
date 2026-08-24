@@ -37,6 +37,7 @@ interface ChatListProps {
   onStatusToggle?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  currentUserId?: number | null;
 }
 
 interface ContactGroup {
@@ -62,7 +63,8 @@ export const ChatList: React.FC<ChatListProps> = ({
   onOpenNewConversationModal,
   onStatusToggle,
   isCollapsed = false,
-  onToggleCollapse
+  onToggleCollapse,
+  currentUserId
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
@@ -89,24 +91,31 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   };
 
-  const currentUserId = useMemo(() => {
+  const effectiveUserId = useMemo(() => {
+    if (currentUserId) return currentUserId;
     try {
-      const stored = localStorage.getItem('user');
-      return stored ? JSON.parse(stored).id : null;
-    } catch {
-      return null;
-    }
-  }, []);
+      const token = localStorage.getItem('token');
+      if (token) {
+        const payload = JSON.parse(atob(token.split('.')[1]));
+        const uid = Number(payload.sub || payload.id);
+        if (!isNaN(uid)) return uid;
+      }
+    } catch {}
+    return null;
+  }, [currentUserId]);
 
   const [, setTick] = useState(0);
 
   const isConvPinned = (conv: Conversation | null | undefined): boolean => {
     if (!conv || !conv.dados_adicionais) return false;
-    const extra = conv.dados_adicionais;
-    if (currentUserId) {
-      if (Array.isArray(extra.pinned_by_users) && extra.pinned_by_users.includes(currentUserId)) return true;
-      if (extra[`pinned_user_${currentUserId}`] === true) return true;
-      return false;
+    const extra = conv.dados_adicionais as any;
+    if (effectiveUserId) {
+      if (Array.isArray(extra.pinned_by_users)) {
+        return extra.pinned_by_users.includes(effectiveUserId);
+      }
+      if (typeof extra[`pinned_user_${effectiveUserId}`] === 'boolean') {
+        return extra[`pinned_user_${effectiveUserId}`];
+      }
     }
     return Boolean(extra.is_pinned);
   };
@@ -122,14 +131,14 @@ export const ChatList: React.FC<ChatListProps> = ({
     targets.forEach(target => {
       const extra = { ...(target.dados_adicionais || {}) };
       let pinnedUsers: number[] = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
-      if (currentUserId) {
+      if (effectiveUserId) {
         if (nextPinned) {
-          if (!pinnedUsers.includes(currentUserId)) pinnedUsers.push(currentUserId);
+          if (!pinnedUsers.includes(effectiveUserId)) pinnedUsers.push(effectiveUserId);
         } else {
-          pinnedUsers = pinnedUsers.filter(id => id !== currentUserId);
+          pinnedUsers = pinnedUsers.filter(id => id !== effectiveUserId);
         }
         extra.pinned_by_users = pinnedUsers;
-        extra[`pinned_user_${currentUserId}`] = nextPinned;
+        extra[`pinned_user_${effectiveUserId}`] = nextPinned;
       } else {
         extra.is_pinned = nextPinned;
       }
@@ -277,7 +286,7 @@ export const ChatList: React.FC<ChatListProps> = ({
       if (!isPinnedA && isPinnedB) return 1;
       return getLatestInteraction(b) - getLatestInteraction(a);
     });
-  }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation, currentUserId]);
+  }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation, effectiveUserId]);
 
   const totalUnread = useMemo(() => {
     return conversations.filter(conv => {
