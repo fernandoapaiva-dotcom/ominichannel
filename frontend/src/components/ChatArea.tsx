@@ -425,19 +425,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const [isTogglingPin, setIsTogglingPin] = useState(false);
 
+  const isConvPinned = (conv: Conversation | null): boolean => {
+    if (!conv || !conv.dados_adicionais) return false;
+    const extra = conv.dados_adicionais;
+    if (currentUser?.id) {
+      if (Array.isArray(extra.pinned_by_users) && extra.pinned_by_users.includes(currentUser.id)) return true;
+      if (extra[`pinned_user_${currentUser.id}`] === true) return true;
+      return false;
+    }
+    return Boolean(extra.is_pinned);
+  };
+
   const handleTogglePin = async () => {
     if (!conversation || isTogglingPin) return;
-    const currentPinned = Boolean((conversation as any).dados_adicionais?.is_pinned);
+    const currentPinned = isConvPinned(conversation);
     const nextPinned = !currentPinned;
     try {
       setIsTogglingPin(true);
-      const extra = (conversation as any).dados_adicionais || {};
-      extra.is_pinned = nextPinned;
-      if (nextPinned) {
-        extra.pinned_at = new Date().toISOString();
+      const extra = { ...((conversation as any).dados_adicionais || {}) };
+      let pinnedUsers: number[] = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
+      if (currentUser?.id) {
+        if (nextPinned) {
+          if (!pinnedUsers.includes(currentUser.id)) pinnedUsers.push(currentUser.id);
+        } else {
+          pinnedUsers = pinnedUsers.filter(id => id !== currentUser.id);
+        }
+        extra.pinned_by_users = pinnedUsers;
+        extra[`pinned_user_${currentUser.id}`] = nextPinned;
       } else {
-        delete extra.pinned_at;
+        extra.is_pinned = nextPinned;
       }
+      delete extra.is_pinned;
       (conversation as any).dados_adicionais = extra;
 
       await apiFetch(`/conversations/${conversation.id}/toggle-pin`, { method: 'POST' });
@@ -1596,9 +1614,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </button>
           )}
 
-          {/* Pin / Fix Conversation Button */}
+          {/* Pin / Fix Conversation Button (Particular do Atendente) */}
           {(() => {
-            const isPinned = Boolean((conversation as any).dados_adicionais?.is_pinned);
+            const isPinned = isConvPinned(conversation);
             return (
               <button
                 onClick={handleTogglePin}

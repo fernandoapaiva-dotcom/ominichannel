@@ -45,7 +45,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     });
   }, [conversations, activeTab]);
   
-  const activeConversation = displayedConversations.find(c => c.id === activeConversationId) || (displayedConversations.length > 0 ? displayedConversations[0] : null);
+  // Computes active conversation prioritizing selected department
+  const activeConversation = useMemo(() => {
+    if (activeConversationId) {
+      const found = displayedConversations.find(c => c.id === activeConversationId);
+      if (found) {
+        // If a specific department is selected and the active conversation belongs to another department:
+        if (selectedDeptId !== 'all' && String(found.whatsapp_number_id) !== String(selectedDeptId)) {
+          const cid = found.contact_id || found.contact?.id;
+          const cleanPhone = (found.contact?.telefone || '').replace(/\D/g, '');
+          const sameContactInDept = displayedConversations.find(c =>
+            String(c.whatsapp_number_id) === String(selectedDeptId) &&
+            ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
+             (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
+          );
+          if (sameContactInDept) return sameContactInDept;
+        }
+        return found;
+      }
+    }
+
+    if (selectedDeptId !== 'all') {
+      const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
+      if (deptConvs.length > 0) return deptConvs[0];
+    }
+
+    return displayedConversations.length > 0 ? displayedConversations[0] : null;
+  }, [displayedConversations, activeConversationId, selectedDeptId]);
 
   // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -140,7 +166,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           } else if (
             payload.type === 'MESSAGE_STATUS_UPDATE' ||
             payload.type === 'MESSAGE_REACTION_UPDATE' ||
-            payload.type === 'CONVERSATIONS_MARKED_READ'
+            payload.type === 'CONVERSATIONS_MARKED_READ' ||
+            payload.type === 'conversation_pinned_toggled'
           ) {
             fetchConversations();
           }
@@ -168,12 +195,51 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const handleSendMessage = async (text: string, tipo: string = 'texto') => {
     if (!activeConversation) return;
 
+    let targetConv = activeConversation;
+
+    // REGRA DE OURO DO DEPARTAMENTO SELECIONADO:
+    // Se o departamento está selecionado lá em cima (ex: Assistência Técnica),
+    // a mensagem DEVE sair pelo número do departamento selecionado!
+    if (selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
+      const cid = targetConv.contact_id || targetConv.contact?.id;
+      const cleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
+      
+      const matchInDept = conversations.find(c => 
+        String(c.whatsapp_number_id) === String(selectedDeptId) &&
+        ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
+         (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
+      );
+
+      if (matchInDept) {
+        targetConv = matchInDept;
+        setActiveConversationId(matchInDept.id);
+      } else if (targetConv.contact) {
+        try {
+          const createdConv = await apiFetch('/conversations/', {
+            method: 'POST',
+            body: JSON.stringify({
+              whatsapp_number_id: Number(selectedDeptId),
+              contact_phone: targetConv.contact.telefone,
+              contact_name: targetConv.contact.nome
+            })
+          });
+          if (createdConv && createdConv.id) {
+            targetConv = createdConv;
+            setActiveConversationId(createdConv.id);
+            setConversations(prev => [createdConv, ...prev.filter(c => c.id !== createdConv.id)]);
+          }
+        } catch (err) {
+          console.error("Erro ao criar conversa no departamento selecionado:", err);
+        }
+      }
+    }
+
     const isMedia = tipo !== 'texto' || text.endsWith('.webp') || text.endsWith('.gif') || text.includes('/uploads/');
     const actualTipo = isMedia ? (text.endsWith('.gif') ? 'video' : 'imagem') : (tipo || 'texto');
     const tempId = -Date.now();
     const optimisticMsg: Message = {
       id: tempId,
-      conversation_id: activeConversation.id,
+      conversation_id: targetConv.id,
       remetente: 'atendente',
       conteudo: text,
       tipo: actualTipo as any,
@@ -184,7 +250,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     // 1. Instantly append message to local state (0ms instant UI update!)
     setConversations(prevConvs =>
       prevConvs.map(conv => {
-        if (conv.id === activeConversation.id) {
+        if (conv.id === targetConv.id) {
           const currentMsgs = conv.messages || [];
           return {
             ...conv,
@@ -198,10 +264,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
     try {
       // 2. Dispatch network HTTP request asynchronously
-      const res = await apiFetch(`/conversations/${activeConversation.id}/messages`, {
+      const res = await apiFetch(`/conversations/${targetConv.id}/messages`, {
         method: 'POST',
         body: JSON.stringify({
-          conversation_id: activeConversation.id,
+          conversation_id: targetConv.id,
           remetente: 'atendente',
           conteudo: text,
           tipo: actualTipo
@@ -211,7 +277,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       // 3. Confirm delivery: replace tempId with real server DB message
       setConversations(prevConvs =>
         prevConvs.map(conv => {
-          if (conv.id === activeConversation.id) {
+          if (conv.id === targetConv.id) {
             const currentMsgs = conv.messages || [];
             return {
               ...conv,
@@ -228,7 +294,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       // Mark as failed if connection drops
       setConversations(prevConvs =>
         prevConvs.map(conv => {
-          if (conv.id === activeConversation.id) {
+          if (conv.id === targetConv.id) {
             const currentMsgs = conv.messages || [];
             return {
               ...conv,

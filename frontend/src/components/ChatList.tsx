@@ -89,17 +89,47 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   };
 
+  const currentUserId = useMemo(() => {
+    try {
+      const stored = localStorage.getItem('user');
+      return stored ? JSON.parse(stored).id : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const isConvPinned = (conv: Conversation | null | undefined): boolean => {
+    if (!conv || !conv.dados_adicionais) return false;
+    const extra = conv.dados_adicionais;
+    if (currentUserId) {
+      if (Array.isArray(extra.pinned_by_users) && extra.pinned_by_users.includes(currentUserId)) return true;
+      if (extra[`pinned_user_${currentUserId}`] === true) return true;
+      return false;
+    }
+    return Boolean(extra.is_pinned);
+  };
+
   const handleTogglePin = async (e: React.MouseEvent, conv: Conversation) => {
     e.stopPropagation();
-    const currentPinned = Boolean(conv.dados_adicionais?.is_pinned);
+    const currentPinned = isConvPinned(conv);
     const nextPinned = !currentPinned;
     
-    // Optimistic local state update
-    conv.dados_adicionais = {
-      ...(conv.dados_adicionais || {}),
-      is_pinned: nextPinned,
-      pinned_at: nextPinned ? new Date().toISOString() : undefined
-    };
+    // Optimistic local state update per user
+    const extra = { ...(conv.dados_adicionais || {}) };
+    let pinnedUsers: number[] = Array.isArray(extra.pinned_by_users) ? [...extra.pinned_by_users] : [];
+    if (currentUserId) {
+      if (nextPinned) {
+        if (!pinnedUsers.includes(currentUserId)) pinnedUsers.push(currentUserId);
+      } else {
+        pinnedUsers = pinnedUsers.filter(id => id !== currentUserId);
+      }
+      extra.pinned_by_users = pinnedUsers;
+      extra[`pinned_user_${currentUserId}`] = nextPinned;
+    } else {
+      extra.is_pinned = nextPinned;
+    }
+    delete extra.is_pinned;
+    conv.dados_adicionais = extra;
 
     try {
       await apiFetch(`/conversations/${conv.id}/toggle-pin`, {
@@ -157,7 +187,10 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       if (matchingConvs.length === 0) return;
 
-      const primary = matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
+      // When a department is selected, ALWAYS prioritize the conversation belonging to that department!
+      const primary = (selectedDepartmentId !== 'all'
+        ? matchingConvs.find(c => String(c.whatsapp_number_id) === String(selectedDepartmentId))
+        : null) || matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
       const contact = primary.contact;
 
       let groupUnreadCount = 0;
@@ -223,13 +256,13 @@ export const ChatList: React.FC<ChatListProps> = ({
     };
 
     return groups.sort((a, b) => {
-      const isPinnedA = Boolean(a.primaryConv.dados_adicionais?.is_pinned || a.allConversations.some(c => c.dados_adicionais?.is_pinned));
-      const isPinnedB = Boolean(b.primaryConv.dados_adicionais?.is_pinned || b.allConversations.some(c => c.dados_adicionais?.is_pinned));
+      const isPinnedA = isConvPinned(a.primaryConv) || a.allConversations.some(c => isConvPinned(c));
+      const isPinnedB = isConvPinned(b.primaryConv) || b.allConversations.some(c => isConvPinned(c));
       if (isPinnedA && !isPinnedB) return -1;
       if (!isPinnedA && isPinnedB) return 1;
       return getLatestInteraction(b) - getLatestInteraction(a);
     });
-  }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation]);
+  }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation, currentUserId]);
 
   const totalUnread = useMemo(() => {
     return conversations.filter(conv => {
@@ -473,10 +506,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             const primaryConv = group.primaryConv;
             const isSelected = activeConversation?.id === primaryConv.id;
             const lastMessage = primaryConv.messages[primaryConv.messages.length - 1];
-            const isGroupPinned = Boolean(
-              primaryConv.dados_adicionais?.is_pinned ||
-              group.allConversations.some(c => c.dados_adicionais?.is_pinned)
-            );
+            const isGroupPinned = isConvPinned(primaryConv) || group.allConversations.some(c => isConvPinned(c));
             const lastMsgTime = lastMessage?.timestamp ? parseIsoDate(lastMessage.timestamp).getTime() : 0;
             const isRecentMessage = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 24 * 60 * 60 * 1000;
 
@@ -903,7 +933,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         >
                           <div>
                             <div style={{ fontSize: '11px', fontWeight: '600', color: isSubActive ? 'var(--accent-primary)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {Boolean(subConv.dados_adicionais?.is_pinned) && (
+                              {isConvPinned(subConv) && (
                                 <Pin size={10} fill="#eab308" color="#eab308" />
                               )}
                               <span>#{subConv.id} • {subConv.whatsapp_number?.nome_departamento || 'Geral'}</span>
@@ -917,18 +947,18 @@ export const ChatList: React.FC<ChatListProps> = ({
                             <button
                               type="button"
                               onClick={(e) => handleTogglePin(e, subConv)}
-                              title={Boolean(subConv.dados_adicionais?.is_pinned) ? "Desafixar do topo" : "Fixar no topo"}
+                              title={isConvPinned(subConv) ? "Desafixar do topo" : "Fixar no topo"}
                               style={{
-                                background: Boolean(subConv.dados_adicionais?.is_pinned) ? 'rgba(234, 179, 8, 0.18)' : 'transparent',
+                                background: isConvPinned(subConv) ? 'rgba(234, 179, 8, 0.18)' : 'transparent',
                                 border: 'none',
-                                color: Boolean(subConv.dados_adicionais?.is_pinned) ? '#eab308' : 'var(--text-muted)',
+                                color: isConvPinned(subConv) ? '#eab308' : 'var(--text-muted)',
                                 padding: '2px',
                                 cursor: 'pointer',
                                 display: 'flex',
                                 alignItems: 'center'
                               }}
                             >
-                              <Pin size={10} fill={Boolean(subConv.dados_adicionais?.is_pinned) ? '#eab308' : 'none'} />
+                              <Pin size={10} fill={isConvPinned(subConv) ? '#eab308' : 'none'} />
                             </button>
                             <div style={{ textAlign: 'right' }}>
                               <span className={`badge badge-${subConv.status}`} style={{ fontSize: '9px', padding: '1px 5px' }}>

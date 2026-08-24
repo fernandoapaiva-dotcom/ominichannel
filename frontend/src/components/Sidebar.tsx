@@ -58,6 +58,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
+    const isGroup = Boolean(
+      conv.contact?.telefone?.startsWith('120363') ||
+      (conv.contact?.telefone && conv.contact.telefone.length > 15) ||
+      conv.contact?.nome?.includes('Servweld/Servsolda')
+    );
+    if (isGroup) return false;
+
     if (dismissedConvIds.has(conv.id)) return false;
     if (conv.status === 'encerrada' || conv.status === 'expirada_por_inatividade') return false;
 
@@ -99,7 +106,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // If attendant has never sent a message in this conversation, it is pending
     if (lastAttendantMsgIndex === -1) return true;
 
-    // If client sent a new message after the attendant's last reply, it is pending
+    // If customer sent a message AFTER the last attendant response
+    if (lastClientMsgIndex > lastAttendantMsgIndex) return true;
+
+    return false;
+  };
+
+  // Helper: check if a Group conversation has unread / pending activity
+  const isGroupPending = (conv: Conversation): boolean => {
+    const isGroup = Boolean(
+      conv.contact?.telefone?.startsWith('120363') ||
+      (conv.contact?.telefone && conv.contact.telefone.length > 15) ||
+      conv.contact?.nome?.includes('Servweld/Servsolda')
+    );
+    if (!isGroup) return false;
+
+    if (dismissedConvIds.has(conv.id)) return false;
+    const extra = conv.dados_adicionais || {};
+    if (extra.marked_as_read || extra.pending_dismissed) return false;
+
+    const msgs = conv.messages || [];
+    if (msgs.length === 0) return false;
+
+    let lastAttendantMsgIndex = -1;
+    let lastClientMsgIndex = -1;
+
+    for (let i = 0; i < msgs.length; i++) {
+      const r = String(msgs[i].remetente || '').toLowerCase();
+      if (r === 'atendente') {
+        lastAttendantMsgIndex = i;
+      } else if (r === 'cliente') {
+        lastClientMsgIndex = i;
+      }
+    }
+
+    if (lastClientMsgIndex === -1) return false;
+
+    const lastClientMsg = msgs[lastClientMsgIndex];
+    if (lastClientMsg && lastClientMsg.timestamp) {
+      const t = new Date(lastClientMsg.timestamp).getTime();
+      if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000) {
+        return false;
+      }
+    }
+
+    if (lastAttendantMsgIndex === -1) return true;
     if (lastClientMsgIndex > lastAttendantMsgIndex) return true;
 
     return false;
@@ -111,7 +162,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
     return conversations.filter(isConversationPendingForAttendant);
   }, [conversations, user, dismissedConvIds]);
 
+  const groupPendingConversations = useMemo(() => {
+    if (!conversations || !Array.isArray(conversations)) return [];
+    return conversations.filter(isGroupPending);
+  }, [conversations, dismissedConvIds]);
+
   const pendingBadgeCount = pendingConversations.length;
+  const groupPendingBadgeCount = groupPendingConversations.length;
 
   const handleMarkSingleAsRead = async (e: React.MouseEvent, convId: number) => {
     e.preventDefault();
@@ -828,6 +885,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('groups')}
           title="Grupos & Comunidades WhatsApp"
           style={{
+            position: 'relative',
             width: '48px',
             height: '48px',
             borderRadius: 'var(--radius-md)',
@@ -842,6 +900,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
           }}
         >
           <Users size={22} />
+          {groupPendingBadgeCount > 0 && (
+            <span style={{
+              position: 'absolute',
+              top: '4px',
+              right: '4px',
+              backgroundColor: '#ef4444',
+              color: '#ffffff',
+              fontSize: '10px',
+              fontWeight: '800',
+              borderRadius: '10px',
+              minWidth: '16px',
+              height: '16px',
+              padding: '0 3px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 0 6px rgba(239,68,68,0.7)'
+            }}>
+              {groupPendingBadgeCount > 99 ? '99+' : groupPendingBadgeCount}
+            </span>
+          )}
         </button>
 
         <button

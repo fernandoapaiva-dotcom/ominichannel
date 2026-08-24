@@ -2056,7 +2056,7 @@ async def toggle_pin_conversation(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Toggles the pinned status of a conversation (or group) so it stays at the top of the chat list.
+    Toggles the pinned status of a conversation (or group) specifically for the current logged-in user.
     """
     stmt = (
         select(Conversation)
@@ -2071,14 +2071,21 @@ async def toggle_pin_conversation(
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     extra = dict(conv.dados_adicionais or {})
-    current_pinned = bool(extra.get("is_pinned", False))
-    new_pinned = not current_pinned
+    pinned_users = list(extra.get("pinned_by_users") or [])
+    user_id = current_user.id
 
-    extra["is_pinned"] = new_pinned
-    if new_pinned:
-        extra["pinned_at"] = datetime.utcnow().isoformat()
+    if user_id in pinned_users:
+        pinned_users.remove(user_id)
+        new_pinned = False
     else:
-        extra.pop("pinned_at", None)
+        pinned_users.append(user_id)
+        new_pinned = True
+
+    extra["pinned_by_users"] = pinned_users
+    extra[f"pinned_user_{user_id}"] = new_pinned
+    
+    # Remove global is_pinned to ensure isolation per user
+    extra.pop("is_pinned", None)
 
     conv.dados_adicionais = extra
     await db.commit()
@@ -2091,6 +2098,7 @@ async def toggle_pin_conversation(
         message_data={
             "type": "conversation_pinned_toggled",
             "conversation_id": conv.id,
+            "user_id": user_id,
             "is_pinned": new_pinned
         }
     )
@@ -2098,7 +2106,9 @@ async def toggle_pin_conversation(
     return {
         "success": True,
         "conversation_id": conv.id,
+        "user_id": user_id,
         "is_pinned": new_pinned,
+        "pinned_by_users": pinned_users,
         "message": "Conversa fixada no topo com sucesso!" if new_pinned else "Conversa desfixada do topo!"
     }
 
