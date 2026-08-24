@@ -96,6 +96,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const cid = conversation.contact_id || conversation.contact?.id;
     return allConversations.filter(c => (c.contact_id || c.contact?.id) === cid);
   }, [conversation, allConversations]);
+
+  const isGroupChat = useMemo(() => {
+    if (!conversation) return false;
+    return Boolean(
+      conversation.contact?.telefone?.startsWith('120363') ||
+      (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
+      conversation.contact?.nome?.includes('Servweld/Servsolda') ||
+      conversation.dados_adicionais?.is_group
+    );
+  }, [conversation]);
   const [inputText, setInputText] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -2172,6 +2182,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 const reaction = (msg.id ? messageReactions[msg.id] : null) || (msg as any).dados_adicionais?.reaction;
                 const isMenuOpen = activeActionMenuMsgId === (msg.id || idx);
                 const isMsgSelected = selectedMessagesForForward.some(m => (m.id && m.id === msg.id) || m === msg);
+
+                const participantName = (msg as any).dados_adicionais?.participant_name || 
+                                        (msg as any).dados_adicionais?.push_name || 
+                                        (isGroupChat ? ((msg as any).dados_adicionais?.participant_phone ? `+${(msg as any).dados_adicionais.participant_phone}` : (conversation?.contact?.nome || 'Participante')) : (conversation?.contact?.nome || 'Cliente'));
+
+                const participantPhone = (msg as any).dados_adicionais?.participant_phone || 
+                                         ((msg as any).dados_adicionais?.participant ? (msg as any).dados_adicionais.participant.split('@')[0] : (isCustomer ? conversation?.contact?.telefone : ''));
 
                 return (
             <div
