@@ -120,25 +120,34 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     }
   }, [initialEventData, isOpen]);
 
+  const formatLocalDateStr = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const openNewEventModal = (prefill?: Partial<CalendarEvent>, selectedDay?: Date) => {
     setEditingEvent(null);
     const targetDate = selectedDay || new Date();
-    const dateStr = targetDate.toISOString().split('T')[0];
+    const dateStr = formatLocalDateStr(targetDate);
 
     const now = new Date();
-    const nextHour = new Date(now.getTime() + 60 * 60 * 1000);
-    const startTimeStr = `${String(now.getHours()).padStart(2, '0')}:00`;
-    const endTimeStr = `${String(nextHour.getHours()).padStart(2, '0')}:00`;
+    const curHour = targetDate.getHours() || now.getHours();
+    const curMin = targetDate.getMinutes() || 0;
+    const startTimeStr = `${String(curHour).padStart(2, '0')}:${String(curMin).padStart(2, '0')}`;
+    const nextHourNum = (curHour + 1) % 24;
+    const endTimeStr = `${String(nextHourNum).padStart(2, '0')}:${String(curMin).padStart(2, '0')}`;
 
     setFormTitle(prefill?.title || '');
     setFormDescription(prefill?.description || '');
     setFormEventType(prefill?.event_type || 'geral');
     setFormStartDate(dateStr);
-    setFormStartTime(prefill?.start_time ? prefill.start_time.split('T')[1]?.substring(0, 5) || startTimeStr : startTimeStr);
+    setFormStartTime(prefill?.start_time ? `${String(new Date(prefill.start_time).getHours()).padStart(2, '0')}:${String(new Date(prefill.start_time).getMinutes()).padStart(2, '0')}` : startTimeStr);
     setFormEndDate(dateStr);
     setFormEndTime(endTimeStr);
     setFormAllDay(prefill?.all_day || false);
-    setFormColor(prefill?.color || '#10b981');
+    setFormColor(prefill?.color || '#ea580c');
     setFormPriority(prefill?.priority || 'media');
     setFormStatus(prefill?.status || 'pendente');
     setFormReminder(prefill?.reminder_minutes ?? 30);
@@ -165,12 +174,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormTitle(event.title);
     setFormDescription(event.description || '');
     setFormEventType(event.event_type || 'geral');
-    setFormStartDate(startDt.toISOString().split('T')[0]);
+    setFormStartDate(formatLocalDateStr(startDt));
     setFormStartTime(`${String(startDt.getHours()).padStart(2, '0')}:${String(startDt.getMinutes()).padStart(2, '0')}`);
-    setFormEndDate(endDt.toISOString().split('T')[0]);
+    setFormEndDate(formatLocalDateStr(endDt));
     setFormEndTime(`${String(endDt.getHours()).padStart(2, '0')}:${String(endDt.getMinutes()).padStart(2, '0')}`);
     setFormAllDay(event.all_day);
-    setFormColor(event.color || '#10b981');
+    setFormColor(event.color || '#ea580c');
     setFormPriority(event.priority);
     setFormStatus(event.status);
     setFormReminder(event.reminder_minutes ?? null);
@@ -195,19 +204,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
     try {
       setIsSaving(true);
-      const startDateTimeStr = formAllDay
-        ? `${formStartDate}T00:00:00`
-        : `${formStartDate}T${formStartTime}:00`;
-      const endDateTimeStr = formAllDay
-        ? `${formEndDate || formStartDate}T23:59:59`
-        : `${formEndDate || formStartDate}T${formEndTime}:00`;
+      const [sYear, sMonth, sDay] = formStartDate.split('-').map(Number);
+      const [sHour, sMin] = formAllDay ? [0, 0] : formStartTime.split(':').map(Number);
+      const startDtObj = new Date(sYear, sMonth - 1, sDay, sHour, sMin, 0);
+
+      const [eYear, eMonth, eDay] = (formEndDate || formStartDate).split('-').map(Number);
+      const [eHour, eMin] = formAllDay ? [23, 59] : formEndTime.split(':').map(Number);
+      const endDtObj = new Date(eYear, eMonth - 1, eDay, eHour, eMin, 0);
 
       const payload = {
         title: formTitle.trim(),
         description: formDescription.trim() || null,
         event_type: formEventType,
-        start_time: new Date(startDateTimeStr).toISOString(),
-        end_time: new Date(endDateTimeStr).toISOString(),
+        start_time: startDtObj.toISOString(),
+        end_time: endDtObj.toISOString(),
         all_day: formAllDay,
         color: formColor,
         priority: formPriority,
@@ -260,21 +270,24 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     try {
       await apiFetch(`/calendar/events/${eventId}`, { method: 'DELETE' });
       setEvents(prev => prev.filter(ev => ev.id !== eventId));
-      if (editingEvent?.id === eventId) {
-        setIsFormOpen(false);
-      }
+      if (editingEvent?.id === eventId) setIsFormOpen(false);
     } catch (err) {
-      console.error('Error deleting event:', err);
+      console.error('Error deleting calendar event:', err);
+      alert('Erro ao excluir evento.');
     }
   };
 
   const handleToggleStatus = async (event: CalendarEvent, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      const updated = await apiFetch(`/calendar/events/${event.id}/toggle`, { method: 'PATCH' });
+      const newStatus = event.status === 'concluido' ? 'pendente' : 'concluido';
+      const updated = await apiFetch(`/calendar/events/${event.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ ...event, status: newStatus })
+      });
       setEvents(prev => prev.map(ev => ev.id === event.id ? updated : ev));
     } catch (err) {
-      console.error('Error toggling status:', err);
+      console.error('Error updating status:', err);
     }
   };
 
@@ -347,20 +360,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     // Prev month padding
     for (let i = firstDayIndex - 1; i >= 0; i--) {
       const d = new Date(year, month - 1, prevMonthDays - i);
-      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: false, dateStr: formatLocalDateStr(d) });
     }
 
     // Current month days
     for (let i = 1; i <= totalDaysInMonth; i++) {
       const d = new Date(year, month, i);
-      days.push({ date: d, isCurrentMonth: true, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: true, dateStr: formatLocalDateStr(d) });
     }
 
     // Next month padding to fill 35 or 42 grid cells
     const remaining = (7 - (days.length % 7)) % 7;
     for (let i = 1; i <= remaining; i++) {
       const d = new Date(year, month + 1, i);
-      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: false, dateStr: formatLocalDateStr(d) });
     }
 
     return days;
@@ -377,23 +390,23 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     const days: { date: Date; isCurrentMonth: boolean; dateStr: string }[] = [];
     for (let i = firstDayIndex - 1; i >= 0; i--) {
       const d = new Date(year, month - 1, prevMonthDays - i);
-      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: false, dateStr: formatLocalDateStr(d) });
     }
     for (let i = 1; i <= totalDaysInMonth; i++) {
       const d = new Date(year, month, i);
-      days.push({ date: d, isCurrentMonth: true, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: true, dateStr: formatLocalDateStr(d) });
     }
     const rem = (7 - (days.length % 7)) % 7;
     for (let i = 1; i <= rem; i++) {
       const d = new Date(year, month + 1, i);
-      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+      days.push({ date: d, isCurrentMonth: false, dateStr: formatLocalDateStr(d) });
     }
     return days;
   }, [miniCalDate]);
 
   const HOURS_24 = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
 
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => formatLocalDateStr(new Date()), []);
 
   const weekDays = useMemo(() => {
     const startOfWeek = new Date(currentDate);
@@ -403,7 +416,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(startOfWeek);
       d.setDate(d.getDate() + i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = formatLocalDateStr(d);
       return {
         date: d,
         dateStr,
@@ -414,23 +427,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     });
   }, [currentDate, todayStr]);
 
-  const handleDropOnDate = async (eventId: number, newDateStr: string, newHour?: number) => {
+  const handleDropOnDate = async (eventId: number, newDateStr: string, newHour?: number, newMinute?: number) => {
     const ev = events.find(e => e.id === eventId);
     if (!ev) return;
 
     try {
       const origStart = new Date(ev.start_time);
       const origEnd = ev.end_time ? new Date(ev.end_time) : origStart;
-      const durationMs = Math.max(30 * 60 * 1000, origEnd.getTime() - origStart.getTime());
+      const durationMs = Math.max(15 * 60 * 1000, origEnd.getTime() - origStart.getTime());
 
-      let newStartDt: Date;
-      if (newHour !== undefined) {
-        newStartDt = new Date(`${newDateStr}T${String(newHour).padStart(2, '0')}:00:00`);
-      } else {
-        const timePart = ev.start_time.split('T')[1] || '09:00:00';
-        newStartDt = new Date(`${newDateStr}T${timePart}`);
-      }
+      const [year, month, day] = newDateStr.split('-').map(Number);
+      const targetHour = newHour !== undefined ? newHour : origStart.getHours();
+      const targetMinute = newMinute !== undefined ? newMinute : (newHour !== undefined ? 0 : origStart.getMinutes());
 
+      const newStartDt = new Date(year, month - 1, day, targetHour, targetMinute, 0);
       const newEndDt = new Date(newStartDt.getTime() + durationMs);
 
       const payload = {
@@ -466,7 +476,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         method: 'PUT',
         body: JSON.stringify(payload)
       });
-      setEvents(prev => prev.map(e => e.id === eventId ? updated : e));
+      if (updated && updated.id) {
+        setEvents(prev => prev.map(e => e.id === eventId ? updated : e));
+      }
     } catch (err) {
       console.error('Error rescheduling dragged event:', err);
     }
@@ -821,7 +833,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 {/* Mini Days Grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', textAlign: 'center', fontSize: '11px' }}>
                   {miniMonthDays.map((c, i) => {
-                    const isCurSelected = c.dateStr === currentDate.toISOString().split('T')[0];
+                    const isCurSelected = c.dateStr === formatLocalDateStr(currentDate);
                     const isTodayCell = c.dateStr === todayStr;
 
                     return (
@@ -996,7 +1008,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   {weekDays.map((d, dIdx) => {
                     const dayEvents = filteredEvents.filter(ev => {
                       if (ev.all_day) return false;
-                      const evDate = ev.start_time.split('T')[0];
+                      const evDt = new Date(ev.start_time);
+                      const evDate = formatLocalDateStr(evDt);
                       return evDate === d.dateStr;
                     });
 
@@ -1009,36 +1022,43 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     return (
                       <div
                         key={d.dateStr}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          e.currentTarget.style.backgroundColor = 'rgba(26, 115, 232, 0.12)';
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent';
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
+                          if (!evId) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const offsetY = Math.max(0, e.clientY - rect.top);
+                          // Snap to 15-minute increments
+                          const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
+                          const newHour = Math.floor(totalMinutes / 60);
+                          const newMinute = totalMinutes % 60;
+                          handleDropOnDate(evId, d.dateStr, newHour, newMinute);
+                        }}
                         style={{
                           position: 'relative',
                           height: '1440px',
                           borderRight: dIdx < 6 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                          backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent'
+                          backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent',
+                          transition: 'background-color 0.1s ease'
                         }}
                       >
-                        {/* 24 Horizontal Grid Lines & Drop Slots */}
+                        {/* 24 Horizontal Grid Lines & Click to Create */}
                         {HOURS_24.map(hour => (
                           <div
                             key={hour}
                             onClick={() => {
-                              const targetDate = new Date(`${d.dateStr}T${String(hour).padStart(2, '0')}:00:00`);
+                              const [y, m, dayNum] = d.dateStr.split('-').map(Number);
+                              const targetDate = new Date(y, m - 1, dayNum, hour, 0, 0);
                               openNewEventModal(undefined, targetDate);
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = 'move';
-                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.25)';
-                            }}
-                            onDragLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                              const evId = Number(e.dataTransfer.getData('text/plain'));
-                              if (evId) {
-                                handleDropOnDate(evId, d.dateStr, hour);
-                              }
                             }}
                             style={{
                               position: 'absolute',
@@ -1047,8 +1067,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               right: 0,
                               height: '60px',
                               borderBottom: '1px solid rgba(255,255,255,0.06)',
-                              cursor: 'pointer',
-                              transition: 'background 0.1s ease'
+                              cursor: 'pointer'
                             }}
                           />
                         ))}
@@ -1090,9 +1109,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           const topPx = (startMin / 60) * 60;
                           const heightPx = Math.max(26, (durationMin / 60) * 60 - 3);
 
-                          const startHourNum = startDt.getHours();
-                          const endHourNum = endDt.getHours();
-                          const timeRangeText = `${startHourNum > 12 ? startHourNum - 12 : startHourNum || 12} - ${endHourNum > 12 ? endHourNum - 12 : endHourNum || 12}${startHourNum >= 12 ? 'pm' : 'am'}`;
+                          const startHourStr = `${String(startDt.getHours()).padStart(2, '0')}:${String(startDt.getMinutes()).padStart(2, '0')}`;
+                          const endHourStr = `${String(endDt.getHours()).padStart(2, '0')}:${String(endDt.getMinutes()).padStart(2, '0')}`;
+                          const timeRangeText = `${startHourStr} - ${endHourStr}`;
 
                           const isDone = ev.status === 'concluido';
 
@@ -1133,7 +1152,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 justifyContent: 'flex-start',
                                 borderLeft: `3px solid rgba(255,255,255,0.4)`
                               }}
-                              title={`${ev.title} (${timeRangeText}) - Arraste para reposicionar na grade`}
+                              title={`${ev.title} (${timeRangeText}) - Arraste para reposicionar no horário desejado`}
                             >
                               <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 {ev.title}
@@ -1241,10 +1260,11 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
                   {/* Single Day Area */}
                   {(() => {
-                    const curDateStr = currentDate.toISOString().split('T')[0];
+                    const curDateStr = formatLocalDateStr(currentDate);
                     const dayEvents = filteredEvents.filter(ev => {
                       if (ev.all_day) return false;
-                      const evDate = ev.start_time.split('T')[0];
+                      const evDt = new Date(ev.start_time);
+                      const evDate = formatLocalDateStr(evDt);
                       return evDate === curDateStr;
                     });
 
@@ -1254,30 +1274,38 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     const redLineTopPx = (nowMinutes / 60) * 60;
 
                     return (
-                      <div style={{ position: 'relative', height: '1440px' }}>
+                      <div
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          e.currentTarget.style.backgroundColor = 'rgba(26, 115, 232, 0.12)';
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
+                          if (!evId) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const offsetY = Math.max(0, e.clientY - rect.top);
+                          // Snap to 15-minute increments
+                          const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
+                          const newHour = Math.floor(totalMinutes / 60);
+                          const newMinute = totalMinutes % 60;
+                          handleDropOnDate(evId, curDateStr, newHour, newMinute);
+                        }}
+                        style={{ position: 'relative', height: '1440px', transition: 'background-color 0.1s ease' }}
+                      >
                         {/* 24 Grid Lines */}
                         {HOURS_24.map(hour => (
                           <div
                             key={hour}
                             onClick={() => {
-                              const targetDate = new Date(`${curDateStr}T${String(hour).padStart(2, '0')}:00:00`);
+                              const [y, m, dayNum] = curDateStr.split('-').map(Number);
+                              const targetDate = new Date(y, m - 1, dayNum, hour, 0, 0);
                               openNewEventModal(undefined, targetDate);
-                            }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = 'move';
-                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.25)';
-                            }}
-                            onDragLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                              const evId = Number(e.dataTransfer.getData('text/plain'));
-                              if (evId) {
-                                handleDropOnDate(evId, curDateStr, hour);
-                              }
                             }}
                             style={{
                               position: 'absolute',
@@ -1328,9 +1356,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           const topPx = (startMin / 60) * 60;
                           const heightPx = Math.max(32, (durationMin / 60) * 60 - 3);
 
-                          const startHourNum = startDt.getHours();
-                          const endHourNum = endDt.getHours();
-                          const timeRangeText = `${startHourNum > 12 ? startHourNum - 12 : startHourNum || 12} - ${endHourNum > 12 ? endHourNum - 12 : endHourNum || 12}${startHourNum >= 12 ? 'pm' : 'am'}`;
+                          const startHourStr = `${String(startDt.getHours()).padStart(2, '0')}:${String(startDt.getMinutes()).padStart(2, '0')}`;
+                          const endHourStr = `${String(endDt.getHours()).padStart(2, '0')}:${String(endDt.getMinutes()).padStart(2, '0')}`;
+                          const timeRangeText = `${startHourStr} - ${endHourStr}`;
 
                           const isDone = ev.status === 'concluido';
 
@@ -1436,7 +1464,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 }}>
                   {monthDays.map((cell, idx) => {
                     const dayEvents = filteredEvents.filter(ev => {
-                      const evDateStr = ev.start_time.split('T')[0];
+                      const evDt = new Date(ev.start_time);
+                      const evDateStr = formatLocalDateStr(evDt);
                       return evDateStr === cell.dateStr;
                     });
                     const isToday = cell.dateStr === todayStr;
