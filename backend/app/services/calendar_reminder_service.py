@@ -132,7 +132,7 @@ async def send_immediate_creation_notification(event_id: int):
                 f"⏰ *Data e Hora:* {time_str}\n"
                 f"👤 *Cliente:* {client_info}\n"
                 f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                f"👉 *Clique no botão abaixo para confirmar que viu esta atividade:*"
+                f"👉 *Clique no botão abaixo ou responda \"CONFIRMAR\" para confirmar que visualizou:*"
             )
             footer = "Servsolda • Sistema de Tarefas"
 
