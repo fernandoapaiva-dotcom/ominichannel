@@ -354,6 +354,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         status: formStatus,
         reminder_minutes: formReminder,
         contact_id: formContactId,
+        contact_name: formContactName?.trim() || null,
+        contact_phone: formContactPhone?.trim() || null,
         conversation_id: formConversationId,
         employee_id: formEmployeeId ? Number(formEmployeeId) : null,
         employee_name: formEmployeeName || null,
@@ -2168,6 +2170,53 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* Optional Client Information Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    🏢 NOME DO CLIENTE / EMPRESA (OPCIONAL)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: João da Silva / Metalúrgica XYZ"
+                    value={formContactName || ''}
+                    onChange={e => setFormContactName(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: '#fff',
+                      fontSize: '13px',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    📞 TELEFONE DO CLIENTE (OPCIONAL)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: (61) 99999-1122"
+                    value={formContactPhone || ''}
+                    onChange={e => setFormContactPhone(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: '#fff',
+                      fontSize: '13px',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
               </div>
 
               {/* Employee WhatsApp Reminder Options (When an employee is selected) */}

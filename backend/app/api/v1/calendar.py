@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["Calendar & Tasks"])
 
 def _format_event_response(event: CalendarEvent) -> CalendarEventResponse:
-    contact_name = event.contact.nome if event.contact else None
-    contact_phone = event.contact.telefone if event.contact else None
+    c_name = event.contact.nome if event.contact else getattr(event, 'contact_name', None)
+    c_phone = event.contact.telefone if event.contact else getattr(event, 'contact_phone', None)
     return CalendarEventResponse(
         id=event.id,
         tenant_id=event.tenant_id,
@@ -56,8 +56,8 @@ def _format_event_response(event: CalendarEvent) -> CalendarEventResponse:
         whatsapp_instance=event.whatsapp_instance,
         criado_em=event.criado_em,
         atualizado_em=event.atualizado_em,
-        contact_name=contact_name,
-        contact_phone=contact_phone
+        contact_name=c_name,
+        contact_phone=c_phone
     )
 
 @router.get("/events", response_model=List[CalendarEventResponse])
@@ -171,6 +171,8 @@ async def create_calendar_event(
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         contact_id=payload.contact_id,
+        contact_name=payload.contact_name.strip() if payload.contact_name else None,
+        contact_phone=payload.contact_phone.strip() if payload.contact_phone else None,
         conversation_id=payload.conversation_id,
         message_id=payload.message_id,
         title=payload.title.strip(),
@@ -261,6 +263,10 @@ async def update_calendar_event(
         event.reminder_minutes = payload.reminder_minutes
     if payload.contact_id is not None:
         event.contact_id = payload.contact_id
+    if payload.contact_name is not None:
+        event.contact_name = payload.contact_name.strip() if payload.contact_name else None
+    if payload.contact_phone is not None:
+        event.contact_phone = payload.contact_phone.strip() if payload.contact_phone else None
     if payload.conversation_id is not None:
         event.conversation_id = payload.conversation_id
     if payload.employee_id is not None:

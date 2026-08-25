@@ -363,6 +363,8 @@ class CalendarEventCreate(BaseModel):
     status: str = "pendente" # pendente, em_progresso, concluido, cancelado
     reminder_minutes: Optional[int] = None
     contact_id: Optional[int] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
     conversation_id: Optional[int] = None
     message_id: Optional[int] = None
     employee_id: Optional[int] = None
@@ -385,6 +387,8 @@ class CalendarEventUpdate(BaseModel):
     status: Optional[str] = None
     reminder_minutes: Optional[int] = None
     contact_id: Optional[int] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
     conversation_id: Optional[int] = None
     employee_id: Optional[int] = None
     employee_name: Optional[str] = None

@@ -335,6 +335,10 @@ class CalendarEvent(Base):
     confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     confirmation_token: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
 
+    # Optional Client / Customer Contact Information
+    contact_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     # Department WhatsApp Instance Assignment
     whatsapp_number_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="SET NULL"), nullable=True)
     whatsapp_instance: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

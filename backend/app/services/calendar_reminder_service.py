@@ -61,6 +61,9 @@ async def send_whatsapp_to_employee(
             if inst and inst not in ordered_candidates:
                 ordered_candidates.append(inst)
 
+        if not ordered_candidates:
+            ordered_candidates = ["instancia_locacao", "instancia_tecnica"]
+
         if buttons is None:
             buttons = [
                 {
@@ -80,11 +83,25 @@ async def send_whatsapp_to_employee(
                     footer=footer,
                     buttons=buttons
                 )
-                if res and not res.get("error") and (res.get("key") or res.get("messageId") or res.get("success")):
+                if res and not res.get("error") and (res.get("key") or res.get("messageId") or res.get("status") or res.get("success")):
                     logger.info(f"Lembrete com botão enviado com sucesso para funcionário ({clean_phone}) via instância de departamento '{inst_name}'")
                     return True
             except Exception as inst_err:
-                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
+                logger.warning(f"Tentativa com botão via '{inst_name}' falhou: {inst_err}. Tentando envio direto em texto...")
+
+            # Fallback direct text message
+            try:
+                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
+                res_txt = await evolution_service.send_text_message(
+                    instance_name=inst_name,
+                    number=clean_phone,
+                    text=full_text
+                )
+                if res_txt and not res_txt.get("error") and (res_txt.get("key") or res_txt.get("id") or res_txt.get("success")):
+                    logger.info(f"Lembrete em texto enviado com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
+                    return True
+            except Exception as txt_err:
+                logger.warning(f"Tentativa em texto via '{inst_name}' falhou: {txt_err}.")
 
         return False
     except Exception as e:
@@ -158,6 +175,10 @@ async def send_immediate_creation_notification(event_id: int):
             client_info = "Não informado"
             if ev.contact:
                 client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
+            elif ev.contact_name or ev.contact_phone:
+                client_info = f"{ev.contact_name or 'Cliente'}"
+                if ev.contact_phone:
+                    client_info += f" ({ev.contact_phone})"
 
             now_utc = datetime.utcnow()
             now_brt = now_utc - timedelta(hours=3)
