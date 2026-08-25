@@ -621,6 +621,46 @@ async def receive_evolution_webhook(
         c_addr = loc_msg.get("address") or ""
         text_content = f"📍 *LOCALIZAÇÃO RECEBIDA DO CLIENTE*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
 
+    # Check contact / vcard payload
+    contact_msg = message_obj.get("contactMessage")
+    contacts_arr_msg = message_obj.get("contactsArrayMessage")
+    if contact_msg:
+        c_vcard = contact_msg.get("vcard") or ""
+        c_disp_name = contact_msg.get("displayName") or ""
+        if not c_disp_name:
+            fn_m = re.search(r"FN:(.+)", c_vcard)
+            c_disp_name = fn_m.group(1).strip() if fn_m else "Contato"
+        c_phone = ""
+        if "waid=" in c_vcard:
+            try:
+                c_phone = c_vcard.split("waid=")[1].split(":")[0].split("\n")[0].strip()
+            except Exception:
+                pass
+        if not c_phone and "TEL" in c_vcard:
+            tel_m = re.findall(r"TEL[^:]*:(.+)", c_vcard)
+            if tel_m:
+                c_phone = tel_m[0].strip()
+        text_content = f"[CONTATO]|{c_disp_name}|{c_phone}|{c_vcard}"
+
+    elif contacts_arr_msg:
+        c_list = contacts_arr_msg.get("contacts", [])
+        items = []
+        for c in c_list:
+            c_vcard = c.get("vcard") or ""
+            c_disp_name = c.get("displayName") or "Contato"
+            c_phone = ""
+            if "waid=" in c_vcard:
+                try:
+                    c_phone = c_vcard.split("waid=")[1].split(":")[0].split("\n")[0].strip()
+                except Exception:
+                    pass
+            if not c_phone and "TEL" in c_vcard:
+                tel_m = re.findall(r"TEL[^:]*:(.+)", c_vcard)
+                if tel_m:
+                    c_phone = tel_m[0].strip()
+            items.append(f"{c_disp_name}:{c_phone}")
+        text_content = f"[CONTATOS_MULTIPLOS]|" + ";".join(items)
+
     if (img_msg or vid_msg or aud_msg or doc_msg or stk_msg) and not media_base64 and msg_id:
         try:
             media_base64 = await evolution_service.get_media_base64(instance_name, msg_id, from_me=from_me, remote_jid=remote_jid)

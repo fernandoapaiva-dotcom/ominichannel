@@ -1365,6 +1365,146 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
       default:
+        // WhatsApp Contact Card renderer
+        if (typeof raw === 'string' && (raw.startsWith('[CONTATO]|') || raw.startsWith('[CONTATOS_MULTIPLOS]|') || raw.includes('BEGIN:VCARD') || raw === '[contactMessage]')) {
+          let contactName = 'Contato Compartilhado';
+          let contactPhone = '';
+          let vcardData = '';
+
+          if (raw.startsWith('[CONTATO]|')) {
+            const parts = raw.split('|');
+            contactName = parts[1] || 'Contato';
+            contactPhone = parts[2] || '';
+            vcardData = parts.slice(3).join('|') || '';
+          } else if (raw.includes('BEGIN:VCARD')) {
+            const fnM = raw.match(/FN:(.+)/);
+            if (fnM) contactName = fnM[1].trim();
+            const waidM = raw.match(/waid=(\d+)/);
+            if (waidM) contactPhone = waidM[1].trim();
+            else {
+              const telM = raw.match(/TEL[^:]*:(.+)/);
+              if (telM) contactPhone = telM[1].trim();
+            }
+            vcardData = raw;
+          }
+
+          const cleanDigits = contactPhone.replace(/\D/g, '');
+
+          const handleDownloadVcard = () => {
+            const vcfContent = vcardData || `BEGIN:VCARD\nVERSION:3.0\nFN:${contactName}\nTEL;type=CELL:${contactPhone}\nEND:VCARD`;
+            const blob = new Blob([vcfContent], { type: 'text/vcard;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${contactName.replace(/\s+/g, '_')}.vcf`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          };
+
+          return (
+            <div style={{
+              width: '280px',
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: '12px',
+              overflow: 'hidden',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+              display: 'flex',
+              flexDirection: 'column'
+            }}>
+              {/* Header with Avatar & Details */}
+              <div style={{
+                padding: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.08)'
+              }}>
+                <div style={{
+                  width: '46px',
+                  height: '46px',
+                  borderRadius: '50%',
+                  backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                  border: '1px solid #10b981',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#10b981',
+                  fontWeight: '700',
+                  fontSize: '18px',
+                  flexShrink: 0
+                }}>
+                  {contactName.charAt(0).toUpperCase() || <UserIcon size={22} />}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {contactName}
+                  </div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Phone size={12} /> {contactPhone || 'Sem número'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: cleanDigits ? '1fr 1fr' : '1fr',
+                backgroundColor: 'rgba(0, 0, 0, 0.2)'
+              }}>
+                {cleanDigits && (
+                  <a
+                    href={`https://wa.me/${cleanDigits}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      padding: '10px 8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '6px',
+                      fontSize: '12px',
+                      fontWeight: '600',
+                      color: '#10b981',
+                      textDecoration: 'none',
+                      borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+                      transition: 'background 0.15s ease'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.15)'}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <MessageSquare size={14} /> Conversar
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={handleDownloadVcard}
+                  style={{
+                    padding: '10px 8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    fontSize: '12px',
+                    fontWeight: '600',
+                    color: 'var(--text-color)',
+                    background: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'background 0.15s ease'
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)'}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <Download size={14} /> Salvar Contato
+                </button>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'inherit', whiteSpace: 'pre-wrap' }}>
             {renderFormattedMessageText(raw)}

@@ -73,6 +73,47 @@ class WhatsAppSyncService:
             url = msg_payload["stickerMessage"].get("url", "")
             return url or "[Figurinha]", MessageType.IMAGEM
 
+        if "contactMessage" in msg_payload:
+            c_msg = msg_payload["contactMessage"]
+            vcard = c_msg.get("vcard") or ""
+            name = c_msg.get("displayName") or ""
+            if not name:
+                import re
+                fn = re.search(r"FN:(.+)", vcard)
+                name = fn.group(1).strip() if fn else "Contato"
+            phone = ""
+            if "waid=" in vcard:
+                try:
+                    phone = vcard.split("waid=")[1].split(":")[0].split("\n")[0].strip()
+                except Exception:
+                    pass
+            if not phone and "TEL" in vcard:
+                import re
+                tel = re.findall(r"TEL[^:]*:(.+)", vcard)
+                if tel:
+                    phone = tel[0].strip()
+            return f"[CONTATO]|{name}|{phone}|{vcard}", MessageType.TEXTO
+
+        if "contactsArrayMessage" in msg_payload:
+            c_arr = msg_payload.get("contactsArrayMessage", {}).get("contacts", [])
+            items = []
+            for c in c_arr:
+                vcard = c.get("vcard") or ""
+                name = c.get("displayName") or "Contato"
+                phone = ""
+                if "waid=" in vcard:
+                    try:
+                        phone = vcard.split("waid=")[1].split(":")[0].split("\n")[0].strip()
+                    except Exception:
+                        pass
+                if not phone and "TEL" in vcard:
+                    import re
+                    tel = re.findall(r"TEL[^:]*:(.+)", vcard)
+                    if tel:
+                        phone = tel[0].strip()
+                items.append(f"{name}:{phone}")
+            return f"[CONTATOS_MULTIPLOS]|" + ";".join(items), MessageType.TEXTO
+
         return f"[{msg_type_str}]", MessageType.TEXTO
 
     def get_tenant_progress(self, tenant_id: int) -> List[Dict[str, Any]]:
