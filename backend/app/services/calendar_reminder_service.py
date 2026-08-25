@@ -26,7 +26,8 @@ async def send_whatsapp_to_employee(
     title: str,
     description: str,
     footer: str = "Servsolda • Sistema de Tarefas",
-    event_id: Optional[int] = None
+    event_id: Optional[int] = None,
+    buttons: Optional[List[dict]] = None
 ) -> bool:
     try:
         clean_phone = "".join(filter(str.isdigit, employee_phone))
@@ -60,13 +61,14 @@ async def send_whatsapp_to_employee(
             if default_inst not in ordered_candidates:
                 ordered_candidates.append(default_inst)
 
-        buttons = [
-            {
-                "type": "reply",
-                "displayText": "✅ Confirmar Visualização",
-                "id": f"confirm_task_{event_id}" if event_id else "confirm_task"
-            }
-        ]
+        if buttons is None:
+            buttons = [
+                {
+                    "type": "reply",
+                    "displayText": "👀 Confirmar Visualização",
+                    "id": f"confirm_view_task_{event_id}" if event_id else "confirm_view_task"
+                }
+            ]
 
         for inst_name in ordered_candidates:
             try:
@@ -111,7 +113,7 @@ async def send_immediate_creation_notification(event_id: int):
 
             emp_name = ev.employee_name or "Colaborador"
             emp_phone = ev.employee_phone
-            type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Compromisso")
+            type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
             client_info = "Não informado"
             if ev.contact:
@@ -122,23 +124,31 @@ async def send_immediate_creation_notification(event_id: int):
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            title = "🔔 NOVO COMPROMISSO AGENDADO"
+            title = "🔔 NOVA ATIVIDADE LANÇADA PARA VOCÊ"
             description = (
-                f"Olá, *{emp_name}*! A loja vinculou um novo compromisso a você:\n\n"
+                f"Olá, *{emp_name}*! A empresa lançou uma nova atividade atribuída a você:\n\n"
                 f"📌 *Tipo:* {type_label}\n"
-                f"🏷️ *Compromisso:* {ev.title}\n"
+                f"🏷️ *Atividade:* {ev.title}\n"
                 f"⏰ *Data e Hora:* {time_str}\n"
                 f"👤 *Cliente:* {client_info}\n"
                 f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                f"👉 *Clique no botão abaixo para confirmar que visualizou:*"
+                f"👉 *Clique no botão abaixo para confirmar que viu esta atividade:*"
             )
             footer = "Servsolda • Sistema de Tarefas"
 
-            success = await send_whatsapp_to_employee(inst_names, emp_phone, title, description, footer, event_id=ev.id)
+            buttons = [
+                {
+                    "type": "reply",
+                    "displayText": "👀 Confirmar Visualização",
+                    "id": f"confirm_view_task_{ev.id}"
+                }
+            ]
+
+            success = await send_whatsapp_to_employee(inst_names, emp_phone, title, description, footer, event_id=ev.id, buttons=buttons)
             if success:
                 ev.notified_creation = True
                 await session.commit()
-                logger.info(f"Notificação imediata com botão enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
+                logger.info(f"Notificação imediata com botão de visualização enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 

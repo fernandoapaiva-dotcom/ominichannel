@@ -613,17 +613,111 @@ async def receive_evolution_webhook(
         ""
     )
 
-    # Handle Task Confirmation Button from Employee
-    is_task_confirmation = (
+    # 1. Handle Task View Confirmation Button from Employee
+    is_view_confirmation = (
+        btn_id.startswith("confirm_view_task") or
         btn_id.startswith("confirm_task") or
         "confirmar visualização" in text_content.lower() or
-        "confirmar visualizacao" in text_content.lower()
+        "confirmar visualizacao" in text_content.lower() or
+        "vi a atividade" in text_content.lower()
     )
-    if is_task_confirmation and phone_number:
+    if is_view_confirmation and phone_number:
         event_id = None
-        if "confirm_task_" in btn_id:
+        for prefix in ["confirm_view_task_", "confirm_task_"]:
+            if prefix in btn_id:
+                try:
+                    event_id = int(btn_id.replace(prefix, ""))
+                    break
+                except Exception:
+                    pass
+
+        if event_id:
+            ev_stmt = select(CalendarEvent).options(selectinload(CalendarEvent.contact)).where(CalendarEvent.id == event_id)
+        else:
+            ev_stmt = (
+                select(CalendarEvent)
+                .options(selectinload(CalendarEvent.contact))
+                .where(
+                    CalendarEvent.employee_phone.like(f"%{phone_number[-8:]}%"),
+                    CalendarEvent.status.in_(["pendente", "em_progresso"])
+                )
+                .order_by(CalendarEvent.start_time.desc())
+            )
+        ev_res = await db.execute(ev_stmt)
+        ev_obj = ev_res.scalars().first()
+
+        if ev_obj:
+            ev_obj.confirmed_by_employee = True
+            ev_obj.confirmed_at = datetime.utcnow()
+            ev_obj.status = "em_progresso"
+            ev_obj.atualizado_em = datetime.utcnow()
+            await db.commit()
+            await db.refresh(ev_obj)
+            logger.info(f"Atividade #{ev_obj.id} visualizada e colocada em progresso pelo funcionário {phone_number}")
+
+            await ws_manager.broadcast({
+                "type": "CALENDAR_EVENT_UPDATED",
+                "event_id": ev_obj.id,
+                "confirmed_by_employee": True,
+                "status": "em_progresso"
+            })
+
+            emp_name = ev_obj.employee_name or "Colaborador"
+            client_info = "Não informado"
+            if ev_obj.contact:
+                client_info = f"{ev_obj.contact.nome or 'Cliente'} ({ev_obj.contact.telefone or ''})".strip()
+
+            now_utc = datetime.utcnow()
+            now_brt = now_utc - timedelta(hours=3)
+            event_time_brt = ev_obj.start_time if ev_obj.start_time else now_brt
+            time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
+
+            title_step2 = "📋 ATIVIDADE EM CUMPRIMENTO"
+            desc_step2 = (
+                f"Ótimo, *{emp_name}*! Confirmamos que você visualizou a atividade. Ela agora está registrada como *Em Andamento* no sistema.\n\n"
+                f"🏷️ *Atividade:* {ev_obj.title}\n"
+                f"⏰ *Horário:* {time_str}\n"
+                f"👤 *Cliente:* {client_info}\n"
+                f"📝 *Detalhes:* {ev_obj.description or 'Sem observações adicionais.'}\n\n"
+                f"🏁 *Assim que você concluir a atividade, clique no botão abaixo para finalizar na agenda:*"
+            )
+            buttons_step2 = [
+                {
+                    "type": "reply",
+                    "displayText": "✅ Concluir Atividade",
+                    "id": f"complete_task_{ev_obj.id}"
+                }
+            ]
+
             try:
-                event_id = int(btn_id.replace("confirm_task_", ""))
+                await evolution_service.send_button_message(
+                    instance_name=instance_name,
+                    number=phone_number,
+                    title=title_step2,
+                    description=desc_step2,
+                    footer="Servsolda • Sistema de Tarefas",
+                    buttons=buttons_step2
+                )
+            except Exception as e:
+                logger.error(f"Erro ao enviar etapa 2 de cumprimento de tarefa: {e}")
+
+            return {"status": "success", "action": "task_view_confirmed", "event_id": ev_obj.id}
+
+    # 2. Handle Task Completion Button from Employee
+    is_task_completion = (
+        btn_id.startswith("complete_task") or
+        "concluir atividade" in text_content.lower() or
+        "concluir tarefa" in text_content.lower() or
+        "finalizar atividade" in text_content.lower() or
+        "finalizar tarefa" in text_content.lower() or
+        "tarefa concluida" in text_content.lower() or
+        "tarefa concluída" in text_content.lower()
+    )
+    if is_task_completion and phone_number:
+        event_id = None
+        if "complete_task_" in btn_id:
+            try:
+                event_id = int(btn_id.replace("complete_task_", ""))
             except Exception:
                 pass
 
@@ -642,22 +736,23 @@ async def receive_evolution_webhook(
         ev_obj = ev_res.scalars().first()
 
         if ev_obj:
-            ev_obj.confirmed_by_employee = True
-            ev_obj.confirmed_at = datetime.utcnow()
+            ev_obj.status = "concluido"
+            ev_obj.atualizado_em = datetime.utcnow()
             await db.commit()
-            logger.info(f"Tarefa #{ev_obj.id} confirmada via botão WhatsApp pelo funcionário {phone_number}")
+            await db.refresh(ev_obj)
+            logger.info(f"Atividade #{ev_obj.id} finalizada como concluída pelo funcionário {phone_number}")
 
             await ws_manager.broadcast({
                 "type": "CALENDAR_EVENT_UPDATED",
                 "event_id": ev_obj.id,
-                "confirmed_by_employee": True
+                "status": "concluido"
             })
 
-            # Send confirmation response to employee
+            emp_name = ev_obj.employee_name or "Colaborador"
             conf_reply = (
-                f"✅ *COMPROMISSO CONFIRMADO COM SUCESSO!*\n\n"
-                f"A loja registrou que você visualizou o compromisso *\"{ev_obj.title}\"*.\n"
-                f"Bom trabalho!"
+                f"🎉 *PARABÉNS! ATIVIDADE CONCLUÍDA COM SUCESSO!*\n\n"
+                f"A atividade *\"{ev_obj.title}\"* foi finalizada e registrada como *Concluída* na agenda da empresa.\n\n"
+                f"Obrigado pelo seu trabalho! 👏"
             )
             try:
                 await evolution_service.send_text_message(
@@ -666,9 +761,9 @@ async def receive_evolution_webhook(
                     text=conf_reply
                 )
             except Exception as e:
-                logger.error(f"Erro ao responder confirmação de tarefa: {e}")
+                logger.error(f"Erro ao responder conclusão de tarefa: {e}")
 
-            return {"status": "success", "action": "task_confirmed", "event_id": ev_obj.id}
+            return {"status": "success", "action": "task_completed", "event_id": ev_obj.id}
 
     msg_type = MessageType.TEXTO
     # Check media payloads
