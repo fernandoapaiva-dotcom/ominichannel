@@ -690,7 +690,7 @@ async def receive_evolution_webhook(
             buttons_step2 = [
                 {
                     "type": "reply",
-                    "displayText": "✅ Concluir Atividade",
+                    "displayText": "Concluído",
                     "id": f"complete_task_{ev_obj.id}"
                 }
             ]
@@ -712,6 +712,10 @@ async def receive_evolution_webhook(
     # 2. Handle Task Completion Button from Employee
     is_task_completion = (
         btn_id.startswith("complete_task") or
+        "concluído" in cleaned_txt or
+        "concluido" in cleaned_txt or
+        "✅ concluído" in cleaned_txt or
+        "✅ concluido" in cleaned_txt or
         "concluir atividade" in cleaned_txt or
         "concluir tarefa" in cleaned_txt or
         "finalizar atividade" in cleaned_txt or

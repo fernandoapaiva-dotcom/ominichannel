@@ -64,44 +64,27 @@ async def send_whatsapp_to_employee(
         if not ordered_candidates:
             ordered_candidates = ["instancia_locacao", "instancia_tecnica"]
 
-        if buttons is None:
-            buttons = [
-                {
-                    "type": "reply",
-                    "displayText": "👀 Confirmar Visualização",
-                    "id": f"confirm_view_task_{event_id}" if event_id else "confirm_view_task"
-                }
-            ]
-
         for inst_name in ordered_candidates:
             try:
                 res = await evolution_service.send_button_message(
                     instance_name=inst_name,
                     number=clean_phone,
-                    title=title,
-                    description=description,
+                    title="Você recebeu uma nova tarefa para execução!",
+                    description="Uma nova atividade foi lançada para você.\nClique no botão abaixo para confirmar o recebimento:",
                     footer=footer,
-                    buttons=buttons
+                    buttons=[
+                        {
+                            "type": "reply",
+                            "displayText": "Confirmar",
+                            "id": f"confirm_view_task_{event_id}" if event_id else "confirm_view_task"
+                        }
+                    ]
                 )
                 if res and not res.get("error") and (res.get("key") or res.get("messageId") or res.get("status") or res.get("success")):
-                    logger.info(f"Lembrete com botão enviado com sucesso para funcionário ({clean_phone}) via instância de departamento '{inst_name}'")
+                    logger.info(f"Botão de confirmação enviado para funcionário ({clean_phone}) via '{inst_name}'")
                     return True
             except Exception as inst_err:
-                logger.warning(f"Tentativa com botão via '{inst_name}' falhou: {inst_err}. Tentando envio direto em texto...")
-
-            # Fallback direct text message
-            try:
-                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
-                res_txt = await evolution_service.send_text_message(
-                    instance_name=inst_name,
-                    number=clean_phone,
-                    text=full_text
-                )
-                if res_txt and not res_txt.get("error") and (res_txt.get("key") or res_txt.get("id") or res_txt.get("success")):
-                    logger.info(f"Lembrete em texto enviado com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
-                    return True
-            except Exception as txt_err:
-                logger.warning(f"Tentativa em texto via '{inst_name}' falhou: {txt_err}.")
+                logger.warning(f"Tentativa com botão via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
 
         return False
     except Exception as e:

@@ -323,6 +323,48 @@ class EvolutionService:
                 full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
                 return await self.send_text_message(instance_name, number, full_text)
 
+    async def send_poll_message(
+        self,
+        instance_name: str,
+        number: str,
+        question: str,
+        options: List[str],
+        selectable_count: int = 1,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends an interactive one-click Poll button message via Evolution API v2.
+        Endpoint: POST /message/sendPoll/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendPoll/{instance_name}"
+        clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
+        
+        # WhatsApp requires at least 2 options for polls
+        safe_options = list(options)
+        if len(safe_options) < 2:
+            safe_options.append("❌ Recusar" if "Confirmar" in safe_options[0] else "⏳ Em Andamento")
+
+        payload = {
+            "number": clean_number,
+            "name": question,
+            "selectableCount": selectable_count,
+            "values": safe_options
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                res_data = response.json() if response.content else {}
+                if response.status_code < 400:
+                    res_data["success"] = True
+                    return res_data
+                logger.warning(f"sendPoll returned {response.status_code}: {res_data}")
+                return {"success": False, "error": str(res_data)}
+            except Exception as e:
+                logger.error(f"Error sending poll to {number} via instance {instance_name}: {e}")
+                return {"success": False, "error": str(e)}
+
     async def send_reaction(
         self,
         instance_name: str,
