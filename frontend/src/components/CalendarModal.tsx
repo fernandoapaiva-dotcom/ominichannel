@@ -27,6 +27,12 @@ const GOOGLE_COLORS = [
   { name: 'Rosa', hex: '#db2777' },
 ];
 
+const GOOGLE_CALENDAR_PALETTE = [
+  '#e11d48', '#f43f5e', '#fb7185', '#ea580c', '#f97316', '#f59e0b', '#eab308', '#facc15',
+  '#a3e635', '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6',
+  '#a855f7', '#d946ef', '#ec4899', '#78350f', '#71717a', '#a1a1aa'
+];
+
 const MONTH_NAMES = [
   'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
   'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
@@ -43,6 +49,82 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 }) => {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>('week');
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [selectedEventType, setSelectedEventType] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Right-Click Context Menu State
+  const [contextMenu, setContextMenu] = useState<{
+    isOpen: boolean;
+    x: number;
+    y: number;
+    event: CalendarEvent | null;
+  }>({
+    isOpen: false,
+    x: 0,
+    y: 0,
+    event: null
+  });
+
+  const handleOpenContextMenu = (e: React.MouseEvent, ev: CalendarEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const menuWidth = 240;
+    const menuHeight = 220;
+    const x = Math.min(e.clientX, window.innerWidth - menuWidth - 10);
+    const y = Math.min(e.clientY, window.innerHeight - menuHeight - 10);
+    setContextMenu({
+      isOpen: true,
+      x: Math.max(10, x),
+      y: Math.max(10, y),
+      event: ev
+    });
+  };
+
+  const handleChangeEventColor = async (ev: CalendarEvent, newColor: string) => {
+    try {
+      setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, color: newColor } : e));
+      setContextMenu({ isOpen: false, x: 0, y: 0, event: null });
+      await apiFetch(`/calendar/events/${ev.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: ev.title,
+          description: ev.description,
+          event_type: ev.event_type,
+          start_time: ev.start_time,
+          end_time: ev.end_time,
+          all_day: ev.all_day,
+          color: newColor,
+          priority: ev.priority,
+          status: ev.status,
+          reminder_minutes: ev.reminder_minutes,
+          contact_id: ev.contact_id,
+          conversation_id: ev.conversation_id,
+          employee_id: ev.employee_id,
+          employee_name: ev.employee_name,
+          employee_phone: ev.employee_phone,
+          notify_whatsapp: ev.notify_whatsapp,
+          custom_reminder_hours: ev.custom_reminder_hours,
+          confirmed_by_employee: ev.confirmed_by_employee
+        })
+      });
+    } catch (err) {
+      console.error('Error updating event color:', err);
+    }
+  };
+
+  useEffect(() => {
+    const handleCloseCtx = () => {
+      if (contextMenu.isOpen) {
+        setContextMenu({ isOpen: false, x: 0, y: 0, event: null });
+      }
+    };
+    window.addEventListener('click', handleCloseCtx);
+    return () => window.removeEventListener('click', handleCloseCtx);
+  }, [contextMenu.isOpen]);
+
   const [showSidebar, setShowSidebar] = useState<boolean>(true);
   const [miniCalDate, setMiniCalDate] = useState<Date>(new Date());
   const [selectedAgendas, setSelectedAgendas] = useState<Record<string, boolean>>({
@@ -54,9 +136,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     geral: true
   });
   const timeGridRef = useRef<HTMLDivElement>(null);
-  const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pendente' | 'concluido'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'baixa' | 'media' | 'alta' | 'urgente'>('all');
@@ -1176,6 +1255,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 e.stopPropagation();
                                 openEditEventModal(ev);
                               }}
+                              onContextMenu={(e) => handleOpenContextMenu(e, ev)}
                               style={{
                                 position: 'absolute',
                                 top: `${topPx}px`,
@@ -1462,6 +1542,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 e.stopPropagation();
                                 openEditEventModal(ev);
                               }}
+                              onContextMenu={(e) => handleOpenContextMenu(e, ev)}
                               style={{
                                 position: 'absolute',
                                 top: `${topPx}px`,
@@ -1649,6 +1730,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                   e.stopPropagation();
                                   openEditEventModal(ev);
                                 }}
+                                onContextMenu={(e) => handleOpenContextMenu(e, ev)}
                                 style={{
                                   backgroundColor: isDone ? 'rgba(255, 255, 255, 0.05)' : (ev.color || '#ea580c'),
                                   color: isDone ? 'var(--text-muted)' : '#fff',
@@ -1728,6 +1810,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         <div
                           key={ev.id}
                           onClick={() => openEditEventModal(ev)}
+                          onContextMenu={(e) => handleOpenContextMenu(e, ev)}
                           style={{
                             backgroundColor: 'var(--bg-primary)',
                             border: `1px solid ${isDone ? 'var(--border-color)' : 'rgba(255,255,255,0.08)'}`,
@@ -2340,6 +2423,137 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           </form>
         </div>
       </div>
+      )}
+
+      {/* Floating Right-Click Context Menu (Google Calendar Style) */}
+      {contextMenu.isOpen && contextMenu.event && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`,
+            backgroundColor: '#202124',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: '8px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.7)',
+            padding: '8px',
+            width: '230px',
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            animation: 'fadeIn 0.1s ease'
+          }}
+        >
+          {/* Excluir Option */}
+          <button
+            type="button"
+            onClick={() => {
+              const evId = contextMenu.event!.id;
+              setContextMenu({ isOpen: false, x: 0, y: 0, event: null });
+              handleDeleteEvent(evId);
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              width: '100%',
+              padding: '8px 10px',
+              backgroundColor: 'transparent',
+              border: 'none',
+              borderRadius: '6px',
+              color: '#f87171',
+              fontSize: '13px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              textAlign: 'left',
+              transition: 'background 0.15s'
+            }}
+            onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.15)'}
+            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+          >
+            <Trash2 size={16} />
+            <span>Excluir</span>
+          </button>
+
+          {/* Separator */}
+          <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.1)', margin: '2px 0' }} />
+
+          {/* Colors Palette */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 4px 6px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'bold' }}>
+              <Edit3 size={13} />
+              <span>Cor do Compromisso</span>
+            </div>
+            
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(8, 1fr)',
+              gap: '6px',
+              padding: '2px 4px'
+            }}>
+              {GOOGLE_CALENDAR_PALETTE.map(color => {
+                const isSelected = contextMenu.event?.color === color;
+                return (
+                  <button
+                    key={color}
+                    type="button"
+                    title={color}
+                    onClick={() => handleChangeEventColor(contextMenu.event!, color)}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      borderRadius: '50%',
+                      backgroundColor: color,
+                      border: isSelected ? '2px solid #fff' : 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      transition: 'transform 0.1s ease',
+                      boxShadow: isSelected ? '0 0 6px rgba(255,255,255,0.6)' : 'none'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.2)'}
+                    onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                  >
+                    {isSelected && <Check size={11} color="#fff" strokeWidth={3} />}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Padrão Button */}
+            <div style={{ marginTop: '8px', padding: '0 4px' }}>
+              <button
+                type="button"
+                onClick={() => handleChangeEventColor(contextMenu.event!, '#ea580c')}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  padding: '6px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: '16px',
+                  color: '#fff',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: 'pointer',
+                  transition: 'background 0.15s'
+                }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.12)'}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)'}
+              >
+                <Circle size={12} fill="#ea580c" color="#ea580c" />
+                <span>Padrão</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -119,7 +119,7 @@ async def send_immediate_creation_notification(event_id: int):
 
             now_utc = datetime.utcnow()
             now_brt = now_utc - timedelta(hours=3)
-            event_time_brt = ev.start_time - timedelta(hours=3) if ev.start_time else now_brt
+            event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
             title = "🔔 NOVO COMPROMISSO AGENDADO"
@@ -183,7 +183,7 @@ async def check_and_send_calendar_reminders():
             if ev.contact:
                 client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
 
-            event_time_brt = ev.start_time - timedelta(hours=3) if ev.start_time else now_brt
+            event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
             # 1. Immediate creation notification
