@@ -2063,7 +2063,9 @@ async def close_conversation_protocol(
     whatsapp_text = (
         f"🔒 *Servweld - Protocolo Finalizado*\n\n"
         f"Olá, {clean_cust_name}! Informamos que o seu atendimento referente ao *Protocolo #{current_proto}* foi finalizado por {current_user.nome}.\n\n"
-        f"Agradecemos pelo contato! O canal permanece à disposição para quando precisar."
+        f"⭐ *Pesquisa de Satisfação:*\n"
+        f"Como você avalia nosso atendimento de 1 a 5 estrelas? (Por favor, responda com uma nota de 1 a 5)\n\n"
+        f"Agradecemos pela preferência! O canal permanece à disposição sempre que precisar."
     )
 
     # Dispatch to customer's WhatsApp
@@ -2092,7 +2094,8 @@ async def close_conversation_protocol(
     )
     db.add(divider_msg)
 
-    # Clear active protocol number on ongoing conversation so new protocol can be opened in the future
+    # Update conversation status
+    conv.status = ConversationStatus.ENCERRADA
     conv.protocol_number = None
     conv.ultima_interacao_em = datetime.utcnow()
 

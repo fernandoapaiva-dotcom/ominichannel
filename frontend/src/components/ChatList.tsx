@@ -159,21 +159,33 @@ export const ChatList: React.FC<ChatListProps> = ({
     }
   };
 
-  // Group conversations by contact
+  // Group conversations by unique customer (normalized phone) to guarantee a SINGLE card per client
   const contactGroups = useMemo(() => {
-    const map = new Map<number, Conversation[]>();
+    const map = new Map<string, Conversation[]>();
 
     conversations.forEach(conv => {
-      const cid = conv.contact_id || conv.contact?.id || 0;
-      if (!map.has(cid)) {
-        map.set(cid, []);
+      const rawPhone = (conv.contact?.telefone || '').trim();
+      const cleanDigits = rawPhone.replace(/\D/g, '');
+      const isGroup = rawPhone.startsWith('120363') || cleanDigits.length > 15;
+      
+      let groupKey = '';
+      if (isGroup) {
+        groupKey = `group_${cleanDigits || rawPhone}`;
+      } else if (cleanDigits.length >= 8) {
+        groupKey = `client_${cleanDigits.slice(-8)}`;
+      } else {
+        groupKey = `contact_${conv.contact_id || conv.contact?.id || 0}`;
       }
-      map.get(cid)!.push(conv);
+
+      if (!map.has(groupKey)) {
+        map.set(groupKey, []);
+      }
+      map.get(groupKey)!.push(conv);
     });
 
     const groups: ContactGroup[] = [];
 
-    map.forEach((convs, cid) => {
+    map.forEach((convs, gKey) => {
       convs.sort((a, b) => new Date(b.ultima_interacao_em).getTime() - new Date(a.ultima_interacao_em).getTime());
 
       const matchingConvs = convs.filter(conv => {
@@ -222,7 +234,18 @@ export const ChatList: React.FC<ChatListProps> = ({
       const primary = (selectedDepartmentId !== 'all'
         ? matchingConvs.find(c => String(c.whatsapp_number_id) === String(selectedDepartmentId))
         : null) || matchingConvs.find(c => c.status === 'com_ia' || c.status === 'com_humano') || matchingConvs[0];
-      const contact = primary.contact;
+      
+      let bestName = '';
+      let bestPhone = '';
+      matchingConvs.forEach(c => {
+        if (!bestPhone && c.contact?.telefone) bestPhone = c.contact.telefone;
+        const n = c.contact?.nome;
+        if (n && n !== 'WhatsApp' && !n.replace(/\D/g, '')) {
+          bestName = n;
+        } else if (!bestName && n) {
+          bestName = n;
+        }
+      });
 
       let groupUnreadCount = 0;
       matchingConvs.forEach(conv => {
@@ -252,9 +275,9 @@ export const ChatList: React.FC<ChatListProps> = ({
       const hasUnread = groupUnreadCount > 0 || statusFilter === 'nao_lidas';
 
       groups.push({
-        contactId: cid,
-        contactName: contact?.nome || contact?.telefone || 'Cliente sem nome',
-        contactPhone: contact?.telefone || '',
+        contactId: primary.contact_id || primary.contact?.id || 0,
+        contactName: bestName || primary.contact?.nome || primary.contact?.telefone || 'Cliente sem nome',
+        contactPhone: bestPhone || primary.contact?.telefone || '',
         primaryConv: primary,
         allConversations: matchingConvs,
         hasUnread,

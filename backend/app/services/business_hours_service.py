@@ -113,7 +113,8 @@ class BusinessHoursService:
                     .where(
                         Conversation.status.in_([
                             ConversationStatus.COM_HUMANO,
-                            ConversationStatus.AGUARDANDO_ATENDENTE
+                            ConversationStatus.AGUARDANDO_ATENDENTE,
+                            ConversationStatus.COM_IA
                         ])
                     )
                 )
@@ -125,18 +126,14 @@ class BusinessHoursService:
                     if conv.contact and ("@g.us" in str(conv.contact.telefone) or len(str(conv.contact.telefone)) > 15):
                         continue
 
-                    # CRITICAL SAFEGUARD: Closing message MUST ONLY be sent to conversations with an ACTIVE OPEN PROTOCOL!
-                    # NEVER send closing messages to migrated chats, historical WhatsApp conversations, or chats without an open protocol!
+                    # Ensure the conversation had interaction TODAY (within the last 14 hours)
+                    if not conv.ultima_interacao_em or (datetime.utcnow() - conv.ultima_interacao_em).total_seconds() > 14 * 3600:
+                        continue
+
+                    # Ensure conversation has a daily protocol
                     if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
-                        continue
-
-                    extra = dict(conv.dados_adicionais or {})
-                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
-                        continue
-
-                    # Also ensure the conversation was active TODAY (within the last 12 hours)
-                    if not conv.ultima_interacao_em or (datetime.utcnow() - conv.ultima_interacao_em).total_seconds() > 12 * 3600:
-                        continue
+                        from app.api.v1.conversations import generate_daily_protocol
+                        conv.protocol_number = await generate_daily_protocol(db, conv.tenant_id)
 
                     proto = conv.protocol_number
                     closing_text = self.get_shift_closing_message(proto)
