@@ -397,7 +397,19 @@ async def reset_whatsapp_connection(
     except Exception as err:
         logger.warning(f"Delete failed during reset for instance {instance}: {err}")
 
-    await asyncio.sleep(1.5)
+    # 2.1 Clean Postgres session record if accessible to prevent zombie 'open' state
+    try:
+        import asyncpg
+        pg_conn = await asyncpg.connect("postgresql://omini_user:omini_password@localhost:5432/omini_db", timeout=3.0)
+        inst_row = await pg_conn.fetchrow('SELECT id FROM "Instance" WHERE name = $1', instance)
+        if inst_row:
+            await pg_conn.execute('DELETE FROM "Session" WHERE "sessionId" = $1', inst_row['id'])
+            await pg_conn.execute('UPDATE "Instance" SET "connectionStatus" = $1, "ownerJid" = NULL WHERE id = $2', 'close', inst_row['id'])
+        await pg_conn.close()
+    except Exception as pg_err:
+        logger.debug(f"Direct pg session clean skipped/failed: {pg_err}")
+
+    await asyncio.sleep(1.0)
 
     # 3. Create fresh instance
     create_res = await evolution_service.create_instance(
@@ -407,7 +419,7 @@ async def reset_whatsapp_connection(
     )
     logger.info(f"Re-created instance '{instance}' for reset: {create_res}")
 
-    await asyncio.sleep(2.0)
+    await asyncio.sleep(1.5)
 
     # 4. Fetch fresh QR Code
     qrcode_base64 = None
