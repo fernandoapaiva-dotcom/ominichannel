@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Check, Clock,
   AlertCircle, AlertTriangle, User, Phone, MessageSquare, Trash2, Edit3,
   Search, Filter, CheckCircle2, Circle, MoreVertical, ExternalLink, Tag,
-  Truck, Wrench, Users, Bell, CheckSquare, ShieldCheck
+  Truck, Wrench, Users, Bell, CheckSquare, ShieldCheck, Menu, CheckSquare2
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { CalendarEvent, User as UserType, AuthorizedTechnician } from '../types';
@@ -17,14 +17,14 @@ interface CalendarModalProps {
 }
 
 const GOOGLE_COLORS = [
+  { name: 'Laranja', hex: '#ea580c' },
+  { name: 'Roxo', hex: '#9333ea' },
+  { name: 'Azul', hex: '#0284c7' },
+  { name: 'Grafite', hex: '#475569' },
   { name: 'Esmeralda', hex: '#10b981' },
-  { name: 'Azul', hex: '#3b82f6' },
-  { name: 'Roxo', hex: '#8b5cf6' },
-  { name: 'Âmbar', hex: '#f59e0b' },
-  { name: 'Vermelho', hex: '#ef4444' },
-  { name: 'Rosa', hex: '#ec4899' },
-  { name: 'Ciano', hex: '#06b6d4' },
-  { name: 'Grafite', hex: '#6b7280' },
+  { name: 'Âmbar', hex: '#d97706' },
+  { name: 'Vermelho', hex: '#dc2626' },
+  { name: 'Rosa', hex: '#db2777' },
 ];
 
 const MONTH_NAMES = [
@@ -42,7 +42,18 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   onSelectConversation
 }) => {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>('month');
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>('week');
+  const [showSidebar, setShowSidebar] = useState<boolean>(true);
+  const [miniCalDate, setMiniCalDate] = useState<Date>(new Date());
+  const [selectedAgendas, setSelectedAgendas] = useState<Record<string, boolean>>({
+    entrega_gas: true,
+    visita_tecnica: true,
+    manutencao: true,
+    reuniao: true,
+    atendimento: true,
+    geral: true
+  });
+  const timeGridRef = useRef<HTMLDivElement>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -292,9 +303,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setCurrentDate(new Date());
   };
 
+  useEffect(() => {
+    if (timeGridRef.current && (viewMode === 'week' || viewMode === 'day')) {
+      const curHour = new Date().getHours();
+      const targetScroll = Math.max(0, Math.min(18, curHour - 2)) * 60;
+      timeGridRef.current.scrollTop = targetScroll;
+    }
+  }, [viewMode, isOpen]);
+
   // Filtered events
   const filteredEvents = useMemo(() => {
     return events.filter(ev => {
+      const typeKey = ev.event_type || 'geral';
+      if (selectedAgendas[typeKey] === false) return false;
+
       if (statusFilter !== 'all') {
         if (statusFilter === 'concluido' && ev.status !== 'concluido') return false;
         if (statusFilter === 'pendente' && ev.status === 'concluido') return false;
@@ -309,7 +331,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       }
       return true;
     });
-  }, [events, statusFilter, priorityFilter, searchTerm]);
+  }, [events, selectedAgendas, statusFilter, priorityFilter, searchTerm]);
 
   // Month Matrix Calculation
   const monthDays = useMemo(() => {
@@ -343,6 +365,31 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
     return days;
   }, [currentDate]);
+
+  // Mini Calendar Matrix Calculation
+  const miniMonthDays = useMemo(() => {
+    const year = miniCalDate.getFullYear();
+    const month = miniCalDate.getMonth();
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+    const prevMonthDays = new Date(year, month, 0).getDate();
+
+    const days: { date: Date; isCurrentMonth: boolean; dateStr: string }[] = [];
+    for (let i = firstDayIndex - 1; i >= 0; i--) {
+      const d = new Date(year, month - 1, prevMonthDays - i);
+      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+    }
+    for (let i = 1; i <= totalDaysInMonth; i++) {
+      const d = new Date(year, month, i);
+      days.push({ date: d, isCurrentMonth: true, dateStr: d.toISOString().split('T')[0] });
+    }
+    const rem = (7 - (days.length % 7)) % 7;
+    for (let i = 1; i <= rem; i++) {
+      const d = new Date(year, month + 1, i);
+      days.push({ date: d, isCurrentMonth: false, dateStr: d.toISOString().split('T')[0] });
+    }
+    return days;
+  }, [miniCalDate]);
 
   const HOURS_24 = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
 
@@ -453,34 +500,68 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       }}>
         {/* Top Header / Google Calendar Navigation */}
         <div style={{
-          padding: '14px 24px',
+          padding: '12px 20px',
           borderBottom: '1px solid var(--border-color)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
-          gap: '16px',
-          backgroundColor: 'var(--bg-primary)'
+          gap: '12px',
+          backgroundColor: '#181d2c'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+            <button
+              type="button"
+              onClick={() => setShowSidebar(prev => !prev)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '6px',
+                borderRadius: '50%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title="Menu lateral"
+            >
+              <Menu size={20} />
+            </button>
+
+            {/* Google-like Logo Badge */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '10px',
-              color: 'var(--accent-primary)',
+              gap: '8px',
+              color: '#fff',
               fontWeight: 'bold',
               fontSize: '18px'
             }}>
-              <CalendarIcon size={24} />
-              <span>Agenda de Tarefas</span>
+              <div style={{
+                backgroundColor: '#1a73e8',
+                color: '#fff',
+                width: '28px',
+                height: '28px',
+                borderRadius: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '14px',
+                fontWeight: '800'
+              }}>
+                {new Date().getDate()}
+              </div>
+              <span>Agenda</span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {/* Navigation Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '12px' }}>
               <button
                 type="button"
                 onClick={handleToday}
                 style={{
-                  padding: '6px 14px',
+                  padding: '6px 16px',
                   borderRadius: '20px',
                   border: '1px solid var(--border-color)',
                   backgroundColor: 'var(--bg-secondary)',
@@ -530,25 +611,25 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               </button>
             </div>
 
-            <h2 style={{ fontSize: '19px', fontWeight: '700', color: '#fff', margin: 0, minWidth: '200px' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#fff', margin: '0 0 0 10px' }}>
               {MONTH_NAMES[currentDate.getMonth()]} de {currentDate.getFullYear()}
             </h2>
           </div>
 
-          {/* Right Controls: Search, View Switchers, New Event Button & Close */}
+          {/* Right Controls: Search, View Mode, Status Filter, Close */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             {/* Search Input */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              backgroundColor: 'var(--bg-secondary)',
+              backgroundColor: 'var(--bg-primary)',
               border: '1px solid var(--border-color)',
               borderRadius: '20px',
               padding: '6px 12px',
-              width: '200px'
+              width: '180px'
             }}>
-              <Search size={15} color="var(--text-muted)" />
+              <Search size={14} color="var(--text-muted)" />
               <input
                 type="text"
                 placeholder="Buscar tarefas..."
@@ -559,7 +640,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   border: 'none',
                   outline: 'none',
                   color: '#fff',
-                  fontSize: '13px',
+                  fontSize: '12px',
                   width: '100%'
                 }}
               />
@@ -574,10 +655,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               )}
             </div>
 
-            {/* View Mode Buttons */}
+            {/* View Mode Switcher */}
             <div style={{
               display: 'flex',
-              backgroundColor: 'var(--bg-secondary)',
+              backgroundColor: 'var(--bg-primary)',
               borderRadius: '20px',
               border: '1px solid var(--border-color)',
               padding: '2px'
@@ -588,10 +669,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   type="button"
                   onClick={() => setViewMode(mode)}
                   style={{
-                    padding: '6px 14px',
+                    padding: '5px 12px',
                     borderRadius: '16px',
                     border: 'none',
-                    backgroundColor: viewMode === mode ? 'var(--accent-primary)' : 'transparent',
+                    backgroundColor: viewMode === mode ? '#1a73e8' : 'transparent',
                     color: viewMode === mode ? '#fff' : 'var(--text-muted)',
                     cursor: 'pointer',
                     fontSize: '12px',
@@ -610,7 +691,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               value={statusFilter}
               onChange={e => setStatusFilter(e.target.value as any)}
               style={{
-                backgroundColor: 'var(--bg-secondary)',
+                backgroundColor: 'var(--bg-primary)',
                 border: '1px solid var(--border-color)',
                 color: 'var(--text-main)',
                 padding: '6px 10px',
@@ -625,32 +706,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               <option value="concluido">✅ Concluídas</option>
             </select>
 
-            {/* New Event Button */}
-            <button
-              type="button"
-              onClick={() => openNewEventModal()}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                backgroundColor: 'var(--accent-primary)',
-                color: '#fff',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '20px',
-                fontWeight: 'bold',
-                fontSize: '13px',
-                cursor: 'pointer',
-                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)',
-                transition: 'transform 0.15s ease'
-              }}
-              onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.03)')}
-              onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
-            >
-              <Plus size={16} /> Novo Evento / Tarefa
-            </button>
-
-            {/* Close Modal Button */}
+            {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
@@ -666,302 +722,304 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               }}
               title="Fechar (Esc)"
             >
-              <X size={24} />
+              <X size={22} />
             </button>
           </div>
         </div>
 
-        {/* Calendar Body */}
-        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
-          {/* 1. MONTH VIEW */}
-          {viewMode === 'month' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '600px' }}>
-              {/* Sticky Weekday Header */}
-              <div style={{
-                position: 'sticky',
-                top: 0,
-                zIndex: 10,
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, 1fr)',
-                borderBottom: '1px solid var(--border-color)',
-                backgroundColor: 'var(--bg-secondary)',
-                backdropFilter: 'blur(10px)',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-              }}>
-                {WEEKDAYS.map((day, idx) => (
-                  <div
-                    key={day}
-                    style={{
-                      padding: '12px 10px',
-                      textAlign: 'center',
-                      fontSize: '12px',
-                      fontWeight: '700',
-                      color: idx === 0 || idx === 6 ? 'var(--text-muted)' : 'var(--accent-primary)',
-                      borderRight: idx < 6 ? '1px solid var(--border-color)' : 'none'
-                    }}
-                  >
-                    {day.toUpperCase()}
-                  </div>
-                ))}
-              </div>
+        {/* Main Body (Split into Left Sidebar + Main Calendar View) */}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', backgroundColor: '#0d1117' }}>
+          {/* LEFT SIDEBAR (Google Calendar Style) */}
+          {showSidebar && (
+            <div style={{
+              width: '235px',
+              backgroundColor: '#131722',
+              borderRight: '1px solid var(--border-color)',
+              padding: '16px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '20px',
+              overflowY: 'auto',
+              flexShrink: 0
+            }}>
+              {/* + Criar Button */}
+              <button
+                type="button"
+                onClick={() => openNewEventModal()}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  backgroundColor: '#202637',
+                  border: '1px solid var(--border-color)',
+                  color: '#fff',
+                  padding: '10px 18px',
+                  borderRadius: '28px',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                  transition: 'all 0.15s ease',
+                  width: 'fit-content'
+                }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2a324b')}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#202637')}
+              >
+                <div style={{
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '50%',
+                  backgroundColor: '#1a73e8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Plus size={16} color="#fff" />
+                </div>
+                <span>Criar</span>
+              </button>
 
-              {/* Month Grid with Drag & Drop */}
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(7, 1fr)',
-                flex: 1,
-                gridAutoRows: 'minmax(105px, 1fr)'
-              }}>
-                {monthDays.map((cell, idx) => {
-                  const dayEvents = filteredEvents.filter(ev => {
-                    const evDateStr = ev.start_time.split('T')[0];
-                    return evDateStr === cell.dateStr;
-                  });
-                  const isToday = cell.dateStr === todayStr;
-
-                  return (
-                    <div
-                      key={idx}
-                      onClick={() => openNewEventModal(undefined, cell.date)}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.18)';
-                      }}
-                      onDragLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = isToday
-                          ? 'rgba(16, 185, 129, 0.05)'
-                          : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.style.backgroundColor = isToday
-                          ? 'rgba(16, 185, 129, 0.05)'
-                          : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
-                        const evId = Number(e.dataTransfer.getData('text/plain'));
-                        if (evId) {
-                          handleDropOnDate(evId, cell.dateStr);
-                        }
-                      }}
-                      style={{
-                        borderRight: (idx + 1) % 7 !== 0 ? '1px solid var(--border-color)' : 'none',
-                        borderBottom: '1px solid var(--border-color)',
-                        padding: '6px',
-                        backgroundColor: isToday
-                          ? 'rgba(16, 185, 129, 0.05)'
-                          : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)',
-                        opacity: cell.isCurrentMonth ? 1 : 0.45,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s'
-                      }}
+              {/* Mini Calendar */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 4px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>
+                    {MONTH_NAMES[miniCalDate.getMonth()]} de {miniCalDate.getFullYear()}
+                  </span>
+                  <div style={{ display: 'flex', gap: '2px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setMiniCalDate(prev => {
+                        const d = new Date(prev);
+                        d.setMonth(d.getMonth() - 1);
+                        return d;
+                      })}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
                     >
-                      {/* Day Number */}
-                      <div style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        marginBottom: '4px'
-                      }}>
-                        <span style={{
-                          fontSize: '13px',
-                          fontWeight: isToday ? 'bold' : '500',
+                      <ChevronLeft size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMiniCalDate(prev => {
+                        const d = new Date(prev);
+                        d.setMonth(d.getMonth() + 1);
+                        return d;
+                      })}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Mini Day Letters */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', textAlign: 'center', fontSize: '10px', color: 'var(--text-muted)', fontWeight: 'bold' }}>
+                  {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((l, i) => (
+                    <span key={i}>{l}</span>
+                  ))}
+                </div>
+
+                {/* Mini Days Grid */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '2px', textAlign: 'center', fontSize: '11px' }}>
+                  {miniMonthDays.map((c, i) => {
+                    const isCurSelected = c.dateStr === currentDate.toISOString().split('T')[0];
+                    const isTodayCell = c.dateStr === todayStr;
+
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setCurrentDate(c.date)}
+                        style={{
+                          background: isCurSelected ? '#1a73e8' : 'none',
+                          color: isCurSelected ? '#fff' : isTodayCell ? 'var(--accent-primary)' : c.isCurrentMonth ? 'var(--text-main)' : 'rgba(255,255,255,0.2)',
+                          border: isTodayCell && !isCurSelected ? '1px solid var(--accent-primary)' : 'none',
+                          borderRadius: '50%',
                           width: '24px',
                           height: '24px',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          borderRadius: '50%',
-                          backgroundColor: isToday ? 'var(--accent-primary)' : 'transparent',
-                          color: isToday ? '#fff' : 'var(--text-main)'
-                        }}>
-                          {cell.date.getDate()}
-                        </span>
+                          margin: '0 auto',
+                          cursor: 'pointer',
+                          fontWeight: isCurSelected || isTodayCell ? 'bold' : 'normal'
+                        }}
+                      >
+                        {c.date.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
-                        {dayEvents.length > 0 && (
-                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                            {dayEvents.length} {dayEvents.length === 1 ? 'tarefa' : 'tarefas'}
-                          </span>
-                        )}
-                      </div>
+              {/* Minhas Agendas / Filtros de Tipos de Tarefas */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '14px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Minhas Agendas
+                </span>
 
-                      {/* Draggable Event Chips */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', overflowY: 'auto', flex: 1 }}>
-                        {dayEvents.slice(0, 4).map(ev => {
-                          const isDone = ev.status === 'concluido';
-                          const timeStr = ev.all_day ? '' : ev.start_time.split('T')[1]?.substring(0, 5) || '';
-
-                          return (
-                            <div
-                              key={ev.id}
-                              draggable={true}
-                              onDragStart={(e) => {
-                                e.stopPropagation();
-                                e.dataTransfer.setData('text/plain', String(ev.id));
-                                e.dataTransfer.effectAllowed = 'move';
-                              }}
-                              onClick={e => {
-                                e.stopPropagation();
-                                openEditEventModal(ev);
-                              }}
-                              style={{
-                                backgroundColor: isDone ? 'rgba(255, 255, 255, 0.05)' : (ev.color || '#10b981'),
-                                color: isDone ? 'var(--text-muted)' : '#fff',
-                                textDecoration: isDone ? 'line-through' : 'none',
-                                borderRadius: '4px',
-                                padding: '2px 6px',
-                                fontSize: '11px',
-                                fontWeight: '600',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                cursor: 'grab',
-                                opacity: isDone ? 0.65 : 0.95,
-                                border: isDone ? '1px solid var(--border-color)' : 'none',
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                transition: 'transform 0.1s ease'
-                              }}
-                              title={`${ev.title}${ev.contact_name ? ` (${ev.contact_name})` : ''} - Arraste para mover de dia`}
-                            >
-                              <button
-                                type="button"
-                                onClick={e => handleToggleStatus(ev, e)}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  padding: 0,
-                                  color: 'inherit',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center'
-                                }}
-                              >
-                                {isDone ? <CheckCircle2 size={11} /> : <Circle size={11} />}
-                              </button>
-                              {timeStr && <span style={{ opacity: 0.85 }}>{timeStr}</span>}
-                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ev.title}</span>
-                            </div>
-                          );
-                        })}
-                        {dayEvents.length > 4 && (
-                          <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 'bold' }}>
-                            +{dayEvents.length - 4} mais
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                {[
+                  { key: 'entrega_gas', label: '🚚 Entregas de Gás', color: '#0284c7' },
+                  { key: 'visita_tecnica', label: '🔧 Visitas Técnicas', color: '#10b981' },
+                  { key: 'manutencao', label: '⚙️ Manutenções', color: '#d97706' },
+                  { key: 'reuniao', label: '👥 Reuniões', color: '#9333ea' },
+                  { key: 'atendimento', label: '💬 Atendimentos', color: '#06b6d4' },
+                  { key: 'geral', label: '📅 Tarefas Gerais', color: '#475569' },
+                ].map(ag => (
+                  <label
+                    key={ag.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      fontSize: '12px',
+                      color: selectedAgendas[ag.key] ? '#fff' : 'var(--text-muted)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAgendas[ag.key] !== false}
+                      onChange={e => setSelectedAgendas(prev => ({ ...prev, [ag.key]: e.target.checked }))}
+                      style={{ accentColor: ag.color, cursor: 'pointer' }}
+                    />
+                    <span style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      backgroundColor: ag.color,
+                      display: 'inline-block'
+                    }} />
+                    <span>{ag.label}</span>
+                  </label>
+                ))}
               </div>
             </div>
           )}
 
-          {/* 2. WEEK VIEW (24h Time Grid on Left + Sticky Weekdays Header + Drag & Drop) */}
-          {viewMode === 'week' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: '850px' }}>
-              {/* Sticky Top Header (Time label + 7 Days) */}
-              <div style={{
-                position: 'sticky',
-                top: 0,
-                zIndex: 20,
-                display: 'grid',
-                gridTemplateColumns: '70px repeat(7, 1fr)',
-                borderBottom: '1px solid var(--border-color)',
-                backgroundColor: 'var(--bg-secondary)',
-                backdropFilter: 'blur(10px)',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-              }}>
+          {/* MAIN CALENDAR AREA */}
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+            {/* 1. WEEK VIEW (Google Calendar Style with Absolute Block Positioning) */}
+            {viewMode === 'week' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                {/* Sticky Top Header (Time label + 7 Days) */}
                 <div style={{
-                  padding: '12px 8px',
-                  textAlign: 'center',
-                  fontSize: '11px',
-                  fontWeight: '700',
-                  color: 'var(--text-muted)',
-                  borderRight: '1px solid var(--border-color)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px'
+                  display: 'grid',
+                  gridTemplateColumns: '65px repeat(7, 1fr)',
+                  borderBottom: '1px solid var(--border-color)',
+                  backgroundColor: '#181d2c',
+                  zIndex: 20,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  flexShrink: 0
                 }}>
-                  <Clock size={12} /> 24 HORAS
-                </div>
-                {weekDays.map((d, idx) => (
-                  <div
-                    key={d.dateStr}
-                    style={{
-                      padding: '10px',
-                      textAlign: 'center',
-                      borderRight: idx < 6 ? '1px solid var(--border-color)' : 'none',
-                      backgroundColor: d.isToday ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
-                    }}
-                  >
-                    <div style={{ fontSize: '11px', fontWeight: '700', color: d.isToday ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
-                      {d.dayName.toUpperCase()}
-                    </div>
-                    <div style={{
-                      fontSize: '16px',
-                      fontWeight: '800',
-                      color: d.isToday ? '#fff' : 'var(--text-main)',
-                      width: '28px',
-                      height: '28px',
-                      borderRadius: '50%',
-                      backgroundColor: d.isToday ? 'var(--accent-primary)' : 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      margin: '2px auto 0'
-                    }}>
-                      {d.dayNum}
-                    </div>
+                  <div style={{
+                    padding: '12px 6px',
+                    textAlign: 'center',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    color: 'var(--text-muted)',
+                    borderRight: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    GMT-03
                   </div>
-                ))}
-              </div>
-
-              {/* 24-Hour Time Rows */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                {HOURS_24.map(hour => {
-                  const hourLabel = `${String(hour).padStart(2, '0')}:00`;
-
-                  return (
+                  {weekDays.map((d, idx) => (
                     <div
-                      key={hour}
+                      key={d.dateStr}
                       style={{
-                        display: 'grid',
-                        gridTemplateColumns: '70px repeat(7, 1fr)',
-                        minHeight: '64px',
-                        borderBottom: '1px solid rgba(255,255,255,0.06)'
+                        padding: '10px 4px',
+                        textAlign: 'center',
+                        borderRight: idx < 6 ? '1px solid var(--border-color)' : 'none',
+                        backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.08)' : 'transparent'
                       }}
                     >
-                      {/* Left 24h Column */}
-                      <div style={{
-                        padding: '6px 8px',
-                        fontSize: '11px',
-                        fontWeight: '700',
-                        color: 'var(--text-muted)',
-                        borderRight: '1px solid var(--border-color)',
-                        backgroundColor: 'rgba(0,0,0,0.15)',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        justifyContent: 'center'
-                      }}>
-                        {hourLabel}
+                      <div style={{ fontSize: '11px', fontWeight: 'bold', color: d.isToday ? '#60a5fa' : 'var(--text-muted)' }}>
+                        {d.dayName.toUpperCase()}.
                       </div>
+                      <div style={{
+                        fontSize: '18px',
+                        fontWeight: '800',
+                        color: d.isToday ? '#fff' : 'var(--text-main)',
+                        width: '32px',
+                        height: '32px',
+                        borderRadius: '50%',
+                        backgroundColor: d.isToday ? '#1a73e8' : 'transparent',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        margin: '2px auto 0'
+                      }}>
+                        {d.dayNum}
+                      </div>
+                    </div>
+                  ))}
+                </div>
 
-                      {/* 7 Day Slots for this hour */}
-                      {weekDays.map((d, dIdx) => {
-                        const slotEvents = filteredEvents.filter(ev => {
-                          if (ev.all_day) return false;
-                          const evDate = ev.start_time.split('T')[0];
-                          const evHour = new Date(ev.start_time).getHours();
-                          return evDate === d.dateStr && evHour === hour;
-                        });
+                {/* Scrollable 24h Time Grid */}
+                <div
+                  ref={timeGridRef}
+                  style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    display: 'grid',
+                    gridTemplateColumns: '65px repeat(7, 1fr)',
+                    position: 'relative',
+                    backgroundColor: '#0f131d'
+                  }}
+                >
+                  {/* Left Column (24 Hours Labels) */}
+                  <div style={{
+                    height: '1440px',
+                    position: 'relative',
+                    borderRight: '1px solid var(--border-color)',
+                    backgroundColor: 'rgba(0,0,0,0.2)'
+                  }}>
+                    {HOURS_24.map(h => (
+                      <div
+                        key={h}
+                        style={{
+                          position: 'absolute',
+                          top: `${h * 60 - 8}px`,
+                          right: '8px',
+                          fontSize: '11px',
+                          color: 'var(--text-muted)',
+                          fontWeight: '600'
+                        }}
+                      >
+                        {h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`}
+                      </div>
+                    ))}
+                  </div>
 
-                        return (
+                  {/* 7 Day Columns */}
+                  {weekDays.map((d, dIdx) => {
+                    const dayEvents = filteredEvents.filter(ev => {
+                      if (ev.all_day) return false;
+                      const evDate = ev.start_time.split('T')[0];
+                      return evDate === d.dateStr;
+                    });
+
+                    // Current Time Red Indicator Line
+                    const now = new Date();
+                    const isCurrentDay = d.dateStr === todayStr;
+                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                    const redLineTopPx = (nowMinutes / 60) * 60;
+
+                    return (
+                      <div
+                        key={d.dateStr}
+                        style={{
+                          position: 'relative',
+                          height: '1440px',
+                          borderRight: dIdx < 6 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                          backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent'
+                        }}
+                      >
+                        {/* 24 Horizontal Grid Lines & Drop Slots */}
+                        {HOURS_24.map(hour => (
                           <div
-                            key={d.dateStr}
+                            key={hour}
                             onClick={() => {
                               const targetDate = new Date(`${d.dateStr}T${String(hour).padStart(2, '0')}:00:00`);
                               openNewEventModal(undefined, targetDate);
@@ -969,183 +1027,75 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             onDragOver={(e) => {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
-                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
+                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.25)';
                             }}
                             onDragLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent';
+                              e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent';
+                              e.currentTarget.style.backgroundColor = 'transparent';
                               const evId = Number(e.dataTransfer.getData('text/plain'));
                               if (evId) {
                                 handleDropOnDate(evId, d.dateStr, hour);
                               }
                             }}
                             style={{
-                              borderRight: dIdx < 6 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                              backgroundColor: d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent',
-                              padding: '3px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '4px',
+                              position: 'absolute',
+                              top: `${hour * 60}px`,
+                              left: 0,
+                              right: 0,
+                              height: '60px',
+                              borderBottom: '1px solid rgba(255,255,255,0.06)',
                               cursor: 'pointer',
-                              transition: 'background 0.15s'
+                              transition: 'background 0.1s ease'
+                            }}
+                          />
+                        ))}
+
+                        {/* Red Line Current Time Indicator */}
+                        {isCurrentDay && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: `${redLineTopPx}px`,
+                              left: 0,
+                              right: 0,
+                              height: '2px',
+                              backgroundColor: '#ef4444',
+                              zIndex: 15,
+                              pointerEvents: 'none'
                             }}
                           >
-                            {slotEvents.map(ev => {
-                              const isDone = ev.status === 'concluido';
-                              return (
-                                <div
-                                  key={ev.id}
-                                  draggable={true}
-                                  onDragStart={(e) => {
-                                    e.stopPropagation();
-                                    e.dataTransfer.setData('text/plain', String(ev.id));
-                                    e.dataTransfer.effectAllowed = 'move';
-                                  }}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    openEditEventModal(ev);
-                                  }}
-                                  style={{
-                                    backgroundColor: isDone ? 'rgba(255, 255, 255, 0.08)' : (ev.color || '#10b981'),
-                                    color: '#fff',
-                                    borderRadius: '6px',
-                                    padding: '4px 6px',
-                                    fontSize: '11px',
-                                    fontWeight: '600',
-                                    cursor: 'grab',
-                                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-                                    display: 'flex',
-                                    flexDirection: 'column',
-                                    gap: '2px',
-                                    opacity: isDone ? 0.65 : 1
-                                  }}
-                                  title={`${ev.title} - Arraste para mover horário`}
-                                >
-                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
-                                    <span style={{ fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {ev.title}
-                                    </span>
-                                    {ev.confirmed_by_employee && <CheckSquare size={12} color="#4ade80" />}
-                                  </div>
-                                  {ev.employee_name && (
-                                    <span style={{ fontSize: '10px', opacity: 0.9 }}>
-                                      👤 {ev.employee_name}
-                                    </span>
-                                  )}
-                                </div>
-                              );
-                            })}
+                            <div style={{
+                              position: 'absolute',
+                              left: '-5px',
+                              top: '-4px',
+                              width: '10px',
+                              height: '10px',
+                              borderRadius: '50%',
+                              backgroundColor: '#ef4444'
+                            }} />
                           </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                        )}
 
-          {/* 3. DAY VIEW (24h Time Grid on Left + Sticky Header + Drag & Drop) */}
-          {viewMode === 'day' && (
-            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: '900px', margin: '0 auto', width: '100%' }}>
-              {/* Sticky Top Header for Single Day */}
-              <div style={{
-                position: 'sticky',
-                top: 0,
-                zIndex: 20,
-                padding: '14px 20px',
-                borderBottom: '1px solid var(--border-color)',
-                backgroundColor: 'var(--bg-secondary)',
-                backdropFilter: 'blur(10px)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
-              }}>
-                <div>
-                  <h3 style={{ fontSize: '16px', color: '#fff', margin: 0 }}>
-                    {currentDate.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
-                  </h3>
-                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                    Clique no horário desejado ou arraste os compromissos para reposicionar
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openNewEventModal(undefined, currentDate)}
-                  className="btn-primary"
-                  style={{ padding: '6px 14px', fontSize: '12px' }}
-                >
-                  <Plus size={14} /> Adicionar no Dia
-                </button>
-              </div>
+                        {/* Absolute Positioned Event Blocks */}
+                        {dayEvents.map(ev => {
+                          const startDt = new Date(ev.start_time);
+                          const endDt = ev.end_time ? new Date(ev.end_time) : new Date(startDt.getTime() + 60 * 60 * 1000);
+                          const startMin = startDt.getHours() * 60 + startDt.getMinutes();
+                          const endMin = endDt.getHours() * 60 + endDt.getMinutes();
+                          const durationMin = Math.max(30, endMin - startMin);
 
-              {/* 24-Hour Day Rows */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                {HOURS_24.map(hour => {
-                  const hourLabel = `${String(hour).padStart(2, '0')}:00`;
-                  const curDateStr = currentDate.toISOString().split('T')[0];
-                  const slotEvents = filteredEvents.filter(ev => {
-                    if (ev.all_day) return false;
-                    const evDate = ev.start_time.split('T')[0];
-                    const evHour = new Date(ev.start_time).getHours();
-                    return evDate === curDateStr && evHour === hour;
-                  });
+                          const topPx = (startMin / 60) * 60;
+                          const heightPx = Math.max(26, (durationMin / 60) * 60 - 3);
 
-                  return (
-                    <div
-                      key={hour}
-                      onClick={() => {
-                        const targetDate = new Date(`${curDateStr}T${String(hour).padStart(2, '0')}:00:00`);
-                        openNewEventModal(undefined, targetDate);
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                        e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
-                      }}
-                      onDragLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                        const evId = Number(e.dataTransfer.getData('text/plain'));
-                        if (evId) {
-                          handleDropOnDate(evId, curDateStr, hour);
-                        }
-                      }}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '70px 1fr',
-                        minHeight: '64px',
-                        borderBottom: '1px solid rgba(255,255,255,0.06)',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s'
-                      }}
-                    >
-                      {/* 24h Left Label */}
-                      <div style={{
-                        padding: '8px',
-                        fontSize: '12px',
-                        fontWeight: '700',
-                        color: 'var(--text-muted)',
-                        borderRight: '1px solid var(--border-color)',
-                        backgroundColor: 'rgba(0,0,0,0.15)',
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        justifyContent: 'center'
-                      }}>
-                        {hourLabel}
-                      </div>
+                          const startHourNum = startDt.getHours();
+                          const endHourNum = endDt.getHours();
+                          const timeRangeText = `${startHourNum > 12 ? startHourNum - 12 : startHourNum || 12} - ${endHourNum > 12 ? endHourNum - 12 : endHourNum || 12}${startHourNum >= 12 ? 'pm' : 'am'}`;
 
-                      {/* Main Hour Content Slot */}
-                      <div style={{ padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {slotEvents.map(ev => {
                           const isDone = ev.status === 'concluido';
+
                           return (
                             <div
                               key={ev.id}
@@ -1160,287 +1110,607 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 openEditEventModal(ev);
                               }}
                               style={{
-                                backgroundColor: isDone ? 'rgba(255, 255, 255, 0.08)' : (ev.color || '#10b981'),
+                                position: 'absolute',
+                                top: `${topPx}px`,
+                                height: `${heightPx}px`,
+                                left: '3px',
+                                right: '3px',
+                                backgroundColor: isDone ? 'rgba(255, 255, 255, 0.1)' : (ev.color || '#ea580c'),
+                                color: '#fff',
+                                borderRadius: '6px',
+                                padding: '3px 8px',
+                                fontSize: '11px',
+                                fontWeight: '700',
+                                cursor: 'grab',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                                zIndex: 10,
+                                opacity: isDone ? 0.65 : 1,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'flex-start',
+                                borderLeft: `3px solid rgba(255,255,255,0.4)`
+                              }}
+                              title={`${ev.title} (${timeRangeText}) - Arraste para reposicionar na grade`}
+                            >
+                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                {ev.title}
+                              </div>
+                              <div style={{ fontSize: '10px', opacity: 0.85, fontWeight: 'normal' }}>
+                                {timeRangeText}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 2. DAY VIEW (Google Calendar Style Single Day) */}
+            {viewMode === 'day' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                {/* Sticky Header */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: '65px 1fr',
+                  borderBottom: '1px solid var(--border-color)',
+                  backgroundColor: '#181d2c',
+                  zIndex: 20,
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                  flexShrink: 0
+                }}>
+                  <div style={{
+                    padding: '12px 6px',
+                    textAlign: 'center',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    color: 'var(--text-muted)',
+                    borderRight: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    GMT-03
+                  </div>
+                  <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <div style={{
+                      fontSize: '18px',
+                      fontWeight: '800',
+                      color: '#fff',
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '50%',
+                      backgroundColor: '#1a73e8',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      {currentDate.getDate()}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>
+                        {currentDate.toLocaleDateString('pt-BR', { weekday: 'long' }).toUpperCase()}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {currentDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Scrollable Day Grid */}
+                <div
+                  ref={timeGridRef}
+                  style={{
+                    flex: 1,
+                    overflowY: 'auto',
+                    display: 'grid',
+                    gridTemplateColumns: '65px 1fr',
+                    position: 'relative',
+                    backgroundColor: '#0f131d'
+                  }}
+                >
+                  {/* Left Column (24 Hours Labels) */}
+                  <div style={{
+                    height: '1440px',
+                    position: 'relative',
+                    borderRight: '1px solid var(--border-color)',
+                    backgroundColor: 'rgba(0,0,0,0.2)'
+                  }}>
+                    {HOURS_24.map(h => (
+                      <div
+                        key={h}
+                        style={{
+                          position: 'absolute',
+                          top: `${h * 60 - 8}px`,
+                          right: '8px',
+                          fontSize: '11px',
+                          color: 'var(--text-muted)',
+                          fontWeight: '600'
+                        }}
+                      >
+                        {h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Single Day Area */}
+                  {(() => {
+                    const curDateStr = currentDate.toISOString().split('T')[0];
+                    const dayEvents = filteredEvents.filter(ev => {
+                      if (ev.all_day) return false;
+                      const evDate = ev.start_time.split('T')[0];
+                      return evDate === curDateStr;
+                    });
+
+                    const now = new Date();
+                    const isCurrentDay = curDateStr === todayStr;
+                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+                    const redLineTopPx = (nowMinutes / 60) * 60;
+
+                    return (
+                      <div style={{ position: 'relative', height: '1440px' }}>
+                        {/* 24 Grid Lines */}
+                        {HOURS_24.map(hour => (
+                          <div
+                            key={hour}
+                            onClick={() => {
+                              const targetDate = new Date(`${curDateStr}T${String(hour).padStart(2, '0')}:00:00`);
+                              openNewEventModal(undefined, targetDate);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.25)';
+                            }}
+                            onDragLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                              const evId = Number(e.dataTransfer.getData('text/plain'));
+                              if (evId) {
+                                handleDropOnDate(evId, curDateStr, hour);
+                              }
+                            }}
+                            style={{
+                              position: 'absolute',
+                              top: `${hour * 60}px`,
+                              left: 0,
+                              right: 0,
+                              height: '60px',
+                              borderBottom: '1px solid rgba(255,255,255,0.06)',
+                              cursor: 'pointer'
+                            }}
+                          />
+                        ))}
+
+                        {/* Red Line Current Time Indicator */}
+                        {isCurrentDay && (
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: `${redLineTopPx}px`,
+                              left: 0,
+                              right: 0,
+                              height: '2px',
+                              backgroundColor: '#ef4444',
+                              zIndex: 15,
+                              pointerEvents: 'none'
+                            }}
+                          >
+                            <div style={{
+                              position: 'absolute',
+                              left: '-5px',
+                              top: '-4px',
+                              width: '10px',
+                              height: '10px',
+                              borderRadius: '50%',
+                              backgroundColor: '#ef4444'
+                            }} />
+                          </div>
+                        )}
+
+                        {/* Absolute Event Blocks */}
+                        {dayEvents.map(ev => {
+                          const startDt = new Date(ev.start_time);
+                          const endDt = ev.end_time ? new Date(ev.end_time) : new Date(startDt.getTime() + 60 * 60 * 1000);
+                          const startMin = startDt.getHours() * 60 + startDt.getMinutes();
+                          const endMin = endDt.getHours() * 60 + endDt.getMinutes();
+                          const durationMin = Math.max(30, endMin - startMin);
+
+                          const topPx = (startMin / 60) * 60;
+                          const heightPx = Math.max(32, (durationMin / 60) * 60 - 3);
+
+                          const startHourNum = startDt.getHours();
+                          const endHourNum = endDt.getHours();
+                          const timeRangeText = `${startHourNum > 12 ? startHourNum - 12 : startHourNum || 12} - ${endHourNum > 12 ? endHourNum - 12 : endHourNum || 12}${startHourNum >= 12 ? 'pm' : 'am'}`;
+
+                          const isDone = ev.status === 'concluido';
+
+                          return (
+                            <div
+                              key={ev.id}
+                              draggable={true}
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                e.dataTransfer.setData('text/plain', String(ev.id));
+                                e.dataTransfer.effectAllowed = 'move';
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditEventModal(ev);
+                              }}
+                              style={{
+                                position: 'absolute',
+                                top: `${topPx}px`,
+                                height: `${heightPx}px`,
+                                left: '8px',
+                                right: '8px',
+                                backgroundColor: isDone ? 'rgba(255, 255, 255, 0.1)' : (ev.color || '#ea580c'),
                                 color: '#fff',
                                 borderRadius: '8px',
-                                padding: '8px 12px',
+                                padding: '6px 12px',
                                 fontSize: '13px',
-                                fontWeight: '600',
+                                fontWeight: '700',
                                 cursor: 'grab',
-                                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                                zIndex: 10,
+                                opacity: isDone ? 0.65 : 1,
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'space-between',
-                                opacity: isDone ? 0.65 : 1
+                                borderLeft: `4px solid rgba(255,255,255,0.4)`
                               }}
-                              title={`${ev.title} - Arraste para mover horário`}
+                              title={`${ev.title} (${timeRangeText}) - Arraste para mover`}
                             >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <button
-                                  type="button"
-                                  onClick={e => handleToggleStatus(ev, e)}
-                                  style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: 0 }}
-                                >
-                                  {isDone ? <CheckCircle2 size={18} /> : <Circle size={18} />}
-                                </button>
-                                <div>
-                                  <div style={{ textDecoration: isDone ? 'line-through' : 'none' }}>
-                                    {ev.title}
-                                  </div>
-                                  <div style={{ fontSize: '11px', opacity: 0.9, marginTop: '2px' }}>
-                                    🕒 {ev.start_time.split('T')[1]?.substring(0, 5)} {ev.employee_name ? `• 👤 ${ev.employee_name}` : ''} {ev.contact_name ? `• 🏢 ${ev.contact_name}` : ''}
-                                  </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {ev.title}
                                 </div>
+                                <span style={{ fontSize: '11px', opacity: 0.85, fontWeight: 'normal' }}>
+                                  ({timeRangeText})
+                                </span>
                               </div>
-
                               {ev.employee_name && (
-                                <div style={{
-                                  fontSize: '11px',
-                                  padding: '2px 8px',
-                                  borderRadius: '12px',
-                                  backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)',
-                                  color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
-                                  fontWeight: 'bold',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}>
-                                  <CheckSquare size={12} />
-                                  {ev.confirmed_by_employee ? 'Visualizado' : 'Aguardando'}
-                                </div>
+                                <span style={{ fontSize: '11px', backgroundColor: 'rgba(0,0,0,0.2)', padding: '2px 8px', borderRadius: '10px' }}>
+                                  👤 {ev.employee_name}
+                                </span>
                               )}
                             </div>
                           );
                         })}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 4. AGENDA / LIST VIEW */}
-          {viewMode === 'agenda' && (
-            <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto', width: '100%' }}>
-              {filteredEvents.length === 0 ? (
-                <div style={{
-                  textAlign: 'center',
-                  padding: '60px 20px',
-                  color: 'var(--text-muted)'
-                }}>
-                  <CalendarIcon size={56} style={{ margin: '0 auto 16px', opacity: 0.3 }} />
-                  <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '8px' }}>Nenhuma tarefa encontrada</h3>
-                  <p style={{ fontSize: '13px' }}>Clique em "+ Novo Evento / Tarefa" ou agende direto de uma conversa do WhatsApp.</p>
+                    );
+                  })()}
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {filteredEvents.map(ev => {
-                    const isDone = ev.status === 'concluido';
-                    const evDate = new Date(ev.start_time);
-                    const formattedDate = evDate.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' });
-                    const timeStr = ev.all_day ? 'Dia Inteiro' : ev.start_time.split('T')[1]?.substring(0, 5) || '';
+              </div>
+            )}
+
+            {/* 3. MONTH VIEW */}
+            {viewMode === 'month' && (
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+                {/* Sticky Weekday Header */}
+                <div style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 20,
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  borderBottom: '1px solid var(--border-color)',
+                  backgroundColor: '#181d2c',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+                }}>
+                  {WEEKDAYS.map((day, idx) => (
+                    <div
+                      key={day}
+                      style={{
+                        padding: '12px 10px',
+                        textAlign: 'center',
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        color: idx === 0 || idx === 6 ? 'var(--text-muted)' : 'var(--accent-primary)',
+                        borderRight: idx < 6 ? '1px solid var(--border-color)' : 'none'
+                      }}
+                    >
+                      {day.toUpperCase()}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Month Grid with Drag & Drop */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(7, 1fr)',
+                  flex: 1,
+                  gridAutoRows: 'minmax(105px, 1fr)'
+                }}>
+                  {monthDays.map((cell, idx) => {
+                    const dayEvents = filteredEvents.filter(ev => {
+                      const evDateStr = ev.start_time.split('T')[0];
+                      return evDateStr === cell.dateStr;
+                    });
+                    const isToday = cell.dateStr === todayStr;
 
                     return (
                       <div
-                        key={ev.id}
-                        onClick={() => openEditEventModal(ev)}
-                        style={{
-                          backgroundColor: 'var(--bg-primary)',
-                          border: `1px solid ${isDone ? 'var(--border-color)' : 'rgba(255,255,255,0.08)'}`,
-                          borderLeft: `5px solid ${ev.color || '#10b981'}`,
-                          borderRadius: '12px',
-                          padding: '14px 18px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: '16px',
-                          cursor: 'pointer',
-                          opacity: isDone ? 0.6 : 1,
-                          transition: 'transform 0.15s, background 0.15s'
+                        key={idx}
+                        onClick={() => openNewEventModal(undefined, cell.date)}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.18)';
                         }}
-                        onMouseEnter={e => (e.currentTarget.style.transform = 'translateX(4px)')}
-                        onMouseLeave={e => (e.currentTarget.style.transform = 'translateX(0)')}
+                        onDragLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = isToday
+                            ? 'rgba(16, 185, 129, 0.05)'
+                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.style.backgroundColor = isToday
+                            ? 'rgba(16, 185, 129, 0.05)'
+                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
+                          if (evId) {
+                            handleDropOnDate(evId, cell.dateStr);
+                          }
+                        }}
+                        style={{
+                          borderRight: (idx + 1) % 7 !== 0 ? '1px solid var(--border-color)' : 'none',
+                          borderBottom: '1px solid var(--border-color)',
+                          padding: '6px',
+                          backgroundColor: isToday
+                            ? 'rgba(16, 185, 129, 0.05)'
+                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)',
+                          opacity: cell.isCurrentMonth ? 1 : 0.45,
+                          display: 'flex',
+                          flexDirection: 'column',
+                          cursor: 'pointer',
+                          transition: 'background 0.15s'
+                        }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: 0 }}>
-                          <button
-                            type="button"
-                            onClick={e => handleToggleStatus(ev, e)}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: isDone ? 'var(--accent-primary)' : 'var(--text-muted)',
-                              cursor: 'pointer',
-                              padding: '4px',
-                              display: 'flex',
-                              alignItems: 'center'
-                            }}
-                          >
-                            {isDone ? <CheckCircle2 size={22} color="var(--accent-primary)" /> : <Circle size={22} />}
-                          </button>
+                        {/* Day Number */}
+                        <div style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '4px'
+                        }}>
+                          <span style={{
+                            fontSize: '13px',
+                            fontWeight: isToday ? 'bold' : '500',
+                            width: '24px',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderRadius: '50%',
+                            backgroundColor: isToday ? '#1a73e8' : 'transparent',
+                            color: isToday ? '#fff' : 'var(--text-main)'
+                          }}>
+                            {cell.date.getDate()}
+                          </span>
 
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                              <h4 style={{
-                                fontSize: '15px',
-                                fontWeight: '600',
-                                color: '#fff',
-                                textDecoration: isDone ? 'line-through' : 'none',
-                                margin: 0
-                              }}>
-                                {ev.title}
-                              </h4>
-
-                              {/* Event Type Badge */}
-                              {ev.event_type === 'entrega_gas' && (
-                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <Truck size={11} /> Entrega de Gás
-                                </span>
-                              )}
-                              {ev.event_type === 'visita_tecnica' && (
-                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#10b981', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  <Wrench size={11} /> Visita Técnica
-                                </span>
-                              )}
-                              {ev.event_type === 'manutencao' && (
-                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                  ⚙️ Manutenção
-                                </span>
-                              )}
-
-                              {/* Employee Badge & Confirmation Check */}
-                              {ev.employee_name && (
-                                <span style={{
-                                  fontSize: '10px',
-                                  backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.2)' : 'rgba(234, 179, 8, 0.2)',
-                                  color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
-                                  border: `1px solid ${ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
-                                  padding: '2px 8px',
-                                  borderRadius: '10px',
-                                  fontWeight: 'bold',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  gap: '4px'
-                                }}>
-                                  <Users size={11} /> {ev.employee_name}
-                                  {ev.confirmed_by_employee ? ' (✓ Visualizou)' : ' (⏳ Pendente)'}
-                                </span>
-                              )}
-
-                              {ev.priority === 'urgente' && (
-                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
-                                  URGENTE
-                                </span>
-                              )}
-                              {ev.priority === 'alta' && (
-                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
-                                  ALTA
-                                </span>
-                              )}
-                            </div>
-
-                            {ev.description && (
-                              <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px', whiteSpace: 'pre-wrap', maxHeight: '40px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {ev.description}
-                              </p>
-                            )}
-
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
-                              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                <Clock size={13} /> {formattedDate} • {timeStr}
-                              </span>
-
-                              {ev.contact_name && (
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-primary)' }}>
-                                  <User size={13} /> {ev.contact_name}
-                                </span>
-                              )}
-
-                              {ev.employee_phone && ev.notify_whatsapp && (
-                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#60a5fa', fontSize: '11px' }}>
-                                  <Bell size={11} /> WhatsApp Ativo
-                                </span>
-                              )}
-                            </div>
-                          </div>
+                          {dayEvents.length > 0 && (
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                              {dayEvents.length} {dayEvents.length === 1 ? 'tarefa' : 'tarefas'}
+                            </span>
+                          )}
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          {ev.employee_name && (
-                            <button
-                              type="button"
-                              onClick={e => handleToggleEmployeeConfirmation(ev, e)}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                padding: '6px 10px',
-                                borderRadius: '8px',
-                                border: `1px solid ${ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
-                                backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.12)',
-                                color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
-                                fontSize: '11px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer'
-                              }}
-                              title={ev.confirmed_by_employee ? "Clique para desmarcar visualização" : "Clique para marcar que o funcionário confirmou visualização"}
-                            >
-                              <CheckSquare size={13} /> {ev.confirmed_by_employee ? 'Visualizado' : 'Dar Check'}
-                            </button>
-                          )}
-                          {ev.conversation_id && onSelectConversation && (
-                            <button
-                              type="button"
-                              onClick={e => {
-                                e.stopPropagation();
-                                onSelectConversation(ev.conversation_id!);
-                                onClose();
-                              }}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                padding: '6px 12px',
-                                borderRadius: '8px',
-                                border: '1px solid var(--border-color)',
-                                backgroundColor: 'var(--bg-secondary)',
-                                color: 'var(--accent-primary)',
-                                fontSize: '12px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer'
-                              }}
-                              title="Abrir conversa no WhatsApp"
-                            >
-                              <MessageSquare size={14} /> Abrir Chat
-                            </button>
-                          )}
+                        {/* Draggable Event Chips */}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', overflowY: 'auto', flex: 1 }}>
+                          {dayEvents.slice(0, 4).map(ev => {
+                            const isDone = ev.status === 'concluido';
+                            const timeStr = ev.all_day ? '' : ev.start_time.split('T')[1]?.substring(0, 5) || '';
 
-                          <button
-                            type="button"
-                            onClick={e => {
-                              e.stopPropagation();
-                              handleDeleteEvent(ev.id);
-                            }}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: 'var(--text-muted)',
-                              cursor: 'pointer',
-                              padding: '6px',
-                              borderRadius: '6px'
-                            }}
-                            title="Excluir"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                            return (
+                              <div
+                                key={ev.id}
+                                draggable={true}
+                                onDragStart={(e) => {
+                                  e.stopPropagation();
+                                  e.dataTransfer.setData('text/plain', String(ev.id));
+                                  e.dataTransfer.effectAllowed = 'move';
+                                }}
+                                onClick={e => {
+                                  e.stopPropagation();
+                                  openEditEventModal(ev);
+                                }}
+                                style={{
+                                  backgroundColor: isDone ? 'rgba(255, 255, 255, 0.05)' : (ev.color || '#ea580c'),
+                                  color: isDone ? 'var(--text-muted)' : '#fff',
+                                  textDecoration: isDone ? 'line-through' : 'none',
+                                  borderRadius: '4px',
+                                  padding: '2px 6px',
+                                  fontSize: '11px',
+                                  fontWeight: '600',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  cursor: 'grab',
+                                  opacity: isDone ? 0.65 : 0.95,
+                                  border: isDone ? '1px solid var(--border-color)' : 'none',
+                                  whiteSpace: 'nowrap',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  transition: 'transform 0.1s ease'
+                                }}
+                                title={`${ev.title}${ev.contact_name ? ` (${ev.contact_name})` : ''} - Arraste para mover de dia`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={e => handleToggleStatus(ev, e)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    color: 'inherit',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center'
+                                  }}
+                                >
+                                  {isDone ? <CheckCircle2 size={11} /> : <Circle size={11} />}
+                                </button>
+                                {timeStr && <span style={{ opacity: 0.85 }}>{timeStr}</span>}
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ev.title}</span>
+                              </div>
+                            );
+                          })}
+                          {dayEvents.length > 4 && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 'bold' }}>
+                              +{dayEvents.length - 4} mais
+                            </div>
+                          )}
                         </div>
                       </div>
                     );
                   })}
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            )}
+
+            {/* 4. AGENDA / LIST VIEW */}
+            {viewMode === 'agenda' && (
+              <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto', width: '100%', overflowY: 'auto' }}>
+                {filteredEvents.length === 0 ? (
+                  <div style={{
+                    textAlign: 'center',
+                    padding: '60px 20px',
+                    color: 'var(--text-muted)'
+                  }}>
+                    <CalendarIcon size={56} style={{ margin: '0 auto 16px', opacity: 0.3 }} />
+                    <h3 style={{ fontSize: '18px', color: '#fff', marginBottom: '8px' }}>Nenhuma tarefa encontrada</h3>
+                    <p style={{ fontSize: '13px' }}>Clique em "+ Criar" para agendar uma nova tarefa.</p>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    {filteredEvents.map(ev => {
+                      const isDone = ev.status === 'concluido';
+                      const evDate = new Date(ev.start_time);
+                      const formattedDate = evDate.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' });
+                      const timeStr = ev.all_day ? 'Dia Inteiro' : ev.start_time.split('T')[1]?.substring(0, 5) || '';
+
+                      return (
+                        <div
+                          key={ev.id}
+                          onClick={() => openEditEventModal(ev)}
+                          style={{
+                            backgroundColor: 'var(--bg-primary)',
+                            border: `1px solid ${isDone ? 'var(--border-color)' : 'rgba(255,255,255,0.08)'}`,
+                            borderLeft: `5px solid ${ev.color || '#ea580c'}`,
+                            borderRadius: '12px',
+                            padding: '14px 18px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '16px',
+                            cursor: 'pointer',
+                            opacity: isDone ? 0.6 : 1,
+                            transition: 'transform 0.15s, background 0.15s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: 0 }}>
+                            <button
+                              type="button"
+                              onClick={e => handleToggleStatus(ev, e)}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: isDone ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                cursor: 'pointer',
+                                padding: '4px',
+                                display: 'flex',
+                                alignItems: 'center'
+                              }}
+                            >
+                              {isDone ? <CheckCircle2 size={22} color="var(--accent-primary)" /> : <Circle size={22} />}
+                            </button>
+
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                <h4 style={{
+                                  fontSize: '15px',
+                                  fontWeight: '600',
+                                  color: '#fff',
+                                  textDecoration: isDone ? 'line-through' : 'none',
+                                  margin: 0
+                                }}>
+                                  {ev.title}
+                                </h4>
+
+                                {ev.employee_name && (
+                                  <span style={{
+                                    fontSize: '10px',
+                                    backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.2)' : 'rgba(234, 179, 8, 0.2)',
+                                    color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
+                                    border: `1px solid ${ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
+                                    padding: '2px 8px',
+                                    borderRadius: '10px',
+                                    fontWeight: 'bold',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                  }}>
+                                    <Users size={11} /> {ev.employee_name}
+                                    {ev.confirmed_by_employee ? ' (✓ Visualizou)' : ' (⏳ Pendente)'}
+                                  </span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <Clock size={13} /> {formattedDate} • {timeStr}
+                                </span>
+
+                                {ev.contact_name && (
+                                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-primary)' }}>
+                                    <User size={13} /> {ev.contact_name}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                handleDeleteEvent(ev.id);
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--text-muted)',
+                                cursor: 'pointer',
+                                padding: '6px',
+                                borderRadius: '6px'
+                              }}
+                              title="Excluir"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
