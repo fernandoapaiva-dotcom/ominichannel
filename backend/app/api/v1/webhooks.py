@@ -668,6 +668,10 @@ async def receive_evolution_webhook(
             client_info = "Não informado"
             if ev_obj.contact:
                 client_info = f"{ev_obj.contact.nome or 'Cliente'} ({ev_obj.contact.telefone or ''})".strip()
+            elif getattr(ev_obj, 'contact_name', None) or getattr(ev_obj, 'contact_phone', None):
+                client_info = f"{getattr(ev_obj, 'contact_name', None) or 'Cliente'}"
+                if getattr(ev_obj, 'contact_phone', None):
+                    client_info += f" ({ev_obj.contact_phone})"
 
             now_utc = datetime.utcnow()
             now_brt = now_utc - timedelta(hours=3)
