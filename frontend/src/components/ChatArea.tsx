@@ -32,6 +32,56 @@ interface ChatAreaProps {
   onToggleChatList?: () => void;
 }
 
+const normalizeIsoDate = (ts: string | Date | undefined): Date => {
+  if (!ts) return new Date();
+  if (ts instanceof Date) return isNaN(ts.getTime()) ? new Date() : ts;
+  let str = String(ts).trim();
+  if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T');
+  }
+  if (!str.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(str)) {
+    str = str + 'Z';
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? new Date() : d;
+};
+
+const formatDateDivider = (timestampStr: string): string => {
+  try {
+    const msgDate = normalizeIsoDate(timestampStr);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const isToday = msgDate.toDateString() === today.toDateString();
+    const isYesterday = msgDate.toDateString() === yesterday.toDateString();
+
+    if (isToday) return 'Hoje';
+    if (isYesterday) return 'Ontem';
+
+    const diffTime = today.getTime() - msgDate.getTime();
+    const diffDays = Math.floor(diffTime / (1000 * 3600 * 24));
+    
+    if (diffDays < 7 && diffDays >= 2) {
+      const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+      return weekdays[msgDate.getDay()];
+    }
+
+    return msgDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  } catch {
+    return 'Hoje';
+  }
+};
+
+const getMessageDateKey = (timestampStr: string): string => {
+  try {
+    const d = normalizeIsoDate(timestampStr);
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  } catch {
+    return '';
+  }
+};
+
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   allConversations,
@@ -816,56 +866,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       console.error('Send error:', err);
       setSendError(err.message || 'Falha ao enviar arquivo ou mensagem.');
       setIsSending(false);
-    }
-  };
-
-  const normalizeIsoDate = (ts: string | Date | undefined): Date => {
-    if (!ts) return new Date();
-    if (ts instanceof Date) return isNaN(ts.getTime()) ? new Date() : ts;
-    let str = String(ts).trim();
-    if (str.includes(' ') && !str.includes('T')) {
-      str = str.replace(' ', 'T');
-    }
-    if (!str.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(str)) {
-      str = str + 'Z';
-    }
-    const d = new Date(str);
-    return isNaN(d.getTime()) ? new Date() : d;
-  };
-
-  const formatDateDivider = (timestampStr: string): string => {
-    try {
-      const msgDate = normalizeIsoDate(timestampStr);
-      const today = new Date();
-      const yesterday = new Date();
-      yesterday.setDate(today.getDate() - 1);
-
-      const isToday = msgDate.toDateString() === today.toDateString();
-      const isYesterday = msgDate.toDateString() === yesterday.toDateString();
-
-      if (isToday) return 'Hoje';
-      if (isYesterday) return 'Ontem';
-
-      const diffTime = today.getTime() - msgDate.getTime();
-      const diffDays = Math.floor(diffTime / (1000 * 3600 * 24));
-      
-      if (diffDays < 7 && diffDays >= 2) {
-        const weekdays = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
-        return weekdays[msgDate.getDay()];
-      }
-
-      return msgDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-    } catch {
-      return 'Hoje';
-    }
-  };
-
-  const getMessageDateKey = (timestampStr: string): string => {
-    try {
-      const d = normalizeIsoDate(timestampStr);
-      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
-    } catch {
-      return '';
     }
   };
 
