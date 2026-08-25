@@ -35,16 +35,30 @@ async def send_whatsapp_to_employee(
         if not clean_phone.startswith("55") and len(clean_phone) in [10, 11]:
             clean_phone = f"55{clean_phone}"
 
-        # Dedup and preserve order
-        unique_instances = []
+        # Fetch live instances from Evolution API to prioritize truly connected ('open') instances
+        open_instances = []
+        try:
+            ping_data = await evolution_service.ping_server()
+            if ping_data.get("success") and ping_data.get("data"):
+                for inst_info in ping_data["data"]:
+                    if inst_info.get("connectionStatus") == "open":
+                        open_instances.append(inst_info.get("name"))
+        except Exception as ping_err:
+            logger.warning(f"Não foi possível obter instâncias online: {ping_err}")
+
+        # Combine instances, prioritizing open ones
+        ordered_candidates = []
+        for inst in open_instances:
+            if inst and inst not in ordered_candidates:
+                ordered_candidates.append(inst)
+
         for inst in instances:
-            if inst and inst not in unique_instances:
-                unique_instances.append(inst)
-        
-        # Also append default instances as fallback
-        for default_inst in ["instancia_financeiro", "instancia_locacao", "instancia_vendas", "instancia_tecnica"]:
-            if default_inst not in unique_instances:
-                unique_instances.append(default_inst)
+            if inst and inst not in ordered_candidates:
+                ordered_candidates.append(inst)
+
+        for default_inst in ["instancia_locacao", "instancia_vendas", "instancia_tecnica", "instancia_financeiro"]:
+            if default_inst not in ordered_candidates:
+                ordered_candidates.append(default_inst)
 
         buttons = [
             {
@@ -54,7 +68,7 @@ async def send_whatsapp_to_employee(
             }
         ]
 
-        for inst_name in unique_instances:
+        for inst_name in ordered_candidates:
             try:
                 res = await evolution_service.send_button_message(
                     instance_name=inst_name,
@@ -64,7 +78,7 @@ async def send_whatsapp_to_employee(
                     footer=footer,
                     buttons=buttons
                 )
-                if res and not res.get("error") and (res.get("key") or res.get("messageId")):
+                if res and not res.get("error") and (res.get("key") or res.get("messageId") or res.get("success")):
                     logger.info(f"Lembrete com botão enviado com sucesso para funcionário ({clean_phone}) via instância '{inst_name}'")
                     return True
             except Exception as inst_err:

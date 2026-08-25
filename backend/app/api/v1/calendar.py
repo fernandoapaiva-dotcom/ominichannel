@@ -278,6 +278,10 @@ async def update_calendar_event(
     await db.commit()
     await db.refresh(event)
 
+    # Trigger immediate WhatsApp notification to the employee if enabled
+    if event.notify_whatsapp and event.employee_phone:
+        asyncio.create_task(send_immediate_creation_notification(event.id))
+
     return _format_event_response(event)
 
 @router.post("/events/{event_id}/confirm_employee", response_model=CalendarEventResponse)
