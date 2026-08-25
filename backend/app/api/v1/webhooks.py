@@ -614,12 +614,14 @@ async def receive_evolution_webhook(
     )
 
     # 1. Handle Task View Confirmation Button from Employee
+    cleaned_txt = text_content.lower().strip()
     is_view_confirmation = (
         btn_id.startswith("confirm_view_task") or
         btn_id.startswith("confirm_task") or
-        "confirmar visualização" in text_content.lower() or
-        "confirmar visualizacao" in text_content.lower() or
-        "vi a atividade" in text_content.lower()
+        "confirmar visualização" in cleaned_txt or
+        "confirmar visualizacao" in cleaned_txt or
+        "vi a atividade" in cleaned_txt or
+        cleaned_txt in ["confirmar", "confirmado", "ok", "1", "visualizado", "visto", "recebido"]
     )
     if is_view_confirmation and phone_number:
         event_id = None
@@ -679,7 +681,7 @@ async def receive_evolution_webhook(
                 f"⏰ *Horário:* {time_str}\n"
                 f"👤 *Cliente:* {client_info}\n"
                 f"📝 *Detalhes:* {ev_obj.description or 'Sem observações adicionais.'}\n\n"
-                f"🏁 *Assim que você concluir a atividade, clique no botão abaixo para finalizar na agenda:*"
+                f"🏁 *Assim que você concluir a atividade, clique no botão abaixo ou responda 'CONCLUIR':*"
             )
             buttons_step2 = [
                 {
@@ -706,12 +708,13 @@ async def receive_evolution_webhook(
     # 2. Handle Task Completion Button from Employee
     is_task_completion = (
         btn_id.startswith("complete_task") or
-        "concluir atividade" in text_content.lower() or
-        "concluir tarefa" in text_content.lower() or
-        "finalizar atividade" in text_content.lower() or
-        "finalizar tarefa" in text_content.lower() or
-        "tarefa concluida" in text_content.lower() or
-        "tarefa concluída" in text_content.lower()
+        "concluir atividade" in cleaned_txt or
+        "concluir tarefa" in cleaned_txt or
+        "finalizar atividade" in cleaned_txt or
+        "finalizar tarefa" in cleaned_txt or
+        "tarefa concluida" in cleaned_txt or
+        "tarefa concluída" in cleaned_txt or
+        cleaned_txt in ["concluir", "concluido", "concluído", "pronto", "feito", "finalizar", "finalizado", "2"]
     )
     if is_task_completion and phone_number:
         event_id = None
