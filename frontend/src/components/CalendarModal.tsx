@@ -1065,7 +1065,10 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             border: '1px solid var(--border-color)',
             borderRadius: '16px',
             width: '100%',
-            maxWidth: '540px',
+            maxWidth: '560px',
+            maxHeight: '90vh',
+            display: 'flex',
+            flexDirection: 'column',
             boxShadow: '0 24px 60px rgba(0,0,0,0.9)',
             overflow: 'hidden'
           }}>
@@ -1075,7 +1078,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              backgroundColor: 'var(--bg-primary)'
+              backgroundColor: 'var(--bg-primary)',
+              flexShrink: 0
             }}>
               <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 'bold', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <CalendarIcon size={18} color="var(--accent-primary)" />
@@ -1090,7 +1094,15 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSaveEvent} style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <form onSubmit={handleSaveEvent} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <div style={{
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '16px',
+                overflowY: 'auto',
+                flex: 1
+              }}>
               {/* Event Title */}
               <div>
                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
@@ -1465,67 +1477,80 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   }}
                 />
               </div>
+            </div>
 
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
-                {editingEvent ? (
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteEvent(editingEvent.id)}
-                    style={{
-                      backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                      color: '#ef4444',
-                      border: '1px solid rgba(239, 68, 68, 0.3)',
-                      padding: '8px 14px',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      fontWeight: 'bold',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Excluir
-                  </button>
-                ) : <div />}
+            {/* Sticky Action Buttons Footer */}
+            <div style={{
+              padding: '14px 20px',
+              borderTop: '1px solid var(--border-color)',
+              backgroundColor: 'var(--bg-primary)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexShrink: 0
+            }}>
+              {editingEvent ? (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteEvent(editingEvent.id)}
+                  style={{
+                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                    color: '#ef4444',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Excluir
+                </button>
+              ) : <div />}
 
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    type="button"
-                    onClick={() => setIsFormOpen(false)}
-                    style={{
-                      backgroundColor: 'transparent',
-                      color: 'var(--text-muted)',
-                      border: '1px solid var(--border-color)',
-                      padding: '8px 16px',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Cancelar
-                  </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsFormOpen(false)}
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: 'var(--text-muted)',
+                    border: '1px solid var(--border-color)',
+                    padding: '8px 16px',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancelar
+                </button>
 
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    style={{
-                      backgroundColor: 'var(--accent-primary)',
-                      color: '#fff',
-                      border: 'none',
-                      padding: '8px 20px',
-                      borderRadius: '8px',
-                      fontSize: '13px',
-                      fontWeight: 'bold',
-                      cursor: isSaving ? 'not-allowed' : 'pointer',
-                      boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)'
-                    }}
-                  >
-                    {isSaving ? 'Salvando...' : editingEvent ? 'Salvar Alterações' : 'Criar Tarefa'}
-                  </button>
-                </div>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  style={{
+                    backgroundColor: 'var(--accent-primary)',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '10px 24px',
+                    borderRadius: '8px',
+                    fontSize: '13px',
+                    fontWeight: 'bold',
+                    cursor: isSaving ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <Check size={16} />
+                  {isSaving ? 'Salvando...' : editingEvent ? 'Salvar Alterações' : 'Salvar e Agendar Tarefa'}
+                </button>
               </div>
-            </form>
-          </div>
+            </div>
+          </form>
         </div>
+      </div>
       )}
     </div>
   );
