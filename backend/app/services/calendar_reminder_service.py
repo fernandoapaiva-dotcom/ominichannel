@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
@@ -20,7 +20,7 @@ EVENT_TYPE_LABELS = {
     "geral": "📅 Tarefa / Compromisso Geral"
 }
 
-async def send_whatsapp_to_employee(instance_name: str, employee_phone: str, message_text: str) -> bool:
+async def send_whatsapp_to_employee(instances: List[str], employee_phone: str, message_text: str) -> bool:
     try:
         clean_phone = "".join(filter(str.isdigit, employee_phone))
         if not clean_phone:
@@ -28,12 +28,31 @@ async def send_whatsapp_to_employee(instance_name: str, employee_phone: str, mes
         if not clean_phone.startswith("55") and len(clean_phone) in [10, 11]:
             clean_phone = f"55{clean_phone}"
 
-        res = await evolution_service.send_text_message(
-            instance_name=instance_name,
-            phone_number=clean_phone,
-            text=message_text
-        )
-        return bool(res)
+        # Dedup and preserve order
+        unique_instances = []
+        for inst in instances:
+            if inst and inst not in unique_instances:
+                unique_instances.append(inst)
+        
+        # Also append default instances as fallback
+        for default_inst in ["instancia_financeiro", "instancia_locacao", "instancia_vendas", "instancia_tecnica"]:
+            if default_inst not in unique_instances:
+                unique_instances.append(default_inst)
+
+        for inst_name in unique_instances:
+            try:
+                res = await evolution_service.send_text_message(
+                    instance_name=inst_name,
+                    number=clean_phone,
+                    text=message_text
+                )
+                if res and not res.get("error") and (res.get("key") or res.get("messageId")):
+                    logger.info(f"Lembrete enviado com sucesso para funcionário ({clean_phone}) via instância '{inst_name}'")
+                    return True
+            except Exception as inst_err:
+                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
+
+        return False
     except Exception as e:
         logger.error(f"Erro ao enviar lembrete no WhatsApp do funcionário ({employee_phone}): {e}")
         return False
@@ -55,8 +74,8 @@ async def send_immediate_creation_notification(event_id: int):
 
             stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.status == True, WhatsAppNumber.tenant_id == ev.tenant_id)
             res_w = await session.execute(stmt_w)
-            wn = res_w.scalars().first()
-            inst_name = wn.instancia_evolution_api if (wn and wn.instancia_evolution_api) else "instancia_vendas"
+            wns = res_w.scalars().all()
+            inst_names = [w.instancia_evolution_api for w in wns if w.instancia_evolution_api]
 
             emp_name = ev.employee_name or "Colaborador"
             emp_phone = ev.employee_phone
@@ -83,7 +102,7 @@ async def send_immediate_creation_notification(event_id: int):
                 f"👉 *Por favor, confirme que visualizou clicando no link abaixo:*\n"
                 f"{confirm_url}"
             )
-            success = await send_whatsapp_to_employee(inst_name, emp_phone, msg)
+            success = await send_whatsapp_to_employee(inst_names, emp_phone, msg)
             if success:
                 ev.notified_creation = True
                 await session.commit()
@@ -117,11 +136,13 @@ async def check_and_send_calendar_reminders():
 
         tenant_instance_map = {}
         for wn in whatsapp_numbers:
-            if wn.tenant_id not in tenant_instance_map and wn.instancia_evolution_api:
-                tenant_instance_map[wn.tenant_id] = wn.instancia_evolution_api
+            if wn.tenant_id not in tenant_instance_map:
+                tenant_instance_map[wn.tenant_id] = []
+            if wn.instancia_evolution_api:
+                tenant_instance_map[wn.tenant_id].append(wn.instancia_evolution_api)
 
         for ev in events:
-            inst_name = tenant_instance_map.get(ev.tenant_id) or "instancia_vendas"
+            inst_list = tenant_instance_map.get(ev.tenant_id, [])
             emp_name = ev.employee_name or "Colaborador"
             emp_phone = ev.employee_phone
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Compromisso")
@@ -147,7 +168,7 @@ async def check_and_send_calendar_reminders():
                     f"👉 *Por favor, confirme que visualizou clicando no link abaixo:*\n"
                     f"{confirm_url}"
                 )
-                success = await send_whatsapp_to_employee(inst_name, emp_phone, msg)
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
                 if success:
                     ev.notified_creation = True
                     logger.info(f"Notificação de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
@@ -166,7 +187,7 @@ async def check_and_send_calendar_reminders():
                     f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
                     f"Status: {status_txt}"
                 )
-                success = await send_whatsapp_to_employee(inst_name, emp_phone, msg)
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
                 if success:
                     ev.notified_day_of = True
                     logger.info(f"Lembrete do dia enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")
@@ -185,7 +206,7 @@ async def check_and_send_calendar_reminders():
                     f"👤 *Cliente:* {client_info}\n\n"
                     f"Por favor, prepare-se para o atendimento/entrega!"
                 )
-                success = await send_whatsapp_to_employee(inst_name, emp_phone, msg)
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
                 if success:
                     ev.notified_hours_before = True
                     logger.info(f"Lembrete de antecedência enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")
