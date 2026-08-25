@@ -684,6 +684,43 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent<any>) => {
+    const clipboardData = e.clipboardData;
+    if (!clipboardData) return;
+
+    const items = clipboardData.items;
+    const files: File[] = [];
+
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.indexOf('image') !== -1 || item.type.indexOf('video') !== -1 || item.type.indexOf('audio') !== -1 || item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+            const fileName = file.name && file.name.includes('.') ? file.name : `imagem_colada_${Date.now()}.${ext}`;
+            const renamedFile = new File([file], fileName, { type: file.type || 'image/png' });
+            files.push(renamedFile);
+          }
+        }
+      }
+    }
+
+    if (clipboardData.files && clipboardData.files.length > 0) {
+      for (let i = 0; i < clipboardData.files.length; i++) {
+        const f = clipboardData.files[i];
+        if (!files.some(existing => existing.name === f.name && existing.size === f.size)) {
+          files.push(f);
+        }
+      }
+    }
+
+    if (files.length > 0) {
+      e.preventDefault();
+      setPendingFiles(prev => [...prev, ...files]);
+    }
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() && pendingFiles.length === 0) return;
@@ -3764,7 +3801,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
         return (
-          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
+          <form onSubmit={handleSend} onPaste={handlePaste} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
             <button
               type="button"
               onClick={() => {
@@ -3840,63 +3877,86 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     borderRadius: 'var(--radius-md)',
                     boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
                     zIndex: 1000,
-                    width: '320px',
+                    minWidth: '280px',
+                    maxWidth: '360px',
                     maxHeight: '260px',
                     overflowY: 'auto',
-                    padding: '6px'
+                    padding: '6px 0'
                   }}
                 >
-                  <div style={{ padding: '6px 8px', fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>{isGroupChat ? `Integrantes do Grupo (${filteredParticipants.length}):` : 'Mencionar no WhatsApp:'}</span>
-                    <span style={{ fontSize: '10px', color: 'var(--accent-primary)', cursor: 'pointer' }} onClick={() => setShowMentionMenu(false)}>Fechar [Esc]</span>
+                  <div style={{ padding: '6px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--accent-primary)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
+                    Integrantes do Grupo ({filteredParticipants.length})
                   </div>
-                  {/* Option 1: @todos (for group chats) */}
+
                   {showTodos && (
                     <div
-                      onClick={() => handleInsertMention('@todos ')}
+                      onClick={() => {
+                        const cursor = textareaRef.current ? textareaRef.current.selectionStart : inputText.length;
+                        const lastAtIndex = inputText.lastIndexOf('@');
+                        const prefix = lastAtIndex !== -1 ? inputText.substring(0, lastAtIndex) : inputText;
+                        const nextText = `${prefix}@todos `;
+                        setInputText(nextText);
+                        setShowMentionMenu(false);
+                        if (textareaRef.current) {
+                          textareaRef.current.focus();
+                        }
+                      }}
                       style={{
-                        padding: '8px 10px',
-                        borderRadius: 'var(--radius-sm)',
+                        padding: '8px 12px',
+                        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
                         cursor: 'pointer',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '8px',
-                        color: 'var(--accent-primary)',
-                        fontWeight: '700',
-                        fontSize: '13px',
-                        borderBottom: '1px solid rgba(255,255,255,0.05)',
-                        transition: 'background 0.15s ease'
+                        justifyContent: 'space-between',
+                        fontSize: '12px',
+                        color: 'var(--text-main)',
+                        backgroundColor: 'rgba(0, 230, 153, 0.08)'
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.18)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.08)')}
                     >
-                      <Users size={16} />
-                      <div>
-                        <div>@todos</div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: '400' }}>Notificar todos os {groupParticipants.length} membros no grupo</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ width: '24px', height: '24px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', color: '#051a12', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '11px', fontWeight: '800' }}>
+                          @
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: '700', color: 'var(--accent-primary)' }}>@todos</div>
+                          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Notificar todos os {groupParticipants.length} membros</div>
+                        </div>
                       </div>
+                      <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', fontWeight: '700' }}>
+                        Geral
+                      </span>
                     </div>
                   )}
 
-                  {/* Option 2: Filtered Group participants */}
                   {filteredParticipants.length > 0 ? (
                     filteredParticipants.map(p => (
                       <div
-                        key={p.id || p.phone}
-                        onClick={() => handleInsertMention(`@${p.name} `)}
+                        key={p.phone || p.lid || p.name}
+                        onClick={() => {
+                          const cursor = textareaRef.current ? textareaRef.current.selectionStart : inputText.length;
+                          const lastAtIndex = inputText.lastIndexOf('@');
+                          const prefix = lastAtIndex !== -1 ? inputText.substring(0, lastAtIndex) : inputText;
+                          const nextText = `${prefix}@${p.name} `;
+                          setInputText(nextText);
+                          setShowMentionMenu(false);
+                          if (textareaRef.current) {
+                            textareaRef.current.focus();
+                          }
+                        }}
                         style={{
-                          padding: '7px 10px',
-                          borderRadius: 'var(--radius-sm)',
+                          padding: '8px 12px',
+                          borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
                           cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          gap: '8px',
-                          color: 'var(--text-main)',
                           fontSize: '12px',
-                          transition: 'background 0.15s ease'
+                          color: 'var(--text-main)',
+                          transition: 'background-color 0.15s ease'
                         }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)')}
+                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)')}
                         onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
@@ -3927,13 +3987,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <textarea
               ref={textareaRef}
               rows={1}
-              placeholder={isGroupChat ? 'Enviar mensagem no grupo... (@ menciona alguém ou @todos)' : 'Digite sua mensagem... (Shift+Enter ou Ctrl+Enter quebra linha)'}
+              placeholder={isGroupChat ? 'Enviar mensagem no grupo... (@ menciona alguém ou @todos)' : 'Digite sua mensagem... (Cole Ctrl+V imagens/arquivos aqui)'}
               value={inputText}
               spellCheck={true}
               lang="pt-BR"
               autoCorrect="on"
               autoCapitalize="sentences"
               autoComplete="on"
+              onPaste={handlePaste}
               onChange={(e) => {
                 const val = e.target.value;
                 setInputText(val);
