@@ -24,6 +24,27 @@ const formatTime = (ts: string | Date | undefined) => {
   return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
+  if (!phone) return '';
+  const clean = String(phone).replace(/\D/g, '');
+  if (clean.startsWith('120363') || clean.length > 15) {
+    return 'Grupo';
+  }
+  if (clean.startsWith('55') && clean.length === 12) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
+  }
+  if (clean.startsWith('55') && clean.length === 13) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
+  }
+  if (clean.length === 10) {
+    return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
+  }
+  if (clean.length === 11) {
+    return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
+  }
+  return phone;
+};
+
 interface ChatListProps {
   conversations: Conversation[];
   activeConversation: Conversation | null;
@@ -706,7 +727,7 @@ export const ChatList: React.FC<ChatListProps> = ({
 
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                       <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Phone size={11} /> {group.contactPhone}
+                        <Phone size={11} /> {formatWhatsAppPhone(group.contactPhone)}
                       </span>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>

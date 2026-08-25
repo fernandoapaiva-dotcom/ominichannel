@@ -304,6 +304,20 @@ class WhatsAppSyncService:
                                     else msgs_json if isinstance(msgs_json, list)
                                     else []
                                 )
+
+                                # If chat is a LID, resolve to true phone number via remoteJidAlt
+                                if "@lid" in jid or (len(phone) >= 14 and not phone.startswith("55") and not phone.startswith("120363")):
+                                    for m_item in records:
+                                        k_obj = m_item.get("key", {})
+                                        alt_jid = k_obj.get("remoteJidAlt") or m_item.get("remoteJidAlt") or ""
+                                        if "@s.whatsapp.net" in alt_jid:
+                                            resolved_phone = self._clean_phone_from_jid(alt_jid)
+                                            if resolved_phone:
+                                                phone = resolved_phone
+                                                if m_item.get("pushName") and (name == phone or not name or name == jid):
+                                                    name = m_item["pushName"]
+                                                break
+
                         except Exception as chat_err:
                             logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
 

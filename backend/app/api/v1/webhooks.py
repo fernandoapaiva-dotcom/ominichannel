@@ -536,6 +536,15 @@ async def receive_evolution_webhook(
     from_me = key.get("fromMe", False) if isinstance(key, dict) else False
 
     remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
+    remote_jid_alt = key.get("remoteJidAlt") or data.get("remoteJidAlt") or ""
+    sender_jid = data.get("sender", "") or ""
+
+    if "@lid" in str(remote_jid).lower():
+        if "@s.whatsapp.net" in str(remote_jid_alt):
+            remote_jid = remote_jid_alt
+        elif "@s.whatsapp.net" in str(sender_jid):
+            remote_jid = sender_jid
+
     is_group = (
         "@g.us" in str(remote_jid).lower() or
         data.get("isGroup") is True or

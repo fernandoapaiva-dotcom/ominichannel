@@ -82,6 +82,27 @@ const getMessageDateKey = (timestampStr: string): string => {
   }
 };
 
+export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
+  if (!phone) return '';
+  const clean = String(phone).replace(/\D/g, '');
+  if (clean.startsWith('120363') || clean.length > 15) {
+    return 'Grupo';
+  }
+  if (clean.startsWith('55') && clean.length === 12) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
+  }
+  if (clean.startsWith('55') && clean.length === 13) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
+  }
+  if (clean.length === 10) {
+    return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
+  }
+  if (clean.length === 11) {
+    return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
+  }
+  return phone;
+};
+
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   allConversations,
@@ -2306,7 +2327,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </div>
             ) : (
               <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {formatWhatsAppPhone(conversation.contact?.telefone)}</span>
                 {conversation.assigned_user_name && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
                     <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
