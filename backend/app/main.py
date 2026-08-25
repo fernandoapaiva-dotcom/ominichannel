@@ -28,6 +28,7 @@ from app.services.inactivity_service import start_inactivity_checker_loop
 from app.services.evolution_service import start_profile_picture_syncer_loop
 from app.services.business_hours_service import start_business_hours_scheduler_loop
 from app.services.calendar_reminder_service import start_calendar_reminder_loop
+from app.services.whatsapp_watchdog_service import start_whatsapp_watchdog_loop
 
 import mimetypes
 
@@ -59,7 +60,10 @@ async def lifespan(app: FastAPI):
     # Start Calendar WhatsApp reminders loop
     calendar_reminder_task = asyncio.create_task(start_calendar_reminder_loop(interval_seconds=60))
     logger.info("Calendar WhatsApp reminder background scheduler loop started.")
-    logger.info("Business hours 18:00 shift closing scheduler loop started.")
+
+    # Start WhatsApp Instance Connection Auto-Heal Watchdog
+    watchdog_task = asyncio.create_task(start_whatsapp_watchdog_loop(interval_seconds=30))
+    logger.info("🛡️ WhatsApp Instance Auto-Heal Watchdog background loop started (30s interval).")
     
     yield
     
@@ -67,6 +71,8 @@ async def lifespan(app: FastAPI):
     inactivity_task.cancel()
     profile_pic_task.cancel()
     business_hours_task.cancel()
+    calendar_reminder_task.cancel()
+    watchdog_task.cancel()
     logger.info("Application shutdown completed.")
 
 app = FastAPI(
