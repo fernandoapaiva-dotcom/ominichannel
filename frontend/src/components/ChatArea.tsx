@@ -108,6 +108,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       conversation.dados_adicionais?.is_group
     );
   }, [conversation]);
+
+  type RenderGroup = 
+    | { type: 'single'; message: Message; originalIndex: number }
+    | { type: 'image_album'; messages: Message[]; originalIndices: number[] };
+
+  const processedMessageGroups = useMemo<RenderGroup[]>(() => {
+    const rawMsgs = conversation?.messages || [];
+    const groups: RenderGroup[] = [];
+    let i = 0;
+
+    while (i < rawMsgs.length) {
+      const msg = rawMsgs[i];
+      const isImg = msg.tipo === 'imagem' || (msg.conteudo && (msg.conteudo.endsWith('.jpg') || msg.conteudo.endsWith('.png') || msg.conteudo.endsWith('.jpeg') || msg.conteudo.endsWith('.webp')) && !msg.conteudo.includes('figurinha'));
+      
+      if (isImg) {
+        // Collect consecutive images from the same sender within 3 minutes
+        const album: Message[] = [msg];
+        const indices: number[] = [i];
+        let j = i + 1;
+
+        while (j < rawMsgs.length) {
+          const nextMsg = rawMsgs[j];
+          const nextIsImg = nextMsg.tipo === 'imagem' || (nextMsg.conteudo && (nextMsg.conteudo.endsWith('.jpg') || nextMsg.conteudo.endsWith('.png') || nextMsg.conteudo.endsWith('.jpeg') || nextMsg.conteudo.endsWith('.webp')) && !nextMsg.conteudo.includes('figurinha'));
+          
+          if (nextIsImg && nextMsg.remetente === msg.remetente) {
+            const t1 = normalizeIsoDate(msg.timestamp).getTime();
+            const t2 = normalizeIsoDate(nextMsg.timestamp).getTime();
+            if (Math.abs(t2 - t1) <= 180000) {
+              album.push(nextMsg);
+              indices.push(j);
+              j++;
+              continue;
+            }
+          }
+          break;
+        }
+
+        if (album.length > 1) {
+          groups.push({ type: 'image_album', messages: album, originalIndices: indices });
+          i = j;
+          continue;
+        }
+      }
+
+      groups.push({ type: 'single', message: msg, originalIndex: i });
+      i++;
+    }
+
+    return groups;
+  }, [conversation?.messages]);
+
   const [inputText, setInputText] = useState('');
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
@@ -1421,56 +1472,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
     );
   };
-
-  type RenderGroup = 
-    | { type: 'single'; message: Message; originalIndex: number }
-    | { type: 'image_album'; messages: Message[]; originalIndices: number[] };
-
-  const processedMessageGroups = useMemo<RenderGroup[]>(() => {
-    const rawMsgs = conversation?.messages || [];
-    const groups: RenderGroup[] = [];
-    let i = 0;
-
-    while (i < rawMsgs.length) {
-      const msg = rawMsgs[i];
-      const isImg = msg.tipo === 'imagem' || (msg.conteudo && (msg.conteudo.endsWith('.jpg') || msg.conteudo.endsWith('.png') || msg.conteudo.endsWith('.jpeg') || msg.conteudo.endsWith('.webp')) && !msg.conteudo.includes('figurinha'));
-      
-      if (isImg) {
-        // Collect consecutive images from the same sender within 3 minutes
-        const album: Message[] = [msg];
-        const indices: number[] = [i];
-        let j = i + 1;
-
-        while (j < rawMsgs.length) {
-          const nextMsg = rawMsgs[j];
-          const nextIsImg = nextMsg.tipo === 'imagem' || (nextMsg.conteudo && (nextMsg.conteudo.endsWith('.jpg') || nextMsg.conteudo.endsWith('.png') || nextMsg.conteudo.endsWith('.jpeg') || nextMsg.conteudo.endsWith('.webp')) && !nextMsg.conteudo.includes('figurinha'));
-          
-          if (nextIsImg && nextMsg.remetente === msg.remetente) {
-            const t1 = normalizeIsoDate(msg.timestamp).getTime();
-            const t2 = normalizeIsoDate(nextMsg.timestamp).getTime();
-            if (Math.abs(t2 - t1) <= 180000) {
-              album.push(nextMsg);
-              indices.push(j);
-              j++;
-              continue;
-            }
-          }
-          break;
-        }
-
-        if (album.length > 1) {
-          groups.push({ type: 'image_album', messages: album, originalIndices: indices });
-          i = j;
-          continue;
-        }
-      }
-
-      groups.push({ type: 'single', message: msg, originalIndex: i });
-      i++;
-    }
-
-    return groups;
-  }, [conversation?.messages]);
 
   const formatTime = (ts: string | Date | undefined) => {
     if (!ts) return '';
