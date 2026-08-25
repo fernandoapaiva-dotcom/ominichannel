@@ -730,7 +730,7 @@ async def send_agent_message(
 
     raw_content = (msg_in.conteudo or "").strip()
     is_sticker = (
-        msg_in.tipo in (MessageType.IMAGEM, "sticker", "figurinha") or
+        str(msg_in.tipo).lower() in ("sticker", "figurinha") or
         raw_content.lower().endswith(".webp") or
         ("/uploads/" in raw_content and raw_content.lower().endswith(".webp"))
     )
@@ -738,6 +738,13 @@ async def send_agent_message(
         raw_content.lower().endswith(".gif") or
         "giphy.com" in raw_content.lower() or
         "tenor.com" in raw_content.lower()
+    )
+    is_media = (
+        not is_sticker and not is_gif and (
+            str(msg_in.tipo).lower() in (MessageType.IMAGEM, MessageType.VIDEO, MessageType.AUDIO, MessageType.ARQUIVO, "imagem", "video", "audio", "arquivo", "document", "documento") or
+            "/uploads/" in raw_content or
+            (raw_content.startswith("http") and any(raw_content.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".mp4", ".ogg", ".mp3", ".pdf"]))
+        )
     )
 
     actual_tipo = MessageType.IMAGEM if (is_sticker or is_gif) else msg_in.tipo
@@ -769,6 +776,65 @@ async def send_agent_message(
             mimetype="video/mp4",
             media=raw_content,
             file_name="animacao.mp4"
+        )
+    elif is_media and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+        # Extract media path and optional caption
+        media_path = raw_content.split("|")[0].strip()
+        caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
+
+        agent_name = current_user.nome or "Atendente"
+        formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_name}:*"
+
+        media_data = media_path
+        fname = "arquivo"
+        mimetype = "image/jpeg"
+        media_type = "image"
+
+        if "/uploads/" in media_path:
+            fname = media_path.split("/uploads/")[-1]
+            lpath = os.path.join("uploads", fname)
+            if os.path.exists(lpath):
+                with open(lpath, "rb") as f:
+                    media_data = base64.b64encode(f.read()).decode("utf-8")
+
+        f_lower = fname.lower()
+        if f_lower.endswith(".png"):
+            mimetype = "image/png"
+            media_type = "image"
+        elif f_lower.endswith((".jpg", ".jpeg")):
+            mimetype = "image/jpeg"
+            media_type = "image"
+        elif f_lower.endswith(".mp4"):
+            mimetype = "video/mp4"
+            media_type = "video"
+        elif f_lower.endswith((".ogg", ".mp3", ".wav")):
+            mimetype = "audio/ogg"
+            media_type = "audio"
+        elif f_lower.endswith(".pdf"):
+            mimetype = "application/pdf"
+            media_type = "document"
+        else:
+            if str(msg_in.tipo).lower() in ("imagem", "image"):
+                media_type = "image"
+                mimetype = "image/jpeg"
+            elif str(msg_in.tipo).lower() == "video":
+                media_type = "video"
+                mimetype = "video/mp4"
+            elif str(msg_in.tipo).lower() == "audio":
+                media_type = "audio"
+                mimetype = "audio/ogg"
+            else:
+                media_type = "document"
+                mimetype = "application/octet-stream"
+
+        send_res = await evolution_service.send_media_message(
+            instance_name=conv.whatsapp_number.instancia_evolution_api,
+            number=conv.contact.telefone,
+            media_type=media_type,
+            mimetype=mimetype,
+            media=media_data,
+            file_name=fname,
+            caption=formatted_caption
         )
     else:
         provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
