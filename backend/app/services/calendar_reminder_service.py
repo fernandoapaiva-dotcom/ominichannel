@@ -66,25 +66,30 @@ async def send_whatsapp_to_employee(
 
         for inst_name in ordered_candidates:
             try:
-                res = await evolution_service.send_button_message(
+                # 1. Send complete task card (guaranteed arrival on all WhatsApp apps)
+                full_card = f"*{title}*\n\n{description}\n\n_{footer}_"
+                res_txt = await evolution_service.send_text_message(
                     instance_name=inst_name,
                     number=clean_phone,
-                    title="Você recebeu uma nova tarefa para execução!",
-                    description="Uma nova atividade foi lançada para você.\nClique no botão abaixo para confirmar o recebimento:",
-                    footer=footer,
-                    buttons=[
-                        {
-                            "type": "reply",
-                            "displayText": "Confirmar",
-                            "id": f"confirm_view_task_{event_id}" if event_id else "confirm_view_task"
-                        }
-                    ]
+                    text=full_card
                 )
-                if res and not res.get("error") and (res.get("key") or res.get("messageId") or res.get("status") or res.get("success")):
-                    logger.info(f"Botão de confirmação enviado para funcionário ({clean_phone}) via '{inst_name}'")
+
+                # 2. Send interactive 1-tap confirmation button
+                try:
+                    await evolution_service.send_poll_message(
+                        instance_name=inst_name,
+                        number=clean_phone,
+                        question="👉 Clique abaixo para confirmar o recebimento:",
+                        options=["✅ Confirmar", "❌ Recusar"]
+                    )
+                except Exception as poll_err:
+                    logger.debug(f"Poll button error: {poll_err}")
+
+                if res_txt and not res_txt.get("error"):
+                    logger.info(f"Tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
                     return True
             except Exception as inst_err:
-                logger.warning(f"Tentativa com botão via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
+                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
 
         return False
     except Exception as e:

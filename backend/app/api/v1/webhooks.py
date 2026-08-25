@@ -696,14 +696,20 @@ async def receive_evolution_webhook(
             ]
 
             try:
-                await evolution_service.send_button_message(
+                await evolution_service.send_text_message(
                     instance_name=instance_name,
                     number=phone_number,
-                    title=title_step2,
-                    description=desc_step2,
-                    footer="Servsolda • Sistema de Tarefas",
-                    buttons=buttons_step2
+                    text=f"*{title_step2}*\n\n{desc_step2}\n\n_Servsolda • Sistema de Tarefas_"
                 )
+                try:
+                    await evolution_service.send_poll_message(
+                        instance_name=instance_name,
+                        number=phone_number,
+                        question="🏁 Concluiu a atividade? Clique abaixo:",
+                        options=["✅ Concluído", "⏳ Em Andamento"]
+                    )
+                except Exception as poll_err:
+                    logger.debug(f"Poll step 2 error: {poll_err}")
             except Exception as e:
                 logger.error(f"Erro ao enviar etapa 2 de cumprimento de tarefa: {e}")
 
