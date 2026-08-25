@@ -115,6 +115,38 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     }
   };
 
+  const handleChangeEventStatus = async (ev: CalendarEvent, newStatus: 'pendente' | 'em_progresso' | 'concluido' | 'cancelado') => {
+    try {
+      setEvents(prev => prev.map(e => e.id === ev.id ? { ...e, status: newStatus } : e));
+      setContextMenu({ isOpen: false, x: 0, y: 0, event: null });
+      await apiFetch(`/calendar/events/${ev.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: ev.title,
+          description: ev.description,
+          event_type: ev.event_type,
+          start_time: ev.start_time,
+          end_time: ev.end_time,
+          all_day: ev.all_day,
+          color: ev.color,
+          priority: ev.priority,
+          status: newStatus,
+          reminder_minutes: ev.reminder_minutes,
+          contact_id: ev.contact_id,
+          conversation_id: ev.conversation_id,
+          employee_id: ev.employee_id,
+          employee_name: ev.employee_name,
+          employee_phone: ev.employee_phone,
+          notify_whatsapp: ev.notify_whatsapp,
+          custom_reminder_hours: ev.custom_reminder_hours,
+          confirmed_by_employee: ev.confirmed_by_employee
+        })
+      });
+    } catch (err) {
+      console.error('Error updating event status:', err);
+    }
+  };
+
   useEffect(() => {
     const handleCloseCtx = () => {
       if (contextMenu.isOpen) {
@@ -2476,6 +2508,69 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             <Trash2 size={16} />
             <span>Excluir</span>
           </button>
+
+          {/* Separator */}
+          <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.1)', margin: '2px 0' }} />
+
+          {/* Status Section */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '0 4px 6px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 'bold' }}>
+              <CheckSquare size={13} />
+              <span>Status do Compromisso</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              {[
+                { id: 'pendente', label: 'Pendente', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.15)' },
+                { id: 'em_progresso', label: 'Em Andamento', color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.15)' },
+                { id: 'concluido', label: 'Concluído', color: '#10b981', bg: 'rgba(16, 185, 129, 0.15)' },
+                { id: 'cancelado', label: 'Cancelado', color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)' },
+              ].map(st => {
+                const isCurrent = contextMenu.event?.status === st.id;
+                return (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => handleChangeEventStatus(contextMenu.event!, st.id as any)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      width: '100%',
+                      padding: '6px 8px',
+                      backgroundColor: isCurrent ? st.bg : 'transparent',
+                      border: isCurrent ? `1px solid ${st.color}40` : '1px solid transparent',
+                      borderRadius: '6px',
+                      color: isCurrent ? st.color : '#e2e8f0',
+                      fontSize: '12px',
+                      fontWeight: isCurrent ? 'bold' : '500',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      transition: 'background 0.1s'
+                    }}
+                    onMouseEnter={e => {
+                      if (!isCurrent) e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)';
+                    }}
+                    onMouseLeave={e => {
+                      if (!isCurrent) e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        backgroundColor: st.color,
+                        display: 'inline-block'
+                      }} />
+                      <span>{st.label}</span>
+                    </div>
+                    {isCurrent && <Check size={13} color={st.color} strokeWidth={2.5} />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Separator */}
           <div style={{ height: '1px', backgroundColor: 'rgba(255, 255, 255, 0.1)', margin: '2px 0' }} />
