@@ -242,57 +242,8 @@ class WhatsAppSyncService:
                         if idx % 3 == 0 or idx == total_chats - 1:
                             await self._emit_progress(tenant_id, stats)
 
-                        # 2. Get or create Contact
-                        contact_stmt = select(Contact).where(
-                            Contact.tenant_id == tenant_id,
-                            Contact.telefone == phone
-                        )
-                        c_res = await session.execute(contact_stmt)
-                        contact = c_res.scalars().first()
-
-                        if not contact:
-                            contact = Contact(
-                                tenant_id=tenant_id,
-                                telefone=phone,
-                                nome=name,
-                                foto_perfil_url=profile_pic
-                            )
-                            session.add(contact)
-                            await session.flush()
-                            stats["contacts_synced"] += 1
-                        else:
-                            if (not contact.nome or contact.nome == phone) and name != phone:
-                                contact.nome = name
-                            elif ab_entry and contact.nome != ab_entry["name"]:
-                                contact.nome = ab_entry["name"]
-                            if not contact.foto_perfil_url and profile_pic:
-                                contact.foto_perfil_url = profile_pic
-
-                        # 3. Get or create Conversation
-                        conv_stmt = select(Conversation).where(
-                            Conversation.tenant_id == tenant_id,
-                            Conversation.contact_id == contact.id,
-                            Conversation.whatsapp_number_id == whatsapp_number_id
-                        )
-                        conv_res = await session.execute(conv_stmt)
-                        conv = conv_res.scalars().first()
-
-                        if not conv:
-                            conv = Conversation(
-                                tenant_id=tenant_id,
-                                whatsapp_number_id=whatsapp_number_id,
-                                contact_id=contact.id,
-                                status=ConversationStatus.COM_HUMANO,
-                                protocol_number=None,
-                                dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
-                                criado_em=datetime.utcnow(),
-                                ultima_interacao_em=datetime.utcnow()
-                            )
-                            session.add(conv)
-                            await session.flush()
-                            stats["conversations_synced"] += 1
-
-                        # 4. Fetch messages for this chat
+                        # 1. Fetch messages for this chat via HTTP (outside DB transaction)
+                        records = []
                         try:
                             msgs_payload = {
                                 "where": {
@@ -312,87 +263,121 @@ class WhatsAppSyncService:
                                     else msgs_json if isinstance(msgs_json, list)
                                     else []
                                 )
-
-                                latest_msg_dt = None
-                                for m_obj in records:
-                                    key_obj = m_obj.get("key", {})
-                                    msg_wa_id = key_obj.get("id")
-                                    if not msg_wa_id:
-                                        continue
-
-                                    from_me = key_obj.get("fromMe", False)
-                                    remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
-                                    content_text, msg_type = self._parse_message_content(m_obj)
-
-                                    # If message is media and has mmg.whatsapp.net, download and save to /uploads/
-                                    if "mmg.whatsapp.net" in content_text or msg_type in [MessageType.IMAGEM, MessageType.VIDEO, MessageType.AUDIO, MessageType.ARQUIVO]:
-                                        try:
-                                            from app.services.evolution_service import evolution_service
-                                            import base64
-                                            import uuid
-                                            import os
-                                            b64_data = await evolution_service.get_media_base64(
-                                                instance_name=instance_name,
-                                                message_id=msg_wa_id,
-                                                from_me=from_me,
-                                                remote_jid=jid
-                                            )
-                                            if b64_data:
-                                                os.makedirs("uploads", exist_ok=True)
-                                                ext = ".jpeg" if msg_type == MessageType.IMAGEM else (".mp4" if msg_type == MessageType.VIDEO else (".ogg" if msg_type == MessageType.AUDIO else ".pdf"))
-                                                raw_b = base64.b64decode(b64_data.split(",")[1] if "," in b64_data else b64_data)
-                                                fname = f"{uuid.uuid4().hex}{ext}"
-                                                with open(os.path.join("uploads", fname), "wb") as f:
-                                                    f.write(raw_b)
-                                                caption = content_text.split("|", 1)[1] if "|" in content_text else ""
-                                                content_text = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
-                                        except Exception as media_err:
-                                            logger.debug(f"Could not auto-download media for {msg_wa_id}: {media_err}")
-
-                                    ts_raw = m_obj.get("messageTimestamp")
-                                    msg_dt = datetime.utcnow()
-                                    if ts_raw:
-                                        try:
-                                            ts_int = int(ts_raw)
-                                            if ts_int > 1e11:
-                                                ts_int = ts_int / 1000.0
-                                            msg_dt = datetime.fromtimestamp(ts_int)
-                                        except Exception:
-                                            pass
-
-                                    if latest_msg_dt is None or msg_dt > latest_msg_dt:
-                                        latest_msg_dt = msg_dt
-
-                                    existing_msg_stmt = select(Message.id).where(
-                                        Message.conversation_id == conv.id,
-                                        Message.whatsapp_msg_id == msg_wa_id
-                                    )
-                                    existing_res = await session.execute(existing_msg_stmt)
-                                    if existing_res.scalars().first():
-                                        continue
-
-                                    db_msg = Message(
-                                        conversation_id=conv.id,
-                                        remetente=remetente,
-                                        conteudo=content_text,
-                                        tipo=msg_type,
-                                        status="delivered",
-                                        whatsapp_msg_id=msg_wa_id,
-                                        timestamp=msg_dt
-                                    )
-                                    session.add(db_msg)
-                                    stats["messages_synced"] += 1
-
-                                if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
-                                    conv.ultima_interacao_em = latest_msg_dt
-
                         except Exception as chat_err:
                             logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
 
-                        if idx % 10 == 0:
-                            await session.commit()
+                        # 2. Open short-lived DB transaction with retry to save Contact, Conv and Messages
+                        for attempt in range(5):
+                            try:
+                                async with AsyncSessionLocal() as session:
+                                    # Get or create Contact
+                                    contact_stmt = select(Contact).where(
+                                        Contact.tenant_id == tenant_id,
+                                        Contact.telefone == phone
+                                    )
+                                    c_res = await session.execute(contact_stmt)
+                                    contact = c_res.scalars().first()
 
-                    await session.commit()
+                                    if not contact:
+                                        contact = Contact(
+                                            tenant_id=tenant_id,
+                                            telefone=phone,
+                                            nome=name,
+                                            foto_perfil_url=profile_pic
+                                        )
+                                        session.add(contact)
+                                        await session.flush()
+                                        stats["contacts_synced"] += 1
+                                    else:
+                                        if (not contact.nome or contact.nome == phone) and name != phone:
+                                            contact.nome = name
+                                        elif ab_entry and contact.nome != ab_entry["name"]:
+                                            contact.nome = ab_entry["name"]
+                                        if not contact.foto_perfil_url and profile_pic:
+                                            contact.foto_perfil_url = profile_pic
+
+                                    # Get or create Conversation
+                                    conv_stmt = select(Conversation).where(
+                                        Conversation.tenant_id == tenant_id,
+                                        Conversation.contact_id == contact.id,
+                                        Conversation.whatsapp_number_id == whatsapp_number_id
+                                    )
+                                    conv_res = await session.execute(conv_stmt)
+                                    conv = conv_res.scalars().first()
+
+                                    if not conv:
+                                        conv = Conversation(
+                                            tenant_id=tenant_id,
+                                            whatsapp_number_id=whatsapp_number_id,
+                                            contact_id=contact.id,
+                                            status=ConversationStatus.COM_HUMANO,
+                                            protocol_number=None,
+                                            dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
+                                            criado_em=datetime.utcnow(),
+                                            ultima_interacao_em=datetime.utcnow()
+                                        )
+                                        session.add(conv)
+                                        await session.flush()
+                                        stats["conversations_synced"] += 1
+
+                                    # Insert messages
+                                    latest_msg_dt = None
+                                    for m_obj in records:
+                                        key_obj = m_obj.get("key", {})
+                                        msg_wa_id = key_obj.get("id")
+                                        if not msg_wa_id:
+                                            continue
+
+                                        from_me = key_obj.get("fromMe", False)
+                                        remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
+                                        content_text, msg_type = self._parse_message_content(m_obj)
+
+                                        ts_raw = m_obj.get("messageTimestamp")
+                                        msg_dt = datetime.utcnow()
+                                        if ts_raw:
+                                            try:
+                                                ts_int = int(ts_raw)
+                                                if ts_int > 1e11:
+                                                    ts_int = ts_int / 1000.0
+                                                msg_dt = datetime.fromtimestamp(ts_int)
+                                            except Exception:
+                                                pass
+
+                                        if latest_msg_dt is None or msg_dt > latest_msg_dt:
+                                            latest_msg_dt = msg_dt
+
+                                        existing_msg_stmt = select(Message.id).where(
+                                            Message.conversation_id == conv.id,
+                                            Message.whatsapp_msg_id == msg_wa_id
+                                        )
+                                        existing_res = await session.execute(existing_msg_stmt)
+                                        if existing_res.scalars().first():
+                                            continue
+
+                                        db_msg = Message(
+                                            conversation_id=conv.id,
+                                            remetente=remetente,
+                                            conteudo=content_text,
+                                            tipo=msg_type,
+                                            status="delivered",
+                                            whatsapp_msg_id=msg_wa_id,
+                                            timestamp=msg_dt
+                                        )
+                                        session.add(db_msg)
+                                        stats["messages_synced"] += 1
+
+                                    if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
+                                        conv.ultima_interacao_em = latest_msg_dt
+
+                                    await session.commit()
+                                break
+                            except Exception as db_err:
+                                if "locked" in str(db_err).lower() and attempt < 4:
+                                    await asyncio.sleep(0.3 * (attempt + 1))
+                                    continue
+                                logger.warning(f"Erro ao salvar dados do chat {jid}: {db_err}")
+                                break
+
                     stats["status"] = "completed"
                     stats["percentage"] = 100
                     stats["current_contact"] = "Sincronização concluída com sucesso!"
