@@ -893,51 +893,64 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                             except Exception:
                                 pass
 
+                        # Fetch contacts quickly
+                        contacts_to_check = []
                         async with AsyncSessionLocal() as db:
-                            c_res = await db.execute(select(Contact))
-                            contacts = c_res.scalars().all()
-                            updated = False
+                            c_res = await db.execute(select(Contact.id, Contact.telefone, Contact.nome, Contact.foto_perfil_url))
+                            contacts_data = c_res.all()
 
-                            for c in contacts:
-                                clean_num = c.telefone.replace("+", "").replace("-", "").replace(" ", "").strip()
+                        updates = []
+                        pic_fetches = 0
 
-                                # A. Check if Contact is a WhatsApp Group
-                                if clean_num in group_map:
-                                    g_info = group_map[clean_num]
-                                    if c.nome != g_info["subject"]:
-                                        c.nome = g_info["subject"]
-                                        updated = True
-                                    if g_info["pictureUrl"] and c.foto_perfil_url != g_info["pictureUrl"]:
-                                        c.foto_perfil_url = g_info["pictureUrl"]
-                                        updated = True
-                                    continue
+                        for c_id, c_tel, c_nome, c_pic in contacts_data:
+                            clean_num = c_tel.replace("+", "").replace("-", "").replace(" ", "").strip()
 
-                                # B. Check if Contact is an internal WhatsApp LID
-                                if clean_num in lid_map:
-                                    real_phone = lid_map[clean_num]
-                                    matching = next((x for x in contacts if x.telefone == real_phone), None)
-                                    if matching and c.nome != f"{matching.nome} (Comunidade)":
-                                        c.nome = f"{matching.nome} (Comunidade)"
-                                        if matching.foto_perfil_url and not c.foto_perfil_url:
-                                            c.foto_perfil_url = matching.foto_perfil_url
-                                        updated = True
-                                    continue
+                            # A. Check if Contact is a WhatsApp Group
+                            if clean_num in group_map:
+                                g_info = group_map[clean_num]
+                                new_name = g_info["subject"] if c_nome != g_info["subject"] else None
+                                new_pic = g_info["pictureUrl"] if g_info["pictureUrl"] and c_pic != g_info["pictureUrl"] else None
+                                if new_name or new_pic:
+                                    updates.append({"id": c_id, "nome": new_name or c_nome, "foto_perfil_url": new_pic or c_pic})
+                                continue
 
-                                # C. Fetch Profile Picture if missing
-                                if not c.foto_perfil_url:
-                                    for inst in instances:
-                                        try:
-                                            res = await client.post(f"{base_url}/chat/fetchProfilePictureUrl/{inst}", headers=headers, json={"number": clean_num})
-                                            if res.status_code in [200, 201]:
-                                                pic = res.json().get("profilePictureUrl")
-                                                if pic:
-                                                    c.foto_perfil_url = pic
-                                                    updated = True
-                                                    break
-                                        except Exception:
-                                            continue
+                            # B. Check if Contact is an internal WhatsApp LID
+                            if clean_num in lid_map:
+                                real_phone = lid_map[clean_num]
+                                matching = next((x for x in contacts_data if x[1] == real_phone), None)
+                                if matching:
+                                    target_name = f"{matching[2]} (Comunidade)"
+                                    target_pic = matching[3] if not c_pic else c_pic
+                                    if c_nome != target_name or (target_pic and c_pic != target_pic):
+                                        updates.append({"id": c_id, "nome": target_name, "foto_perfil_url": target_pic})
+                                continue
 
-                            if updated:
+                            # C. Fetch Profile Picture if missing (max 3 per cycle to keep server ultra fast)
+                            if not c_pic and pic_fetches < 3:
+                                pic_fetches += 1
+                                for inst in instances[:2]:
+                                    try:
+                                        res = await client.post(
+                                            f"{base_url}/chat/fetchProfilePictureUrl/{inst}",
+                                            headers=headers,
+                                            json={"number": clean_num},
+                                            timeout=3.0
+                                        )
+                                        if res.status_code in [200, 201]:
+                                            pic = res.json().get("profilePictureUrl")
+                                            if pic:
+                                                updates.append({"id": c_id, "nome": c_nome, "foto_perfil_url": pic})
+                                                break
+                                    except Exception:
+                                        continue
+
+                        if updates:
+                            async with AsyncSessionLocal() as db:
+                                for u in updates:
+                                    c_obj = await db.get(Contact, u["id"])
+                                    if c_obj:
+                                        c_obj.nome = u["nome"]
+                                        c_obj.foto_perfil_url = u["foto_perfil_url"]
                                 await db.commit()
         except Exception as e:
             logger.debug(f"Profile picture and group sync loop error: {e}")
