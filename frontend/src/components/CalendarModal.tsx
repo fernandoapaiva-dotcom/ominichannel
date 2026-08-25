@@ -54,8 +54,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     geral: true
   });
   const timeGridRef = useRef<HTMLDivElement>(null);
-  const [draggedEventId, setDraggedEventId] = useState<number | null>(null);
-  const draggedEventIdRef = useRef<number | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -1030,25 +1028,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
-                          const evIdStr = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || String(draggedEventIdRef.current || '');
-                          const evId = Number(evIdStr);
-                          if (evId) {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const offsetY = Math.max(0, e.clientY - rect.top);
-                            const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
-                            const newHour = Math.floor(totalMinutes / 60);
-                            const newMinute = totalMinutes % 60;
-                            handleDropOnDate(evId, d.dateStr, newHour, newMinute);
-                          }
-                          setDraggedEventId(null);
-                          draggedEventIdRef.current = null;
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
+                          if (!evId) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const offsetY = Math.max(0, e.clientY - rect.top);
+                          const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
+                          const newHour = Math.floor(totalMinutes / 60);
+                          const newMinute = totalMinutes % 60;
+                          handleDropOnDate(evId, d.dateStr, newHour, newMinute);
                         }}
                         style={{
                           position: 'relative',
                           height: '1440px',
                           borderRight: dIdx < 6 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-                          backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent',
-                          transition: 'background-color 0.1s ease'
+                          backgroundColor: d.isToday ? 'rgba(26, 115, 232, 0.02)' : 'transparent'
                         }}
                       >
                         {/* 24 Horizontal Grid Lines & Drop Slots */}
@@ -1057,27 +1050,17 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             key={hour}
                             onDragOver={(e) => {
                               e.preventDefault();
-                              e.stopPropagation();
                               e.dataTransfer.dropEffect = 'move';
-                              e.currentTarget.style.backgroundColor = 'rgba(26, 115, 232, 0.25)';
-                            }}
-                            onDragLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              e.stopPropagation();
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                              const evIdStr = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || String(draggedEventIdRef.current || '');
-                              const evId = Number(evIdStr);
+                              const evId = Number(e.dataTransfer.getData('text/plain'));
                               if (evId) {
                                 const rect = e.currentTarget.getBoundingClientRect();
                                 const offsetY = Math.max(0, Math.min(59, e.clientY - rect.top));
                                 const minute = Math.min(45, Math.floor(offsetY / 15) * 15);
                                 handleDropOnDate(evId, d.dateStr, hour, minute);
                               }
-                              setDraggedEventId(null);
-                              draggedEventIdRef.current = null;
                             }}
                             onClick={() => {
                               const [y, m, dayNum] = d.dateStr.split('-').map(Number);
@@ -1091,9 +1074,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               right: 0,
                               height: '60px',
                               borderBottom: '1px solid rgba(255,255,255,0.06)',
-                              cursor: 'pointer',
-                              zIndex: 1,
-                              transition: 'background-color 0.1s ease'
+                              cursor: 'pointer'
                             }}
                           />
                         ))}
@@ -1146,15 +1127,23 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               key={ev.id}
                               draggable={true}
                               onDragStart={(e) => {
-                                draggedEventIdRef.current = ev.id;
-                                setDraggedEventId(ev.id);
                                 e.dataTransfer.setData('text/plain', String(ev.id));
-                                e.dataTransfer.setData('text', String(ev.id));
                                 e.dataTransfer.effectAllowed = 'move';
                               }}
-                              onDragEnd={() => {
-                                draggedEventIdRef.current = null;
-                                setDraggedEventId(null);
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const evId = Number(e.dataTransfer.getData('text/plain'));
+                                if (!evId) return;
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const offsetY = Math.max(0, e.clientY - rect.top);
+                                const totalMinutes = Math.min(23 * 60 + 45, Math.floor((startMin + offsetY) / 15) * 15);
+                                const newHour = Math.floor(totalMinutes / 60);
+                                const newMinute = totalMinutes % 60;
+                                handleDropOnDate(evId, d.dateStr, newHour, newMinute);
                               }}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1182,8 +1171,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 display: 'flex',
                                 flexDirection: 'column',
                                 justifyContent: 'flex-start',
-                                borderLeft: `3px solid rgba(255,255,255,0.4)`,
-                                pointerEvents: draggedEventId ? 'none' : 'auto'
+                                borderLeft: `3px solid rgba(255,255,255,0.4)`
                               }}
                               title={`${ev.title} (${timeRangeText}) - Arraste para reposicionar no horário desejado`}
                             >
@@ -1314,20 +1302,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
-                          const evIdStr = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || String(draggedEventIdRef.current || '');
-                          const evId = Number(evIdStr);
-                          if (evId) {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const offsetY = Math.max(0, e.clientY - rect.top);
-                            const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
-                            const newHour = Math.floor(totalMinutes / 60);
-                            const newMinute = totalMinutes % 60;
-                            handleDropOnDate(evId, curDateStr, newHour, newMinute);
-                          }
-                          setDraggedEventId(null);
-                          draggedEventIdRef.current = null;
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
+                          if (!evId) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const offsetY = Math.max(0, e.clientY - rect.top);
+                          const totalMinutes = Math.min(23 * 60 + 45, Math.floor(offsetY / 15) * 15);
+                          const newHour = Math.floor(totalMinutes / 60);
+                          const newMinute = totalMinutes % 60;
+                          handleDropOnDate(evId, curDateStr, newHour, newMinute);
                         }}
-                        style={{ position: 'relative', height: '1440px', transition: 'background-color 0.1s ease' }}
+                        style={{ position: 'relative', height: '1440px' }}
                       >
                         {/* 24 Grid Lines & Slots */}
                         {HOURS_24.map(hour => (
@@ -1335,27 +1319,17 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             key={hour}
                             onDragOver={(e) => {
                               e.preventDefault();
-                              e.stopPropagation();
                               e.dataTransfer.dropEffect = 'move';
-                              e.currentTarget.style.backgroundColor = 'rgba(26, 115, 232, 0.25)';
-                            }}
-                            onDragLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              e.stopPropagation();
-                              e.currentTarget.style.backgroundColor = 'transparent';
-                              const evIdStr = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || String(draggedEventIdRef.current || '');
-                              const evId = Number(evIdStr);
+                              const evId = Number(e.dataTransfer.getData('text/plain'));
                               if (evId) {
                                 const rect = e.currentTarget.getBoundingClientRect();
                                 const offsetY = Math.max(0, Math.min(59, e.clientY - rect.top));
                                 const minute = Math.min(45, Math.floor(offsetY / 15) * 15);
                                 handleDropOnDate(evId, curDateStr, hour, minute);
                               }
-                              setDraggedEventId(null);
-                              draggedEventIdRef.current = null;
                             }}
                             onClick={() => {
                               const [y, m, dayNum] = curDateStr.split('-').map(Number);
@@ -1369,9 +1343,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               right: 0,
                               height: '60px',
                               borderBottom: '1px solid rgba(255,255,255,0.06)',
-                              cursor: 'pointer',
-                              zIndex: 1,
-                              transition: 'background-color 0.1s ease'
+                              cursor: 'pointer'
                             }}
                           />
                         ))}
@@ -1424,15 +1396,23 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               key={ev.id}
                               draggable={true}
                               onDragStart={(e) => {
-                                draggedEventIdRef.current = ev.id;
-                                setDraggedEventId(ev.id);
                                 e.dataTransfer.setData('text/plain', String(ev.id));
-                                e.dataTransfer.setData('text', String(ev.id));
                                 e.dataTransfer.effectAllowed = 'move';
                               }}
-                              onDragEnd={() => {
-                                draggedEventIdRef.current = null;
-                                setDraggedEventId(null);
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                const evId = Number(e.dataTransfer.getData('text/plain'));
+                                if (!evId) return;
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const offsetY = Math.max(0, e.clientY - rect.top);
+                                const totalMinutes = Math.min(23 * 60 + 45, Math.floor((startMin + offsetY) / 15) * 15);
+                                const newHour = Math.floor(totalMinutes / 60);
+                                const newMinute = totalMinutes % 60;
+                                handleDropOnDate(evId, curDateStr, newHour, newMinute);
                               }}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1460,8 +1440,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'space-between',
-                                borderLeft: `4px solid rgba(255,255,255,0.4)`,
-                                pointerEvents: draggedEventId ? 'none' : 'auto'
+                                borderLeft: `4px solid rgba(255,255,255,0.4)`
                               }}
                               title={`${ev.title} (${timeRangeText}) - Arraste para mover`}
                             >
@@ -1541,25 +1520,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         onDragOver={(e) => {
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
-                          e.currentTarget.style.backgroundColor = 'rgba(26, 115, 232, 0.25)';
-                        }}
-                        onDragLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = isToday
-                            ? 'rgba(16, 185, 129, 0.05)'
-                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
-                          e.currentTarget.style.backgroundColor = isToday
-                            ? 'rgba(16, 185, 129, 0.05)'
-                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
-                          const evIdStr = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text') || String(draggedEventIdRef.current || '');
-                          const evId = Number(evIdStr);
+                          const evId = Number(e.dataTransfer.getData('text/plain'));
                           if (evId) {
                             handleDropOnDate(evId, cell.dateStr);
                           }
-                          setDraggedEventId(null);
-                          draggedEventIdRef.current = null;
                         }}
                         style={{
                           borderRight: (idx + 1) % 7 !== 0 ? '1px solid var(--border-color)' : 'none',
@@ -1616,15 +1583,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 key={ev.id}
                                 draggable={true}
                                 onDragStart={(e) => {
-                                  draggedEventIdRef.current = ev.id;
-                                  setDraggedEventId(ev.id);
                                   e.dataTransfer.setData('text/plain', String(ev.id));
-                                  e.dataTransfer.setData('text', String(ev.id));
                                   e.dataTransfer.effectAllowed = 'move';
-                                }}
-                                onDragEnd={() => {
-                                  draggedEventIdRef.current = null;
-                                  setDraggedEventId(null);
                                 }}
                                 onClick={e => {
                                   e.stopPropagation();
@@ -1647,8 +1607,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                   whiteSpace: 'nowrap',
                                   overflow: 'hidden',
                                   textOverflow: 'ellipsis',
-                                  transition: 'transform 0.1s ease',
-                                  pointerEvents: draggedEventId ? 'none' : 'auto'
+                                  transition: 'transform 0.1s ease'
                                 }}
                                 title={`${ev.title}${ev.contact_name ? ` (${ev.contact_name})` : ''} - Arraste para mover de dia`}
                               >
