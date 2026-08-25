@@ -1,4 +1,4 @@
-﻿import re
+import re
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -70,6 +70,8 @@ async def create_technician(
         tenant_id=current_user.tenant_id,
         nome=payload.nome.strip(),
         telefone=clean_phone,
+        cargo=payload.cargo.strip() if payload.cargo else None,
+        departamento=payload.departamento.strip() if payload.departamento else None,
         especialidade=payload.especialidade.strip() if payload.especialidade else None,
         ativo=payload.ativo
     )
@@ -86,7 +88,7 @@ async def update_technician(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Updates an authorized technician.
+    Updates an authorized technician / store employee.
     """
     stmt = select(AuthorizedTechnician).where(
         AuthorizedTechnician.id == tech_id,
@@ -95,7 +97,7 @@ async def update_technician(
     res = await db.execute(stmt)
     tech = res.scalar_one_or_none()
     if not tech:
-        raise HTTPException(status_code=404, detail="Técnico não encontrado")
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado")
 
     if payload.nome is not None:
         tech.nome = payload.nome.strip()
@@ -104,6 +106,10 @@ async def update_technician(
         if not clean_phone or len(clean_phone) < 10:
             raise HTTPException(status_code=400, detail="Telefone inválido.")
         tech.telefone = clean_phone
+    if payload.cargo is not None:
+        tech.cargo = payload.cargo.strip() if payload.cargo else None
+    if payload.departamento is not None:
+        tech.departamento = payload.departamento.strip() if payload.departamento else None
     if payload.especialidade is not None:
         tech.especialidade = payload.especialidade.strip() if payload.especialidade else None
     if payload.ativo is not None:

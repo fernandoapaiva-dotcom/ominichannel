@@ -321,16 +321,20 @@ class PixKeyResponse(BaseModel):
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
 
-# Authorized Technician Schemas (Copiloto RAG)
+# Authorized Technician & Store Employee Schemas
 class AuthorizedTechnicianCreate(BaseModel):
     nome: str
     telefone: str
+    cargo: Optional[str] = None
+    departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: bool = True
 
 class AuthorizedTechnicianUpdate(BaseModel):
     nome: Optional[str] = None
     telefone: Optional[str] = None
+    cargo: Optional[str] = None
+    departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: Optional[bool] = None
 
@@ -339,6 +343,8 @@ class AuthorizedTechnicianResponse(BaseModel):
     tenant_id: int
     nome: str
     telefone: str
+    cargo: Optional[str] = None
+    departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: bool
     criado_em: datetime
@@ -348,6 +354,7 @@ class AuthorizedTechnicianResponse(BaseModel):
 class CalendarEventCreate(BaseModel):
     title: str
     description: Optional[str] = None
+    event_type: str = "geral" # visita_tecnica, entrega_gas, manutencao, reuniao, geral
     start_time: datetime
     end_time: Optional[datetime] = None
     all_day: bool = False
@@ -358,10 +365,16 @@ class CalendarEventCreate(BaseModel):
     contact_id: Optional[int] = None
     conversation_id: Optional[int] = None
     message_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    employee_name: Optional[str] = None
+    employee_phone: Optional[str] = None
+    notify_whatsapp: bool = True
+    custom_reminder_hours: int = 2
 
 class CalendarEventUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    event_type: Optional[str] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     all_day: Optional[bool] = None
@@ -371,6 +384,12 @@ class CalendarEventUpdate(BaseModel):
     reminder_minutes: Optional[int] = None
     contact_id: Optional[int] = None
     conversation_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    employee_name: Optional[str] = None
+    employee_phone: Optional[str] = None
+    notify_whatsapp: Optional[bool] = None
+    custom_reminder_hours: Optional[int] = None
+    confirmed_by_employee: Optional[bool] = None
 
 class CalendarEventResponse(BaseModel):
     id: int
@@ -381,6 +400,7 @@ class CalendarEventResponse(BaseModel):
     message_id: Optional[int] = None
     title: str
     description: Optional[str] = None
+    event_type: str = "geral"
     start_time: datetime
     end_time: Optional[datetime] = None
     all_day: bool
@@ -388,6 +408,17 @@ class CalendarEventResponse(BaseModel):
     priority: str
     status: str
     reminder_minutes: Optional[int] = None
+    employee_id: Optional[int] = None
+    employee_name: Optional[str] = None
+    employee_phone: Optional[str] = None
+    notify_whatsapp: bool = True
+    notified_creation: bool = False
+    notified_day_of: bool = False
+    notified_hours_before: bool = False
+    custom_reminder_hours: int = 2
+    confirmed_by_employee: bool = False
+    confirmed_at: Optional[datetime] = None
+    confirmation_token: Optional[str] = None
     criado_em: datetime
     atualizado_em: datetime
     contact_name: Optional[str] = None

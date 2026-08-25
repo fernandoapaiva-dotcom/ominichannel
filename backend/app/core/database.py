@@ -69,7 +69,25 @@ from sqlalchemy import text
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        try:
-            await conn.execute(text("ALTER TABLE contacts ADD COLUMN foto_perfil_url VARCHAR(500);"))
-        except Exception:
-            pass
+        migrations = [
+            "ALTER TABLE contacts ADD COLUMN foto_perfil_url VARCHAR(500);",
+            "ALTER TABLE authorized_technicians ADD COLUMN cargo VARCHAR(100);",
+            "ALTER TABLE authorized_technicians ADD COLUMN departamento VARCHAR(100);",
+            "ALTER TABLE calendar_events ADD COLUMN event_type VARCHAR(50) DEFAULT 'geral';",
+            "ALTER TABLE calendar_events ADD COLUMN employee_id INTEGER;",
+            "ALTER TABLE calendar_events ADD COLUMN employee_name VARCHAR(150);",
+            "ALTER TABLE calendar_events ADD COLUMN employee_phone VARCHAR(50);",
+            "ALTER TABLE calendar_events ADD COLUMN notify_whatsapp BOOLEAN DEFAULT 1;",
+            "ALTER TABLE calendar_events ADD COLUMN notified_creation BOOLEAN DEFAULT 0;",
+            "ALTER TABLE calendar_events ADD COLUMN notified_day_of BOOLEAN DEFAULT 0;",
+            "ALTER TABLE calendar_events ADD COLUMN notified_hours_before BOOLEAN DEFAULT 0;",
+            "ALTER TABLE calendar_events ADD COLUMN custom_reminder_hours INTEGER DEFAULT 2;",
+            "ALTER TABLE calendar_events ADD COLUMN confirmed_by_employee BOOLEAN DEFAULT 0;",
+            "ALTER TABLE calendar_events ADD COLUMN confirmed_at DATETIME;",
+            "ALTER TABLE calendar_events ADD COLUMN confirmation_token VARCHAR(100);",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass

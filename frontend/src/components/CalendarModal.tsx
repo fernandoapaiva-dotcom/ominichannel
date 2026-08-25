@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   X, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, Check, Clock,
   AlertCircle, AlertTriangle, User, Phone, MessageSquare, Trash2, Edit3,
-  Search, Filter, CheckCircle2, Circle, MoreVertical, ExternalLink, Tag
+  Search, Filter, CheckCircle2, Circle, MoreVertical, ExternalLink, Tag,
+  Truck, Wrench, Users, Bell, CheckSquare, ShieldCheck
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
-import { CalendarEvent, User as UserType } from '../types';
+import { CalendarEvent, User as UserType, AuthorizedTechnician } from '../types';
 
 interface CalendarModalProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>('month');
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pendente' | 'concluido'>('all');
@@ -53,6 +55,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [formTitle, setFormTitle] = useState<string>('');
   const [formDescription, setFormDescription] = useState<string>('');
+  const [formEventType, setFormEventType] = useState<string>('geral');
   const [formStartDate, setFormStartDate] = useState<string>('');
   const [formStartTime, setFormStartTime] = useState<string>('09:00');
   const [formEndDate, setFormEndDate] = useState<string>('');
@@ -66,16 +69,28 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formConversationId, setFormConversationId] = useState<number | null>(null);
   const [formContactName, setFormContactName] = useState<string | null>(null);
   const [formContactPhone, setFormContactPhone] = useState<string | null>(null);
+  
+  // Store Employee & WhatsApp Reminders
+  const [formEmployeeId, setFormEmployeeId] = useState<number | ''>('');
+  const [formEmployeeName, setFormEmployeeName] = useState<string>('');
+  const [formEmployeePhone, setFormEmployeePhone] = useState<string>('');
+  const [formNotifyWhatsApp, setFormNotifyWhatsApp] = useState<boolean>(true);
+  const [formCustomReminderHours, setFormCustomReminderHours] = useState<number>(2);
+  const [formConfirmedByEmployee, setFormConfirmedByEmployee] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  // Load events
+  // Load events and employees
   const fetchEvents = async () => {
     try {
       setLoading(true);
-      const data: CalendarEvent[] = await apiFetch('/calendar/events');
-      setEvents(data);
+      const [eventsData, empData] = await Promise.all([
+        apiFetch('/calendar/events'),
+        apiFetch('/technicians/')
+      ]);
+      setEvents(eventsData || []);
+      setEmployees(empData || []);
     } catch (err) {
-      console.error('Error fetching calendar events:', err);
+      console.error('Error fetching calendar events or employees:', err);
     } finally {
       setLoading(false);
     }
@@ -106,6 +121,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
     setFormTitle(prefill?.title || '');
     setFormDescription(prefill?.description || '');
+    setFormEventType(prefill?.event_type || 'geral');
     setFormStartDate(dateStr);
     setFormStartTime(prefill?.start_time ? prefill.start_time.split('T')[1]?.substring(0, 5) || startTimeStr : startTimeStr);
     setFormEndDate(dateStr);
@@ -119,6 +135,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormConversationId(prefill?.conversation_id || null);
     setFormContactName(prefill?.contact_name || null);
     setFormContactPhone(prefill?.contact_phone || null);
+
+    setFormEmployeeId(prefill?.employee_id || '');
+    setFormEmployeeName(prefill?.employee_name || '');
+    setFormEmployeePhone(prefill?.employee_phone || '');
+    setFormNotifyWhatsApp(prefill?.notify_whatsapp ?? true);
+    setFormCustomReminderHours(prefill?.custom_reminder_hours || 2);
+    setFormConfirmedByEmployee(prefill?.confirmed_by_employee || false);
+
     setIsFormOpen(true);
   };
 
@@ -129,6 +153,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
     setFormTitle(event.title);
     setFormDescription(event.description || '');
+    setFormEventType(event.event_type || 'geral');
     setFormStartDate(startDt.toISOString().split('T')[0]);
     setFormStartTime(`${String(startDt.getHours()).padStart(2, '0')}:${String(startDt.getMinutes()).padStart(2, '0')}`);
     setFormEndDate(endDt.toISOString().split('T')[0]);
@@ -142,6 +167,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormConversationId(event.conversation_id || null);
     setFormContactName(event.contact_name || null);
     setFormContactPhone(event.contact_phone || null);
+
+    setFormEmployeeId(event.employee_id || '');
+    setFormEmployeeName(event.employee_name || '');
+    setFormEmployeePhone(event.employee_phone || '');
+    setFormNotifyWhatsApp(event.notify_whatsapp ?? true);
+    setFormCustomReminderHours(event.custom_reminder_hours || 2);
+    setFormConfirmedByEmployee(event.confirmed_by_employee || false);
+
     setIsFormOpen(true);
   };
 
@@ -161,6 +194,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       const payload = {
         title: formTitle.trim(),
         description: formDescription.trim() || null,
+        event_type: formEventType,
         start_time: new Date(startDateTimeStr).toISOString(),
         end_time: new Date(endDateTimeStr).toISOString(),
         all_day: formAllDay,
@@ -169,7 +203,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         status: formStatus,
         reminder_minutes: formReminder,
         contact_id: formContactId,
-        conversation_id: formConversationId
+        conversation_id: formConversationId,
+        employee_id: formEmployeeId ? Number(formEmployeeId) : null,
+        employee_name: formEmployeeName || null,
+        employee_phone: formEmployeePhone || null,
+        notify_whatsapp: formNotifyWhatsApp,
+        custom_reminder_hours: formCustomReminderHours,
+        confirmed_by_employee: formConfirmedByEmployee
       };
 
       if (editingEvent) {
@@ -191,6 +231,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       alert('Erro ao salvar evento. Verifique os dados e tente novamente.');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleToggleEmployeeConfirmation = async (event: CalendarEvent, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      const updated = await apiFetch(`/calendar/events/${event.id}/confirm_employee`, { method: 'POST' });
+      setEvents(prev => prev.map(ev => ev.id === event.id ? updated : ev));
+    } catch (err) {
+      console.error('Error toggling employee confirmation:', err);
     }
   };
 
@@ -770,6 +820,42 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 {ev.title}
                               </h4>
 
+                              {/* Event Type Badge */}
+                              {ev.event_type === 'entrega_gas' && (
+                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <Truck size={11} /> Entrega de Gás
+                                </span>
+                              )}
+                              {ev.event_type === 'visita_tecnica' && (
+                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(16, 185, 129, 0.2)', color: '#10b981', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  <Wrench size={11} /> Visita Técnica
+                                </span>
+                              )}
+                              {ev.event_type === 'manutencao' && (
+                                <span style={{ fontSize: '10px', backgroundColor: 'rgba(245, 158, 11, 0.2)', color: '#f59e0b', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                  ⚙️ Manutenção
+                                </span>
+                              )}
+
+                              {/* Employee Badge & Confirmation Check */}
+                              {ev.employee_name && (
+                                <span style={{
+                                  fontSize: '10px',
+                                  backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.2)' : 'rgba(234, 179, 8, 0.2)',
+                                  color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
+                                  border: `1px solid ${ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
+                                  padding: '2px 8px',
+                                  borderRadius: '10px',
+                                  fontWeight: 'bold',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}>
+                                  <Users size={11} /> {ev.employee_name}
+                                  {ev.confirmed_by_employee ? ' (✓ Visualizou)' : ' (⏳ Pendente)'}
+                                </span>
+                              )}
+
                               {ev.priority === 'urgente' && (
                                 <span style={{ fontSize: '10px', backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
                                   URGENTE
@@ -788,7 +874,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               </p>
                             )}
 
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
                               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                 <Clock size={13} /> {formattedDate} • {timeStr}
                               </span>
@@ -798,11 +884,39 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                   <User size={13} /> {ev.contact_name}
                                 </span>
                               )}
+
+                              {ev.employee_phone && ev.notify_whatsapp && (
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#60a5fa', fontSize: '11px' }}>
+                                  <Bell size={11} /> WhatsApp Ativo
+                                </span>
+                              )}
                             </div>
                           </div>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {ev.employee_name && (
+                            <button
+                              type="button"
+                              onClick={e => handleToggleEmployeeConfirmation(ev, e)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                padding: '6px 10px',
+                                borderRadius: '8px',
+                                border: `1px solid ${ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.4)' : 'rgba(234, 179, 8, 0.4)'}`,
+                                backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.12)',
+                                color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
+                                fontSize: '11px',
+                                fontWeight: 'bold',
+                                cursor: 'pointer'
+                              }}
+                              title={ev.confirmed_by_employee ? "Clique para desmarcar visualização" : "Clique para marcar que o funcionário confirmou visualização"}
+                            >
+                              <CheckSquare size={13} /> {ev.confirmed_by_employee ? 'Visualizado' : 'Dar Check'}
+                            </button>
+                          )}
                           {ev.conversation_id && onSelectConversation && (
                             <button
                               type="button"
@@ -1020,6 +1134,160 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     <span style={{ fontWeight: 'bold' }}>Cliente Vinculado: </span>
                     {formContactName || 'Sem nome'} ({formContactPhone})
                   </div>
+                </div>
+              )}
+
+              {/* Event Type & Employee Row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    TIPO DE COMPROMISSO
+                  </label>
+                  <select
+                    value={formEventType}
+                    onChange={e => setFormEventType(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: '#fff',
+                      fontSize: '13px',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value="visita_tecnica">🔧 Visita Técnica</option>
+                    <option value="entrega_gas">🚚 Entrega de Gás / Mercadoria</option>
+                    <option value="manutencao">⚙️ Manutenção de Equipamento</option>
+                    <option value="reuniao">👥 Reunião / Alinhamento</option>
+                    <option value="atendimento">💬 Atendimento ao Cliente</option>
+                    <option value="geral">📅 Tarefa / Compromisso Geral</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    FUNCIONÁRIO RESPONSÁVEL
+                  </label>
+                  <select
+                    value={formEmployeeId}
+                    onChange={e => {
+                      const empId = e.target.value ? Number(e.target.value) : '';
+                      setFormEmployeeId(empId);
+                      const emp = employees.find(x => x.id === empId);
+                      if (emp) {
+                        setFormEmployeeName(emp.nome);
+                        setFormEmployeePhone(emp.telefone);
+                      } else {
+                        setFormEmployeeName('');
+                        setFormEmployeePhone('');
+                      }
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border-color)',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: '#fff',
+                      fontSize: '13px',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value="">-- Nenhum funcionário selecionado --</option>
+                    {employees.filter(e => e.ativo).map(emp => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.nome} ({emp.cargo || 'Equipe'} - {emp.telefone})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Employee WhatsApp Reminder Options (When an employee is selected) */}
+              {formEmployeePhone && (
+                <div style={{
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                  border: '1px solid rgba(0, 230, 153, 0.25)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <input
+                        type="checkbox"
+                        id="notifyWhatsAppCheck"
+                        checked={formNotifyWhatsApp}
+                        onChange={e => setFormNotifyWhatsApp(e.target.checked)}
+                        style={{ cursor: 'pointer' }}
+                      />
+                      <label htmlFor="notifyWhatsAppCheck" style={{ fontSize: '13px', color: '#fff', fontWeight: '600', cursor: 'pointer' }}>
+                        📲 Lembretes Automáticos no WhatsApp do Funcionário
+                      </label>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Lembrar:</label>
+                      <select
+                        value={formCustomReminderHours}
+                        onChange={e => setFormCustomReminderHours(Number(e.target.value))}
+                        disabled={!formNotifyWhatsApp}
+                        style={{
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          border: '1px solid var(--border-color)',
+                          backgroundColor: 'var(--bg-primary)',
+                          color: '#fff',
+                          fontSize: '12px',
+                          outline: 'none'
+                        }}
+                      >
+                        <option value={1}>1 hora antes</option>
+                        <option value={2}>2 horas antes</option>
+                        <option value={4}>4 horas antes</option>
+                        <option value={12}>12 horas antes</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ fontSize: '11px', color: '#a7f3d0', lineHeight: '1.4' }}>
+                    A IA enviará mensagem detalhada no WhatsApp de <strong>{formEmployeeName}</strong> ({formEmployeePhone}) na criação, no dia do evento às 08h e {formCustomReminderHours}h antes, com link para ele confirmar visualização!
+                  </div>
+
+                  {editingEvent && (
+                    <div style={{
+                      marginTop: '4px',
+                      paddingTop: '8px',
+                      borderTop: '1px solid rgba(255,255,255,0.1)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}>
+                      <div style={{ fontSize: '12px', color: formConfirmedByEmployee ? '#22c55e' : '#f59e0b', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {formConfirmedByEmployee ? <CheckSquare size={14} /> : <Clock size={14} />}
+                        {formConfirmedByEmployee ? 'Visualização Confirmada pelo Funcionário' : 'Aguardando Visualização do Funcionário'}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setFormConfirmedByEmployee(!formConfirmedByEmployee)}
+                        style={{
+                          background: formConfirmedByEmployee ? 'rgba(34, 197, 94, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                          border: '1px solid rgba(255,255,255,0.2)',
+                          borderRadius: '6px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          color: '#fff',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {formConfirmedByEmployee ? 'Desmarcar Check' : 'Marcar como Confirmado'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

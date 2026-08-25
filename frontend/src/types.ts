@@ -84,7 +84,9 @@ export interface AuthorizedTechnician {
   tenant_id: number;
   nome: string;
   telefone: string;
-  especialidade?: string;
+  cargo?: string | null;
+  departamento?: string | null;
+  especialidade?: string | null;
   ativo: boolean;
   criado_em: string;
 }
@@ -98,6 +100,7 @@ export interface CalendarEvent {
   message_id?: number | null;
   title: string;
   description?: string | null;
+  event_type?: string;
   start_time: string;
   end_time?: string | null;
   all_day: boolean;
@@ -105,6 +108,17 @@ export interface CalendarEvent {
   priority: 'baixa' | 'media' | 'alta' | 'urgente';
   status: 'pendente' | 'em_progresso' | 'concluido' | 'cancelado';
   reminder_minutes?: number | null;
+  employee_id?: number | null;
+  employee_name?: string | null;
+  employee_phone?: string | null;
+  notify_whatsapp?: boolean;
+  notified_creation?: boolean;
+  notified_day_of?: boolean;
+  notified_hours_before?: boolean;
+  custom_reminder_hours?: number;
+  confirmed_by_employee?: boolean;
+  confirmed_at?: string | null;
+  confirmation_token?: string | null;
   criado_em: string;
   atualizado_em: string;
   contact_name?: string | null;

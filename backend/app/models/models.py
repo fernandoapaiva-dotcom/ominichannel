@@ -263,7 +263,7 @@ class TenantPixKey(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-# Authorized Technicians for Advanced RAG Copilot Assistance
+# Authorized Technicians and Store Employees
 class AuthorizedTechnician(Base):
     __tablename__ = "authorized_technicians"
 
@@ -271,7 +271,9 @@ class AuthorizedTechnician(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     nome: Mapped[str] = mapped_column(String(150), nullable=False)
     telefone: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    especialidade: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # Ex: "Inversores, MIG/MAG, TIG, Placas Eletrônicas"
+    cargo: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # Técnico, Vendedor, Consultor, Entregador, etc.
+    departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # Assistência Técnica, Vendas, Locação, etc.
+    especialidade: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # Ex: "Inversores, MIG/MAG, TIG, Entrega de Gás"
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -309,6 +311,7 @@ class CalendarEvent(Base):
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), default="geral") # visita_tecnica, entrega_gas, manutencao, reuniao, geral
     start_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     all_day: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -317,6 +320,21 @@ class CalendarEvent(Base):
     status: Mapped[str] = mapped_column(String(50), default="pendente") # pendente, em_progresso, concluido, cancelado
     reminder_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # Store Employee Assignment & WhatsApp Reminders
+    employee_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("authorized_technicians.id", ondelete="SET NULL"), nullable=True)
+    employee_name: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    employee_phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    notify_whatsapp: Mapped[bool] = mapped_column(Boolean, default=True)
+    notified_creation: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_day_of: Mapped[bool] = mapped_column(Boolean, default=False)
+    notified_hours_before: Mapped[bool] = mapped_column(Boolean, default=False)
+    custom_reminder_hours: Mapped[int] = mapped_column(Integer, default=2)
+
+    # Employee Confirmation Status (e.g. Visualized / Check)
+    confirmed_by_employee: Mapped[bool] = mapped_column(Boolean, default=False)
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    confirmation_token: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -324,5 +342,6 @@ class CalendarEvent(Base):
     user: Mapped["User"] = relationship("User")
     contact: Mapped[Optional["Contact"]] = relationship("Contact")
     conversation: Mapped[Optional["Conversation"]] = relationship("Conversation")
+    employee: Mapped[Optional["AuthorizedTechnician"]] = relationship("AuthorizedTechnician")
 
 

@@ -177,12 +177,14 @@ export const AdminPanel: React.FC = () => {
     setPixAtivo(item.ativo);
   };
 
-  // --- Technicians (RAG Copilot) State & Handlers ---
+  // --- Store Employees & Technicians State & Handlers ---
   const [technicians, setTechnicians] = useState<AuthorizedTechnician[]>([]);
   const [techLoading, setTechLoading] = useState(false);
   const [editingTechId, setEditingTechId] = useState<number | null>(null);
   const [techName, setTechName] = useState('');
   const [techPhone, setTechPhone] = useState('');
+  const [techCargo, setTechCargo] = useState('Técnico');
+  const [techDept, setTechDept] = useState('Assistência Técnica');
   const [techSpecialty, setTechSpecialty] = useState('');
   const [techAtivo, setTechAtivo] = useState(true);
 
@@ -202,6 +204,8 @@ export const AdminPanel: React.FC = () => {
     setEditingTechId(null);
     setTechName('');
     setTechPhone('');
+    setTechCargo('Técnico');
+    setTechDept('Assistência Técnica');
     setTechSpecialty('');
     setTechAtivo(true);
   };
@@ -209,7 +213,7 @@ export const AdminPanel: React.FC = () => {
   const handleSaveTechnician = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!techName.trim() || !techPhone.trim()) {
-      alert('Por favor, preencha o Nome e o Telefone do Técnico.');
+      alert('Por favor, preencha o Nome e o Telefone do Funcionário.');
       return;
     }
     try {
@@ -219,6 +223,8 @@ export const AdminPanel: React.FC = () => {
           body: JSON.stringify({
             nome: techName,
             telefone: techPhone,
+            cargo: techCargo || null,
+            departamento: techDept || null,
             especialidade: techSpecialty || null,
             ativo: techAtivo
           })
@@ -229,6 +235,8 @@ export const AdminPanel: React.FC = () => {
           body: JSON.stringify({
             nome: techName,
             telefone: techPhone,
+            cargo: techCargo || null,
+            departamento: techDept || null,
             especialidade: techSpecialty || null,
             ativo: techAtivo
           })
@@ -237,7 +245,7 @@ export const AdminPanel: React.FC = () => {
       resetTechForm();
       await loadTechnicians();
     } catch (err: any) {
-      alert('Erro ao salvar técnico: ' + (err.message || err));
+      alert('Erro ao salvar funcionário: ' + (err.message || err));
     }
   };
 
@@ -245,6 +253,8 @@ export const AdminPanel: React.FC = () => {
     setEditingTechId(t.id);
     setTechName(t.nome);
     setTechPhone(t.telefone);
+    setTechCargo(t.cargo || 'Técnico');
+    setTechDept(t.departamento || 'Assistência Técnica');
     setTechSpecialty(t.especialidade || '');
     setTechAtivo(t.ativo);
   };
@@ -903,7 +913,7 @@ export const AdminPanel: React.FC = () => {
             onClick={() => { setActiveSubTab('technicians'); loadTechnicians(); }}
             className={activeSubTab === 'technicians' ? 'btn-primary' : 'btn-secondary'}
           >
-            <Cpu size={16} /> Técnicos (Copiloto RAG)
+            <Users size={16} /> Funcionários & Equipe da Loja
           </button>
           <button
             onClick={() => setActiveSubTab('integrations')}
@@ -2549,15 +2559,15 @@ export const AdminPanel: React.FC = () => {
           </div>
         )}
 
-        {/* 7. Authorized Technicians Tab (RAG Copilot) */}
+        {/* 7. Store Employees & Technicians Tab */}
         {activeSubTab === 'technicians' && (
           <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '24px' }}>
             {/* Form */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Cpu size={20} color="var(--accent-primary)" />
-                  {editingTechId ? 'Editar Técnico Autorizado' : 'Cadastrar Técnico da Loja (Copiloto RAG)'}
+                  <Users size={20} color="var(--accent-primary)" />
+                  {editingTechId ? 'Editar Funcionário da Loja' : 'Cadastrar Funcionário da Loja'}
                 </h3>
                 {editingTechId && (
                   <button onClick={resetTechForm} style={{ background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', border: 'none', cursor: 'pointer' }}>
@@ -2577,20 +2587,20 @@ export const AdminPanel: React.FC = () => {
                 lineHeight: '1.5',
                 color: '#d1fae5'
               }}>
-                <strong>🧠 Como Funciona o Copiloto Técnico:</strong>
+                <strong>👥 Integração com Agenda de Tarefas & WhatsApp da IA:</strong>
                 <ul style={{ margin: '6px 0 0 0', paddingLeft: '18px', fontSize: '11px', color: '#a7f3d0' }}>
-                  <li><strong>Técnicos Cadastrados & Admins:</strong> Ao conversarem com o WhatsApp da Assistência Técnica, a IA atua como Engenheiro Copiloto, fornecendo testes de componentes (IGBTs, PWM, fontes), esquemas elétricos e passo a passo de conserto extraídos dos manuais RAG.</li>
-                  <li><strong>Clientes Comuns:</strong> A IA <u>nunca</u> fornece instruções de conserto para clientes (para proteger o faturamento e segurança), orientando-os a trazer a máquina para a loja.</li>
+                  <li><strong>Lembretes Automáticos de Tarefas:</strong> Ao agendar visitas técnicas, entregas de gás, manutenções ou atendimentos na Agenda de Tarefas e vincular a este funcionário, a IA enviará lembretes no WhatsApp dele no momento do agendamento, no dia do evento e horas antes com botão de confirmação!</li>
+                  <li><strong>Copiloto RAG Técnico:</strong> Se o cargo for Técnico, a IA atuará como copiloto avançado com esquemas elétricos quando ele conversar pelo WhatsApp.</li>
                 </ul>
               </div>
 
               <form onSubmit={handleSaveTechnician} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div>
-                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Nome do Técnico *</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Nome do Funcionário *</label>
                   <input
                     type="text"
                     required
-                    placeholder="Ex: Carlos Oliveira (Laboratório)"
+                    placeholder="Ex: Carlos Oliveira"
                     value={techName}
                     onChange={(e) => setTechName(e.target.value)}
                     style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
@@ -2609,11 +2619,44 @@ export const AdminPanel: React.FC = () => {
                   />
                 </div>
 
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Cargo / Função</label>
+                    <select
+                      value={techCargo}
+                      onChange={(e) => setTechCargo(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
+                    >
+                      <option value="Técnico">Técnico / Especialista</option>
+                      <option value="Entregador">Entregador / Motorista</option>
+                      <option value="Vendedor">Vendedor / Comercial</option>
+                      <option value="Consultor">Consultor Técnico</option>
+                      <option value="Atendente">Atendente / Operacional</option>
+                      <option value="Gerente">Gerente / Supervisor</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Departamento</label>
+                    <select
+                      value={techDept}
+                      onChange={(e) => setTechDept(e.target.value)}
+                      style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
+                    >
+                      <option value="Assistência Técnica">Assistência Técnica</option>
+                      <option value="Vendas e E-commerce">Vendas e E-commerce</option>
+                      <option value="Locação de Máquinas">Locação de Máquinas</option>
+                      <option value="Financeiro">Financeiro</option>
+                      <option value="Geral">Geral / Toda a Loja</option>
+                    </select>
+                  </div>
+                </div>
+
                 <div>
-                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Especialidade / Equipamentos (Opcional)</label>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Especialidade / Observações (Opcional)</label>
                   <input
                     type="text"
-                    placeholder="Ex: Inversores de Solda MIG/MAG, TIG, Corte Plasma e Placas Inversoras"
+                    placeholder="Ex: Entrega de cilindros de gás, inversores MIG/MAG, visitas externas"
                     value={techSpecialty}
                     onChange={(e) => setTechSpecialty(e.target.value)}
                     style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box' }}
@@ -2628,13 +2671,13 @@ export const AdminPanel: React.FC = () => {
                     onChange={(e) => setTechAtivo(e.target.checked)}
                   />
                   <label htmlFor="techAtivo" style={{ fontSize: '13px', color: 'var(--text-main)', cursor: 'pointer' }}>
-                    Técnico Ativo (Receber assistência avançada de conserto)
+                    Funcionário Ativo (Receber lembretes de tarefas e compromissos)
                   </label>
                 </div>
 
                 <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
                   <button type="submit" className="btn-primary" style={{ flex: 1 }}>
-                    <Check size={16} /> {editingTechId ? 'Atualizar Técnico' : 'Salvar Técnico Autorizado'}
+                    <Check size={16} /> {editingTechId ? 'Atualizar Funcionário' : 'Salvar Funcionário'}
                   </button>
                   {editingTechId && (
                     <button type="button" onClick={resetTechForm} className="btn-secondary">
@@ -2649,7 +2692,7 @@ export const AdminPanel: React.FC = () => {
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px', fontWeight: '700', margin: 0 }}>
-                  Técnicos Autorizados ({technicians.length})
+                  Equipe Cadastrada ({technicians.length})
                 </h3>
                 <button onClick={loadTechnicians} className="btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}>
                   <RefreshCw size={12} className={techLoading ? "animate-spin" : ""} /> Atualizar
@@ -2657,10 +2700,10 @@ export const AdminPanel: React.FC = () => {
               </div>
 
               {techLoading ? (
-                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando técnicos...</div>
+                <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando funcionários...</div>
               ) : technicians.length === 0 ? (
                 <div style={{ padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px', lineHeight: '1.6' }}>
-                  Nenhum técnico cadastrado ainda. Adicione o telefone dos técnicos de bancada da sua empresa no formulário ao lado!
+                  Nenhum funcionário cadastrado ainda. Adicione o telefone e cargo dos membros da sua equipe para vinculá-los às tarefas e lembretes da loja!
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '550px', overflowY: 'auto' }}>
@@ -2687,16 +2730,23 @@ export const AdminPanel: React.FC = () => {
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
+                          fontWeight: '700',
+                          fontSize: '15px',
                           flexShrink: 0
                         }}>
-                          <Wrench size={18} />
+                          {item.nome.charAt(0).toUpperCase()}
                         </div>
                         <div>
                           <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             {item.nome}
+                            {item.cargo && (
+                              <span style={{ fontSize: '10px', backgroundColor: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}>
+                                {item.cargo}
+                              </span>
+                            )}
                             {item.ativo ? (
                               <span style={{ fontSize: '10px', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}>
-                                Autorizado
+                                Ativo
                               </span>
                             ) : (
                               <span style={{ fontSize: '10px', backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}>
@@ -2704,12 +2754,20 @@ export const AdminPanel: React.FC = () => {
                               </span>
                             )}
                           </div>
-                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            📞 <strong>WhatsApp:</strong> {item.telefone}
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Phone size={11} /> <strong>WhatsApp:</strong> {item.telefone}
+                            <a
+                              href={`https://wa.me/${item.telefone.replace(/\D/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: 'var(--accent-primary)', fontSize: '11px', textDecoration: 'none', marginLeft: '4px' }}
+                            >
+                              (Conversar)
+                            </a>
                           </div>
-                          {item.especialidade && (
+                          {item.departamento && (
                             <div style={{ fontSize: '11px', color: '#93c5fd', marginTop: '2px' }}>
-                              ⚡ {item.especialidade}
+                              🏢 {item.departamento} {item.especialidade ? `• ${item.especialidade}` : ''}
                             </div>
                           )}
                         </div>
@@ -2721,7 +2779,7 @@ export const AdminPanel: React.FC = () => {
                           onClick={() => handleEditTechnician(item)}
                           className="btn-secondary"
                           style={{ padding: '6px 10px', fontSize: '12px' }}
-                          title="Editar Técnico"
+                          title="Editar Funcionário"
                         >
                           <Pencil size={14} />
                         </button>
@@ -2730,7 +2788,7 @@ export const AdminPanel: React.FC = () => {
                           onClick={() => handleDeleteTechnician(item.id)}
                           className="btn-secondary"
                           style={{ padding: '6px 10px', fontSize: '12px', color: '#f87171' }}
-                          title="Remover Técnico"
+                          title="Remover Funcionário"
                         >
                           <Trash2 size={14} />
                         </button>
