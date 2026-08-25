@@ -618,10 +618,12 @@ async def receive_evolution_webhook(
     is_view_confirmation = (
         btn_id.startswith("confirm_view_task") or
         btn_id.startswith("confirm_task") or
+        "sim, confirmo" in cleaned_txt or
+        "sim, confirmo a atividade" in cleaned_txt or
         "confirmar visualização" in cleaned_txt or
         "confirmar visualizacao" in cleaned_txt or
         "vi a atividade" in cleaned_txt or
-        cleaned_txt in ["confirmar", "confirmado", "ok", "1", "visualizado", "visto", "recebido"]
+        cleaned_txt in ["confirmar", "confirmado", "ok", "1", "visualizado", "visto", "recebido", "sim", "aceito", "aceitar"]
     )
     if is_view_confirmation and phone_number:
         event_id = None
@@ -678,19 +680,19 @@ async def receive_evolution_webhook(
             event_time_brt = ev_obj.start_time if ev_obj.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            title_step2 = "📋 ATIVIDADE EM CUMPRIMENTO"
+            title_step2 = "📋 DETALHES DA ATIVIDADE EM EXECUÇÃO"
             desc_step2 = (
-                f"Ótimo, *{emp_name}*! Confirmamos que você visualizou a atividade. Ela agora está registrada como *Em Andamento* no sistema.\n\n"
+                f"Ótimo, *{emp_name}*! Confirmamos seu aceite. A atividade está registrada como *Em Andamento* no sistema.\n\n"
                 f"🏷️ *Atividade:* {ev_obj.title}\n"
                 f"⏰ *Horário:* {time_str}\n"
                 f"👤 *Cliente:* {client_info}\n"
                 f"📝 *Detalhes:* {ev_obj.description or 'Sem observações adicionais.'}\n\n"
-                f"🏁 *Assim que você concluir a atividade, clique no botão abaixo ou responda 'CONCLUIR':*"
+                f"🏁 *Assim que concluir o atendimento, clique abaixo para finalizar:*"
             )
             buttons_step2 = [
                 {
                     "type": "reply",
-                    "displayText": "Concluído",
+                    "displayText": "Sim, atividade concluída",
                     "id": f"complete_task_{ev_obj.id}"
                 }
             ]
@@ -706,7 +708,7 @@ async def receive_evolution_webhook(
                         instance_name=instance_name,
                         number=phone_number,
                         question="🏁 Concluiu a atividade? Clique abaixo:",
-                        options=["✅ Concluído", "⏳ Em Andamento"]
+                        options=["Sim, atividade concluída", "⏳ Em Andamento"]
                     )
                 except Exception as poll_err:
                     logger.debug(f"Poll step 2 error: {poll_err}")
@@ -719,11 +721,16 @@ async def receive_evolution_webhook(
     is_task_refusal = (
         btn_id.startswith("refuse_task") or
         btn_id.startswith("refuse_view_task") or
+        "não, quero recusar" in cleaned_txt or
+        "nao, quero recusar" in cleaned_txt or
+        "não, recusar" in cleaned_txt or
+        "nao, recusar" in cleaned_txt or
         "❌ recusar" in cleaned_txt or
         "recusar" in cleaned_txt or
         "recusado" in cleaned_txt or
         "não posso" in cleaned_txt or
-        "nao posso" in cleaned_txt
+        "nao posso" in cleaned_txt or
+        cleaned_txt in ["não", "nao", "cancelar"]
     )
     if is_task_refusal and phone_number:
         ev_stmt = (
@@ -769,6 +776,8 @@ async def receive_evolution_webhook(
     # 3. Handle Task Completion Button from Employee
     is_task_completion = (
         btn_id.startswith("complete_task") or
+        "sim, atividade concluída" in cleaned_txt or
+        "sim, atividade concluida" in cleaned_txt or
         "concluído" in cleaned_txt or
         "concluido" in cleaned_txt or
         "✅ concluído" in cleaned_txt or

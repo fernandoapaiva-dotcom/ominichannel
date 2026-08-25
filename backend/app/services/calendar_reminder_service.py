@@ -79,8 +79,8 @@ async def send_whatsapp_to_employee(
                     await evolution_service.send_poll_message(
                         instance_name=inst_name,
                         number=clean_phone,
-                        question="👉 Clique abaixo para confirmar o recebimento:",
-                        options=["✅ Confirmar", "❌ Recusar"]
+                        question="Podemos contar com sua execução? Clique abaixo:",
+                        options=["Sim, confirmo a atividade", "Não, quero recusar"]
                     )
                 except Exception as poll_err:
                     logger.debug(f"Poll button error: {poll_err}")
@@ -175,16 +175,22 @@ async def send_immediate_creation_notification(event_id: int):
 
             title = "🚨 NOVO COMPROMISSO AGENDADO"
             description = (
-                f"Olá, *{emp_name}*! A empresa lançou um novo compromisso atribuído a você para hoje.\n\n"
-                f"👉 *Clique no botão abaixo para CONFIRMAR o recebimento e visualizar os dados completos do chamado:*"
+                f"Oi *{emp_name}*, sua atividade está agendada 📅\n\n"
+                f"Podemos contar com sua execução?\n"
+                f"Clique abaixo para aceitar ou recusar:"
             )
             footer = "Servsolda • Sistema de Tarefas"
 
             buttons = [
                 {
                     "type": "reply",
-                    "displayText": "Confirmar",
+                    "displayText": "Sim, confirmo",
                     "id": f"confirm_view_task_{ev.id}"
+                },
+                {
+                    "type": "reply",
+                    "displayText": "Não, recusar",
+                    "id": f"refuse_view_task_{ev.id}"
                 }
             ]
 
