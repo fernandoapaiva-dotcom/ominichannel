@@ -52,6 +52,8 @@ def _format_event_response(event: CalendarEvent) -> CalendarEventResponse:
         confirmed_by_employee=event.confirmed_by_employee or False,
         confirmed_at=event.confirmed_at,
         confirmation_token=event.confirmation_token,
+        whatsapp_number_id=event.whatsapp_number_id,
+        whatsapp_instance=event.whatsapp_instance,
         criado_em=event.criado_em,
         atualizado_em=event.atualizado_em,
         contact_name=contact_name,
@@ -186,6 +188,8 @@ async def create_calendar_event(
         employee_phone=payload.employee_phone.strip() if payload.employee_phone else None,
         notify_whatsapp=payload.notify_whatsapp if payload.notify_whatsapp is not None else True,
         custom_reminder_hours=payload.custom_reminder_hours or 2,
+        whatsapp_number_id=payload.whatsapp_number_id,
+        whatsapp_instance=payload.whatsapp_instance.strip() if payload.whatsapp_instance else None,
         notified_creation=False,
         notified_day_of=False,
         notified_hours_before=False,
@@ -273,6 +277,10 @@ async def update_calendar_event(
         event.confirmed_by_employee = payload.confirmed_by_employee
         if payload.confirmed_by_employee and not event.confirmed_at:
             event.confirmed_at = datetime.utcnow()
+    if payload.whatsapp_number_id is not None:
+        event.whatsapp_number_id = payload.whatsapp_number_id
+    if payload.whatsapp_instance is not None:
+        event.whatsapp_instance = payload.whatsapp_instance.strip() if payload.whatsapp_instance else None
 
     event.atualizado_em = datetime.utcnow()
     await db.commit()

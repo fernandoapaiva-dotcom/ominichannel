@@ -119,6 +119,8 @@ export interface CalendarEvent {
   confirmed_by_employee?: boolean;
   confirmed_at?: string | null;
   confirmation_token?: string | null;
+  whatsapp_number_id?: number | null;
+  whatsapp_instance?: string | null;
   criado_em: string;
   atualizado_em: string;
   contact_name?: string | null;

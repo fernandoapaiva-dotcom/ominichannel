@@ -111,11 +111,19 @@ async def send_immediate_creation_notification(event_id: int):
             res_w = await session.execute(stmt_w)
             wns = res_w.scalars().all()
 
-            # Dynamic prioritization based on linked conversation or event_type keywords
             preferred_instances = []
             other_instances = []
 
-            # Mapping keywords for event types to match department names
+            # 1. Explicitly selected department instance on event
+            if ev.whatsapp_instance:
+                preferred_instances.append(ev.whatsapp_instance)
+            elif ev.whatsapp_number_id:
+                for w in wns:
+                    if w.id == ev.whatsapp_number_id and w.instancia_evolution_api:
+                        preferred_instances.append(w.instancia_evolution_api)
+                        break
+
+            # 2. Dynamic prioritization based on linked conversation or event_type keywords
             type_keywords = {
                 "visita_tecnica": ["tecnica", "assistencia", "suporte", "servico"],
                 "manutencao": ["tecnica", "manutencao", "assistencia", "oficina"],
@@ -138,7 +146,7 @@ async def send_immediate_creation_notification(event_id: int):
                     if inst not in preferred_instances:
                         preferred_instances.append(inst)
                 else:
-                    if inst not in other_instances:
+                    if inst not in other_instances and inst not in preferred_instances:
                         other_instances.append(inst)
 
             ordered_inst_names = preferred_instances + other_instances

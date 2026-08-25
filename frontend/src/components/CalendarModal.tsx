@@ -6,7 +6,7 @@ import {
   Truck, Wrench, Users, Bell, CheckSquare, ShieldCheck, Menu, CheckSquare2
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
-import { CalendarEvent, User as UserType, AuthorizedTechnician } from '../types';
+import { CalendarEvent, User as UserType, AuthorizedTechnician, WhatsAppNumber } from '../types';
 
 interface CalendarModalProps {
   isOpen: boolean;
@@ -193,26 +193,31 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formContactPhone, setFormContactPhone] = useState<string | null>(null);
   
   // Store Employee & WhatsApp Reminders
+  const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [formEmployeeId, setFormEmployeeId] = useState<number | ''>('');
   const [formEmployeeName, setFormEmployeeName] = useState<string>('');
   const [formEmployeePhone, setFormEmployeePhone] = useState<string>('');
   const [formNotifyWhatsApp, setFormNotifyWhatsApp] = useState<boolean>(true);
   const [formCustomReminderHours, setFormCustomReminderHours] = useState<number>(2);
   const [formConfirmedByEmployee, setFormConfirmedByEmployee] = useState<boolean>(false);
+  const [formWhatsappNumberId, setFormWhatsappNumberId] = useState<number | ''>('');
+  const [formWhatsappInstance, setFormWhatsappInstance] = useState<string>('');
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
-  // Load events and employees
+  // Load events, employees and whatsapp department numbers
   const fetchEvents = async () => {
     try {
       setLoading(true);
-      const [eventsData, empData] = await Promise.all([
+      const [eventsData, empData, wnData] = await Promise.all([
         apiFetch('/calendar/events'),
-        apiFetch('/technicians/')
+        apiFetch('/technicians/'),
+        apiFetch('/whatsapp-numbers/')
       ]);
       setEvents(eventsData || []);
       setEmployees(empData || []);
+      setWhatsappNumbers(wnData || []);
     } catch (err) {
-      console.error('Error fetching calendar events or employees:', err);
+      console.error('Error fetching calendar events, employees or whatsapp numbers:', err);
     } finally {
       setLoading(false);
     }
@@ -283,6 +288,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormNotifyWhatsApp(prefill?.notify_whatsapp ?? true);
     setFormCustomReminderHours(prefill?.custom_reminder_hours || 2);
     setFormConfirmedByEmployee(prefill?.confirmed_by_employee || false);
+    setFormWhatsappNumberId(prefill?.whatsapp_number_id || '');
+    setFormWhatsappInstance(prefill?.whatsapp_instance || '');
 
     setIsFormOpen(true);
   };
@@ -315,6 +322,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormNotifyWhatsApp(event.notify_whatsapp ?? true);
     setFormCustomReminderHours(event.custom_reminder_hours || 2);
     setFormConfirmedByEmployee(event.confirmed_by_employee || false);
+    setFormWhatsappNumberId(event.whatsapp_number_id || '');
+    setFormWhatsappInstance(event.whatsapp_instance || '');
 
     setIsFormOpen(true);
   };
@@ -351,7 +360,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         employee_phone: formEmployeePhone || null,
         notify_whatsapp: formNotifyWhatsApp,
         custom_reminder_hours: formCustomReminderHours,
-        confirmed_by_employee: formConfirmedByEmployee
+        confirmed_by_employee: formConfirmedByEmployee,
+        whatsapp_number_id: formWhatsappNumberId ? Number(formWhatsappNumberId) : null,
+        whatsapp_instance: formWhatsappInstance || null
       };
 
       if (editingEvent) {
@@ -2170,8 +2181,53 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Department / WhatsApp Instance Selector */}
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '4px',
+                    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    border: '1px solid rgba(0, 230, 153, 0.2)'
+                  }}>
+                    <label style={{ fontSize: '11px', color: '#a7f3d0', fontWeight: 'bold' }}>
+                      🏢 ENVIAR PELO WHATSAPP DO DEPARTAMENTO:
+                    </label>
+                    <select
+                      value={formWhatsappNumberId}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setFormWhatsappNumberId(val ? Number(val) : '');
+                        if (val) {
+                          const found = whatsappNumbers.find(w => w.id === Number(val));
+                          setFormWhatsappInstance(found?.instancia_evolution_api || '');
+                        } else {
+                          setFormWhatsappInstance('');
+                        }
+                      }}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-color)',
+                        backgroundColor: 'var(--bg-primary)',
+                        color: '#fff',
+                        fontSize: '12px',
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <option value="">🤖 Automático (Roteamento Inteligente / Padrão)</option>
+                      {whatsappNumbers.filter(w => w.status).map(wn => (
+                        <option key={wn.id} value={wn.id}>
+                          {wn.nome_departamento} ({wn.numero || wn.instancia_evolution_api})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div style={{ fontSize: '11px', color: '#a7f3d0', lineHeight: '1.4' }}>
-                    A IA enviará mensagem detalhada no WhatsApp de <strong>{formEmployeeName}</strong> ({formEmployeePhone}) na criação, no dia do evento às 08h e {formCustomReminderHours}h antes, com link para ele confirmar visualização!
+                    A mensagem da atividade será enviada para o WhatsApp de <strong>{formEmployeeName}</strong> ({formEmployeePhone}) com os botões interativos de visualização e conclusão!
                   </div>
 
                   {editingEvent && (
