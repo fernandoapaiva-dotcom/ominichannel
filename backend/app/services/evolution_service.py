@@ -206,7 +206,22 @@ class EvolutionService:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=15.0)
-                res_data = response.json()
+                res_data = response.json() if response.content else {}
+
+                # Auto-retry on Connection Closed (stale socket)
+                if response.status_code >= 500 or "connection closed" in str(res_data).lower():
+                    logger.warning(f"Instance {instance_name} socket stale/closed. Attempting auto-restart and retry...")
+                    try:
+                        await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers, timeout=8.0)
+                        await asyncio.sleep(1.5)
+                        retry_sock_res = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                        if retry_sock_res.status_code < 400:
+                            retry_sock_data = retry_sock_res.json()
+                            retry_sock_data["success"] = True
+                            return retry_sock_data
+                    except Exception as rest_err:
+                        logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
+
                 if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
                     digits = "".join(filter(str.isdigit, clean_number))
                     lid_payload = {**payload, "number": f"{digits}@lid"}
@@ -217,7 +232,10 @@ class EvolutionService:
                         return retry_data
 
                 if response.status_code >= 400:
-                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                    err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
+                    if not err_msg and "connection closed" in str(res_data).lower():
+                        err_msg = "A conexão do WhatsApp oscilou. Tentando reconectar..."
+                    return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
                 res_data["success"] = True
                 return res_data
             except Exception as e:
@@ -382,7 +400,22 @@ class EvolutionService:
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(url, json=payload, headers=headers, timeout=30.0)
-                res_data = response.json()
+                res_data = response.json() if response.content else {}
+
+                # Auto-retry on Connection Closed (stale socket)
+                if response.status_code >= 500 or "connection closed" in str(res_data).lower():
+                    logger.warning(f"Instance {instance_name} socket stale/closed for media. Attempting auto-restart and retry...")
+                    try:
+                        await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers, timeout=8.0)
+                        await asyncio.sleep(1.5)
+                        retry_sock_res = await client.post(url, json=payload, headers=headers, timeout=30.0)
+                        if retry_sock_res.status_code < 400:
+                            retry_sock_data = retry_sock_res.json()
+                            retry_sock_data["success"] = True
+                            return retry_sock_data
+                    except Exception as rest_err:
+                        logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
+
                 if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
                     digits = "".join(filter(str.isdigit, clean_number))
                     lid_payload = {**payload, "number": f"{digits}@lid"}
@@ -393,7 +426,8 @@ class EvolutionService:
                         return retry_data
 
                 if response.status_code >= 400:
-                    return {"success": False, "error": res_data.get("message") or f"HTTP {response.status_code}"}
+                    err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
+                    return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
                 res_data["success"] = True
                 return res_data
             except Exception as e:
