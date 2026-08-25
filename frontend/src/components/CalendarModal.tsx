@@ -2064,7 +2064,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 </div>
               )}
 
-              {/* Event Type & Employee Row */}
+              {/* Event Type & Department WhatsApp Row */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                 <div>
                   <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
@@ -2094,42 +2094,80 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 </div>
 
                 <div>
-                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                    FUNCIONÁRIO RESPONSÁVEL
+                  <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: '#00e699', marginBottom: '6px' }}>
+                    🏢 DEPARTAMENTO / WHATSAPP DE ENVIO
                   </label>
                   <select
-                    value={formEmployeeId}
+                    value={formWhatsappNumberId}
                     onChange={e => {
-                      const empId = e.target.value ? Number(e.target.value) : '';
-                      setFormEmployeeId(empId);
-                      const emp = employees.find(x => x.id === empId);
-                      if (emp) {
-                        setFormEmployeeName(emp.nome);
-                        setFormEmployeePhone(emp.telefone);
+                      const val = e.target.value;
+                      setFormWhatsappNumberId(val ? Number(val) : '');
+                      if (val) {
+                        const found = whatsappNumbers.find(w => w.id === Number(val));
+                        setFormWhatsappInstance(found?.instancia_evolution_api || '');
                       } else {
-                        setFormEmployeeName('');
-                        setFormEmployeePhone('');
+                        setFormWhatsappInstance('');
                       }
                     }}
                     style={{
                       width: '100%',
                       padding: '8px 12px',
                       borderRadius: '8px',
-                      border: '1px solid var(--border-color)',
+                      border: '1px solid rgba(0, 230, 153, 0.4)',
                       backgroundColor: 'var(--bg-primary)',
                       color: '#fff',
                       fontSize: '13px',
-                      outline: 'none'
+                      outline: 'none',
+                      cursor: 'pointer'
                     }}
                   >
-                    <option value="">-- Nenhum funcionário selecionado --</option>
-                    {employees.filter(e => e.ativo).map(emp => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.nome} ({emp.cargo || 'Equipe'} - {emp.telefone})
+                    <option value="">🤖 Automático (Roteamento Padrão)</option>
+                    {whatsappNumbers.filter(w => w.status).map(wn => (
+                      <option key={wn.id} value={wn.id}>
+                        {wn.nome_departamento} ({wn.numero || wn.instancia_evolution_api})
                       </option>
                     ))}
                   </select>
                 </div>
+              </div>
+
+              {/* Employee Row */}
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                  👤 FUNCIONÁRIO RESPONSÁVEL
+                </label>
+                <select
+                  value={formEmployeeId}
+                  onChange={e => {
+                    const empId = e.target.value ? Number(e.target.value) : '';
+                    setFormEmployeeId(empId);
+                    const emp = employees.find(x => x.id === empId);
+                    if (emp) {
+                      setFormEmployeeName(emp.nome);
+                      setFormEmployeePhone(emp.telefone);
+                    } else {
+                      setFormEmployeeName('');
+                      setFormEmployeePhone('');
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: '#fff',
+                    fontSize: '13px',
+                    outline: 'none'
+                  }}
+                >
+                  <option value="">-- Nenhum funcionário selecionado --</option>
+                  {employees.filter(e => e.ativo).map(emp => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.nome} ({emp.cargo || 'Equipe'} - {emp.telefone})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Employee WhatsApp Reminder Options (When an employee is selected) */}
@@ -2179,51 +2217,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         <option value={12}>12 horas antes</option>
                       </select>
                     </div>
-                  </div>
-
-                  {/* Department / WhatsApp Instance Selector */}
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '4px',
-                    backgroundColor: 'rgba(0, 0, 0, 0.25)',
-                    padding: '8px 10px',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(0, 230, 153, 0.2)'
-                  }}>
-                    <label style={{ fontSize: '11px', color: '#a7f3d0', fontWeight: 'bold' }}>
-                      🏢 ENVIAR PELO WHATSAPP DO DEPARTAMENTO:
-                    </label>
-                    <select
-                      value={formWhatsappNumberId}
-                      onChange={e => {
-                        const val = e.target.value;
-                        setFormWhatsappNumberId(val ? Number(val) : '');
-                        if (val) {
-                          const found = whatsappNumbers.find(w => w.id === Number(val));
-                          setFormWhatsappInstance(found?.instancia_evolution_api || '');
-                        } else {
-                          setFormWhatsappInstance('');
-                        }
-                      }}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: '6px',
-                        border: '1px solid var(--border-color)',
-                        backgroundColor: 'var(--bg-primary)',
-                        color: '#fff',
-                        fontSize: '12px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <option value="">🤖 Automático (Roteamento Inteligente / Padrão)</option>
-                      {whatsappNumbers.filter(w => w.status).map(wn => (
-                        <option key={wn.id} value={wn.id}>
-                          {wn.nome_departamento} ({wn.numero || wn.instancia_evolution_api})
-                        </option>
-                      ))}
-                    </select>
                   </div>
 
                   <div style={{ fontSize: '11px', color: '#a7f3d0', lineHeight: '1.4' }}>
