@@ -688,35 +688,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const clipboardData = e.clipboardData;
     if (!clipboardData) return;
 
-    const items = clipboardData.items;
     const files: File[] = [];
 
-    if (items) {
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.type.indexOf('image') !== -1 || item.type.indexOf('video') !== -1 || item.type.indexOf('audio') !== -1 || item.kind === 'file') {
+    // Process clipboard items
+    if (clipboardData.items && clipboardData.items.length > 0) {
+      for (let i = 0; i < clipboardData.items.length; i++) {
+        const item = clipboardData.items[i];
+        if (item.kind === 'file' || item.type.startsWith('image/') || item.type.startsWith('video/') || item.type.startsWith('audio/')) {
           const file = item.getAsFile();
           if (file) {
             const ext = (file.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
-            const fileName = file.name && file.name.includes('.') ? file.name : `imagem_colada_${Date.now()}.${ext}`;
+            const fileName = file.name && file.name !== 'image.png' && file.name.includes('.') ? file.name : `imagem_${Date.now()}_${files.length + 1}.${ext}`;
             const renamedFile = new File([file], fileName, { type: file.type || 'image/png' });
             files.push(renamedFile);
           }
         }
       }
-    }
-
-    if (clipboardData.files && clipboardData.files.length > 0) {
+    } else if (clipboardData.files && clipboardData.files.length > 0) {
       for (let i = 0; i < clipboardData.files.length; i++) {
-        const f = clipboardData.files[i];
-        if (!files.some(existing => existing.name === f.name && existing.size === f.size)) {
-          files.push(f);
-        }
+        files.push(clipboardData.files[i]);
       }
     }
 
     if (files.length > 0) {
       e.preventDefault();
+      e.stopPropagation();
       setPendingFiles(prev => [...prev, ...files]);
     }
   };
@@ -3373,15 +3369,151 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       {pendingFiles.length > 0 && (
-        <div style={{ padding: '10px 16px', backgroundColor: 'rgba(0, 230, 153, 0.05)', borderTop: '1px solid rgba(0, 230, 153, 0.2)', display: 'flex', gap: '10px', overflowX: 'auto', alignItems: 'center' }}>
-          <span style={{ fontSize: '12px', fontWeight: '600', color: 'var(--accent-primary)', whiteSpace: 'nowrap' }}>Anexos ({pendingFiles.length}):</span>
-          {pendingFiles.map((file, idx) => (
-            <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px' }}>
-              {file.type.startsWith('image/') ? <img src={URL.createObjectURL(file)} alt="Preview" style={{ width: '24px', height: '24px', objectFit: 'cover', borderRadius: '4px' }} /> : <FileText size={16} />}
-              <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}</span>
-              <button type="button" onClick={() => removePendingFile(idx)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}><X size={14} /></button>
-            </div>
-          ))}
+        <div style={{
+          padding: '12px 20px',
+          backgroundColor: 'rgba(15, 23, 42, 0.95)',
+          borderTop: '1px solid rgba(0, 230, 153, 0.3)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          boxShadow: '0 -6px 20px rgba(0, 0, 0, 0.35)',
+          zIndex: 90
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '12px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <ImageIcon size={14} />
+              <span>{pendingFiles.length === 1 ? '1 mídia pronta para envio' : `${pendingFiles.length} mídias prontas para envio em lote`}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPendingFiles([])}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+            >
+              <X size={12} /> Cancelar todas
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', alignItems: 'center', paddingBottom: '4px' }}>
+            {pendingFiles.map((file, idx) => {
+              const isImg = file.type.startsWith('image/');
+              const isVid = file.type.startsWith('video/');
+              const isAud = file.type.startsWith('audio/');
+              const previewUrl = isImg ? URL.createObjectURL(file) : null;
+
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    position: 'relative',
+                    width: '80px',
+                    height: '80px',
+                    borderRadius: '10px',
+                    overflow: 'hidden',
+                    border: '2px solid rgba(0, 230, 153, 0.4)',
+                    backgroundColor: '#1e293b',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+                    transition: 'transform 0.15s ease'
+                  }}
+                >
+                  {isImg && previewUrl ? (
+                    <img
+                      src={previewUrl}
+                      alt="Prévia da imagem"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', padding: '6px', textAlign: 'center' }}>
+                      {isVid ? <Video size={24} color="#60a5fa" /> : isAud ? <Music size={24} color="#c084fc" /> : <FileText size={24} color="#34d399" />}
+                      <span style={{ fontSize: '9px', maxWidth: '68px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>
+                        {file.name}
+                      </span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => removePendingFile(idx)}
+                    title="Remover este anexo"
+                    style={{
+                      position: 'absolute',
+                      top: '3px',
+                      right: '3px',
+                      background: 'rgba(0, 0, 0, 0.75)',
+                      border: '1px solid rgba(255, 255, 255, 0.3)',
+                      borderRadius: '50%',
+                      width: '20px',
+                      height: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#f87171',
+                      cursor: 'pointer',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.5)'
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+
+                  <span style={{
+                    position: 'absolute',
+                    bottom: '2px',
+                    left: '2px',
+                    backgroundColor: 'rgba(0,0,0,0.6)',
+                    color: '#fff',
+                    fontSize: '9px',
+                    padding: '1px 4px',
+                    borderRadius: '4px',
+                    fontWeight: '700'
+                  }}>
+                    #{idx + 1}
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* Add More Media Button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Adicionar mais imagens ou arquivos ao lote"
+              style={{
+                width: '80px',
+                height: '80px',
+                borderRadius: '10px',
+                border: '2px dashed rgba(255, 255, 255, 0.25)',
+                backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '4px',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                flexShrink: 0,
+                transition: 'all 0.15s ease'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = 'var(--accent-primary)';
+                e.currentTarget.style.color = 'var(--accent-primary)';
+                e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.05)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+                e.currentTarget.style.color = 'var(--text-muted)';
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.03)';
+              }}
+            >
+              <Plus size={20} />
+              <span style={{ fontSize: '10px', fontWeight: '600' }}>Adicionar</span>
+            </button>
+          </div>
         </div>
       )}
 
@@ -3801,7 +3933,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
         return (
-          <form onSubmit={handleSend} onPaste={handlePaste} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
+          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
             <button
               type="button"
               onClick={() => {
