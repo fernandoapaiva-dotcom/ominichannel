@@ -127,6 +127,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return `${year}-${month}-${day}`;
   };
 
+  const formatLocalIsoStr = (d: Date): string => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const secs = String(d.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${mins}:${secs}`;
+  };
+
   const openNewEventModal = (prefill?: Partial<CalendarEvent>, selectedDay?: Date) => {
     setEditingEvent(null);
     const targetDate = selectedDay || new Date();
@@ -216,8 +226,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         title: formTitle.trim(),
         description: formDescription.trim() || null,
         event_type: formEventType,
-        start_time: startDtObj.toISOString(),
-        end_time: endDtObj.toISOString(),
+        start_time: formatLocalIsoStr(startDtObj),
+        end_time: formatLocalIsoStr(endDtObj),
         all_day: formAllDay,
         color: formColor,
         priority: formPriority,
@@ -447,8 +457,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         title: ev.title,
         description: ev.description,
         event_type: ev.event_type,
-        start_time: newStartDt.toISOString(),
-        end_time: newEndDt.toISOString(),
+        start_time: formatLocalIsoStr(newStartDt),
+        end_time: formatLocalIsoStr(newEndDt),
         all_day: ev.all_day,
         color: ev.color,
         priority: ev.priority,
@@ -467,8 +477,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       // Optimistic update
       const updatedOptimistic: CalendarEvent = {
         ...ev,
-        start_time: newStartDt.toISOString(),
-        end_time: newEndDt.toISOString()
+        start_time: formatLocalIsoStr(newStartDt),
+        end_time: formatLocalIsoStr(newEndDt)
       };
       setEvents(prev => prev.map(e => e.id === eventId ? updatedOptimistic : e));
 
@@ -1051,9 +1061,25 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             onDragOver={(e) => {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
+                              e.currentTarget.style.background = 'linear-gradient(90deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.28) 100%)';
+                              e.currentTarget.style.boxShadow = 'inset 0 0 16px rgba(59, 130, 246, 0.65), 0 0 12px rgba(59, 130, 246, 0.4)';
+                              e.currentTarget.style.border = '1.5px dashed #60a5fa';
+                              e.currentTarget.style.zIndex = '5';
+                            }}
+                            onDragLeave={(e) => {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.boxShadow = 'none';
+                              e.currentTarget.style.border = 'none';
+                              e.currentTarget.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                              e.currentTarget.style.zIndex = '1';
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.boxShadow = 'none';
+                              e.currentTarget.style.border = 'none';
+                              e.currentTarget.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                              e.currentTarget.style.zIndex = '1';
                               const evId = Number(e.dataTransfer.getData('text/plain'));
                               if (evId) {
                                 const rect = e.currentTarget.getBoundingClientRect();
@@ -1074,7 +1100,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               right: 0,
                               height: '60px',
                               borderBottom: '1px solid rgba(255,255,255,0.06)',
-                              cursor: 'pointer'
+                              cursor: 'pointer',
+                              transition: 'background 0.1s ease, box-shadow 0.1s ease'
                             }}
                           />
                         ))}
@@ -1320,9 +1347,25 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             onDragOver={(e) => {
                               e.preventDefault();
                               e.dataTransfer.dropEffect = 'move';
+                              e.currentTarget.style.background = 'linear-gradient(90deg, rgba(59, 130, 246, 0.4) 0%, rgba(37, 99, 235, 0.28) 100%)';
+                              e.currentTarget.style.boxShadow = 'inset 0 0 16px rgba(59, 130, 246, 0.65), 0 0 12px rgba(59, 130, 246, 0.4)';
+                              e.currentTarget.style.border = '1.5px dashed #60a5fa';
+                              e.currentTarget.style.zIndex = '5';
+                            }}
+                            onDragLeave={(e) => {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.boxShadow = 'none';
+                              e.currentTarget.style.border = 'none';
+                              e.currentTarget.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                              e.currentTarget.style.zIndex = '1';
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.boxShadow = 'none';
+                              e.currentTarget.style.border = 'none';
+                              e.currentTarget.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                              e.currentTarget.style.zIndex = '1';
                               const evId = Number(e.dataTransfer.getData('text/plain'));
                               if (evId) {
                                 const rect = e.currentTarget.getBoundingClientRect();
@@ -1343,7 +1386,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               right: 0,
                               height: '60px',
                               borderBottom: '1px solid rgba(255,255,255,0.06)',
-                              cursor: 'pointer'
+                              cursor: 'pointer',
+                              transition: 'background 0.1s ease, box-shadow 0.1s ease'
                             }}
                           />
                         ))}
@@ -1520,9 +1564,24 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         onDragOver={(e) => {
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
+                          e.currentTarget.style.background = 'linear-gradient(135deg, rgba(59, 130, 246, 0.38) 0%, rgba(37, 99, 235, 0.28) 100%)';
+                          e.currentTarget.style.boxShadow = 'inset 0 0 18px rgba(59, 130, 246, 0.7), 0 0 14px rgba(59, 130, 246, 0.5)';
+                          e.currentTarget.style.borderColor = '#60a5fa';
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.style.background = isToday
+                            ? 'rgba(16, 185, 129, 0.05)'
+                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                          e.currentTarget.style.boxShadow = 'none';
+                          e.currentTarget.style.borderColor = 'var(--border-color)';
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
+                          e.currentTarget.style.background = isToday
+                            ? 'rgba(16, 185, 129, 0.05)'
+                            : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                          e.currentTarget.style.boxShadow = 'none';
+                          e.currentTarget.style.borderColor = 'var(--border-color)';
                           const evId = Number(e.dataTransfer.getData('text/plain'));
                           if (evId) {
                             handleDropOnDate(evId, cell.dateStr);
@@ -1539,7 +1598,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           display: 'flex',
                           flexDirection: 'column',
                           cursor: 'pointer',
-                          transition: 'background 0.15s'
+                          transition: 'background 0.15s, box-shadow 0.15s, border-color 0.15s'
                         }}
                       >
                         {/* Day Number */}
