@@ -38,6 +38,59 @@ async def send_whatsapp_to_employee(instance_name: str, employee_phone: str, mes
         logger.error(f"Erro ao enviar lembrete no WhatsApp do funcionário ({employee_phone}): {e}")
         return False
 
+async def send_immediate_creation_notification(event_id: int):
+    """Sends immediate WhatsApp notification to the assigned employee upon event creation."""
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = (
+                select(CalendarEvent)
+                .options(selectinload(CalendarEvent.contact))
+                .where(CalendarEvent.id == event_id)
+            )
+            res = await session.execute(stmt)
+            ev = res.scalar_one_or_none()
+
+            if not ev or not ev.notify_whatsapp or not ev.employee_phone:
+                return
+
+            stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.status == True, WhatsAppNumber.tenant_id == ev.tenant_id)
+            res_w = await session.execute(stmt_w)
+            wn = res_w.scalars().first()
+            inst_name = wn.instancia_evolution_api if (wn and wn.instancia_evolution_api) else "instancia_vendas"
+
+            emp_name = ev.employee_name or "Colaborador"
+            emp_phone = ev.employee_phone
+            type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Compromisso")
+
+            client_info = "Não informado"
+            if ev.contact:
+                client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
+
+            now_utc = datetime.utcnow()
+            now_brt = now_utc - timedelta(hours=3)
+            event_time_brt = ev.start_time - timedelta(hours=3) if ev.start_time else now_brt
+            time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
+            confirm_url = f"http://localhost:8000/api/v1/calendar/confirm/{ev.confirmation_token}"
+
+            msg = (
+                f"🔔 *NOVO COMPROMISSO AGENDADO - LOJA*\n\n"
+                f"Olá, *{emp_name}*! A loja vinculou um novo compromisso a você:\n\n"
+                f"📌 *Tipo:* {type_label}\n"
+                f"🏷️ *Compromisso:* {ev.title}\n"
+                f"⏰ *Data e Hora:* {time_str}\n"
+                f"👤 *Cliente:* {client_info}\n"
+                f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
+                f"👉 *Por favor, confirme que visualizou clicando no link abaixo:*\n"
+                f"{confirm_url}"
+            )
+            success = await send_whatsapp_to_employee(inst_name, emp_phone, msg)
+            if success:
+                ev.notified_creation = True
+                await session.commit()
+                logger.info(f"Notificação imediata de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
+
 async def check_and_send_calendar_reminders():
     async with AsyncSessionLocal() as session:
         now_utc = datetime.utcnow()
@@ -58,7 +111,7 @@ async def check_and_send_calendar_reminders():
         if not events:
             return
 
-        stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.ativo == True)
+        stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.status == True)
         res_w = await session.execute(stmt_w)
         whatsapp_numbers = res_w.scalars().all()
 

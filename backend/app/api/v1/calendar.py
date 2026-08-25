@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import List, Optional
 from datetime import datetime, date, time
@@ -14,6 +15,7 @@ from app.schemas.schemas import (
     CalendarEventUpdate,
     CalendarEventResponse
 )
+from app.services.calendar_reminder_service import send_immediate_creation_notification
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +207,10 @@ async def create_calendar_event(
         )
         res = await db.execute(stmt)
         new_event = res.scalar_one()
+
+    # Trigger immediate WhatsApp notification to the employee
+    if new_event.notify_whatsapp and new_event.employee_phone:
+        asyncio.create_task(send_immediate_creation_notification(new_event.id))
 
     return _format_event_response(new_event)
 
