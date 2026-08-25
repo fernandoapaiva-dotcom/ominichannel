@@ -295,4 +295,15 @@ button {
   .mobile-hidden {
     display: none !important;
   }
+
+  .hide-on-mobile {
+    display: none !important;
+  }
 }
+
+@media (max-width: 1024px) {
+  .hide-on-tablet {
+    display: none !important;
+  }
+}
+

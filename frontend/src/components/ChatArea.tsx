@@ -1798,8 +1798,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       )}
 
       <div style={{
-        padding: '0 16px',
-        height: '64px',
+        padding: '8px 16px',
+        minHeight: '64px',
+        height: 'auto',
         width: '100%',
         boxSizing: 'border-box',
         borderBottom: '1px solid var(--border-color)',
@@ -1807,30 +1808,30 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        gap: '12px',
+        gap: '10px',
         position: 'relative',
         zIndex: 100,
         overflow: 'visible',
-        whiteSpace: 'nowrap',
+        flexWrap: 'wrap',
         flexShrink: 0
       }}>
         {/* Left Section: Avatar & Customer Metadata */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, minWidth: 0, maxWidth: '100%' }}>
           {onToggleChatList && isChatListCollapsed && (
             <button
               onClick={onToggleChatList}
               className="btn-secondary"
               style={{
-                height: '34px',
-                padding: '0 10px',
+                height: '32px',
+                padding: '0 8px',
                 fontSize: '11px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px'
+                gap: '5px'
               }}
               title="Expandir/Mostrar lista de conversas"
             >
-              <PanelLeftOpen size={15} /> Ver Conversas
+              <PanelLeftOpen size={14} /> <span className="hide-on-mobile">Conversas</span>
             </button>
           )}
 
@@ -1859,7 +1860,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               alt={conversation.contact.nome || 'Cliente'}
               onClick={() => setShowAvatarZoom(true)}
               title="Clique para expandir a foto de perfil"
-              style={{ width: '40px', height: '40px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
+              style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
               onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
               onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
             />
@@ -1868,13 +1869,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onClick={() => setShowAvatarZoom(true)}
               title="Clique para expandir a foto de perfil"
               style={{
-                width: '40px',
-                height: '40px',
+                width: '38px',
+                height: '38px',
                 borderRadius: '50%',
                 background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
                 color: '#051a12',
                 fontWeight: '700',
-                fontSize: '17px',
+                fontSize: '16px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1887,7 +1888,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           )}
 
-          <div>
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               {isEditingContact ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1927,7 +1928,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               ) : (
                 <>
-                  <h3 style={{ fontSize: '15px', fontWeight: '700', color: 'var(--text-main)', margin: 0 }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {conversation.contact?.nome || 'Cliente'}
                   </h3>
                   <button
@@ -1946,7 +1947,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       alignItems: 'center'
                     }}
                   >
-                    <Pencil size={13} />
+                    <Pencil size={12} />
                   </button>
                 </>
               )}
@@ -1964,7 +1965,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   marginTop: '2px',
                   alignItems: 'center',
                   cursor: 'pointer',
-                  maxWidth: '380px',
+                  maxWidth: '320px',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis'
@@ -1975,12 +1976,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </span>
                 {groupParticipants.length > 0 && (
                   <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    : {groupParticipants.slice(0, 4).map(p => p.name).join(', ')}{groupParticipants.length > 4 ? ` e +${groupParticipants.length - 4}` : ''}
+                    : {groupParticipants.slice(0, 3).map(p => p.name).join(', ')}{groupParticipants.length > 3 ? ` e +${groupParticipants.length - 3}` : ''}
                   </span>
                 )}
               </div>
             ) : (
-              <div style={{ display: 'flex', gap: '10px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {conversation.contact?.telefone}</span>
                 {conversation.assigned_user_name && (
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
@@ -1992,7 +1993,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Right Section: Action Buttons Toolbar (All buttons visible, 32px height, no clipping) */}
+        {/* Right Section: Action Buttons Toolbar (Fully responsive, wrapped, and complete) */}
         <div style={{
           display: 'flex',
           gap: '5px',
@@ -2000,7 +2001,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           flexShrink: 0,
           padding: '2px 0',
           justifyContent: 'flex-end',
-          flexWrap: 'nowrap'
+          flexWrap: 'wrap'
         }}>
           {/* Thread Switcher Dropdown */}
           {contactConversations.length > 1 && onSelectConversation && (
@@ -2025,7 +2026,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }}
                 title="Alternar entre chamados deste cliente"
               >
-                <span>📁 #{conversation.id} ({conversation.status.replace('_', ' ')})</span>
+                <span>📁 #{conversation.id}</span>
                 <ChevronDown size={12} />
               </button>
 
@@ -2103,7 +2104,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               disabled={isOperatingProtocol}
               style={{
                 height: '32px',
-                padding: '0 10px',
+                padding: '0 9px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '11px',
                 fontWeight: '700',
@@ -2113,7 +2114,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '5px',
+                gap: '4px',
                 cursor: 'pointer',
                 flexShrink: 0,
                 whiteSpace: 'nowrap',
@@ -2121,7 +2122,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               title="Finalizar este atendimento e registrar marco do protocolo"
             >
-              <Lock size={13} /> Fechar Protocolo
+              <Lock size={12} /> <span>Fechar Protocolo</span>
             </button>
           ) : (
             <button
@@ -2129,7 +2130,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               disabled={isOperatingProtocol}
               style={{
                 height: '32px',
-                padding: '0 10px',
+                padding: '0 9px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '11px',
                 fontWeight: '800',
@@ -2139,7 +2140,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '5px',
+                gap: '4px',
                 cursor: 'pointer',
                 flexShrink: 0,
                 whiteSpace: 'nowrap',
@@ -2147,9 +2148,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               title="Iniciar protocolo formal para este atendimento (associa mensagens retroativas)"
             >
-              <FileText size={13} /> Abrir Protocolo
+              <FileText size={12} /> <span>Abrir Protocolo</span>
             </button>
           )}
+
+          {/* Transfer Conversation Button (Always Visible in Header) */}
+          <button
+            onClick={onOpenTransferModal}
+            className="btn-secondary"
+            style={{
+              height: '32px',
+              padding: '0 9px',
+              fontSize: '11px',
+              fontWeight: '700',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'rgba(59, 130, 246, 0.15)',
+              color: '#93c5fd',
+              border: '1px solid rgba(59, 130, 246, 0.45)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '4px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
+              boxShadow: '0 0 8px rgba(59, 130, 246, 0.2)'
+            }}
+            title="Transferir chamado para outro setor ou atendente humano"
+          >
+            <ArrowRightLeft size={12} />
+            <span>Transferir</span>
+          </button>
 
           {/* Pin / Fix Conversation Button (Particular do Atendente) */}
           {(() => {
@@ -2161,7 +2190,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 className="btn-secondary"
                 style={{
                   height: '32px',
-                  padding: '0 9px',
+                  padding: '0 8px',
                   fontSize: '11px',
                   fontWeight: '600',
                   borderRadius: 'var(--radius-md)',
@@ -2179,7 +2208,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 title={isPinned ? "Desafixar esta conversa do topo" : "Fixar esta conversa no topo da lista"}
               >
                 <Pin size={12} fill={isPinned ? '#eab308' : 'none'} color={isPinned ? '#eab308' : 'currentColor'} />
-                {isPinned ? 'Fixado' : 'Fixar'}
+                <span>{isPinned ? 'Fixado' : 'Fixar'}</span>
               </button>
             );
           })()}
@@ -2190,7 +2219,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="btn-secondary"
             style={{
               height: '32px',
-              padding: '0 9px',
+              padding: '0 8px',
               fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
@@ -2205,9 +2234,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               flexShrink: 0,
               whiteSpace: 'nowrap'
             }}
-            title="Marcar todas as mensagens deste cliente como lidas/resolvidas sem precisar responder"
+            title="Marcar todas as mensagens deste cliente como lidas"
           >
-            <CheckCheck size={13} /> {isMarkingRead ? '...' : 'Lido'}
+            <CheckCheck size={12} /> <span>{isMarkingRead ? '...' : 'Lido'}</span>
           </button>
 
           <button
@@ -2215,7 +2244,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             disabled={isTogglingStatus}
             style={{
               height: '32px',
-              padding: '0 9px',
+              padding: '0 8px',
               borderRadius: 'var(--radius-md)',
               fontSize: '11px',
               fontWeight: '700',
@@ -2231,7 +2260,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               whiteSpace: 'nowrap'
             }}
           >
-            {conversation.status === 'com_ia' ? <><Bot size={13} /> COM IA</> : <><Headphones size={13} /> HUMANO</>}
+            {conversation.status === 'com_ia' ? <><Bot size={12} /> <span>COM IA</span></> : <><Headphones size={12} /> <span>HUMANO</span></>}
           </button>
 
           {conversation.status === 'com_ia' && (
@@ -2240,7 +2269,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               disabled={isAssumingControl}
               style={{
                 height: '32px',
-                padding: '0 10px',
+                padding: '0 9px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '11px',
                 fontWeight: '800',
@@ -2258,7 +2287,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               title="Intervir no atendimento da IA e assumir o controle da conversa agora"
             >
-              <Zap size={13} className={isAssumingControl ? "animate-spin" : ""} />
+              <Zap size={12} className={isAssumingControl ? "animate-spin" : ""} />
               <span>{isAssumingControl ? '...' : 'Assumir'}</span>
             </button>
           )}
@@ -2268,7 +2297,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="btn-secondary"
             style={{
               height: '32px',
-              padding: '0 9px',
+              padding: '0 8px',
               fontSize: '11px',
               fontWeight: '600',
               borderRadius: 'var(--radius-md)',
@@ -2285,7 +2314,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             }}
             title="Iniciar chamada de vídeo / voz WebRTC e enviar link para o cliente"
           >
-            <Video size={13} /> Vídeo/Voz
+            <Video size={12} /> <span>Vídeo/Voz</span>
           </button>
 
           {onOpenMediaGallery && (
@@ -2294,7 +2323,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               className="btn-secondary"
               style={{
                 height: '32px',
-                padding: '0 9px',
+                padding: '0 8px',
                 fontSize: '11px',
                 fontWeight: '600',
                 borderRadius: 'var(--radius-md)',
@@ -2307,7 +2336,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 whiteSpace: 'nowrap'
               }}
             >
-              <Paperclip size={13} /> Mídia ({conversationMedia.length})
+              <Paperclip size={12} /> <span>Mídia ({conversationMedia.length})</span>
             </button>
           )}
 
@@ -2319,7 +2348,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               className="btn-secondary"
               style={{
                 height: '32px',
-                padding: '0 8px',
+                padding: '0 7px',
                 fontSize: '11px',
                 fontWeight: '600',
                 borderRadius: 'var(--radius-md)',
