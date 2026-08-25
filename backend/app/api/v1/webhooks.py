@@ -715,7 +715,58 @@ async def receive_evolution_webhook(
 
             return {"status": "success", "action": "task_view_confirmed", "event_id": ev_obj.id}
 
-    # 2. Handle Task Completion Button from Employee
+    # 2. Handle Task Refusal Button from Employee
+    is_task_refusal = (
+        btn_id.startswith("refuse_task") or
+        btn_id.startswith("refuse_view_task") or
+        "❌ recusar" in cleaned_txt or
+        "recusar" in cleaned_txt or
+        "recusado" in cleaned_txt or
+        "não posso" in cleaned_txt or
+        "nao posso" in cleaned_txt
+    )
+    if is_task_refusal and phone_number:
+        ev_stmt = (
+            select(CalendarEvent)
+            .where(
+                CalendarEvent.employee_phone.like(f"%{phone_number[-8:]}%"),
+                CalendarEvent.status.in_(["pendente", "em_progresso"])
+            )
+            .order_by(CalendarEvent.start_time.desc())
+        )
+        ev_res = await db.execute(ev_stmt)
+        ev_obj = ev_res.scalars().first()
+        if ev_obj:
+            ev_obj.status = "cancelado"
+            ev_obj.confirmed_by_employee = False
+            ev_obj.atualizado_em = datetime.utcnow()
+            await db.commit()
+            await db.refresh(ev_obj)
+
+            await ws_manager.broadcast({
+                "type": "CALENDAR_EVENT_UPDATED",
+                "event_id": ev_obj.id,
+                "confirmed_by_employee": False,
+                "status": "cancelado"
+            })
+
+            emp_name = ev_obj.employee_name or "Colaborador"
+            refuse_reply = (
+                f"⚠️ *ATIVIDADE RECUSADA*\n\n"
+                f"Entendido, *{emp_name}*. A recusa foi registrada no calendário do sistema para que a coordenação faça o remanejamento da atividade *\"{ev_obj.title}\"*."
+            )
+            try:
+                await evolution_service.send_text_message(
+                    instance_name=instance_name,
+                    number=phone_number,
+                    text=refuse_reply
+                )
+            except Exception as e:
+                logger.error(f"Erro ao enviar resposta de recusa: {e}")
+
+            return {"status": "success", "action": "task_refused", "event_id": ev_obj.id}
+
+    # 3. Handle Task Completion Button from Employee
     is_task_completion = (
         btn_id.startswith("complete_task") or
         "concluído" in cleaned_txt or

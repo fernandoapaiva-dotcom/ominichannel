@@ -173,22 +173,17 @@ async def send_immediate_creation_notification(event_id: int):
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            title = "🔔 NOVA ATIVIDADE LANÇADA PARA VOCÊ"
+            title = "🚨 NOVO COMPROMISSO AGENDADO"
             description = (
-                f"Olá, *{emp_name}*! A empresa lançou uma nova atividade atribuída a você:\n\n"
-                f"📌 *Tipo:* {type_label}\n"
-                f"🏷️ *Atividade:* {ev.title}\n"
-                f"⏰ *Data e Hora:* {time_str}\n"
-                f"👤 *Cliente:* {client_info}\n"
-                f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                f"👉 *Clique no botão abaixo ou responda \"CONFIRMAR\" para confirmar que visualizou:*"
+                f"Olá, *{emp_name}*! A empresa lançou um novo compromisso atribuído a você para hoje.\n\n"
+                f"👉 *Clique no botão abaixo para CONFIRMAR o recebimento e visualizar os dados completos do chamado:*"
             )
             footer = "Servsolda • Sistema de Tarefas"
 
             buttons = [
                 {
                     "type": "reply",
-                    "displayText": "👀 Confirmar Visualização",
+                    "displayText": "Confirmar",
                     "id": f"confirm_view_task_{ev.id}"
                 }
             ]
