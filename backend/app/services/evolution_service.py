@@ -186,6 +186,44 @@ class EvolutionService:
             return f"{digits}@lid"
         return digits
 
+    async def resolve_canonical_jid(self, instance_name: str, number: str, custom_base_url: Optional[str] = None, custom_api_key: Optional[str] = None) -> str:
+        """
+        Resolves the exact registered WhatsApp JID for Brazilian phone numbers (handling the 8 vs 9 digit variation).
+        """
+        raw_num = str(number).strip()
+        if "@" in raw_num or raw_num.startswith("120363"):
+            return raw_num
+        digits = "".join(filter(str.isdigit, raw_num))
+        if not digits:
+            return raw_num
+        if not digits.startswith("55") and len(digits) in [10, 11]:
+            digits = f"55{digits}"
+
+        # If Brazilian phone number (12 or 13 digits starting with 55)
+        if digits.startswith("55") and len(digits) in [12, 13]:
+            variants = [digits]
+            if len(digits) == 13:
+                variants.append(digits[:4] + digits[5:])
+            elif len(digits) == 12:
+                variants.append(digits[:4] + "9" + digits[4:])
+
+            base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                try:
+                    r = await client.post(
+                        f"{base_url}/chat/whatsappNumbers/{instance_name}",
+                        headers=headers,
+                        json={"numbers": variants}
+                    )
+                    if r.status_code == 200 and isinstance(r.json(), list):
+                        for item in r.json():
+                            if item.get("exists") and item.get("jid"):
+                                return item.get("jid").split("@")[0]
+                except Exception as e:
+                    logger.debug(f"Error resolving canonical JID for {number}: {e}")
+
+        return digits
+
     async def send_text_message(
         self,
         instance_name: str,
@@ -197,7 +235,7 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
-        clean_number = self._format_target_number(number)
+        clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
         payload: Dict[str, Any] = {
             "number": clean_number,
             "text": text
@@ -260,7 +298,7 @@ class EvolutionService:
         """
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendButtons/{instance_name}"
-        clean_number = self._format_target_number(number)
+        clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
         payload = {
             "number": clean_number,
             "title": title,
