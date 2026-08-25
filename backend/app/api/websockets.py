@@ -58,6 +58,7 @@ class ConnectionManager:
                 logger.error(f"Failed to broadcast websocket message to user {u_id}: {e}")
 
 manager = ConnectionManager()
+ws_manager = manager
 
 @router.websocket("/ws")
 async def websocket_endpoint(
