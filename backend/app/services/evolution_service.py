@@ -243,6 +243,48 @@ class EvolutionService:
                 logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_button_message(
+        self,
+        instance_name: str,
+        number: str,
+        title: str,
+        description: str,
+        footer: str,
+        buttons: List[Dict[str, Any]],
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends an interactive button message via Evolution API v2.
+        Endpoint: POST /message/sendButtons/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendButtons/{instance_name}"
+        clean_number = self._format_target_number(number)
+        payload = {
+            "number": clean_number,
+            "title": title,
+            "description": description,
+            "footer": footer,
+            "buttons": buttons
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                res_data = response.json() if response.content else {}
+                if response.status_code < 400:
+                    res_data["success"] = True
+                    return res_data
+                
+                # Fallback to plain text message if buttons fail
+                logger.warning(f"sendButtons returned {response.status_code}, falling back to sendText")
+                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
+                return await self.send_text_message(instance_name, number, full_text)
+            except Exception as e:
+                logger.error(f"Error sending buttons to {number} via instance {instance_name}: {e}")
+                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
+                return await self.send_text_message(instance_name, number, full_text)
+
     async def send_reaction(
         self,
         instance_name: str,

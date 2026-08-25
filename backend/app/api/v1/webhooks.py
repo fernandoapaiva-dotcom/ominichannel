@@ -16,7 +16,7 @@ from app.core.database import get_db
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
     ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog,
-    AuthorizedTechnician
+    AuthorizedTechnician, CalendarEvent
 )
 
 from app.services.evolution_service import evolution_service
@@ -583,12 +583,92 @@ async def receive_evolution_webhook(
                 })
                 return {"status": "success", "event": "reactionMessage", "reaction": emoji_reaction}
 
-    # Extract text or media content
+    # Extract text, media, or button responses
+    btn_response = (
+        message_obj.get("buttonsResponseMessage") or
+        message_obj.get("templateButtonReplyMessage") or
+        message_obj.get("interactiveResponseMessage", {}).get("nativeFlowResponseMessage", {}) or
+        message_obj.get("listResponseMessage")
+    )
+    btn_id = ""
+    btn_text = ""
+    if btn_response:
+        btn_id = (
+            btn_response.get("selectedButtonId") or
+            btn_response.get("selectedId") or
+            btn_response.get("selectedRowId") or
+            ""
+        )
+        btn_text = (
+            btn_response.get("selectedDisplayText") or
+            btn_response.get("title") or
+            ""
+        )
+
     text_content = (
         message_obj.get("conversation") or
         message_obj.get("extendedTextMessage", {}).get("text") or
+        btn_text or
+        btn_id or
         ""
     )
+
+    # Handle Task Confirmation Button from Employee
+    is_task_confirmation = (
+        btn_id.startswith("confirm_task") or
+        "confirmar visualização" in text_content.lower() or
+        "confirmar visualizacao" in text_content.lower()
+    )
+    if is_task_confirmation and phone_number:
+        event_id = None
+        if "confirm_task_" in btn_id:
+            try:
+                event_id = int(btn_id.replace("confirm_task_", ""))
+            except Exception:
+                pass
+
+        if event_id:
+            ev_stmt = select(CalendarEvent).where(CalendarEvent.id == event_id)
+        else:
+            ev_stmt = (
+                select(CalendarEvent)
+                .where(
+                    CalendarEvent.employee_phone.like(f"%{phone_number[-8:]}%"),
+                    CalendarEvent.status.in_(["pendente", "em_progresso"])
+                )
+                .order_by(CalendarEvent.start_time.desc())
+            )
+        ev_res = await db.execute(ev_stmt)
+        ev_obj = ev_res.scalars().first()
+
+        if ev_obj:
+            ev_obj.confirmed_by_employee = True
+            ev_obj.confirmed_at = datetime.utcnow()
+            await db.commit()
+            logger.info(f"Tarefa #{ev_obj.id} confirmada via botão WhatsApp pelo funcionário {phone_number}")
+
+            await ws_manager.broadcast({
+                "type": "CALENDAR_EVENT_UPDATED",
+                "event_id": ev_obj.id,
+                "confirmed_by_employee": True
+            })
+
+            # Send confirmation response to employee
+            conf_reply = (
+                f"✅ *COMPROMISSO CONFIRMADO COM SUCESSO!*\n\n"
+                f"A loja registrou que você visualizou o compromisso *\"{ev_obj.title}\"*.\n"
+                f"Bom trabalho!"
+            )
+            try:
+                await evolution_service.send_text_message(
+                    instance_name=instance_name,
+                    number=phone_number,
+                    text=conf_reply
+                )
+            except Exception as e:
+                logger.error(f"Erro ao responder confirmação de tarefa: {e}")
+
+            return {"status": "success", "action": "task_confirmed", "event_id": ev_obj.id}
 
     msg_type = MessageType.TEXTO
     # Check media payloads

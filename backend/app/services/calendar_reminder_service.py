@@ -20,7 +20,14 @@ EVENT_TYPE_LABELS = {
     "geral": "📅 Tarefa / Compromisso Geral"
 }
 
-async def send_whatsapp_to_employee(instances: List[str], employee_phone: str, message_text: str) -> bool:
+async def send_whatsapp_to_employee(
+    instances: List[str],
+    employee_phone: str,
+    title: str,
+    description: str,
+    footer: str = "Servsolda • Sistema de Tarefas",
+    event_id: Optional[int] = None
+) -> bool:
     try:
         clean_phone = "".join(filter(str.isdigit, employee_phone))
         if not clean_phone:
@@ -39,15 +46,26 @@ async def send_whatsapp_to_employee(instances: List[str], employee_phone: str, m
             if default_inst not in unique_instances:
                 unique_instances.append(default_inst)
 
+        buttons = [
+            {
+                "type": "reply",
+                "displayText": "✅ Confirmar Visualização",
+                "id": f"confirm_task_{event_id}" if event_id else "confirm_task"
+            }
+        ]
+
         for inst_name in unique_instances:
             try:
-                res = await evolution_service.send_text_message(
+                res = await evolution_service.send_button_message(
                     instance_name=inst_name,
                     number=clean_phone,
-                    text=message_text
+                    title=title,
+                    description=description,
+                    footer=footer,
+                    buttons=buttons
                 )
                 if res and not res.get("error") and (res.get("key") or res.get("messageId")):
-                    logger.info(f"Lembrete enviado com sucesso para funcionário ({clean_phone}) via instância '{inst_name}'")
+                    logger.info(f"Lembrete com botão enviado com sucesso para funcionário ({clean_phone}) via instância '{inst_name}'")
                     return True
             except Exception as inst_err:
                 logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
@@ -58,7 +76,7 @@ async def send_whatsapp_to_employee(instances: List[str], employee_phone: str, m
         return False
 
 async def send_immediate_creation_notification(event_id: int):
-    """Sends immediate WhatsApp notification to the assigned employee upon event creation."""
+    """Sends immediate WhatsApp notification with interactive button to the assigned employee upon event creation."""
     try:
         async with AsyncSessionLocal() as session:
             stmt = (
@@ -89,24 +107,24 @@ async def send_immediate_creation_notification(event_id: int):
             now_brt = now_utc - timedelta(hours=3)
             event_time_brt = ev.start_time - timedelta(hours=3) if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
-            confirm_url = f"http://localhost:8000/api/v1/calendar/confirm/{ev.confirmation_token}"
 
-            msg = (
-                f"🔔 *NOVO COMPROMISSO AGENDADO - LOJA*\n\n"
+            title = "🔔 NOVO COMPROMISSO AGENDADO"
+            description = (
                 f"Olá, *{emp_name}*! A loja vinculou um novo compromisso a você:\n\n"
                 f"📌 *Tipo:* {type_label}\n"
                 f"🏷️ *Compromisso:* {ev.title}\n"
                 f"⏰ *Data e Hora:* {time_str}\n"
                 f"👤 *Cliente:* {client_info}\n"
                 f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                f"👉 *Por favor, confirme que visualizou clicando no link abaixo:*\n"
-                f"{confirm_url}"
+                f"👉 *Clique no botão abaixo para confirmar que visualizou:*"
             )
-            success = await send_whatsapp_to_employee(inst_names, emp_phone, msg)
+            footer = "Servsolda • Sistema de Tarefas"
+
+            success = await send_whatsapp_to_employee(inst_names, emp_phone, title, description, footer, event_id=ev.id)
             if success:
                 ev.notified_creation = True
                 await session.commit()
-                logger.info(f"Notificação imediata de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
+                logger.info(f"Notificação imediata com botão enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 
@@ -153,22 +171,21 @@ async def check_and_send_calendar_reminders():
 
             event_time_brt = ev.start_time - timedelta(hours=3) if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
-            confirm_url = f"http://localhost:8000/api/v1/calendar/confirm/{ev.confirmation_token}"
 
             # 1. Immediate creation notification
             if not ev.notified_creation:
-                msg = (
-                    f"🔔 *NOVO COMPROMISSO AGENDADO - LOJA*\n\n"
+                title = "🔔 NOVO COMPROMISSO AGENDADO"
+                description = (
                     f"Olá, *{emp_name}*! A loja vinculou um novo compromisso a você:\n\n"
                     f"📌 *Tipo:* {type_label}\n"
                     f"🏷️ *Compromisso:* {ev.title}\n"
                     f"⏰ *Data e Hora:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n"
                     f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                    f"👉 *Por favor, confirme que visualizou clicando no link abaixo:*\n"
-                    f"{confirm_url}"
+                    f"👉 *Clique no botão abaixo para confirmar que visualizou:*"
                 )
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
+                footer = "Servsolda • Sistema de Tarefas"
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
                 if success:
                     ev.notified_creation = True
                     logger.info(f"Notificação de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
@@ -176,9 +193,9 @@ async def check_and_send_calendar_reminders():
             # 2. Morning reminder on the day of the event
             is_same_day = (event_time_brt.date() == now_brt.date())
             if is_same_day and not ev.notified_day_of:
-                status_txt = "✅ Confirmado por você" if ev.confirmed_by_employee else f"⚠️ Confirme o recebimento: {confirm_url}"
-                msg = (
-                    f"☀️ *LEMBRETE: COMPROMISSO HOJE - LOJA*\n\n"
+                status_txt = "✅ Confirmado por você" if ev.confirmed_by_employee else "⏳ Aguardando sua confirmação"
+                title = "☀️ LEMBRETE: COMPROMISSO HOJE"
+                description = (
                     f"Olá, *{emp_name}*! Lembramos que você tem um compromisso agendado para hoje:\n\n"
                     f"📌 *Tipo:* {type_label}\n"
                     f"🏷️ *Compromisso:* {ev.title}\n"
@@ -187,7 +204,8 @@ async def check_and_send_calendar_reminders():
                     f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
                     f"Status: {status_txt}"
                 )
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
+                footer = "Servsolda • Sistema de Tarefas"
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
                 if success:
                     ev.notified_day_of = True
                     logger.info(f"Lembrete do dia enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")
@@ -198,15 +216,16 @@ async def check_and_send_calendar_reminders():
             diff_hours = diff_seconds / 3600.0
 
             if 0 < diff_hours <= hours_before and not ev.notified_hours_before:
-                msg = (
-                    f"⏰ *ATENÇÃO: COMPROMISSO EM BREVE (em ~{max(1, int(round(diff_hours)))}h)*\n\n"
+                title = f"⏰ ATENÇÃO: COMPROMISSO EM BREVE (~{max(1, int(round(diff_hours)))}h)"
+                description = (
                     f"Olá, *{emp_name}*! Faltam poucas horas para o seu compromisso:\n\n"
                     f"📌 *Compromisso:* {ev.title}\n"
                     f"⏰ *Horário:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n\n"
                     f"Por favor, prepare-se para o atendimento/entrega!"
                 )
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, msg)
+                footer = "Servsolda • Sistema de Tarefas"
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
                 if success:
                     ev.notified_hours_before = True
                     logger.info(f"Lembrete de antecedência enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")

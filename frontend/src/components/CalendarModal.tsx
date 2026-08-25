@@ -344,9 +344,88 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return days;
   }, [currentDate]);
 
-  if (!isOpen) return null;
+  const HOURS_24 = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const weekDays = useMemo(() => {
+    const startOfWeek = new Date(currentDate);
+    const day = startOfWeek.getDay(); // 0 is Sunday
+    startOfWeek.setDate(startOfWeek.getDate() - day);
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(startOfWeek);
+      d.setDate(d.getDate() + i);
+      const dateStr = d.toISOString().split('T')[0];
+      return {
+        date: d,
+        dateStr,
+        dayName: WEEKDAYS[d.getDay()],
+        dayNum: d.getDate(),
+        isToday: dateStr === todayStr
+      };
+    });
+  }, [currentDate, todayStr]);
+
+  const handleDropOnDate = async (eventId: number, newDateStr: string, newHour?: number) => {
+    const ev = events.find(e => e.id === eventId);
+    if (!ev) return;
+
+    try {
+      const origStart = new Date(ev.start_time);
+      const origEnd = ev.end_time ? new Date(ev.end_time) : origStart;
+      const durationMs = Math.max(30 * 60 * 1000, origEnd.getTime() - origStart.getTime());
+
+      let newStartDt: Date;
+      if (newHour !== undefined) {
+        newStartDt = new Date(`${newDateStr}T${String(newHour).padStart(2, '0')}:00:00`);
+      } else {
+        const timePart = ev.start_time.split('T')[1] || '09:00:00';
+        newStartDt = new Date(`${newDateStr}T${timePart}`);
+      }
+
+      const newEndDt = new Date(newStartDt.getTime() + durationMs);
+
+      const payload = {
+        title: ev.title,
+        description: ev.description,
+        event_type: ev.event_type,
+        start_time: newStartDt.toISOString(),
+        end_time: newEndDt.toISOString(),
+        all_day: ev.all_day,
+        color: ev.color,
+        priority: ev.priority,
+        status: ev.status,
+        reminder_minutes: ev.reminder_minutes,
+        contact_id: ev.contact_id,
+        conversation_id: ev.conversation_id,
+        employee_id: ev.employee_id,
+        employee_name: ev.employee_name,
+        employee_phone: ev.employee_phone,
+        notify_whatsapp: ev.notify_whatsapp,
+        custom_reminder_hours: ev.custom_reminder_hours,
+        confirmed_by_employee: ev.confirmed_by_employee
+      };
+
+      // Optimistic update
+      const updatedOptimistic: CalendarEvent = {
+        ...ev,
+        start_time: newStartDt.toISOString(),
+        end_time: newEndDt.toISOString()
+      };
+      setEvents(prev => prev.map(e => e.id === eventId ? updatedOptimistic : e));
+
+      const updated = await apiFetch(`/calendar/events/${eventId}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      setEvents(prev => prev.map(e => e.id === eventId ? updated : e));
+    } catch (err) {
+      console.error('Error rescheduling dragged event:', err);
+    }
+  };
+
+  if (!isOpen) return null;
 
   return (
     <div style={{
@@ -594,20 +673,26 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
         {/* Calendar Body */}
         <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {/* 1. MONTH VIEW */}
           {viewMode === 'month' && (
             <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: '600px' }}>
-              {/* Weekday Header */}
+              {/* Sticky Weekday Header */}
               <div style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 10,
                 display: 'grid',
                 gridTemplateColumns: 'repeat(7, 1fr)',
                 borderBottom: '1px solid var(--border-color)',
-                backgroundColor: 'rgba(0,0,0,0.2)'
+                backgroundColor: 'var(--bg-secondary)',
+                backdropFilter: 'blur(10px)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
               }}>
                 {WEEKDAYS.map((day, idx) => (
                   <div
                     key={day}
                     style={{
-                      padding: '10px',
+                      padding: '12px 10px',
                       textAlign: 'center',
                       fontSize: '12px',
                       fontWeight: '700',
@@ -620,12 +705,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 ))}
               </div>
 
-              {/* Month Grid */}
+              {/* Month Grid with Drag & Drop */}
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(7, 1fr)',
                 flex: 1,
-                gridAutoRows: 'minmax(100px, 1fr)'
+                gridAutoRows: 'minmax(105px, 1fr)'
               }}>
                 {monthDays.map((cell, idx) => {
                   const dayEvents = filteredEvents.filter(ev => {
@@ -638,6 +723,26 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     <div
                       key={idx}
                       onClick={() => openNewEventModal(undefined, cell.date)}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.18)';
+                      }}
+                      onDragLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = isToday
+                          ? 'rgba(16, 185, 129, 0.05)'
+                          : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.style.backgroundColor = isToday
+                          ? 'rgba(16, 185, 129, 0.05)'
+                          : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)';
+                        const evId = Number(e.dataTransfer.getData('text/plain'));
+                        if (evId) {
+                          handleDropOnDate(evId, cell.dateStr);
+                        }
+                      }}
                       style={{
                         borderRight: (idx + 1) % 7 !== 0 ? '1px solid var(--border-color)' : 'none',
                         borderBottom: '1px solid var(--border-color)',
@@ -651,8 +756,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         cursor: 'pointer',
                         transition: 'background 0.15s'
                       }}
-                      onMouseEnter={e => (e.currentTarget.style.backgroundColor = isToday ? 'rgba(16, 185, 129, 0.12)' : 'rgba(255, 255, 255, 0.03)')}
-                      onMouseLeave={e => (e.currentTarget.style.backgroundColor = isToday ? 'rgba(16, 185, 129, 0.05)' : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)')}
                     >
                       {/* Day Number */}
                       <div style={{
@@ -683,7 +786,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         )}
                       </div>
 
-                      {/* Event Chips */}
+                      {/* Draggable Event Chips */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', overflowY: 'auto', flex: 1 }}>
                         {dayEvents.slice(0, 4).map(ev => {
                           const isDone = ev.status === 'concluido';
@@ -692,6 +795,12 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           return (
                             <div
                               key={ev.id}
+                              draggable={true}
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                e.dataTransfer.setData('text/plain', String(ev.id));
+                                e.dataTransfer.effectAllowed = 'move';
+                              }}
                               onClick={e => {
                                 e.stopPropagation();
                                 openEditEventModal(ev);
@@ -707,14 +816,15 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '4px',
-                                cursor: 'pointer',
+                                cursor: 'grab',
                                 opacity: isDone ? 0.65 : 0.95,
                                 border: isDone ? '1px solid var(--border-color)' : 'none',
                                 whiteSpace: 'nowrap',
                                 overflow: 'hidden',
-                                textOverflow: 'ellipsis'
+                                textOverflow: 'ellipsis',
+                                transition: 'transform 0.1s ease'
                               }}
-                              title={`${ev.title}${ev.contact_name ? ` (${ev.contact_name})` : ''}`}
+                              title={`${ev.title}${ev.contact_name ? ` (${ev.contact_name})` : ''} - Arraste para mover de dia`}
                             >
                               <button
                                 type="button"
@@ -749,7 +859,368 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             </div>
           )}
 
-          {/* Agenda / List View */}
+          {/* 2. WEEK VIEW (24h Time Grid on Left + Sticky Weekdays Header + Drag & Drop) */}
+          {viewMode === 'week' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: '850px' }}>
+              {/* Sticky Top Header (Time label + 7 Days) */}
+              <div style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 20,
+                display: 'grid',
+                gridTemplateColumns: '70px repeat(7, 1fr)',
+                borderBottom: '1px solid var(--border-color)',
+                backgroundColor: 'var(--bg-secondary)',
+                backdropFilter: 'blur(10px)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+              }}>
+                <div style={{
+                  padding: '12px 8px',
+                  textAlign: 'center',
+                  fontSize: '11px',
+                  fontWeight: '700',
+                  color: 'var(--text-muted)',
+                  borderRight: '1px solid var(--border-color)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '4px'
+                }}>
+                  <Clock size={12} /> 24 HORAS
+                </div>
+                {weekDays.map((d, idx) => (
+                  <div
+                    key={d.dateStr}
+                    style={{
+                      padding: '10px',
+                      textAlign: 'center',
+                      borderRight: idx < 6 ? '1px solid var(--border-color)' : 'none',
+                      backgroundColor: d.isToday ? 'rgba(16, 185, 129, 0.1)' : 'transparent'
+                    }}
+                  >
+                    <div style={{ fontSize: '11px', fontWeight: '700', color: d.isToday ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                      {d.dayName.toUpperCase()}
+                    </div>
+                    <div style={{
+                      fontSize: '16px',
+                      fontWeight: '800',
+                      color: d.isToday ? '#fff' : 'var(--text-main)',
+                      width: '28px',
+                      height: '28px',
+                      borderRadius: '50%',
+                      backgroundColor: d.isToday ? 'var(--accent-primary)' : 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      margin: '2px auto 0'
+                    }}>
+                      {d.dayNum}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* 24-Hour Time Rows */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                {HOURS_24.map(hour => {
+                  const hourLabel = `${String(hour).padStart(2, '0')}:00`;
+
+                  return (
+                    <div
+                      key={hour}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '70px repeat(7, 1fr)',
+                        minHeight: '64px',
+                        borderBottom: '1px solid rgba(255,255,255,0.06)'
+                      }}
+                    >
+                      {/* Left 24h Column */}
+                      <div style={{
+                        padding: '6px 8px',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        color: 'var(--text-muted)',
+                        borderRight: '1px solid var(--border-color)',
+                        backgroundColor: 'rgba(0,0,0,0.15)',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'center'
+                      }}>
+                        {hourLabel}
+                      </div>
+
+                      {/* 7 Day Slots for this hour */}
+                      {weekDays.map((d, dIdx) => {
+                        const slotEvents = filteredEvents.filter(ev => {
+                          if (ev.all_day) return false;
+                          const evDate = ev.start_time.split('T')[0];
+                          const evHour = new Date(ev.start_time).getHours();
+                          return evDate === d.dateStr && evHour === hour;
+                        });
+
+                        return (
+                          <div
+                            key={d.dateStr}
+                            onClick={() => {
+                              const targetDate = new Date(`${d.dateStr}T${String(hour).padStart(2, '0')}:00:00`);
+                              openNewEventModal(undefined, targetDate);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = 'move';
+                              e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
+                            }}
+                            onDragLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent';
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              e.currentTarget.style.backgroundColor = d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent';
+                              const evId = Number(e.dataTransfer.getData('text/plain'));
+                              if (evId) {
+                                handleDropOnDate(evId, d.dateStr, hour);
+                              }
+                            }}
+                            style={{
+                              borderRight: dIdx < 6 ? '1px solid rgba(255,255,255,0.06)' : 'none',
+                              backgroundColor: d.isToday ? 'rgba(16, 185, 129, 0.03)' : 'transparent',
+                              padding: '3px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '4px',
+                              cursor: 'pointer',
+                              transition: 'background 0.15s'
+                            }}
+                          >
+                            {slotEvents.map(ev => {
+                              const isDone = ev.status === 'concluido';
+                              return (
+                                <div
+                                  key={ev.id}
+                                  draggable={true}
+                                  onDragStart={(e) => {
+                                    e.stopPropagation();
+                                    e.dataTransfer.setData('text/plain', String(ev.id));
+                                    e.dataTransfer.effectAllowed = 'move';
+                                  }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openEditEventModal(ev);
+                                  }}
+                                  style={{
+                                    backgroundColor: isDone ? 'rgba(255, 255, 255, 0.08)' : (ev.color || '#10b981'),
+                                    color: '#fff',
+                                    borderRadius: '6px',
+                                    padding: '4px 6px',
+                                    fontSize: '11px',
+                                    fontWeight: '600',
+                                    cursor: 'grab',
+                                    boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: '2px',
+                                    opacity: isDone ? 0.65 : 1
+                                  }}
+                                  title={`${ev.title} - Arraste para mover horário`}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px' }}>
+                                    <span style={{ fontWeight: 'bold', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                      {ev.title}
+                                    </span>
+                                    {ev.confirmed_by_employee && <CheckSquare size={12} color="#4ade80" />}
+                                  </div>
+                                  {ev.employee_name && (
+                                    <span style={{ fontSize: '10px', opacity: 0.9 }}>
+                                      👤 {ev.employee_name}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 3. DAY VIEW (24h Time Grid on Left + Sticky Header + Drag & Drop) */}
+          {viewMode === 'day' && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', maxWidth: '900px', margin: '0 auto', width: '100%' }}>
+              {/* Sticky Top Header for Single Day */}
+              <div style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 20,
+                padding: '14px 20px',
+                borderBottom: '1px solid var(--border-color)',
+                backgroundColor: 'var(--bg-secondary)',
+                backdropFilter: 'blur(10px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)'
+              }}>
+                <div>
+                  <h3 style={{ fontSize: '16px', color: '#fff', margin: 0 }}>
+                    {currentDate.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                  </h3>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    Clique no horário desejado ou arraste os compromissos para reposicionar
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openNewEventModal(undefined, currentDate)}
+                  className="btn-primary"
+                  style={{ padding: '6px 14px', fontSize: '12px' }}
+                >
+                  <Plus size={14} /> Adicionar no Dia
+                </button>
+              </div>
+
+              {/* 24-Hour Day Rows */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                {HOURS_24.map(hour => {
+                  const hourLabel = `${String(hour).padStart(2, '0')}:00`;
+                  const curDateStr = currentDate.toISOString().split('T')[0];
+                  const slotEvents = filteredEvents.filter(ev => {
+                    if (ev.all_day) return false;
+                    const evDate = ev.start_time.split('T')[0];
+                    const evHour = new Date(ev.start_time).getHours();
+                    return evDate === curDateStr && evHour === hour;
+                  });
+
+                  return (
+                    <div
+                      key={hour}
+                      onClick={() => {
+                        const targetDate = new Date(`${curDateStr}T${String(hour).padStart(2, '0')}:00:00`);
+                        openNewEventModal(undefined, targetDate);
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = 'move';
+                        e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.2)';
+                      }}
+                      onDragLeave={(e) => {
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.style.backgroundColor = 'transparent';
+                        const evId = Number(e.dataTransfer.getData('text/plain'));
+                        if (evId) {
+                          handleDropOnDate(evId, curDateStr, hour);
+                        }
+                      }}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '70px 1fr',
+                        minHeight: '64px',
+                        borderBottom: '1px solid rgba(255,255,255,0.06)',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s'
+                      }}
+                    >
+                      {/* 24h Left Label */}
+                      <div style={{
+                        padding: '8px',
+                        fontSize: '12px',
+                        fontWeight: '700',
+                        color: 'var(--text-muted)',
+                        borderRight: '1px solid var(--border-color)',
+                        backgroundColor: 'rgba(0,0,0,0.15)',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'center'
+                      }}>
+                        {hourLabel}
+                      </div>
+
+                      {/* Main Hour Content Slot */}
+                      <div style={{ padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {slotEvents.map(ev => {
+                          const isDone = ev.status === 'concluido';
+                          return (
+                            <div
+                              key={ev.id}
+                              draggable={true}
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                e.dataTransfer.setData('text/plain', String(ev.id));
+                                e.dataTransfer.effectAllowed = 'move';
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openEditEventModal(ev);
+                              }}
+                              style={{
+                                backgroundColor: isDone ? 'rgba(255, 255, 255, 0.08)' : (ev.color || '#10b981'),
+                                color: '#fff',
+                                borderRadius: '8px',
+                                padding: '8px 12px',
+                                fontSize: '13px',
+                                fontWeight: '600',
+                                cursor: 'grab',
+                                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                opacity: isDone ? 0.65 : 1
+                              }}
+                              title={`${ev.title} - Arraste para mover horário`}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <button
+                                  type="button"
+                                  onClick={e => handleToggleStatus(ev, e)}
+                                  style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: 0 }}
+                                >
+                                  {isDone ? <CheckCircle2 size={18} /> : <Circle size={18} />}
+                                </button>
+                                <div>
+                                  <div style={{ textDecoration: isDone ? 'line-through' : 'none' }}>
+                                    {ev.title}
+                                  </div>
+                                  <div style={{ fontSize: '11px', opacity: 0.9, marginTop: '2px' }}>
+                                    🕒 {ev.start_time.split('T')[1]?.substring(0, 5)} {ev.employee_name ? `• 👤 ${ev.employee_name}` : ''} {ev.contact_name ? `• 🏢 ${ev.contact_name}` : ''}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {ev.employee_name && (
+                                <div style={{
+                                  fontSize: '11px',
+                                  padding: '2px 8px',
+                                  borderRadius: '12px',
+                                  backgroundColor: ev.confirmed_by_employee ? 'rgba(34, 197, 94, 0.3)' : 'rgba(234, 179, 8, 0.3)',
+                                  color: ev.confirmed_by_employee ? '#4ade80' : '#fde047',
+                                  fontWeight: 'bold',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px'
+                                }}>
+                                  <CheckSquare size={12} />
+                                  {ev.confirmed_by_employee ? 'Visualizado' : 'Aguardando'}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* 4. AGENDA / LIST VIEW */}
           {viewMode === 'agenda' && (
             <div style={{ padding: '24px', maxWidth: '900px', margin: '0 auto', width: '100%' }}>
               {filteredEvents.length === 0 ? (
@@ -968,80 +1439,6 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   })}
                 </div>
               )}
-            </div>
-          )}
-
-          {/* Week View & Day View fallback to clean agenda layout */}
-          {(viewMode === 'week' || viewMode === 'day') && (
-            <div style={{ padding: '24px', maxWidth: '1000px', margin: '0 auto', width: '100%' }}>
-              <div style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '16px',
-                borderBottom: '1px solid var(--border-color)',
-                paddingBottom: '12px'
-              }}>
-                <h3 style={{ fontSize: '16px', color: '#fff', margin: 0 }}>
-                  Tarefas de {currentDate.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
-                </h3>
-                <span style={{ fontSize: '13px', color: 'var(--accent-primary)', fontWeight: 'bold' }}>
-                  {filteredEvents.length} compromissos agendados
-                </span>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {filteredEvents.map(ev => (
-                  <div
-                    key={ev.id}
-                    onClick={() => openEditEventModal(ev)}
-                    style={{
-                      backgroundColor: 'var(--bg-primary)',
-                      borderLeft: `6px solid ${ev.color || '#10b981'}`,
-                      borderTop: '1px solid var(--border-color)',
-                      borderRight: '1px solid var(--border-color)',
-                      borderBottom: '1px solid var(--border-color)',
-                      borderRadius: '10px',
-                      padding: '12px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <button
-                        type="button"
-                        onClick={e => handleToggleStatus(ev, e)}
-                        style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', padding: 0 }}
-                      >
-                        {ev.status === 'concluido' ? <CheckCircle2 size={20} /> : <Circle size={20} color="var(--text-muted)" />}
-                      </button>
-                      <div>
-                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff', textDecoration: ev.status === 'concluido' ? 'line-through' : 'none' }}>
-                          {ev.title}
-                        </div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                          🕒 {ev.all_day ? 'Dia Inteiro' : ev.start_time.split('T')[1]?.substring(0, 5)} {ev.contact_name ? `• 👤 ${ev.contact_name}` : ''}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button
-                        type="button"
-                        onClick={e => {
-                          e.stopPropagation();
-                          handleDeleteEvent(ev.id);
-                        }}
-                        style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
         </div>
