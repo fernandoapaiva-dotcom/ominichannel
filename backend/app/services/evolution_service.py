@@ -235,7 +235,11 @@ class EvolutionService:
     ) -> Dict[str, Any]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
-        clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
+        clean_number = self._format_target_number(number)
+        if "@" not in str(clean_number):
+            clean_number = await self.resolve_canonical_jid(instance_name, str(clean_number), custom_base_url, custom_api_key)
+            clean_number = self._format_target_number(clean_number)
+
         payload: Dict[str, Any] = {
             "number": clean_number,
             "text": text
