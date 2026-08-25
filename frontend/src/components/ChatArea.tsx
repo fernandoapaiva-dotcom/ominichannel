@@ -1321,6 +1321,156 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
     }
   };
+  const renderImageAlbum = (albumMessages: Message[]) => {
+    const total = albumMessages.length;
+    const displayCount = Math.min(total, 4);
+    const displayed = albumMessages.slice(0, displayCount);
+    const extraCount = total - 4;
+
+    // Find caption if any
+    let captionText = '';
+    for (const m of albumMessages) {
+      const c = m.conteudo || '';
+      if (c.includes('|')) {
+        const parts = c.split('|');
+        if (parts.length > 1 && parts[1].trim()) {
+          captionText = parts.slice(1).join('|').trim();
+          break;
+        }
+      }
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: total === 2 ? 'repeat(2, 1fr)' : 'repeat(2, 1fr)',
+          gap: '4px',
+          borderRadius: '8px',
+          overflow: 'hidden',
+          maxWidth: '320px'
+        }}>
+          {displayed.map((m, idx) => {
+            let raw = m.conteudo || '';
+            let mediaPath = raw.includes('|') ? raw.split('|')[0].trim() : raw.trim();
+            mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '');
+            let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+            if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && m.id && m.id > 0) {
+              fullUrl = `http://localhost:8000/api/v1/conversations/messages/${m.id}/media`;
+            }
+            const mediaIndex = conversationMedia.findIndex(item => item.id === m.id);
+            const isLastOfFour = idx === 3 && extraCount > 0;
+
+            return (
+              <div
+                key={m.id || idx}
+                style={{
+                  position: 'relative',
+                  width: total === 3 && idx === 0 ? '100%' : '140px',
+                  height: total === 3 && idx === 0 ? '180px' : '140px',
+                  gridColumn: total === 3 && idx === 0 ? 'span 2' : 'auto',
+                  cursor: 'pointer',
+                  overflow: 'hidden',
+                  backgroundColor: 'rgba(0,0,0,0.3)',
+                  borderRadius: '4px'
+                }}
+                onClick={() => {
+                  setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0);
+                }}
+              >
+                <img
+                  src={fullUrl}
+                  alt={`Imagem ${idx + 1}`}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    display: 'block',
+                    transition: 'transform 0.2s ease'
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.05)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
+                />
+
+                {isLastOfFour && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#ffffff',
+                    fontSize: '22px',
+                    fontWeight: '800',
+                    letterSpacing: '1px'
+                  }}>
+                    +{extraCount}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {captionText && (
+          <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', margin: '4px 0 0 0', whiteSpace: 'pre-wrap' }}>
+            {captionText}
+          </p>
+        )}
+      </div>
+    );
+  };
+
+  type RenderGroup = 
+    | { type: 'single'; message: Message; originalIndex: number }
+    | { type: 'image_album'; messages: Message[]; originalIndices: number[] };
+
+  const processedMessageGroups = useMemo<RenderGroup[]>(() => {
+    const rawMsgs = conversation?.messages || [];
+    const groups: RenderGroup[] = [];
+    let i = 0;
+
+    while (i < rawMsgs.length) {
+      const msg = rawMsgs[i];
+      const isImg = msg.tipo === 'imagem' || (msg.conteudo && (msg.conteudo.endsWith('.jpg') || msg.conteudo.endsWith('.png') || msg.conteudo.endsWith('.jpeg') || msg.conteudo.endsWith('.webp')) && !msg.conteudo.includes('figurinha'));
+      
+      if (isImg) {
+        // Collect consecutive images from the same sender within 3 minutes
+        const album: Message[] = [msg];
+        const indices: number[] = [i];
+        let j = i + 1;
+
+        while (j < rawMsgs.length) {
+          const nextMsg = rawMsgs[j];
+          const nextIsImg = nextMsg.tipo === 'imagem' || (nextMsg.conteudo && (nextMsg.conteudo.endsWith('.jpg') || nextMsg.conteudo.endsWith('.png') || nextMsg.conteudo.endsWith('.jpeg') || nextMsg.conteudo.endsWith('.webp')) && !nextMsg.conteudo.includes('figurinha'));
+          
+          if (nextIsImg && nextMsg.remetente === msg.remetente) {
+            const t1 = normalizeIsoDate(msg.timestamp).getTime();
+            const t2 = normalizeIsoDate(nextMsg.timestamp).getTime();
+            if (Math.abs(t2 - t1) <= 180000) {
+              album.push(nextMsg);
+              indices.push(j);
+              j++;
+              continue;
+            }
+          }
+          break;
+        }
+
+        if (album.length > 1) {
+          groups.push({ type: 'image_album', messages: album, originalIndices: indices });
+          i = j;
+          continue;
+        }
+      }
+
+      groups.push({ type: 'single', message: msg, originalIndex: i });
+      i++;
+    }
+
+    return groups;
+  }, [conversation?.messages]);
 
   const formatTime = (ts: string | Date | undefined) => {
     if (!ts) return '';
@@ -2638,15 +2788,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {(conversation?.messages || []).map((msg, idx, arr) => {
-          const prevMsg = idx > 0 ? arr[idx - 1] : null;
+        {processedMessageGroups.map((group, groupIdx, groupArr) => {
+          const msg = group.type === 'single' ? group.message : group.messages[0];
+          const lastMsg = group.type === 'single' ? group.message : group.messages[group.messages.length - 1];
+          const idx = group.type === 'single' ? group.originalIndex : group.originalIndices[0];
+          const prevGroup = groupIdx > 0 ? groupArr[groupIdx - 1] : null;
+          const prevMsg = prevGroup ? (prevGroup.type === 'single' ? prevGroup.message : prevGroup.messages[0]) : null;
+
           const showDateDivider = !prevMsg || (msg.timestamp && prevMsg.timestamp && getMessageDateKey(msg.timestamp) !== getMessageDateKey(prevMsg.timestamp));
           const dateLabel = showDateDivider && msg.timestamp ? formatDateDivider(msg.timestamp) : null;
 
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
           const isSystem = msg.remetente === 'sistema';
-          const msgKey = msg.id ? `msg_${msg.id}_${idx}` : `msg_${idx}`;
+          const msgKey = group.type === 'single' 
+            ? (msg.id ? `msg_${msg.id}_${idx}` : `msg_${idx}`)
+            : `album_${group.messages.map(m => m.id || 0).join('_')}_${idx}`;
 
           return (
             <React.Fragment key={msgKey}>
@@ -2881,15 +3038,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span>{formatTime(msg.timestamp)}</span>
+                    <span>{formatTime(lastMsg.timestamp)}</span>
                     {!isCustomer && (
-                      msg.status === 'sending' || msg.status === 'pending' ? (
+                      lastMsg.status === 'sending' || lastMsg.status === 'pending' ? (
                         <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
-                      ) : msg.status === 'failed' ? (
+                      ) : lastMsg.status === 'failed' ? (
                         <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
-                      ) : msg.status === 'sent' ? (
+                      ) : lastMsg.status === 'sent' ? (
                         <Check size={14} style={{ color: 'var(--text-muted)' }} title="Enviada ao servidor" />
-                      ) : msg.status === 'delivered' ? (
+                      ) : lastMsg.status === 'delivered' ? (
                         <CheckCheck size={15} style={{ color: 'var(--text-muted)' }} title="Entregue no WhatsApp" />
                       ) : (
                         <CheckCheck size={15} style={{ color: '#53bdeb' }} title="Lida / Visualizada pelo cliente" />
@@ -2921,7 +3078,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
                 </div>
 
-                {renderMediaContent(msg)}
+                {group.type === 'image_album' ? renderImageAlbum(group.messages) : renderMediaContent(msg)}
 
                 {/* Reaction Emoji Badge on Bubble Bottom */}
                 {reaction && (
