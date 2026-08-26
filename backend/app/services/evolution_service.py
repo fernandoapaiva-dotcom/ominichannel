@@ -271,21 +271,12 @@ class EvolutionService:
                 except Exception as rest_err:
                     logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
 
-            # Retry with canonical JID or @lid only if WhatsApp rejected the initial number (400)
-            if response.status_code == 400 and "@g.us" not in str(clean_number):
+            # Retry with canonical JID (8 vs 9 digits) if WhatsApp rejected the initial number (400)
+            if response.status_code == 400 and "@g.us" not in str(clean_number) and "@lid" not in str(clean_number):
                 alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
                 if alt_number and alt_number != clean_number:
                     retry_payload = {**payload, "number": self._format_target_number(alt_number)}
                     retry_res = await client.post(url, json=retry_payload, headers=headers)
-                    if retry_res.status_code < 400:
-                        retry_data = retry_res.json()
-                        retry_data["success"] = True
-                        return retry_data
-
-                digits = "".join(filter(str.isdigit, clean_number))
-                if "@lid" not in clean_number:
-                    lid_payload = {**payload, "number": f"{digits}@lid"}
-                    retry_res = await client.post(url, json=lid_payload, headers=headers)
                     if retry_res.status_code < 400:
                         retry_data = retry_res.json()
                         retry_data["success"] = True
@@ -565,14 +556,15 @@ class EvolutionService:
                 except Exception as rest_err:
                     logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
 
-            if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
-                digits = "".join(filter(str.isdigit, clean_number))
-                lid_payload = {**payload, "number": f"{digits}@lid"}
-                retry_res = await client.post(url, json=lid_payload, headers=headers)
-                if retry_res.status_code < 400:
-                    retry_data = retry_res.json()
-                    retry_data["success"] = True
-                    return retry_data
+            if response.status_code == 400 and "@g.us" not in str(clean_number) and "@lid" not in str(clean_number):
+                alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
+                if alt_number and alt_number != clean_number:
+                    retry_payload = {**payload, "number": self._format_target_number(alt_number)}
+                    retry_res = await client.post(url, json=retry_payload, headers=headers)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
 
             if response.status_code >= 400:
                 err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
