@@ -534,8 +534,8 @@ class EvolutionService:
         clean_number = self._format_target_number(number)
 
         media_payload = media
-        if not media.startswith("http") and not media.startswith("data:"):
-            media_payload = f"data:{mimetype};base64,{media}"
+        if media_payload.startswith("data:") and ";base64," in media_payload:
+            media_payload = media_payload.split(";base64,")[1]
 
         payload = {
             "number": clean_number,
