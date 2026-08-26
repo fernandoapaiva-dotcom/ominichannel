@@ -95,24 +95,58 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       const data = await apiFetch('/conversations/');
       if (Array.isArray(data)) {
         setConversations(prev => {
-          // Collect any optimistic messages that are currently sending
-          const optimisticMap: { [convId: number]: Message[] } = {};
+          // Collect all optimistic/sending messages across all conversations
+          const pendingMessages: { [key: string]: Message[] } = {};
           prev.forEach(c => {
             const sending = (c.messages || []).filter(m => m.id < 0 || m.status === 'sending');
             if (sending.length > 0) {
-              optimisticMap[c.id] = sending;
+              const cid = c.contact_id || c.contact?.id;
+              const phone = (c.contact?.telefone || '').replace(/\D/g, '');
+              if (cid) {
+                pendingMessages[`cid_${cid}`] = [...(pendingMessages[`cid_${cid}`] || []), ...sending];
+              }
+              if (phone.length >= 8) {
+                pendingMessages[`phone_${phone.slice(-8)}`] = [...(pendingMessages[`phone_${phone.slice(-8)}`] || []), ...sending];
+              }
+              pendingMessages[`conv_${c.id}`] = [...(pendingMessages[`conv_${c.id}`] || []), ...sending];
             }
           });
 
           return data.map((c: Conversation) => {
-            const sending = optimisticMap[c.id] || [];
+            const cid = c.contact_id || c.contact?.id;
+            const phone = (c.contact?.telefone || '').replace(/\D/g, '');
+            const keyCid = cid ? `cid_${cid}` : '';
+            const keyPhone = phone.length >= 8 ? `phone_${phone.slice(-8)}` : '';
+            const keyConv = `conv_${c.id}`;
+
+            const sending = [
+              ...(keyConv ? (pendingMessages[keyConv] || []) : []),
+              ...(keyCid ? (pendingMessages[keyCid] || []) : []),
+              ...(keyPhone ? (pendingMessages[keyPhone] || []) : [])
+            ];
+
             if (sending.length > 0) {
-              const existingIds = new Set((c.messages || []).map(m => m.id));
-              const toKeep = sending.filter(m => !existingIds.has(m.id));
-              return {
-                ...c,
-                messages: [...(c.messages || []), ...toKeep]
-              };
+              const currentMsgs = c.messages || [];
+              const existingTexts = new Set(currentMsgs.map(m => m.conteudo?.trim()));
+              const existingIds = new Set(currentMsgs.map(m => m.id));
+
+              // Deduplicate pending messages to keep
+              const uniqueToKeep: Message[] = [];
+              const seenTempIds = new Set<number>();
+
+              sending.forEach(m => {
+                if (!seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(m.conteudo?.trim())) {
+                  seenTempIds.add(m.id);
+                  uniqueToKeep.push(m);
+                }
+              });
+
+              if (uniqueToKeep.length > 0) {
+                return {
+                  ...c,
+                  messages: [...currentMsgs, ...uniqueToKeep]
+                };
+              }
             }
             return c;
           });
@@ -254,8 +288,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
             setConversations(prev => {
               let found = false;
+              const targetPhone = String(payload.contact_phone || payload.phone || '').replace(/\D/g, '');
               const updated = prev.map(c => {
-                if (c.id === payload.conversation_id) {
+                const cid = c.contact_id || c.contact?.id;
+                const phone = (c.contact?.telefone || '').replace(/\D/g, '');
+
+                const matches = (
+                  c.id === payload.conversation_id ||
+                  (payload.contact_id && cid && cid === payload.contact_id) ||
+                  (targetPhone.length >= 8 && phone.length >= 8 && phone.includes(targetPhone.slice(-8)))
+                );
+
+                if (matches) {
                   found = true;
                   const currentMsgs = c.messages || [];
                   const hasSameId = currentMsgs.some(m => m.id === newMsg.id);
@@ -266,8 +310,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                       messages: currentMsgs.map(m => m.id === newMsg.id ? { ...m, ...newMsg } : m)
                     };
                   }
+                  let replaced = false;
                   const replacedSending = currentMsgs.map(m => {
-                    if ((m.id < 0 || m.status === 'sending') && m.conteudo === newMsg.conteudo && m.remetente === newMsg.remetente) {
+                    if (!replaced && (m.id < 0 || m.status === 'sending') && m.conteudo?.trim() === newMsg.conteudo?.trim() && m.remetente === newMsg.remetente) {
+                      replaced = true;
                       return newMsg;
                     }
                     return m;
@@ -403,10 +449,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       status: 'sending'
     };
 
-    // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately on screen!
+    const targetCid = targetConv.contact_id || targetConv.contact?.id;
+    const targetCleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
+
+    // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately across all linked conversations for this contact!
     setConversations(prevConvs =>
       prevConvs.map(conv => {
-        if (conv.id === targetConv.id) {
+        const cid = conv.contact_id || conv.contact?.id;
+        const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
+
+        const matches = (
+          conv.id === targetConv.id ||
+          (targetCid && cid && cid === targetCid) ||
+          (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
+        );
+
+        if (matches) {
           const currentMsgs = conv.messages || [];
           return {
             ...conv,
@@ -459,10 +517,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           })
         });
 
-        // 3. Confirm delivery: replace tempId with real server DB message
+        // 3. Confirm delivery: replace tempId with real server DB message across all linked views
         setConversations(prevConvs =>
           prevConvs.map(conv => {
-            if (conv.id === targetConv.id || conv.id === finalConvId) {
+            const cid = conv.contact_id || conv.contact?.id;
+            const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
+            const matches = (
+              conv.id === targetConv.id ||
+              conv.id === finalConvId ||
+              (targetCid && cid && cid === targetCid) ||
+              (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
+            );
+
+            if (matches) {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
@@ -479,7 +546,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         // Mark as failed if connection drops
         setConversations(prevConvs =>
           prevConvs.map(conv => {
-            if (conv.id === targetConv.id) {
+            const cid = conv.contact_id || conv.contact?.id;
+            const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
+            const matches = (
+              conv.id === targetConv.id ||
+              (targetCid && cid && cid === targetCid) ||
+              (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
+            );
+
+            if (matches) {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
