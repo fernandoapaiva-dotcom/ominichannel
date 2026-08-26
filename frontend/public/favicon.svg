@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00f5a0" />
+      <stop offset="100%" stop-color="#00d984" />
+    </linearGradient>
+  </defs>
+  <!-- Background Squircle -->
+  <rect x="16" y="16" width="480" height="480" rx="140" fill="url(#bgGrad)" />
+  
+  <!-- Robot Head Graphic -->
+  <!-- Antenna stem -->
+  <rect x="236" y="110" width="40" height="44" rx="10" fill="#061f18" />
+  <!-- Antenna horizontal bar -->
+  <path d="M216 110 L296 110" stroke="#061f18" stroke-width="28" stroke-linecap="round" />
+  
+  <!-- Ears / Antennas left and right -->
+  <line x1="100" y1="285" x2="150" y2="285" stroke="#061f18" stroke-width="28" stroke-linecap="round" />
+  <line x1="362" y1="285" x2="412" y2="285" stroke="#061f18" stroke-width="28" stroke-linecap="round" />
+
+  <!-- Robot Head Outline Box -->
+  <rect x="135" y="154" width="242" height="230" rx="52" fill="none" stroke="#061f18" stroke-width="32" stroke-linejoin="round" />
+
+  <!-- Eyes -->
+  <rect x="195" y="235" width="28" height="68" rx="14" fill="#061f18" />
+  <rect x="289" y="235" width="28" height="68" rx="14" fill="#061f18" />
+</svg>
