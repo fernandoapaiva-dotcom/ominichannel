@@ -62,11 +62,10 @@ async def send_whatsapp_to_employee(
                 ordered_candidates.append(inst)
 
         if not ordered_candidates:
-            ordered_candidates = ["instancia_locacao", "instancia_tecnica"]
+            ordered_candidates = ["instancia_locacao", "instancia_tecnica", "instancia_vendas"]
 
         for inst_name in ordered_candidates:
             try:
-                # 1. Send complete task card (guaranteed arrival on all WhatsApp apps)
                 full_card = f"*{title}*\n\n{description}\n\n_{footer}_"
                 res_txt = await evolution_service.send_text_message(
                     instance_name=inst_name,
@@ -74,19 +73,8 @@ async def send_whatsapp_to_employee(
                     text=full_card
                 )
 
-                # 2. Send interactive 1-tap confirmation button
-                try:
-                    await evolution_service.send_poll_message(
-                        instance_name=inst_name,
-                        number=clean_phone,
-                        question="Podemos contar com sua execução? Clique abaixo:",
-                        options=["Sim, confirmo a atividade", "Não, quero recusar"]
-                    )
-                except Exception as poll_err:
-                    logger.debug(f"Poll button error: {poll_err}")
-
                 if res_txt and not res_txt.get("error"):
-                    logger.info(f"Tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
+                    logger.info(f"Mensagem de tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
                     return True
             except Exception as inst_err:
                 logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
@@ -97,7 +85,7 @@ async def send_whatsapp_to_employee(
         return False
 
 async def send_immediate_creation_notification(event_id: int):
-    """Sends immediate WhatsApp notification with interactive button to the assigned employee upon event creation."""
+    """Sends immediate WhatsApp notification with complete task details to the assigned employee upon event creation."""
     try:
         async with AsyncSessionLocal() as session:
             stmt = (
@@ -173,32 +161,22 @@ async def send_immediate_creation_notification(event_id: int):
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            title = "🚨 NOVO COMPROMISSO AGENDADO"
+            title = "🔔 NOVA ATIVIDADE AGENDADA"
             description = (
-                f"Oi *{emp_name}*, sua atividade está agendada 📅\n\n"
-                f"Podemos contar com sua execução?\n"
-                f"Clique abaixo para aceitar ou recusar:"
+                f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
+                f"📌 *Tipo:* {type_label}\n"
+                f"🏷️ *Atividade:* {ev.title}\n"
+                f"⏰ *Data e Hora:* {time_str}\n"
+                f"👤 *Cliente:* {client_info}\n"
+                f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
             )
             footer = "Servsolda • Sistema de Tarefas"
 
-            buttons = [
-                {
-                    "type": "reply",
-                    "displayText": "Sim, confirmo",
-                    "id": f"confirm_view_task_{ev.id}"
-                },
-                {
-                    "type": "reply",
-                    "displayText": "Não, recusar",
-                    "id": f"refuse_view_task_{ev.id}"
-                }
-            ]
-
-            success = await send_whatsapp_to_employee(ordered_inst_names, emp_phone, title, description, footer, event_id=ev.id, buttons=buttons)
+            success = await send_whatsapp_to_employee(ordered_inst_names, emp_phone, title, description, footer, event_id=ev.id)
             if success:
                 ev.notified_creation = True
                 await session.commit()
-                logger.info(f"Notificação imediata com botão de visualização enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
+                logger.info(f"Notificação de tarefa enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 
@@ -249,25 +227,17 @@ async def check_and_send_calendar_reminders():
 
             # 1. Immediate creation notification
             if not ev.notified_creation:
-                title = "🔔 NOVA ATIVIDADE LANÇADA PARA VOCÊ"
+                title = "🔔 NOVA ATIVIDADE AGENDADA"
                 description = (
-                    f"Olá, *{emp_name}*! A empresa lançou uma nova atividade atribuída a você:\n\n"
+                    f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
                     f"📌 *Tipo:* {type_label}\n"
                     f"🏷️ *Atividade:* {ev.title}\n"
                     f"⏰ *Data e Hora:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                    f"👉 *Clique no botão abaixo ou responda \"CONFIRMAR\" para registrar que visualizou:*"
+                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
                 )
                 footer = "Servsolda • Sistema de Tarefas"
-                buttons = [
-                    {
-                        "type": "reply",
-                        "displayText": "👀 Confirmar Visualização",
-                        "id": f"confirm_view_task_{ev.id}"
-                    }
-                ]
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id, buttons=buttons)
+                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
                 if success:
                     ev.notified_creation = True
                     logger.info(f"Notificação de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
