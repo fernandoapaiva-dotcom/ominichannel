@@ -180,71 +180,63 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
     const targets = Object.values(selectedTargets);
     if (msgsList.length === 0 || targets.length === 0) return;
 
-    try {
-      setIsForwarding(true);
-      setForwardProgress(`Iniciando encaminhamento para ${targets.length} destinos...`);
+    // 1. Instant 0ms UI Dismissal (Exact WhatsApp Web UX)
+    setSelectedTargets({});
+    setSearchTerm('');
+    if (onForwardSuccess) onForwardSuccess();
+    onClose();
 
-      let processed = 0;
+    // 2. Asynchronous background network forwarding
+    (async () => {
+      try {
+        for (const target of targets) {
+          let targetConvId = target.conversationId;
 
-      for (const target of targets) {
-        processed++;
-        setForwardProgress(`Encaminhando (${processed}/${targets.length}) para ${target.contactName}...`);
+          // Ensure conversation in the intended sending department
+          if (target.whatsappNumberId) {
+            try {
+              const matchedConv = conversations.find(
+                c => c.whatsapp_number_id === target.whatsappNumberId &&
+                     c.contact?.telefone === target.contactPhone
+              );
 
-        let targetConvId = target.conversationId;
-
-        // Ensure conversation in the intended sending department
-        if (target.whatsappNumberId) {
-          try {
-            const matchedConv = conversations.find(
-              c => c.whatsapp_number_id === target.whatsappNumberId &&
-                   c.contact?.telefone === target.contactPhone
-            );
-
-            if (matchedConv) {
-              targetConvId = matchedConv.id;
-            } else {
-              const startRes = await apiFetch('/conversations/start', {
-                method: 'POST',
-                body: JSON.stringify({
-                  whatsapp_number_id: target.whatsappNumberId,
-                  telefone: target.contactPhone,
-                  nome: target.contactName
-                })
-              });
-              if (startRes && startRes.id) {
-                targetConvId = startRes.id;
+              if (matchedConv) {
+                targetConvId = matchedConv.id;
+              } else {
+                const startRes = await apiFetch('/conversations/start', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    whatsapp_number_id: target.whatsappNumberId,
+                    telefone: target.contactPhone,
+                    nome: target.contactName
+                  })
+                });
+                if (startRes && startRes.id) {
+                  targetConvId = startRes.id;
+                }
               }
+            } catch (createErr) {
+              console.warn(`Usando conversa padrão para ${target.contactName}:`, createErr);
             }
-          } catch (createErr) {
-            console.warn(`Usando conversa padrão para ${target.contactName}:`, createErr);
+          }
+
+          // Send all selected messages to the resolved conversation
+          for (const msg of msgsList) {
+            await apiFetch(`/conversations/${targetConvId}/messages`, {
+              method: 'POST',
+              body: JSON.stringify({
+                conversation_id: targetConvId,
+                conteudo: msg.conteudo,
+                tipo: msg.tipo || 'texto',
+                remetente: 'atendente'
+              })
+            });
           }
         }
-
-        // Send all selected messages to the resolved conversation
-        for (const msg of msgsList) {
-          await apiFetch(`/conversations/${targetConvId}/messages`, {
-            method: 'POST',
-            body: JSON.stringify({
-              conversation_id: targetConvId,
-              conteudo: msg.conteudo,
-              tipo: msg.tipo || 'texto',
-              remetente: 'atendente'
-            })
-          });
-        }
+      } catch (err) {
+        console.error('Erro em segundo plano ao encaminhar mensagens:', err);
       }
-
-      setSelectedTargets({});
-      setSearchTerm('');
-      if (onForwardSuccess) onForwardSuccess();
-      onClose();
-    } catch (err) {
-      console.error('Erro ao encaminhar mensagens:', err);
-      alert('Erro ao encaminhar mensagens. Verifique os logs.');
-    } finally {
-      setIsForwarding(false);
-      setForwardProgress(null);
-    }
+    })();
   };
 
   if (!isOpen || msgsList.length === 0) return null;
