@@ -256,57 +256,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     if (!activeConversation) return;
 
     let targetConv = activeConversation;
-    const rawTargetPhone = targetConv.contact?.telefone || '';
-    const rawTargetName = targetConv.contact?.nome || '';
-    const isGroup = Boolean(
-      rawTargetPhone.includes('@g.us') ||
-      rawTargetPhone.startsWith('120363') ||
-      rawTargetPhone.includes('-') ||
-      rawTargetPhone.length >= 18 ||
-      (targetConv.dados_adicionais as any)?.is_group === true ||
-      (targetConv.contact?.dados_adicionais as any)?.is_group === true ||
-      rawTargetName.startsWith('SERV -') ||
-      rawTargetName.includes('GRUPO') ||
-      rawTargetName.includes('Servweld/Servsolda')
-    );
-
-    // REGRA DE OURO DO DEPARTAMENTO SELECIONADO:
-    // Se o departamento está selecionado lá em cima (ex: Assistência Técnica) e NÃO é um grupo,
-    // a mensagem DEVE sair pelo número do departamento selecionado!
-    if (!isGroup && selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
-      const cid = targetConv.contact_id || targetConv.contact?.id;
-      const cleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
-      
-      const matchInDept = conversations.find(c => 
-        String(c.whatsapp_number_id) === String(selectedDeptId) &&
-        ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
-         (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
-      );
-
-      if (matchInDept) {
-        targetConv = matchInDept;
-        setActiveConversationId(matchInDept.id);
-      } else if (targetConv.contact) {
-        try {
-          const createdConv = await apiFetch('/conversations/', {
-            method: 'POST',
-            body: JSON.stringify({
-              whatsapp_number_id: Number(selectedDeptId),
-              contact_phone: targetConv.contact.telefone,
-              contact_name: targetConv.contact.nome
-            })
-          });
-          if (createdConv && createdConv.id) {
-            targetConv = createdConv;
-            setActiveConversationId(createdConv.id);
-            setConversations(prev => [createdConv, ...prev.filter(c => c.id !== createdConv.id)]);
-          }
-        } catch (err) {
-          console.error("Erro ao criar conversa no departamento selecionado:", err);
-        }
-      }
-    }
-
     const isMedia = tipo !== 'texto' || text.endsWith('.webp') || text.endsWith('.gif') || text.includes('/uploads/');
     const actualTipo = isMedia ? (text.endsWith('.gif') ? 'video' : 'imagem') : (tipo || 'texto');
     const tempId = -Date.now();
@@ -320,7 +269,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       status: 'sending'
     };
 
-    // 1. Instantly append message to local state (0ms instant UI update!)
+    // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately on screen!
     setConversations(prevConvs =>
       prevConvs.map(conv => {
         if (conv.id === targetConv.id) {
@@ -335,49 +284,79 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       })
     );
 
-    try {
-      // 2. Dispatch network HTTP request asynchronously
-      const res = await apiFetch(`/conversations/${targetConv.id}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({
-          conversation_id: targetConv.id,
-          remetente: 'atendente',
-          conteudo: text,
-          tipo: actualTipo
-        })
-      });
+    // 2. Asynchronous Network Dispatch in background without blocking UI
+    (async () => {
+      try {
+        const rawTargetPhone = targetConv.contact?.telefone || '';
+        const rawTargetName = targetConv.contact?.nome || '';
+        const isGroup = Boolean(
+          rawTargetPhone.includes('@g.us') ||
+          rawTargetPhone.startsWith('120363') ||
+          rawTargetPhone.includes('-') ||
+          rawTargetPhone.length >= 18 ||
+          (targetConv.dados_adicionais as any)?.is_group === true ||
+          (targetConv.contact?.dados_adicionais as any)?.is_group === true ||
+          rawTargetName.startsWith('SERV -') ||
+          rawTargetName.includes('GRUPO') ||
+          rawTargetName.includes('Servweld/Servsolda')
+        );
 
-      // 3. Confirm delivery: replace tempId with real server DB message
-      setConversations(prevConvs =>
-        prevConvs.map(conv => {
-          if (conv.id === targetConv.id) {
-            const currentMsgs = conv.messages || [];
-            return {
-              ...conv,
-              messages: currentMsgs.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
-            };
+        let finalConvId = targetConv.id;
+        if (!isGroup && selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
+          const cid = targetConv.contact_id || targetConv.contact?.id;
+          const cleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
+          const matchInDept = conversations.find(c => 
+            String(c.whatsapp_number_id) === String(selectedDeptId) &&
+            ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
+             (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
+          );
+          if (matchInDept) {
+            finalConvId = matchInDept.id;
           }
-          return conv;
-        })
-      );
-    } catch (err: any) {
-      console.error('Optimistic message send error:', err);
-      setNotificationAlert(err.message || 'Erro ao enviar mensagem no WhatsApp.');
-      setTimeout(() => setNotificationAlert(null), 7000);
-      // Mark as failed if connection drops
-      setConversations(prevConvs =>
-        prevConvs.map(conv => {
-          if (conv.id === targetConv.id) {
-            const currentMsgs = conv.messages || [];
-            return {
-              ...conv,
-              messages: currentMsgs.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
-            };
-          }
-          return conv;
-        })
-      );
-    }
+        }
+
+        const res = await apiFetch(`/conversations/${finalConvId}/messages`, {
+          method: 'POST',
+          body: JSON.stringify({
+            conversation_id: finalConvId,
+            remetente: 'atendente',
+            conteudo: text,
+            tipo: actualTipo
+          })
+        });
+
+        // 3. Confirm delivery: replace tempId with real server DB message
+        setConversations(prevConvs =>
+          prevConvs.map(conv => {
+            if (conv.id === targetConv.id || conv.id === finalConvId) {
+              const currentMsgs = conv.messages || [];
+              return {
+                ...conv,
+                messages: currentMsgs.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
+              };
+            }
+            return conv;
+          })
+        );
+      } catch (err: any) {
+        console.error('Optimistic message send error:', err);
+        setNotificationAlert(err.message || 'Erro ao enviar mensagem no WhatsApp.');
+        setTimeout(() => setNotificationAlert(null), 7000);
+        // Mark as failed if connection drops
+        setConversations(prevConvs =>
+          prevConvs.map(conv => {
+            if (conv.id === targetConv.id) {
+              const currentMsgs = conv.messages || [];
+              return {
+                ...conv,
+                messages: currentMsgs.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
+              };
+            }
+            return conv;
+          })
+        );
+      }
+    })();
   };
 
   const handleConversationCreated = (conv: Conversation) => {
