@@ -1344,6 +1344,21 @@ async def receive_evolution_webhook(
             }
         )
         logger.info(f"[OUTGOING MOBILE SYNC] Mensagem/Foto enviada pelo celular sincronizada na conversa #{conversation.id} ({contact.nome})")
+        
+        # Trigger Smart Automation Engine (OS Handler & Custom Rules) for attendant message
+        from app.services.automation_service import automation_service
+        import asyncio
+        asyncio.create_task(
+            automation_service.process_and_dispatch_automation(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                message_text=text_content,
+                from_me=True,
+                contact_name=contact.nome if contact else "Cliente",
+                instance_name=instance_name,
+                recipient_phone=contact.telefone if contact else ""
+            )
+        )
         return {"status": "success", "action": "synced_attendant_mobile_message"}
 
     # 4. Save Customer Message with WhatsApp Message ID (status received/unread)
@@ -1391,6 +1406,21 @@ async def receive_evolution_webhook(
             "department": whatsapp_number.nome_departamento,
             "dados_adicionais": user_msg.dados_adicionais
         }
+    )
+
+    # Trigger Smart Automation Engine for customer incoming message
+    from app.services.automation_service import automation_service
+    import asyncio
+    asyncio.create_task(
+        automation_service.process_and_dispatch_automation(
+            tenant_id=tenant_id,
+            conversation_id=conversation.id,
+            message_text=text_content,
+            from_me=False,
+            contact_name=contact.nome if contact else "Cliente",
+            instance_name=instance_name,
+            recipient_phone=contact.telefone if contact else ""
+        )
     )
 
     # Internal Number / Bot Echo Shield: Never run AI if sender is another internal company phone or automated bot

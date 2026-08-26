@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building, Zap } from 'lucide-react';
 import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../types';
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
+import { AutomationsSettings } from './AutomationsSettings';
 
 interface AdminPanelProps {
   initialNumbers?: WhatsAppNumber[];
@@ -10,7 +11,7 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix'>('numbers');
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations'>('numbers');
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>(initialNumbers);
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
@@ -961,6 +962,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             className={activeSubTab === 'pix' ? 'btn-primary' : 'btn-secondary'}
           >
             <QrCode size={16} /> Chaves Pix & QR Code
+          </button>
+          <button
+            onClick={() => setActiveSubTab('automations')}
+            className={activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}
+          >
+            <Zap size={16} /> Automações & Gatilhos (OS)
           </button>
         </div>
 
@@ -2828,6 +2835,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               )}
             </div>
           </div>
+        )}
+
+        {/* 8. Automations & Smart OS Handlers Tab */}
+        {activeSubTab === 'automations' && (
+          <AutomationsSettings />
         )}
       </div>
     </div>

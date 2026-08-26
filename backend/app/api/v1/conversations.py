@@ -1024,6 +1024,20 @@ async def send_agent_message(
 
     asyncio.create_task(_async_dispatch_to_whatsapp())
 
+    # 4. Trigger Smart Automation Engine (OS Handler & Custom Rules) in background
+    from app.services.automation_service import automation_service
+    asyncio.create_task(
+        automation_service.process_and_dispatch_automation(
+            tenant_id=target_tenant_id,
+            conversation_id=target_conv_id,
+            message_text=raw_content,
+            from_me=True,
+            contact_name=conv.contact.nome if conv.contact else "Cliente",
+            instance_name=target_instance_name,
+            recipient_phone=target_phone
+        )
+    )
+
     return message
 
 class ReactionPayload(BaseModel):

@@ -228,3 +228,86 @@ async def google_oauth_callback(
     )
 
     return RedirectResponse(url="http://localhost:3000/?tab=admin&gdrive=success")
+
+
+@router.get("/automations")
+async def get_automations(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns the automation engine configuration (OS handlers, diagnostic price table, custom rules).
+    """
+    from app.services.automation_service import automation_service
+    return await automation_service.get_tenant_automations(db, current_user.tenant_id)
+
+
+@router.post("/automations")
+async def save_automations(
+    payload: dict,
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Saves the automation configuration for the tenant.
+    """
+    from app.services.automation_service import automation_service
+    saved = await automation_service.save_tenant_automations(db, admin_user.tenant_id, payload)
+    
+    audit = AuditLog(
+        tenant_id=admin_user.tenant_id,
+        user_id=admin_user.id,
+        user_name=admin_user.nome,
+        acao="ATUALIZOU_CONFIG_AUTOMACAO",
+        detalhes="Atualizou regras de automação de OS e respostas padrão.",
+        timestamp=datetime.utcnow()
+    )
+    db.add(audit)
+    await db.commit()
+    return saved
+
+
+@router.post("/automations/test")
+async def test_automation_simulation(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Simulates message parsing against automation rules and returns the matched messages without sending to WhatsApp.
+    """
+    from app.services.automation_service import automation_service
+    test_text = payload.get("text", "")
+    from_me = payload.get("from_me", True)
+    client_name = payload.get("client_name", "Cliente Teste")
+    custom_config = payload.get("config")
+
+    if not custom_config:
+        custom_config = await automation_service.get_tenant_automations(db, current_user.tenant_id)
+
+    os_match = automation_service.match_os_handler(test_text, custom_config, from_me, client_name)
+    if os_match:
+        status, msgs = os_match
+        return {
+            "matched": True,
+            "rule_type": "os_handler",
+            "os_status": status,
+            "messages": msgs,
+            "count": len(msgs)
+        }
+
+    custom_match = automation_service.match_custom_rules(test_text, custom_config, from_me)
+    if custom_match:
+        return {
+            "matched": True,
+            "rule_type": "custom_rule",
+            "messages": custom_match,
+            "count": len(custom_match)
+        }
+
+    return {
+        "matched": False,
+        "reason": "Nenhuma palavra-chave ou padrão de OS correspondente encontrado.",
+        "messages": []
+    }
+
