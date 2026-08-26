@@ -537,19 +537,22 @@ async def receive_evolution_webhook(
 
     remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
     remote_jid_alt = key.get("remoteJidAlt") or data.get("remoteJidAlt") or ""
-    sender_jid = data.get("sender", "") or ""
+    sender_jid = data.get("sender", "") or data.get("senderPhone", "") or ""
+    participant_jid = key.get("participant", "") or data.get("participant", "") or ""
 
+    # Fix LID numbers: resolve to real WhatsApp phone number
     if "@lid" in str(remote_jid).lower():
         if "@s.whatsapp.net" in str(remote_jid_alt):
             remote_jid = remote_jid_alt
+        elif "@s.whatsapp.net" in str(participant_jid):
+            remote_jid = participant_jid
         elif "@s.whatsapp.net" in str(sender_jid):
             remote_jid = sender_jid
 
     is_group = (
         "@g.us" in str(remote_jid).lower() or
-        data.get("isGroup") is True or
-        bool(key.get("participant")) or
-        "@temp" in str(remote_jid).lower()
+        str(remote_jid).startswith("120363") or
+        data.get("isGroup") is True
     )
     raw_phone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
 
@@ -1071,10 +1074,28 @@ async def receive_evolution_webhook(
 
     clean_push_name = sanitize_customer_name(push_name) if push_name else "Cliente"
     if not contact:
+        # Check if an existing contact can be matched by pushName before creating a duplicate
+        if clean_push_name and clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] and not is_group:
+            nm_stmt = select(Contact).where(
+                Contact.tenant_id == tenant_id,
+                Contact.nome.ilike(clean_push_name)
+            )
+            nm_res = await db.execute(nm_stmt)
+            matched_by_name = nm_res.scalars().first()
+            if matched_by_name:
+                contact = matched_by_name
+                # If incoming phone is real and contact had a LID, update phone
+                if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
+                    contact.telefone = phone_number
+
+    if not contact:
         contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=clean_push_name, foto_perfil_url=profile_pic_url)
         db.add(contact)
         await db.flush()
     else:
+        # Upgrade phone if contact had a LID and we now have a real number
+        if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
+            contact.telefone = phone_number
         if clean_push_name and clean_push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente" or is_group):
             contact.nome = clean_push_name
         if profile_pic_url and contact.foto_perfil_url != profile_pic_url:

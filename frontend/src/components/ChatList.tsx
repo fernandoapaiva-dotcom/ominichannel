@@ -26,8 +26,9 @@ const formatTime = (ts: string | Date | undefined) => {
 
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
   if (!phone) return '';
-  const clean = String(phone).replace(/\D/g, '');
-  if (clean.startsWith('120363') || clean.length > 15) {
+  const str = String(phone);
+  const clean = str.replace(/\D/g, '');
+  if (str.includes('@g.us') || clean.startsWith('120363')) {
     return 'Grupo';
   }
   if (clean.startsWith('55') && clean.length === 12) {
@@ -42,7 +43,7 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   if (clean.length === 11) {
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
   }
-  return phone;
+  return str.replace('@lid', '').replace('@s.whatsapp.net', '');
 };
 
 interface ChatListProps {
@@ -187,12 +188,12 @@ export const ChatList: React.FC<ChatListProps> = ({
     conversations.forEach(conv => {
       const rawPhone = (conv.contact?.telefone || '').trim();
       const cleanDigits = rawPhone.replace(/\D/g, '');
-      const isGroup = rawPhone.startsWith('120363') || cleanDigits.length > 15;
+      const isGroup = rawPhone.includes('@g.us') || rawPhone.startsWith('120363') || Boolean((conv.dados_adicionais as any)?.is_group);
       
       let groupKey = '';
       if (isGroup) {
         groupKey = `group_${cleanDigits || rawPhone}`;
-      } else if (cleanDigits.length >= 8) {
+      } else if (cleanDigits.length >= 8 && !cleanDigits.startsWith('120363')) {
         groupKey = `client_${cleanDigits.slice(-8)}`;
       } else {
         groupKey = `contact_${conv.contact_id || conv.contact?.id || 0}`;

@@ -84,8 +84,9 @@ const getMessageDateKey = (timestampStr: string): string => {
 
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
   if (!phone) return '';
-  const clean = String(phone).replace(/\D/g, '');
-  if (clean.startsWith('120363') || clean.length > 15) {
+  const str = String(phone);
+  const clean = str.replace(/\D/g, '');
+  if (str.includes('@g.us') || clean.startsWith('120363')) {
     return 'Grupo';
   }
   if (clean.startsWith('55') && clean.length === 12) {
@@ -100,7 +101,7 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   if (clean.length === 11) {
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
   }
-  return phone;
+  return str.replace('@lid', '').replace('@s.whatsapp.net', '');
 };
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -172,9 +173,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const isGroupChat = useMemo(() => {
     if (!conversation) return false;
+    const phone = conversation.contact?.telefone || '';
     return Boolean(
-      conversation.contact?.telefone?.startsWith('120363') ||
-      (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
+      phone.includes('@g.us') ||
+      phone.startsWith('120363') ||
       conversation.contact?.nome?.includes('Servweld/Servsolda') ||
       conversation.dados_adicionais?.is_group
     );
@@ -4245,10 +4247,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <span>Chamado em atendimento por <strong>{assignedAttendantName}</strong>. Apenas visualização em tempo real permitida.</span>
         </div>
       ) : (() => {
+        const phone = conversation.contact?.telefone || '';
         const isGroupChat = Boolean(
-          conversation.contact?.telefone?.startsWith('120363') ||
-          (conversation.contact?.telefone && conversation.contact.telefone.length > 15) ||
-          conversation.contact?.nome?.includes('Servweld/Servsolda')
+          phone.includes('@g.us') ||
+          phone.startsWith('120363') ||
+          conversation.contact?.nome?.includes('Servweld/Servsolda') ||
+          conversation.dados_adicionais?.is_group
         );
 
         return (

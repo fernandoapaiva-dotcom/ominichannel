@@ -63,14 +63,14 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
     const seenKeys = new Set<string>();
 
     for (const c of conversations) {
+      const phone = c.contact?.telefone || '';
       const isGroup = Boolean(
-        c.contact?.telefone?.startsWith('120363') ||
-        c.contact?.telefone?.includes('@g.us') ||
-        (c.contact?.telefone?.length || 0) > 15 ||
+        phone.startsWith('120363') ||
+        phone.includes('@g.us') ||
+        Boolean((c.dados_adicionais as any)?.is_group) ||
         c.contact?.nome?.includes('Servweld/Servsolda')
       );
 
-      const phone = c.contact?.telefone || '';
       const name = c.contact?.nome || (isGroup ? 'Grupo de WhatsApp' : 'Cliente');
       const deptName = c.whatsapp_number?.nome_departamento || 'Geral';
       const wnId = c.whatsapp_number_id || (c.whatsapp_number?.id || 1);

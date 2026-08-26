@@ -325,11 +325,17 @@ class WhatsAppSyncService:
                         for attempt in range(5):
                             try:
                                 async with AsyncSessionLocal() as session:
-                                    # Get or create Contact
-                                    contact_stmt = select(Contact).where(
-                                        Contact.tenant_id == tenant_id,
-                                        Contact.telefone == phone
-                                    )
+                                    # 2. Get or create Contact (with 8-digit suffix match)
+                                    if len(phone) >= 8 and not phone.startswith("120363"):
+                                        contact_stmt = select(Contact).where(
+                                            Contact.tenant_id == tenant_id,
+                                            (Contact.telefone == phone) | (Contact.telefone.like(f"%{phone[-8:]}%"))
+                                        )
+                                    else:
+                                        contact_stmt = select(Contact).where(
+                                            Contact.tenant_id == tenant_id,
+                                            Contact.telefone == phone
+                                        )
                                     c_res = await session.execute(contact_stmt)
                                     contact = c_res.scalars().first()
 

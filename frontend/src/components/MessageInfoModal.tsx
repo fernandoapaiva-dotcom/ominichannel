@@ -17,9 +17,11 @@ export const MessageInfoModal: React.FC<MessageInfoModalProps> = ({
 }) => {
   if (!isOpen || !message) return null;
 
+  const phone = conversation?.contact?.telefone || '';
   const isGroup = Boolean(
-    conversation?.contact?.telefone?.startsWith('120363') ||
-    (conversation?.contact?.telefone && conversation.contact.telefone.length > 15) ||
+    phone.startsWith('120363') ||
+    phone.includes('@g.us') ||
+    Boolean((conversation?.dados_adicionais as any)?.is_group) ||
     conversation?.contact?.nome?.includes('Servweld/Servsolda')
   );
 

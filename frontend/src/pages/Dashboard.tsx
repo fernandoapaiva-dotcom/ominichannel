@@ -33,9 +33,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   const displayedConversations = React.useMemo(() => {
     return conversations.filter(c => {
+      const phone = c.contact?.telefone || '';
       const isGroup = Boolean(
-        c.contact?.telefone?.startsWith('120363') ||
-        (c.contact?.telefone && c.contact.telefone.length > 15) ||
+        phone.includes('@g.us') ||
+        phone.startsWith('120363') ||
+        (c.dados_adicionais as any)?.is_group === true ||
         c.contact?.nome?.includes('Servweld/Servsolda')
       );
 
@@ -248,9 +250,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     if (!activeConversation) return;
 
     let targetConv = activeConversation;
+    const rawTargetPhone = targetConv.contact?.telefone || '';
     const isGroup = Boolean(
-      targetConv.contact?.telefone?.startsWith('120363') ||
-      (targetConv.contact?.telefone && targetConv.contact.telefone.length > 15) ||
+      rawTargetPhone.includes('@g.us') ||
+      rawTargetPhone.startsWith('120363') ||
       (targetConv.dados_adicionais as any)?.is_group
     );
 

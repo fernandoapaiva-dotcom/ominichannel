@@ -58,9 +58,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
+    const phone = conv.contact?.telefone || '';
     const isGroup = Boolean(
-      conv.contact?.telefone?.startsWith('120363') ||
-      (conv.contact?.telefone && conv.contact.telefone.length > 15) ||
+      phone.includes('@g.us') ||
+      phone.startsWith('120363') ||
+      Boolean((conv.dados_adicionais as any)?.is_group) ||
       conv.contact?.nome?.includes('Servweld/Servsolda')
     );
     if (isGroup) return false;
@@ -114,9 +116,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Helper: check if a Group conversation has unread / pending activity
   const isGroupPending = (conv: Conversation): boolean => {
+    const phone = conv.contact?.telefone || '';
     const isGroup = Boolean(
-      conv.contact?.telefone?.startsWith('120363') ||
-      (conv.contact?.telefone && conv.contact.telefone.length > 15) ||
+      phone.includes('@g.us') ||
+      phone.startsWith('120363') ||
+      Boolean((conv.dados_adicionais as any)?.is_group) ||
       conv.contact?.nome?.includes('Servweld/Servsolda')
     );
     if (!isGroup) return false;
