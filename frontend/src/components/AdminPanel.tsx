@@ -940,6 +940,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             <Database size={16} /> Base RAG (IA Concierge)
           </button>
           <button
+            onClick={() => setActiveSubTab('automations')}
+            className={activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}
+          >
+            <Zap size={16} /> Automações & Gatilhos (OS)
+          </button>
+          <button
             onClick={() => { setActiveSubTab('technicians'); loadTechnicians(); }}
             className={activeSubTab === 'technicians' ? 'btn-primary' : 'btn-secondary'}
           >
@@ -962,12 +968,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             className={activeSubTab === 'pix' ? 'btn-primary' : 'btn-secondary'}
           >
             <QrCode size={16} /> Chaves Pix & QR Code
-          </button>
-          <button
-            onClick={() => setActiveSubTab('automations')}
-            className={activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}
-          >
-            <Zap size={16} /> Automações & Gatilhos (OS)
           </button>
         </div>
 
