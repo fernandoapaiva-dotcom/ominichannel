@@ -119,20 +119,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   const handleSelectConversation = useCallback((convId: number) => {
     setActiveConversationId(convId);
-    // Optimistically mark as read in conversations state
-    setConversations(prev => prev.map(c => {
-      if (c.id === convId) {
-        return {
-          ...c,
-          dados_adicionais: {
-            ...(c.dados_adicionais || {}),
-            marked_as_read: true,
-            pending_dismissed: true
-          }
-        };
-      }
-      return c;
-    }));
+    // Optimistically mark as read for all conversations and messages of this contact
+    setConversations(prev => {
+      const selected = prev.find(c => c.id === convId);
+      const contactId = selected?.contact_id || selected?.contact?.id;
+      const cleanPhone = (selected?.contact?.telefone || '').replace(/\D/g, '');
+
+      return prev.map(c => {
+        const matchesContact = (
+          c.id === convId ||
+          (contactId && (c.contact_id === contactId || c.contact?.id === contactId)) ||
+          (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8)))
+        );
+
+        if (matchesContact) {
+          const currentMsgs = c.messages || [];
+          return {
+            ...c,
+            messages: currentMsgs.map(m => m.remetente === 'cliente' ? { ...m, status: 'read' } : m),
+            dados_adicionais: {
+              ...(c.dados_adicionais || {}),
+              marked_as_read: true,
+              pending_dismissed: true
+            }
+          };
+        }
+        return c;
+      });
+    });
     // Persist to backend silently
     apiFetch(`/conversations/${convId}/mark_read`, { method: 'POST' })
       .catch(err => console.debug('Error auto-marking conversation read:', err));

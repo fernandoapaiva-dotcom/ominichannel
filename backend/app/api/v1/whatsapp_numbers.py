@@ -33,7 +33,12 @@ async def list_accessible_whatsapp_numbers(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    if current_user.role == "admin":
+    from app.models.models import UserRole
+    is_admin = (
+        current_user.role == UserRole.ADMIN or
+        str(getattr(current_user.role, 'value', current_user.role)).lower() == "admin"
+    )
+    if is_admin:
         stmt = select(WhatsAppNumber).where(WhatsAppNumber.tenant_id == current_user.tenant_id)
     else:
         stmt = (

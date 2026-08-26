@@ -176,10 +176,28 @@ async def mark_single_conversation_read(
 
     from sqlalchemy import update, func
     from sqlalchemy.orm.attributes import flag_modified
+    
+    # Mark all messages in all conversations of this contact as read
+    target_conv_ids = [conv.id]
+    if conv.contact_id:
+        c_stmt = select(Conversation).where(
+            Conversation.tenant_id == current_user.tenant_id,
+            Conversation.contact_id == conv.contact_id
+        )
+        c_res = await db.execute(c_stmt)
+        related_convs = c_res.scalars().all()
+        target_conv_ids = [c.id for c in related_convs]
+        for rc in related_convs:
+            rc_extra = dict(rc.dados_adicionais or {})
+            rc_extra["marked_as_read"] = True
+            rc_extra["pending_dismissed"] = True
+            rc.dados_adicionais = rc_extra
+            flag_modified(rc, "dados_adicionais")
+
     upd_msgs = (
         update(Message)
         .where(
-            Message.conversation_id == conv.id,
+            Message.conversation_id.in_(target_conv_ids),
             func.lower(Message.remetente) == "cliente"
         )
         .values(status="read")

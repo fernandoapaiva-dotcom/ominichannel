@@ -289,12 +289,21 @@ export const AdminPanel: React.FC = () => {
   const loadData = async () => {
     try {
       const numData: WhatsAppNumber[] = await apiFetch('/whatsapp-numbers/');
-      const userData = await apiFetch('/users/');
-      setNumbers(numData);
-      setUsers(userData);
-      fetchAllStatuses(numData);
+      if (Array.isArray(numData)) {
+        setNumbers(numData);
+        fetchAllStatuses(numData);
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Error loading whatsapp numbers:', err);
+    }
+
+    try {
+      const userData = await apiFetch('/users/');
+      if (Array.isArray(userData)) {
+        setUsers(userData);
+      }
+    } catch (err) {
+      console.error('Error loading users:', err);
     }
   };
 

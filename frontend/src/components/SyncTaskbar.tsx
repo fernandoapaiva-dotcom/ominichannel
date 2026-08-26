@@ -46,6 +46,18 @@ export const SyncTaskbar: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    // Auto-dismiss completed sync items after 4 seconds
+    progressList.forEach(item => {
+      if (item.status === 'completed' && !closedInstances.includes(item.instance)) {
+        const timer = setTimeout(() => {
+          setClosedInstances(prev => [...prev, item.instance]);
+        }, 4000);
+        return () => clearTimeout(timer);
+      }
+    });
+  }, [progressList, closedInstances]);
+
   const activeItems = progressList.filter(item => !closedInstances.includes(item.instance));
 
   if (activeItems.length === 0) {
@@ -59,14 +71,15 @@ export const SyncTaskbar: React.FC = () => {
   return (
     <div style={{
       position: 'fixed',
-      bottom: '20px',
+      top: '16px',
       right: '24px',
-      zIndex: 99999,
+      zIndex: 9999,
       display: 'flex',
       flexDirection: 'column',
-      gap: '10px',
-      maxWidth: '480px',
-      width: 'calc(100vw - 48px)'
+      gap: '8px',
+      maxWidth: '380px',
+      width: 'calc(100vw - 48px)',
+      pointerEvents: 'none'
     }}>
       {activeItems.map((item) => {
         const isRunning = item.status === 'running';
@@ -79,156 +92,119 @@ export const SyncTaskbar: React.FC = () => {
         return (
           <div
             key={item.instance}
-            className="glass-panel"
+            className="animate-fade-in"
             style={{
               backgroundColor: '#0f172a',
               border: `1px solid ${borderColor}`,
-              borderRadius: '12px',
-              padding: minimized ? '10px 16px' : '16px 20px',
-              boxShadow: `0 12px 35px ${glowColor}, 0 4px 12px rgba(0,0,0,0.5)`,
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-              color: '#f8fafc'
+              borderRadius: '10px',
+              padding: '10px 14px',
+              boxShadow: `0 8px 25px ${glowColor}, 0 4px 10px rgba(0,0,0,0.6)`,
+              color: '#f8fafc',
+              pointerEvents: 'auto',
+              backdropFilter: 'blur(8px)'
             }}
           >
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 {isRunning && (
                   <div style={{
-                    width: '28px',
-                    height: '28px',
+                    width: '22px',
+                    height: '22px',
                     borderRadius: '50%',
                     backgroundColor: 'rgba(0, 230, 153, 0.15)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: 'var(--accent-primary)'
+                    color: 'var(--accent-primary)',
+                    flexShrink: 0
                   }}>
-                    <RefreshCw size={15} className="spin" />
+                    <RefreshCw size={12} className="spin" />
                   </div>
                 )}
                 {isCompleted && (
                   <div style={{
-                    width: '28px',
-                    height: '28px',
+                    width: '22px',
+                    height: '22px',
                     borderRadius: '50%',
                     backgroundColor: 'rgba(16, 185, 129, 0.2)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: '#34d399'
+                    color: '#34d399',
+                    flexShrink: 0
                   }}>
-                    <CheckCircle2 size={16} />
+                    <CheckCircle2 size={13} />
                   </div>
                 )}
                 {isError && (
                   <div style={{
-                    width: '28px',
-                    height: '28px',
+                    width: '22px',
+                    height: '22px',
                     borderRadius: '50%',
                     backgroundColor: 'rgba(239, 68, 68, 0.2)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: '#f87171'
+                    color: '#f87171',
+                    flexShrink: 0
                   }}>
-                    <AlertCircle size={16} />
+                    <AlertCircle size={13} />
                   </div>
                 )}
 
                 <div>
-                  <h4 style={{ fontSize: '13px', fontWeight: '700', margin: 0, color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {isRunning ? 'Sincronizando WhatsApp' : isCompleted ? 'Sincronização Concluída!' : 'Falha na Sincronização'}
+                  <div style={{ fontSize: '12px', fontWeight: '700', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {isRunning ? 'Sincronizando' : isCompleted ? 'Sincronizado!' : 'Falha na Sincronização'}
                     <span style={{
-                      fontSize: '11px',
+                      fontSize: '10px',
                       fontWeight: '600',
-                      padding: '2px 6px',
+                      padding: '1px 5px',
                       borderRadius: '4px',
                       backgroundColor: 'rgba(255,255,255,0.08)',
                       color: 'var(--accent-primary)'
                     }}>
                       {item.instance}
                     </span>
-                  </h4>
-                  {minimized && (
-                    <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                      {isRunning ? `${item.percentage}% (${item.processed_chats}/${item.total_chats} chats)` : `${item.messages_synced} msgs importadas`}
-                    </span>
-                  )}
+                  </div>
                 </div>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <button
-                  onClick={() => setMinimized(!minimized)}
-                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
-                  title={minimized ? 'Expandir' : 'Minimizar'}
-                >
-                  {minimized ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </button>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: isError ? '#f87171' : 'var(--accent-primary)' }}>
+                  {item.percentage}%
+                </span>
                 <button
                   onClick={() => handleClose(item.instance)}
-                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '4px' }}
+                  style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center' }}
                   title="Fechar"
                 >
-                  <X size={16} />
+                  <X size={14} />
                 </button>
               </div>
             </div>
 
-            {/* Body (when not minimized) */}
-            {!minimized && (
-              <div style={{ marginTop: '12px' }}>
-                {/* Progress bar */}
+            {/* Progress bar */}
+            {isRunning && (
+              <div style={{ marginTop: '8px' }}>
                 <div style={{
                   width: '100%',
-                  height: '8px',
+                  height: '4px',
                   backgroundColor: 'rgba(255, 255, 255, 0.1)',
-                  borderRadius: '4px',
-                  overflow: 'hidden',
-                  position: 'relative'
+                  borderRadius: '2px',
+                  overflow: 'hidden'
                 }}>
                   <div style={{
                     width: `${Math.min(item.percentage, 100)}%`,
                     height: '100%',
-                    background: isError ? '#ef4444' : isCompleted ? '#10b981' : 'linear-gradient(90deg, #00e699, #10b981)',
-                    borderRadius: '4px',
-                    transition: 'width 0.4s ease'
+                    background: 'linear-gradient(90deg, #00e699, #10b981)',
+                    borderRadius: '2px',
+                    transition: 'width 0.3s ease'
                   }} />
                 </div>
-
-                {/* Subtitle & Current Contact */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px', fontSize: '11px' }}>
-                  <span style={{ color: '#94a3b8', maxWidth: '70%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {isRunning ? `Processando: ${item.current_contact || 'Varrendo contatos...'}` : isCompleted ? 'Histórico completo importado no sistema!' : (item.errors?.[0] || 'Erro desconhecido')}
-                  </span>
-                  <span style={{ fontWeight: '700', color: isError ? '#f87171' : 'var(--accent-primary)' }}>
-                    {item.percentage}%
-                  </span>
-                </div>
-
-                {/* Stats Counters */}
-                <div style={{
-                  display: 'flex',
-                  gap: '12px',
-                  marginTop: '12px',
-                  paddingTop: '10px',
-                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-                  fontSize: '11px',
-                  color: '#cbd5e1'
-                }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Database size={12} style={{ color: 'var(--accent-primary)' }} />
-                    Chats: <strong>{item.processed_chats} / {item.total_chats}</strong>
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Users size={12} style={{ color: '#60a5fa' }} />
-                    Contatos: <strong>{item.contacts_synced}</strong>
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <MessageSquare size={12} style={{ color: '#f59e0b' }} />
-                    Mensagens: <strong>{item.messages_synced}</strong>
-                  </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px', fontSize: '10px', color: '#94a3b8' }}>
+                  <span>{item.processed_chats} de {item.total_chats} chats</span>
+                  <span>{item.messages_synced} msgs</span>
                 </div>
               </div>
             )}
