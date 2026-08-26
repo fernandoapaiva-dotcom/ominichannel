@@ -368,7 +368,8 @@ export const AdminPanel: React.FC = () => {
     loadSettingsAndAudit();
     loadWhatsAppGroups();
     loadRagDocuments();
-
+    loadPixKeys();
+    loadTechnicians();
 
     const interval = setInterval(() => {
       if (numbers.length > 0) {
@@ -925,7 +926,7 @@ export const AdminPanel: React.FC = () => {
             <Users size={16} /> Funcionários & Equipe da Loja
           </button>
           <button
-            onClick={() => setActiveSubTab('integrations')}
+            onClick={() => { setActiveSubTab('integrations'); loadSettingsAndAudit(); }}
             className={activeSubTab === 'integrations' ? 'btn-primary' : 'btn-secondary'}
           >
             <Key size={16} /> Integrações & Segurança (Fernet)

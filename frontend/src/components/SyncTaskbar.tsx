@@ -17,9 +17,53 @@ export interface SyncProgressItem {
   errors?: string[];
 }
 
+const ViteIcon: React.FC<{ size?: number; spinning?: boolean }> = ({ size = 20, spinning }) => (
+  <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+    {spinning && (
+      <div style={{
+        position: 'absolute',
+        width: `${size + 10}px`,
+        height: `${size + 10}px`,
+        borderRadius: '50%',
+        border: '2px solid transparent',
+        borderTopColor: '#BD34FE',
+        borderRightColor: '#41D1FF',
+        animation: 'spin 1.2s linear infinite'
+      }} />
+    )}
+    <svg
+      viewBox="0 0 32 32"
+      width={size}
+      height={size}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ filter: 'drop-shadow(0 0 8px rgba(189, 52, 254, 0.6))' }}
+    >
+      <path
+        d="M29.6 4.8L16.8 28.4C16.5 29 15.7 29.1 15.3 28.5L3.1 8.8C2.6 8 3.2 7 4.1 7.1L16.2 8.4C16.6 8.4 17 8.2 17.2 7.8L28.1 3.5C29 3.1 29.9 3.9 29.6 4.8Z"
+        fill="url(#viteGrad1)"
+      />
+      <path
+        d="M22.1 2.3L9.6 4.9C8.9 5 8.5 5.8 8.8 6.4L16.5 21.8C16.8 22.3 17.6 22.2 17.8 21.7L23.4 3.7C23.6 2.9 22.9 2.1 22.1 2.3Z"
+        fill="url(#viteGrad2)"
+      />
+      <defs>
+        <linearGradient id="viteGrad1" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#41D1FF" />
+          <stop offset="1" stopColor="#BD34FE" />
+        </linearGradient>
+        <linearGradient id="viteGrad2" x1="10" y1="2" x2="24" y2="22" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#FFEA83" />
+          <stop offset="0.08" stopColor="#FFDD35" />
+          <stop offset="1" stopColor="#FFA800" />
+        </linearGradient>
+      </defs>
+    </svg>
+  </div>
+);
+
 export const SyncTaskbar: React.FC = () => {
   const [progressList, setProgressList] = useState<SyncProgressItem[]>([]);
-  const [minimized, setMinimized] = useState(false);
   const [closedInstances, setClosedInstances] = useState<string[]>([]);
 
   // Poll sync progress from backend every 2s
@@ -71,7 +115,7 @@ export const SyncTaskbar: React.FC = () => {
   return (
     <div style={{
       position: 'fixed',
-      top: '16px',
+      top: '14px',
       right: '24px',
       zIndex: 9999,
       display: 'flex',
@@ -86,72 +130,28 @@ export const SyncTaskbar: React.FC = () => {
         const isCompleted = item.status === 'completed';
         const isError = item.status === 'error';
 
-        const borderColor = isRunning ? 'rgba(0, 230, 153, 0.4)' : isCompleted ? '#10b981' : '#ef4444';
-        const glowColor = isRunning ? 'rgba(0, 230, 153, 0.15)' : isCompleted ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
+        const borderColor = isRunning ? 'rgba(189, 52, 254, 0.4)' : isCompleted ? '#10b981' : '#ef4444';
+        const glowColor = isRunning ? 'rgba(189, 52, 254, 0.2)' : isCompleted ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.2)';
 
         return (
           <div
             key={item.instance}
             className="animate-fade-in"
             style={{
-              backgroundColor: '#0f172a',
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
               border: `1px solid ${borderColor}`,
-              borderRadius: '10px',
+              borderRadius: '12px',
               padding: '10px 14px',
-              boxShadow: `0 8px 25px ${glowColor}, 0 4px 10px rgba(0,0,0,0.6)`,
+              boxShadow: `0 8px 30px ${glowColor}, 0 4px 12px rgba(0,0,0,0.6)`,
               color: '#f8fafc',
               pointerEvents: 'auto',
-              backdropFilter: 'blur(8px)'
+              backdropFilter: 'blur(12px)'
             }}
           >
-            {/* Header */}
+            {/* Header with Vite JS Logo */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {isRunning && (
-                  <div style={{
-                    width: '22px',
-                    height: '22px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(0, 230, 153, 0.15)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: 'var(--accent-primary)',
-                    flexShrink: 0
-                  }}>
-                    <RefreshCw size={12} className="spin" />
-                  </div>
-                )}
-                {isCompleted && (
-                  <div style={{
-                    width: '22px',
-                    height: '22px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(16, 185, 129, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#34d399',
-                    flexShrink: 0
-                  }}>
-                    <CheckCircle2 size={13} />
-                  </div>
-                )}
-                {isError && (
-                  <div style={{
-                    width: '22px',
-                    height: '22px',
-                    borderRadius: '50%',
-                    backgroundColor: 'rgba(239, 68, 68, 0.2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#f87171',
-                    flexShrink: 0
-                  }}>
-                    <AlertCircle size={13} />
-                  </div>
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <ViteIcon size={20} spinning={isRunning} />
 
                 <div>
                   <div style={{ fontSize: '12px', fontWeight: '700', color: '#fff', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -159,10 +159,10 @@ export const SyncTaskbar: React.FC = () => {
                     <span style={{
                       fontSize: '10px',
                       fontWeight: '600',
-                      padding: '1px 5px',
+                      padding: '1px 6px',
                       borderRadius: '4px',
                       backgroundColor: 'rgba(255,255,255,0.08)',
-                      color: 'var(--accent-primary)'
+                      color: '#41D1FF'
                     }}>
                       {item.instance}
                     </span>
@@ -171,7 +171,7 @@ export const SyncTaskbar: React.FC = () => {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ fontSize: '11px', fontWeight: '700', color: isError ? '#f87171' : 'var(--accent-primary)' }}>
+                <span style={{ fontSize: '11px', fontWeight: '800', color: isError ? '#f87171' : '#FFDD35' }}>
                   {item.percentage}%
                 </span>
                 <button
