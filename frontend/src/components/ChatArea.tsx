@@ -500,15 +500,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [previewMediaIndex, conversationMedia.length, zoomScale]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior: 'smooth' | 'auto' = 'auto') => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight + 1000;
+    }
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior, block: 'end' });
+    }
   };
 
   const handleContainerScroll = () => {
     if (!scrollContainerRef.current) return;
     const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-    // Mark as scrolled up if distance to bottom > 120px
-    const isFar = scrollHeight - scrollTop - clientHeight > 120;
+    // Mark as scrolled up only if user explicitly scrolls up significantly (>200px)
+    const isFar = scrollHeight - scrollTop - clientHeight > 200;
     setIsUserScrolledUp(isFar);
 
     // Calculate current visible date at top of viewport
@@ -536,10 +541,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 1500);
   };
 
-  // Auto-mark conversation as read on screen (WhatsApp Web standard behavior)
+  // Keep pinned to bottom when images/media/previews load
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver(() => {
+      if (!isUserScrolledUp && scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      }
+    });
+
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [conversation?.id, isUserScrolledUp]);
+
+  // Auto-mark conversation as read and scroll to the absolute bottom on conversation change
   useEffect(() => {
     setIsUserScrolledUp(false);
-    scrollToBottom();
+    scrollToBottom('auto');
+
+    // Staggered timers to guarantee full scroll as media, thumbnails & DOM elements finish layout
+    const t1 = setTimeout(() => scrollToBottom('auto'), 50);
+    const t2 = setTimeout(() => scrollToBottom('auto'), 150);
+    const t3 = setTimeout(() => scrollToBottom('auto'), 300);
+    const t4 = setTimeout(() => scrollToBottom('auto'), 600);
 
     if (conversation?.id) {
       const extra = (conversation as any).dados_adicionais || {};
@@ -559,11 +585,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           .catch(err => console.debug('Auto mark_read error:', err));
       }
     }
-  }, [conversation?.id, conversation?.messages?.length]);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearTimeout(t4);
+    };
+  }, [conversation?.id]);
 
   useEffect(() => {
     if (!isUserScrolledUp) {
-      scrollToBottom();
+      scrollToBottom('auto');
+      const t = setTimeout(() => scrollToBottom('auto'), 80);
+      return () => clearTimeout(t);
     }
     setSendError(null);
   }, [conversation?.messages]);
