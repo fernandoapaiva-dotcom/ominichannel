@@ -552,11 +552,17 @@ async def receive_evolution_webhook(
     is_group = (
         "@g.us" in str(remote_jid).lower() or
         str(remote_jid).startswith("120363") or
+        "-" in str(remote_jid).split("@")[0] or
         data.get("isGroup") is True
     )
     raw_phone = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
 
-    phone_number = "".join(filter(str.isdigit, raw_phone))
+    if is_group:
+        phone_number = f"{raw_phone}@g.us"
+    else:
+        phone_number = "".join(filter(str.isdigit, raw_phone))
+
+    participant_name = data.get("pushName") or data.get("senderName") or "Participante"
     push_name = data.get("pushName") or "Cliente"
 
 
@@ -1023,43 +1029,62 @@ async def receive_evolution_webhook(
 
     tenant_id = whatsapp_number.tenant_id
 
-    # 2. Get or Create Contact (matching exact phone, 8/9 digit variants or suffix match)
-    phone_variants = [phone_number]
-    if len(phone_number) == 13 and phone_number.startswith("55"):
-        # e.g., 55 61 9 8334 8333 -> variant without extra 9: 55 61 8334 8333
-        phone_variants.append(phone_number[:4] + phone_number[5:])
-    elif len(phone_number) == 12 and phone_number.startswith("55"):
-        # e.g., 55 61 8334 8333 -> variant with 9: 55 61 9 8334 8333
-        phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
-
-    if len(phone_number) >= 8 and not is_group:
+    # 2. Get or Create Contact (matching exact phone, 8/9 digit variants or group JID)
+    if is_group:
+        group_raw = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+        group_digits = "".join(filter(str.isdigit, group_raw))
         contact_stmt = select(Contact).where(
             Contact.tenant_id == tenant_id,
-            (Contact.telefone.in_(phone_variants) | Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            (Contact.telefone == phone_number) |
+            (Contact.telefone == remote_jid) |
+            (Contact.telefone == group_raw) |
+            (Contact.telefone == group_digits) |
+            (Contact.telefone.like(f"%{group_digits}%"))
         )
     else:
-        contact_stmt = select(Contact).where(
-            Contact.tenant_id == tenant_id,
-            Contact.telefone.in_(phone_variants)
-        )
+        phone_variants = [phone_number]
+        if len(phone_number) == 13 and phone_number.startswith("55"):
+            phone_variants.append(phone_number[:4] + phone_number[5:])
+        elif len(phone_number) == 12 and phone_number.startswith("55"):
+            phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
+
+        if len(phone_number) >= 8:
+            contact_stmt = select(Contact).where(
+                Contact.tenant_id == tenant_id,
+                (Contact.telefone.in_(phone_variants) | Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            )
+        else:
+            contact_stmt = select(Contact).where(
+                Contact.tenant_id == tenant_id,
+                Contact.telefone.in_(phone_variants)
+            )
+
     contact_res = await db.execute(contact_stmt)
     contact = contact_res.scalars().first()
 
     profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
 
     # If message is from a WhatsApp Group, fetch official group subject / title
+    group_subject = None
     if is_group:
+        group_subject = (
+            data.get("groupName") or
+            data.get("groupSubject") or
+            data.get("subject") or
+            (data.get("conversation") if data.get("isGroup") else None)
+        )
         try:
-            g_info = await asyncio.wait_for(
-                evolution_service.fetch_group_info(whatsapp_number.instancia_evolution_api, remote_jid),
-                timeout=2.5
-            )
-            if g_info and isinstance(g_info, dict):
-                group_subject = g_info.get("subject") or g_info.get("name")
-                if group_subject:
-                    push_name = group_subject
-                if g_info.get("pictureUrl"):
-                    profile_pic_url = g_info.get("pictureUrl")
+            if not group_subject or group_subject.lower() in ["none", "null", "undefined"]:
+                g_info = await asyncio.wait_for(
+                    evolution_service.fetch_group_info(whatsapp_number.instancia_evolution_api, remote_jid),
+                    timeout=2.0
+                )
+                if g_info and isinstance(g_info, dict):
+                    fetched_subj = g_info.get("subject") or g_info.get("name")
+                    if fetched_subj and fetched_subj.lower() not in ["none", "null", "undefined"]:
+                        group_subject = fetched_subj
+                    if g_info.get("pictureUrl"):
+                        profile_pic_url = g_info.get("pictureUrl")
         except Exception:
             pass
 
@@ -1089,15 +1114,27 @@ async def receive_evolution_webhook(
                     contact.telefone = phone_number
 
     if not contact:
-        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=clean_push_name, foto_perfil_url=profile_pic_url)
+        initial_name = group_subject or (clean_push_name if not is_group else f"Grupo WhatsApp")
+        extra_c = {"is_group": True} if is_group else {}
+        contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=initial_name, foto_perfil_url=profile_pic_url, dados_adicionais=extra_c)
         db.add(contact)
         await db.flush()
     else:
-        # Upgrade phone if contact had a LID and we now have a real number
-        if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
+        if is_group:
+            extra_c = dict(contact.dados_adicionais or {})
+            extra_c["is_group"] = True
+            contact.dados_adicionais = extra_c
             contact.telefone = phone_number
-        if clean_push_name and clean_push_name != "Cliente" and (not contact.nome or contact.nome == "Cliente" or is_group):
-            contact.nome = clean_push_name
+            if group_subject and group_subject.lower() not in ["grupo whatsapp", "none", "null", "undefined"]:
+                contact.nome = group_subject
+        else:
+            # Upgrade phone if contact had a LID and we now have a real number
+            if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
+                contact.telefone = phone_number
+            # For individual contacts: never overwrite existing saved/custom names! Only set if empty or 'Cliente'
+            if clean_push_name and clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] and (not contact.nome or contact.nome == "Cliente"):
+                contact.nome = clean_push_name
+
         if profile_pic_url and contact.foto_perfil_url != profile_pic_url:
             contact.foto_perfil_url = profile_pic_url
 
@@ -1319,6 +1356,13 @@ async def receive_evolution_webhook(
     extra_conv["inactivity_warning_5m_sent"] = False
     conversation.dados_adicionais = extra_conv
 
+    msg_extra = {}
+    if is_group:
+        msg_extra["participant_name"] = participant_name
+        msg_extra["participant_phone"] = "".join(filter(str.isdigit, str(participant_jid or sender_jid)))
+        msg_extra["participant"] = str(participant_jid or sender_jid)
+        msg_extra["is_group"] = True
+
     user_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
@@ -1326,6 +1370,7 @@ async def receive_evolution_webhook(
         tipo=msg_type,
         status="received",
         whatsapp_msg_id=msg_id if msg_id else None,
+        dados_adicionais=msg_extra if msg_extra else None,
         timestamp=datetime.utcnow()
     )
     db.add(user_msg)
@@ -1343,7 +1388,8 @@ async def receive_evolution_webhook(
             "timestamp": user_msg.timestamp.isoformat() + "Z" if hasattr(user_msg.timestamp, "isoformat") else str(user_msg.timestamp),
             "contact_name": contact.nome,
             "contact_phone": contact.telefone,
-            "department": whatsapp_number.nome_departamento
+            "department": whatsapp_number.nome_departamento,
+            "dados_adicionais": user_msg.dados_adicionais
         }
     )
 

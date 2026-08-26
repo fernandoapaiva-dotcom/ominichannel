@@ -28,7 +28,7 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   if (!phone) return '';
   const str = String(phone);
   const clean = str.replace(/\D/g, '');
-  if (str.includes('@g.us') || clean.startsWith('120363')) {
+  if (str.includes('@g.us') || clean.startsWith('120363') || str.includes('-') || clean.length >= 18) {
     return 'Grupo';
   }
   if (clean.startsWith('55') && clean.length === 12) {
@@ -187,8 +187,17 @@ export const ChatList: React.FC<ChatListProps> = ({
 
     conversations.forEach(conv => {
       const rawPhone = (conv.contact?.telefone || '').trim();
+      const rawName = (conv.contact?.nome || '').trim();
       const cleanDigits = rawPhone.replace(/\D/g, '');
-      const isGroup = rawPhone.includes('@g.us') || rawPhone.startsWith('120363') || Boolean((conv.dados_adicionais as any)?.is_group);
+      const isGroup = rawPhone.includes('@g.us') || 
+                      rawPhone.startsWith('120363') || 
+                      rawPhone.includes('-') ||
+                      cleanDigits.length >= 18 ||
+                      Boolean((conv.dados_adicionais as any)?.is_group) ||
+                      Boolean((conv.contact?.dados_adicionais as any)?.is_group) ||
+                      rawName.startsWith('SERV -') ||
+                      rawName.includes('GRUPO') ||
+                      rawName.includes('Servweld/Servsolda');
       
       let groupKey = '';
       if (isGroup) {

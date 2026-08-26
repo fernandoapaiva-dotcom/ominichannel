@@ -59,11 +59,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
     const phone = conv.contact?.telefone || '';
+    const name = conv.contact?.nome || '';
     const isGroup = Boolean(
       phone.includes('@g.us') ||
       phone.startsWith('120363') ||
+      phone.includes('-') ||
+      phone.length >= 18 ||
       Boolean((conv.dados_adicionais as any)?.is_group) ||
-      conv.contact?.nome?.includes('Servweld/Servsolda')
+      Boolean((conv.contact?.dados_adicionais as any)?.is_group) ||
+      name.startsWith('SERV -') ||
+      name.includes('GRUPO') ||
+      name.includes('Servweld/Servsolda')
     );
     if (isGroup) return false;
 
@@ -117,11 +123,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Helper: check if a Group conversation has unread / pending activity
   const isGroupPending = (conv: Conversation): boolean => {
     const phone = conv.contact?.telefone || '';
+    const name = conv.contact?.nome || '';
     const isGroup = Boolean(
       phone.includes('@g.us') ||
       phone.startsWith('120363') ||
+      phone.includes('-') ||
+      phone.length >= 18 ||
       Boolean((conv.dados_adicionais as any)?.is_group) ||
-      conv.contact?.nome?.includes('Servweld/Servsolda')
+      Boolean((conv.contact?.dados_adicionais as any)?.is_group) ||
+      name.startsWith('SERV -') ||
+      name.includes('GRUPO') ||
+      name.includes('Servweld/Servsolda')
     );
     if (!isGroup) return false;
 

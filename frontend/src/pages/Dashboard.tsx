@@ -34,11 +34,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const displayedConversations = React.useMemo(() => {
     return conversations.filter(c => {
       const phone = c.contact?.telefone || '';
+      const name = c.contact?.nome || '';
       const isGroup = Boolean(
         phone.includes('@g.us') ||
         phone.startsWith('120363') ||
+        phone.includes('-') ||
+        phone.length >= 18 ||
         (c.dados_adicionais as any)?.is_group === true ||
-        c.contact?.nome?.includes('Servweld/Servsolda')
+        (c.contact?.dados_adicionais as any)?.is_group === true ||
+        name.startsWith('SERV -') ||
+        name.includes('GRUPO') ||
+        name.includes('Servweld/Servsolda')
       );
 
       if (activeTab === 'groups') {
@@ -251,10 +257,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
     let targetConv = activeConversation;
     const rawTargetPhone = targetConv.contact?.telefone || '';
+    const rawTargetName = targetConv.contact?.nome || '';
     const isGroup = Boolean(
       rawTargetPhone.includes('@g.us') ||
       rawTargetPhone.startsWith('120363') ||
-      (targetConv.dados_adicionais as any)?.is_group
+      rawTargetPhone.includes('-') ||
+      rawTargetPhone.length >= 18 ||
+      (targetConv.dados_adicionais as any)?.is_group === true ||
+      (targetConv.contact?.dados_adicionais as any)?.is_group === true ||
+      rawTargetName.startsWith('SERV -') ||
+      rawTargetName.includes('GRUPO') ||
+      rawTargetName.includes('Servweld/Servsolda')
     );
 
     // REGRA DE OURO DO DEPARTAMENTO SELECIONADO:

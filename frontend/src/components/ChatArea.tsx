@@ -174,11 +174,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const isGroupChat = useMemo(() => {
     if (!conversation) return false;
     const phone = conversation.contact?.telefone || '';
+    const name = conversation.contact?.nome || '';
     return Boolean(
       phone.includes('@g.us') ||
       phone.startsWith('120363') ||
-      conversation.contact?.nome?.includes('Servweld/Servsolda') ||
-      conversation.dados_adicionais?.is_group
+      phone.includes('-') ||
+      phone.length >= 18 ||
+      conversation.dados_adicionais?.is_group ||
+      (conversation.contact?.dados_adicionais as any)?.is_group ||
+      name.startsWith('SERV -') ||
+      name.includes('GRUPO') ||
+      name.includes('Servweld/Servsolda')
     );
   }, [conversation]);
 
@@ -3198,8 +3204,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                  <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? 'var(--text-muted)' : 'var(--accent-primary)' }}>
-                    {isCustomer ? (conversation.contact?.nome || 'Cliente') : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
+                  <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? (isGroupChat ? '#38bdf8' : 'var(--text-muted)') : 'var(--accent-primary)' }}>
+                    {isCustomer ? (isGroupChat ? (participantName || 'Participante') : (conversation.contact?.nome || 'Cliente')) : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>{formatTime(lastMsg.timestamp)}</span>
