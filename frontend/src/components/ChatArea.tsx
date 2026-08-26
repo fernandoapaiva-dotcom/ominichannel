@@ -1152,7 +1152,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }
 
   const renderMediaContent = (msg: any) => {
-    const { mediaPath, caption } = extractMediaAndCaption(msg.conteudo);
+    const raw = msg.conteudo || '';
+    const { mediaPath, caption } = extractMediaAndCaption(raw);
     let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
     if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
       fullUrl = `http://localhost:8000/api/v1/conversations/messages/${msg.id}/media`;
