@@ -430,13 +430,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  const extractMediaAndCaption = (raw: string | undefined | null) => {
+    if (!raw) return { mediaPath: '', caption: null as string | null };
+    let str = String(raw).trim();
+    let mediaPath = '';
+    let caption: string | null = null;
+
+    if (str.includes('|')) {
+      const parts = str.split('|');
+      mediaPath = parts[0].trim();
+      caption = parts.slice(1).join('|').trim() || null;
+    } else if (str.startsWith('[') && str.includes(']')) {
+      const match = str.match(/^\[(.*?)\]\s*([\s\S]*)$/);
+      if (match) {
+        mediaPath = match[1].trim();
+        caption = match[2].trim() || null;
+      } else {
+        mediaPath = str.trim();
+      }
+    } else if (str.startsWith('/uploads/') || str.startsWith('http://') || str.startsWith('https://')) {
+      const lines = str.split('\n');
+      mediaPath = lines[0].trim();
+      caption = lines.slice(1).join('\n').trim() || null;
+    } else {
+      mediaPath = str;
+    }
+
+    mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '').trim();
+    return { mediaPath, caption };
+  };
+
   // Extract all media items in conversation for universal gallery navigation (Images, Videos, Audios, Files)
   const conversationMedia = (conversation?.messages || [])
     .filter(m => ['imagem', 'video', 'audio', 'arquivo'].includes(m.tipo))
     .map(m => {
-      const parts = (m.conteudo || '').split('|');
-      const mediaPath = parts[0];
-      const caption = parts.length > 1 ? parts.slice(1).join('|') : null;
+      const { mediaPath, caption } = extractMediaAndCaption(m.conteudo);
       const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
       const fileName = mediaPath.split('/').pop() || 'Arquivo';
       return {
@@ -936,18 +964,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleCopyMessage = (msg: Message) => {
-    let text = msg.conteudo || '';
-    if (text.includes('|')) text = text.split('|')[1] || text;
+    const { caption, mediaPath } = extractMediaAndCaption(msg.conteudo);
+    const text = caption || mediaPath || msg.conteudo || '';
     navigator.clipboard.writeText(text);
     setActiveActionMenuMsgId(null);
   };
 
   const handleDownloadMedia = (msg: Message) => {
-    let path = (msg.conteudo || '').split('|')[0];
-    const url = path.startsWith('http') ? path : `http://localhost:8000${path}`;
+    const { mediaPath } = extractMediaAndCaption(msg.conteudo);
+    const url = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
     const a = document.createElement('a');
     a.href = url;
-    a.download = path.split('/').pop() || 'arquivo';
+    a.download = mediaPath.split('/').pop() || 'arquivo';
     a.target = '_blank';
     document.body.appendChild(a);
     a.click();
@@ -1124,27 +1152,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   }
 
   const renderMediaContent = (msg: any) => {
-    let raw = msg.conteudo || '';
-    let mediaPath = '';
-    let caption: string | null = null;
-
-    if (raw.includes('|')) {
-      const parts = raw.split('|');
-      mediaPath = parts[0].trim();
-      caption = parts.slice(1).join('|').trim();
-    } else if (raw.startsWith('[') && raw.includes(']')) {
-      const match = raw.match(/^\[(.*?)\]\s*([\s\S]*)$/);
-      if (match) {
-        mediaPath = match[1].trim();
-        caption = match[2].trim() || null;
-      } else {
-        mediaPath = raw.trim();
-      }
-    } else {
-      mediaPath = raw.trim();
-    }
-
-    mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '');
+    const { mediaPath, caption } = extractMediaAndCaption(msg.conteudo);
     let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
     if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
       fullUrl = `http://localhost:8000/api/v1/conversations/messages/${msg.id}/media`;
@@ -1157,16 +1165,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       case 'figurinha':
         const isSticker = fullUrl.toLowerCase().endsWith('.webp') || fullUrl.toLowerCase().includes('sticker') || msg.tipo === 'sticker' || msg.tipo === 'figurinha';
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: isSticker ? '170px' : '280px' }}>
             <div
               style={{
                 position: 'relative',
                 cursor: isSticker ? 'default' : 'pointer',
                 borderRadius: isSticker ? '0' : '8px',
                 overflow: 'hidden',
-                maxWidth: isSticker ? '170px' : '320px',
+                maxWidth: isSticker ? '170px' : '280px',
                 border: isSticker ? 'none' : '1px solid rgba(255,255,255,0.1)',
-                backgroundColor: 'transparent'
+                backgroundColor: 'rgba(0,0,0,0.15)'
               }}
               onClick={() => {
                 if (!isSticker) {
@@ -1179,9 +1187,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 alt={isSticker ? "Figurinha do WhatsApp" : "Imagem"}
                 style={{
                   width: isSticker ? '150px' : '100%',
-                  maxHeight: isSticker ? '150px' : '300px',
+                  maxHeight: isSticker ? '150px' : '260px',
                   objectFit: isSticker ? 'contain' : 'cover',
-                  display: 'block'
+                  display: 'block',
+                  borderRadius: isSticker ? '0' : '8px'
                 }}
               />
               {isSticker ? (
@@ -1220,7 +1229,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               )}
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap', marginTop: '2px' }}>{caption}</p>}
           </div>
         );
 
@@ -1587,13 +1596,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     // Find caption if any
     let captionText = '';
     for (const m of albumMessages) {
-      const c = m.conteudo || '';
-      if (c.includes('|')) {
-        const parts = c.split('|');
-        if (parts.length > 1 && parts[1].trim()) {
-          captionText = parts.slice(1).join('|').trim();
-          break;
-        }
+      const { caption } = extractMediaAndCaption(m.conteudo);
+      if (caption) {
+        captionText = caption;
+        break;
       }
     }
 
@@ -1608,9 +1614,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           maxWidth: '320px'
         }}>
           {displayed.map((m, idx) => {
-            let raw = m.conteudo || '';
-            let mediaPath = raw.includes('|') ? raw.split('|')[0].trim() : raw.trim();
-            mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '');
+            const { mediaPath } = extractMediaAndCaption(m.conteudo);
             let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
             if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && m.id && m.id > 0) {
               fullUrl = `http://localhost:8000/api/v1/conversations/messages/${m.id}/media`;
