@@ -2456,24 +2456,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {(conversation as any).protocol_number ? (
             <button
               onClick={handleCloseProtocol}
-              disabled={isOperatingProtocol}
+              className="btn-secondary"
               style={{
                 height: '32px',
                 padding: '0 9px',
                 borderRadius: 'var(--radius-md)',
                 fontSize: '11px',
-                fontWeight: '700',
-                border: '1px solid #ef4444',
-                backgroundColor: 'rgba(239, 68, 68, 0.25)',
-                color: '#fca5a5',
+                fontWeight: '600',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '4px',
                 cursor: 'pointer',
                 flexShrink: 0,
-                whiteSpace: 'nowrap',
-                boxShadow: '0 0 10px rgba(239, 68, 68, 0.3)'
+                whiteSpace: 'nowrap'
               }}
               title="Finalizar este atendimento e registrar marco do protocolo"
             >
@@ -4293,25 +4289,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               <Paperclip size={18} />
             </button>
-            
-            <button
-              type="button"
-              onClick={() => setShowMentionMenu(!showMentionMenu)}
-              className="btn-secondary"
-              style={{
-                height: '42px',
-                padding: '0 12px',
-                color: showMentionMenu ? 'var(--accent-primary)' : 'var(--text-muted)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: '700',
-                fontSize: '15px'
-              }}
-              title="Marcar pessoa (@) ou todos no grupo (@todos)"
-            >
-              @
-            </button>
 
             {showMentionMenu && (() => {
               const cursor = textareaRef.current ? (textareaRef.current.selectionStart || inputText.length) : inputText.length;
@@ -4330,23 +4307,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               const showTodos = isGroupChat && (!mentionQuery || 'todos'.includes(mentionQuery) || 'all'.includes(mentionQuery) || 'everyone'.includes(mentionQuery));
 
               return (
-                <div
-                  style={{
-                    position: 'absolute',
-                    bottom: 'calc(100% + 8px)',
-                    left: '20px',
-                    backgroundColor: '#0f172a',
-                    border: '1px solid rgba(0, 230, 153, 0.3)',
-                    borderRadius: 'var(--radius-md)',
-                    boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
-                    zIndex: 1000,
-                    minWidth: '280px',
-                    maxWidth: '360px',
-                    maxHeight: '260px',
-                    overflowY: 'auto',
-                    padding: '6px 0'
-                  }}
-                >
+                <>
+                  <div
+                    onClick={() => setShowMentionMenu(false)}
+                    style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 999 }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      bottom: 'calc(100% + 8px)',
+                      left: '20px',
+                      backgroundColor: '#0f172a',
+                      border: '1px solid rgba(0, 230, 153, 0.3)',
+                      borderRadius: 'var(--radius-md)',
+                      boxShadow: '0 16px 36px rgba(0,0,0,0.85)',
+                      zIndex: 1000,
+                      minWidth: '280px',
+                      maxWidth: '360px',
+                      maxHeight: '260px',
+                      overflowY: 'auto',
+                      padding: '6px 0'
+                    }}
+                  >
                   <div style={{ padding: '6px 12px', fontSize: '10px', fontWeight: '700', color: 'var(--accent-primary)', borderBottom: '1px solid var(--border-color)', textTransform: 'uppercase' }}>
                     Integrantes do Grupo ({filteredParticipants.length})
                   </div>
@@ -4444,6 +4426,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </div>
                   ) : null}
                 </div>
+                </>
               );
             })()}
             

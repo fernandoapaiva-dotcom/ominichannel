@@ -410,27 +410,15 @@ export const ChatList: React.FC<ChatListProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
             Clientes & Chats
-            {totalUnread > 0 && (
-              <span style={{
-                backgroundColor: '#ef4444',
-                color: '#fff',
-                borderRadius: '12px',
-                padding: '2px 6px',
-                fontSize: '10px',
-                fontWeight: '700'
-              }}>
-                {totalUnread}
-              </span>
-            )}
           </h2>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <button
               onClick={() => setStatusFilter(statusFilter === 'nao_lidas' ? 'all' : 'nao_lidas')}
               style={{
-                background: statusFilter === 'nao_lidas' ? '#ef4444' : (totalUnread > 0 ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255,255,255,0.04)'),
-                border: statusFilter === 'nao_lidas' ? '1px solid #ef4444' : (totalUnread > 0 ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid var(--border-color)'),
-                color: statusFilter === 'nao_lidas' ? '#ffffff' : (totalUnread > 0 ? '#f87171' : 'var(--text-muted)'),
+                background: statusFilter === 'nao_lidas' ? 'rgba(0, 230, 153, 0.2)' : 'rgba(255,255,255,0.04)',
+                border: statusFilter === 'nao_lidas' ? '1px solid var(--accent-primary)' : '1px solid var(--border-color)',
+                color: statusFilter === 'nao_lidas' ? 'var(--accent-primary)' : 'var(--text-muted)',
                 borderRadius: 'var(--radius-md)',
                 padding: '5px 8px',
                 fontSize: '11px',
@@ -439,16 +427,15 @@ export const ChatList: React.FC<ChatListProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: '4px',
-                transition: 'all 0.2s ease',
-                boxShadow: statusFilter === 'nao_lidas' ? '0 0 10px rgba(239, 68, 68, 0.4)' : 'none'
+                transition: 'all 0.2s ease'
               }}
               title="Filtrar apenas conversas com mensagens não lidas"
             >
               <span>Não lidas</span>
               {totalUnread > 0 && (
                 <span style={{
-                  backgroundColor: statusFilter === 'nao_lidas' ? '#ffffff' : '#ef4444',
-                  color: statusFilter === 'nao_lidas' ? '#ef4444' : '#ffffff',
+                  backgroundColor: 'var(--accent-primary)',
+                  color: '#051a12',
                   borderRadius: '10px',
                   padding: '1px 5px',
                   fontSize: '9px',
@@ -612,7 +599,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                   onClick={() => onSelectConversation(primaryConv)}
                   style={{
                     padding: '12px 14px',
-                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isGroupPinned ? '3px solid #eab308' : (isWaitingAttendant ? '3px solid #ef4444' : (group.hasUnread ? '3px solid #ef4444' : '3px solid transparent'))),
+                    borderLeft: isSelected ? '3px solid var(--accent-primary)' : (isGroupPinned ? '3px solid #eab308' : '3px solid transparent'),
                     cursor: 'pointer',
                     backgroundColor: isSelected ? 'rgba(0, 230, 153, 0.08)' : 'transparent',
                     display: 'flex',
@@ -620,7 +607,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                     gap: '12px'
                   }}
                 >
-                  {/* WhatsApp Profile Avatar with Click-to-Zoom & Waiting Indicator */}
+                  {/* WhatsApp Profile Avatar with Click-to-Zoom */}
                   <div style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
                     {primaryConv.contact?.foto_perfil_url ? (
                       <img
@@ -634,14 +621,13 @@ export const ChatList: React.FC<ChatListProps> = ({
                             avatarUrl: primaryConv.contact?.foto_perfil_url
                           });
                         }}
-                        title={isWaitingAttendant ? "⚠️ Aguardando resposta de atendente humano! Clique para expandir foto" : "Clique para expandir a foto de perfil"}
+                        title="Clique para expandir a foto de perfil"
                         style={{
                           width: '38px',
                           height: '38px',
                           borderRadius: '50%',
                           objectFit: 'cover',
-                          border: isWaitingAttendant ? '2.5px solid #ef4444' : (isGroupPinned ? '1.5px solid #eab308' : '1.5px solid var(--accent-primary)'),
-                          boxShadow: isWaitingAttendant ? '0 0 10px rgba(239, 68, 68, 0.7)' : 'none',
+                          border: isGroupPinned ? '1.5px solid #eab308' : '1.5px solid var(--accent-primary)',
                           flexShrink: 0,
                           cursor: 'pointer',
                           transition: 'transform 0.15s ease'
@@ -659,52 +645,25 @@ export const ChatList: React.FC<ChatListProps> = ({
                             avatarUrl: null
                           });
                         }}
-                        title={isWaitingAttendant ? "⚠️ Aguardando resposta de atendente humano! Clique para expandir foto" : "Clique para expandir a foto de perfil"}
+                        title="Clique para expandir a foto de perfil"
                         style={{
                           width: '38px',
                           height: '38px',
                           borderRadius: '50%',
-                          background: isWaitingAttendant ? 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)' : (isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)'),
-                          color: isWaitingAttendant ? '#ffffff' : '#051a12',
+                          background: isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                          color: '#051a12',
                           fontWeight: '700',
                           fontSize: '15px',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           flexShrink: 0,
-                          boxShadow: isWaitingAttendant ? '0 0 10px rgba(239, 68, 68, 0.7)' : (isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)'),
-                          border: isWaitingAttendant ? '2.5px solid #ef4444' : 'none',
+                          boxShadow: isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)',
                           cursor: 'pointer'
                         }}
                       >
                         {group.contactName.charAt(0).toUpperCase()}
                       </div>
-                    )}
-
-                    {/* Visual Waiting Indicator Flag on Avatar */}
-                    {isWaitingAttendant && (
-                      <span
-                        title="Aguardando resposta do atendente humano"
-                        style={{
-                          position: 'absolute',
-                          bottom: '-2px',
-                          right: '-2px',
-                          backgroundColor: '#ef4444',
-                          color: '#ffffff',
-                          border: '2px solid #0f172a',
-                          borderRadius: '50%',
-                          width: '15px',
-                          height: '15px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: '9px',
-                          fontWeight: '900',
-                          boxShadow: '0 0 8px rgba(239, 68, 68, 0.9)'
-                        }}
-                      >
-                        !
-                      </span>
                     )}
                   </div>
 
@@ -729,7 +688,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         )}
                         {group.contactName}
                         {group.hasUnread && (
-                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#ef4444', flexShrink: 0 }} title="Mensagem não lida do cliente" />
+                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', flexShrink: 0 }} title="Mensagem não lida do cliente" />
                         )}
                       </span>
                       <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
@@ -856,24 +815,6 @@ export const ChatList: React.FC<ChatListProps> = ({
                         gap: '4px'
                       }}>
                         <Bot size={9} /> Atendimento IA
-                      </span>
-                    )}
-
-                    {/* Pending / Unreplied Alert Badge */}
-                    {isWaitingAttendant && (
-                      <span style={{
-                        fontSize: '9px',
-                        fontWeight: '800',
-                        backgroundColor: '#ef4444',
-                        color: '#ffffff',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '3px',
-                        boxShadow: '0 0 6px rgba(239, 68, 68, 0.6)'
-                      }}>
-                        <AlertCircle size={9} /> AGUARDANDO
                       </span>
                     )}
                   </div>

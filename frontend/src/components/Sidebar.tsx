@@ -739,7 +739,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   height: '32px',
                   borderRadius: '50%',
                   objectFit: 'cover',
-                  border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '2px solid var(--accent-primary)'
+                  border: '2px solid var(--accent-primary)'
                 }}
               />
             ) : (
@@ -754,7 +754,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 color: '#051a12',
                 fontSize: '13px',
                 fontWeight: '700',
-                border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '1px solid var(--border-color)'
+                border: '1px solid var(--border-color)'
               }}>
                 {user.nome ? user.nome.charAt(0).toUpperCase() : 'U'}
               </div>

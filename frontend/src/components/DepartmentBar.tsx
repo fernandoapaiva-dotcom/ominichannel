@@ -126,22 +126,6 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
           }
         }}
       >
-        {totalUnread > 0 && (
-          <span style={{
-            position: 'absolute',
-            top: '4px',
-            right: '4px',
-            backgroundColor: '#ef4444',
-            color: '#fff',
-            fontSize: '10px',
-            fontWeight: 'bold',
-            borderRadius: '10px',
-            padding: '1px 5px',
-            lineHeight: '1.2'
-          }}>
-            {totalUnread}
-          </span>
-        )}
         <div style={{ transition: 'transform 0.2s' }}>
           <LayoutGrid size={22} />
         </div>
@@ -153,7 +137,6 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       {/* Module Cards for each Department */}
       {whatsappNumbers.map(wn => {
         const isSelected = selectedDepartmentId === wn.id;
-        const deptUnread = getUnreadCount(wn.id);
         const icon = getDepartmentIcon(wn.nome_departamento);
 
         return (
@@ -201,22 +184,6 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
               }
             }}
           >
-            {deptUnread > 0 && (
-              <span style={{
-                position: 'absolute',
-                top: '4px',
-                right: '4px',
-                backgroundColor: '#ef4444',
-                color: '#fff',
-                fontSize: '10px',
-                fontWeight: 'bold',
-                borderRadius: '10px',
-                padding: '1px 5px',
-                lineHeight: '1.2'
-              }}>
-                {deptUnread}
-              </span>
-            )}
             <div style={{ transition: 'transform 0.2s' }}>
               {icon}
             </div>
@@ -290,14 +257,14 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
 
           {calendarSummary && calendarSummary.today_pending > 0 && (
             <span style={{
-              backgroundColor: '#ef4444',
-              color: '#fff',
+              backgroundColor: 'rgba(0, 230, 153, 0.2)',
+              color: 'var(--accent-primary)',
+              border: '1px solid rgba(0, 230, 153, 0.4)',
               fontSize: '11px',
               fontWeight: 'bold',
               borderRadius: '12px',
               padding: '2px 8px',
-              marginLeft: '4px',
-              boxShadow: '0 2px 6px rgba(239, 68, 68, 0.4)'
+              marginLeft: '4px'
             }}>
               {calendarSummary.today_pending}
             </span>
