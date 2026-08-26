@@ -37,7 +37,10 @@ if is_sqlite:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.execute("PRAGMA foreign_keys=ON;")
             cursor.execute("PRAGMA busy_timeout=60000;")
+            cursor.execute("PRAGMA wal_autocheckpoint=1000;")
+            cursor.execute("PRAGMA temp_store=MEMORY;")
             cursor.close()
         except Exception as e:
             logger.debug(f"SQLite PRAGMA error: {e}")
