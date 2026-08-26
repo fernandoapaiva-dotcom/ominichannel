@@ -93,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     for (let i = 0; i < msgs.length; i++) {
       const r = String(msgs[i].remetente || '').toLowerCase();
-      if (r === 'atendente') {
+      if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
         lastAttendantMsgIndex = i;
       } else if (r === 'cliente') {
         lastClientMsgIndex = i;
@@ -104,6 +104,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     // Recency check (last client message within 7 days or active protocol)
     const lastClientMsg = msgs[lastClientMsgIndex];
+    if (lastClientMsg && lastClientMsg.status === 'read') return false;
+
     if (lastClientMsg && lastClientMsg.timestamp) {
       const t = new Date(lastClientMsg.timestamp).getTime();
       if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000 && !conv.protocol_number) {
@@ -149,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
     for (let i = 0; i < msgs.length; i++) {
       const r = String(msgs[i].remetente || '').toLowerCase();
-      if (r === 'atendente') {
+      if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
         lastAttendantMsgIndex = i;
       } else if (r === 'cliente') {
         lastClientMsgIndex = i;
@@ -159,6 +161,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (lastClientMsgIndex === -1) return false;
 
     const lastClientMsg = msgs[lastClientMsgIndex];
+    if (lastClientMsg && lastClientMsg.status === 'read') return false;
+
     if (lastClientMsg && lastClientMsg.timestamp) {
       const t = new Date(lastClientMsg.timestamp).getTime();
       if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000) {

@@ -231,18 +231,20 @@ export const ChatList: React.FC<ChatListProps> = ({
             const msgs = conv.messages || [];
             let lastAttendantIdx = -1;
             for (let i = 0; i < msgs.length; i++) {
-              if (String(msgs[i].remetente || '').toLowerCase() === 'atendente') {
+              const r = String(msgs[i].remetente || '').toLowerCase();
+              if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
                 lastAttendantIdx = i;
               }
             }
-            let hasClientAfterAttendant = false;
+            let hasUnreadClient = false;
             for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
-              if (String(msgs[i].remetente || '').toLowerCase() === 'cliente') {
-                hasClientAfterAttendant = true;
+              const r = String(msgs[i].remetente || '').toLowerCase();
+              if (r === 'cliente' && msgs[i].status !== 'read') {
+                hasUnreadClient = true;
                 break;
               }
             }
-            matchesStatus = hasClientAfterAttendant || msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
+            matchesStatus = hasUnreadClient;
           }
         } else if (statusFilter !== 'all') {
           matchesStatus = conv.status === statusFilter;
@@ -288,7 +290,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         let lastAttendantIdx = -1;
         for (let i = 0; i < msgs.length; i++) {
           const r = String(msgs[i].remetente || '').toLowerCase();
-          if (r === 'atendente') {
+          if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
             lastAttendantIdx = i;
           }
         }
@@ -296,14 +298,14 @@ export const ChatList: React.FC<ChatListProps> = ({
         let convUnread = 0;
         for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
           const r = String(msgs[i].remetente || '').toLowerCase();
-          if (r === 'cliente') {
+          if (r === 'cliente' && msgs[i].status !== 'read') {
             convUnread++;
           }
         }
-        groupUnreadCount += Math.max(convUnread, msgs.some(m => m.remetente === 'cliente' && m.status !== 'read') ? 1 : 0);
+        groupUnreadCount += convUnread;
       });
 
-      const hasUnread = groupUnreadCount > 0 || statusFilter === 'nao_lidas';
+      const hasUnread = groupUnreadCount > 0;
 
       groups.push({
         contactId: primary.contact_id || primary.contact?.id || 0,
@@ -354,18 +356,18 @@ export const ChatList: React.FC<ChatListProps> = ({
       let lastAttendantIdx = -1;
       for (let i = 0; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'atendente') {
+        if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
           lastAttendantIdx = i;
         }
       }
 
       for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente') {
+        if (r === 'cliente' && msgs[i].status !== 'read') {
           return true;
         }
       }
-      return msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
+      return false;
     }).length;
   }, [conversations, selectedDepartmentId]);
 

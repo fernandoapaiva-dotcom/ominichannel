@@ -49,17 +49,15 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       let lastAttendantIdx = -1;
       for (let i = 0; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'atendente') {
+        if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
           lastAttendantIdx = i;
         }
       }
 
       for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente') {
-          const mTime = msgs[i].timestamp ? new Date(msgs[i].timestamp).getTime() : 0;
-          const isRecent = mTime > 0 ? (Date.now() - mTime) < 7 * 24 * 60 * 60 * 1000 : true;
-          if (isRecent) return true;
+        if (r === 'cliente' && msgs[i].status !== 'read') {
+          return true;
         }
       }
       return false;
