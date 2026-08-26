@@ -93,7 +93,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const fetchConversations = useCallback(async () => {
     try {
       const data = await apiFetch('/conversations/');
-      setConversations(data);
+      if (Array.isArray(data)) {
+        setConversations(prev => {
+          // Collect any optimistic messages that are currently sending
+          const optimisticMap: { [convId: number]: Message[] } = {};
+          prev.forEach(c => {
+            const sending = (c.messages || []).filter(m => m.id < 0 || m.status === 'sending');
+            if (sending.length > 0) {
+              optimisticMap[c.id] = sending;
+            }
+          });
+
+          return data.map((c: Conversation) => {
+            const sending = optimisticMap[c.id] || [];
+            if (sending.length > 0) {
+              const existingIds = new Set((c.messages || []).map(m => m.id));
+              const toKeep = sending.filter(m => !existingIds.has(m.id));
+              return {
+                ...c,
+                messages: [...(c.messages || []), ...toKeep]
+              };
+            }
+            return c;
+          });
+        });
+      }
     } catch (err) {
       console.error('Error fetching conversations:', err);
     }

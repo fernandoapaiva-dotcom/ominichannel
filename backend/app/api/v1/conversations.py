@@ -770,181 +770,32 @@ async def send_agent_message(
     if "/uploads/" in raw_content:
         clean_db_content = "/uploads/" + raw_content.split("/uploads/")[-1]
 
-    # 1. Dispatch via provider factory
-    send_res = {"success": False}
-    if is_sticker and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
-        sticker_media = raw_content
-        if "/uploads/" in raw_content:
-            fname = raw_content.split("/uploads/")[-1]
-            lpath = os.path.join("uploads", fname)
-            if os.path.exists(lpath):
-                with open(lpath, "rb") as f:
-                    sticker_media = base64.b64encode(f.read()).decode("utf-8")
-
-        send_res = await evolution_service.send_sticker(
-            instance_name=conv.whatsapp_number.instancia_evolution_api,
-            number=conv.contact.telefone,
-            sticker_media=sticker_media
-        )
-    elif is_gif and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
-        send_res = await evolution_service.send_media_message(
-            instance_name=conv.whatsapp_number.instancia_evolution_api,
-            number=conv.contact.telefone,
-            media_type="video",
-            mimetype="video/mp4",
-            media=raw_content,
-            file_name="animacao.mp4"
-        )
-    elif is_media and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
-        # Extract media path and optional caption
-        media_path = raw_content.split("|")[0].strip()
-        caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
-
-        agent_name = current_user.nome or "Atendente"
-        formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_name}:*"
-
-        media_data = media_path
-        fname = "arquivo"
-        mimetype = "image/jpeg"
-        media_type = "image"
-
-        if "/uploads/" in media_path:
-            fname = media_path.split("/uploads/")[-1]
-            lpath = os.path.join("uploads", fname)
-            if os.path.exists(lpath):
-                with open(lpath, "rb") as f:
-                    media_data = base64.b64encode(f.read()).decode("utf-8")
-
-        f_lower = fname.lower()
-        if f_lower.endswith(".png"):
-            mimetype = "image/png"
-            media_type = "image"
-        elif f_lower.endswith((".jpg", ".jpeg")):
-            mimetype = "image/jpeg"
-            media_type = "image"
-        elif f_lower.endswith(".mp4"):
-            mimetype = "video/mp4"
-            media_type = "video"
-        elif f_lower.endswith((".ogg", ".mp3", ".wav")):
-            mimetype = "audio/ogg"
-            media_type = "audio"
-        elif f_lower.endswith(".pdf"):
-            mimetype = "application/pdf"
-            media_type = "document"
-        else:
-            if str(msg_in.tipo).lower() in ("imagem", "image"):
-                media_type = "image"
-                mimetype = "image/jpeg"
-            elif str(msg_in.tipo).lower() == "video":
-                media_type = "video"
-                mimetype = "video/mp4"
-            elif str(msg_in.tipo).lower() == "audio":
-                media_type = "audio"
-                mimetype = "audio/ogg"
-            else:
-                media_type = "document"
-                mimetype = "application/octet-stream"
-
-        send_res = await evolution_service.send_media_message(
-            instance_name=conv.whatsapp_number.instancia_evolution_api,
-            number=conv.contact.telefone,
-            media_type=media_type,
-            mimetype=mimetype,
-            media=media_data,
-            file_name=fname,
-            caption=formatted_caption
-        )
-    else:
-        provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
-        agent_name = current_user.nome or "Atendente"
-        formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
-
-        # Extract mentions in text (e.g. @todos, @everyone, @Nome, @55...)
-        mentioned_list = []
-        c_text = msg_in.conteudo or ""
-        import re
-
-        is_group_chat = bool(
-            conv.contact and (
-                conv.contact.telefone.startswith("120363") or
-                len("".join(filter(str.isdigit, conv.contact.telefone))) > 15
-            )
-        )
-        if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
-            try:
-                g_info = await evolution_service.fetch_group_info(
-                    instance_name=conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None,
-                    group_jid=conv.contact.telefone if "@g.us" in conv.contact.telefone else f"{conv.contact.telefone}@g.us"
-                )
-                if g_info and "participants" in g_info:
-                    for p in g_info["participants"]:
-                        raw_p = p.get("phoneNumber") or p.get("id") or ""
-                        digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
-                        if len(digits) >= 8 and digits not in mentioned_list:
-                            mentioned_list.append(digits)
-            except Exception as ex:
-                logger.warning(f"Error resolving @todos participants: {ex}")
-
-        # Extract direct phone numbers @55...
-        phone_mentions = re.findall(r"@(\d{10,15})", c_text)
-        for pm in phone_mentions:
-            if pm not in mentioned_list:
-                mentioned_list.append(pm)
-
-        # Extract name mentions @Nome Sobrenome
-        name_mentions = re.findall(r"@([a-zA-ZÀ-ÿ\s]{2,30})", c_text)
-        for nm in name_mentions:
-            clean_nm = nm.strip()
-            if clean_nm and clean_nm.lower() not in ["todos", "everyone", "all"]:
-                c_stmt = select(Contact).where(
-                    Contact.tenant_id == current_user.tenant_id,
-                    Contact.nome.ilike(f"%{clean_nm}%")
-                )
-                c_match = (await db.execute(c_stmt)).scalars().first()
-                if c_match and c_match.telefone:
-                    digits = "".join(filter(str.isdigit, c_match.telefone))
-                    if len(digits) >= 8 and digits not in mentioned_list:
-                        mentioned_list.append(digits)
-
-        send_res = await provider.send_text_message(
-            number=conv.contact.telefone,
-            text=formatted_whatsapp_text,
-            mentioned=mentioned_list if mentioned_list else None
-        )
-
-    if send_res and not send_res.get("success", False) and send_res.get("error"):
-        error_detail = send_res.get("error", "Erro no envio")
-        dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
-        err_str = str(error_detail).lower()
-        if "close" in err_str or "desconectad" in err_str or "401" in err_str or "reading 'id'" in err_str or "undefined" in err_str or "503" in err_str:
-            msg = f"O WhatsApp do departamento '{dept_name}' está desconectado do aparelho. Por favor, escaneie o QR Code em Configurações > WhatsApp para reconectar."
-        else:
-            msg = f"Falha no envio pelo WhatsApp ({dept_name}): {error_detail}"
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=msg
-        )
-
-    conv.status = ConversationStatus.COM_HUMANO
-    conv.assigned_user_id = current_user.id
-    conv.ultima_interacao_em = datetime.utcnow()
-
-    wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
-
+    # 1. Immediate ACID DB commit (<15ms) so the message is never lost or delayed
     message = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
         conteudo=clean_db_content,
         tipo=actual_tipo,
         status="sent",
-        whatsapp_msg_id=wa_key_id,
         timestamp=datetime.utcnow()
     )
     db.add(message)
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+    
+    # Mark as read for attendant since attendant is currently speaking
+    extra = dict(conv.dados_adicionais or {})
+    extra["marked_as_read"] = True
+    extra["pending_dismissed"] = True
+    conv.dados_adicionais = extra
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(conv, "dados_adicionais")
+
     await db.commit()
     await db.refresh(message)
 
-    # 4. Broadcast real-time update
+    # 2. Instant Real-time WebSocket Broadcast
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
         whatsapp_number_id=conv.whatsapp_number_id,
@@ -954,12 +805,169 @@ async def send_agent_message(
             "id": message.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": msg_in.conteudo,
-            "status": message.status,
-            "whatsapp_msg_id": message.whatsapp_msg_id,
+            "status": "sent",
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
         }
     )
+
+    # 3. Background WhatsApp API Dispatch (Non-blocking async task)
+    async def _async_dispatch_to_whatsapp():
+        try:
+            from app.core.database import async_session_factory
+            send_res = {"success": False}
+
+            if is_sticker and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+                sticker_media = raw_content
+                if "/uploads/" in raw_content:
+                    fname = raw_content.split("/uploads/")[-1]
+                    lpath = os.path.join("uploads", fname)
+                    if os.path.exists(lpath):
+                        with open(lpath, "rb") as f:
+                            sticker_media = base64.b64encode(f.read()).decode("utf-8")
+
+                send_res = await evolution_service.send_sticker(
+                    instance_name=conv.whatsapp_number.instancia_evolution_api,
+                    number=conv.contact.telefone,
+                    sticker_media=sticker_media
+                )
+            elif is_gif and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+                send_res = await evolution_service.send_media_message(
+                    instance_name=conv.whatsapp_number.instancia_evolution_api,
+                    number=conv.contact.telefone,
+                    media_type="video",
+                    mimetype="video/mp4",
+                    media=raw_content,
+                    file_name="animacao.mp4"
+                )
+            elif is_media and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+                media_path = raw_content.split("|")[0].strip()
+                caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
+                agent_name = current_user.nome or "Atendente"
+                formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_name}:*"
+
+                media_data = media_path
+                fname = "arquivo"
+                mimetype = "image/jpeg"
+                media_type = "image"
+
+                if "/uploads/" in media_path:
+                    fname = media_path.split("/uploads/")[-1]
+                    lpath = os.path.join("uploads", fname)
+                    if os.path.exists(lpath):
+                        with open(lpath, "rb") as f:
+                            media_data = base64.b64encode(f.read()).decode("utf-8")
+
+                f_lower = fname.lower()
+                if f_lower.endswith(".png"):
+                    mimetype = "image/png"
+                    media_type = "image"
+                elif f_lower.endswith((".jpg", ".jpeg")):
+                    mimetype = "image/jpeg"
+                    media_type = "image"
+                elif f_lower.endswith(".mp4"):
+                    mimetype = "video/mp4"
+                    media_type = "video"
+                elif f_lower.endswith((".ogg", ".mp3", ".wav")):
+                    mimetype = "audio/ogg"
+                    media_type = "audio"
+                elif f_lower.endswith(".pdf"):
+                    mimetype = "application/pdf"
+                    media_type = "document"
+                else:
+                    if str(msg_in.tipo).lower() in ("imagem", "image"):
+                        media_type = "image"
+                        mimetype = "image/jpeg"
+                    elif str(msg_in.tipo).lower() == "video":
+                        media_type = "video"
+                        mimetype = "video/mp4"
+                    elif str(msg_in.tipo).lower() == "audio":
+                        media_type = "audio"
+                        mimetype = "audio/ogg"
+                    else:
+                        media_type = "document"
+                        mimetype = "application/octet-stream"
+
+                send_res = await evolution_service.send_media_message(
+                    instance_name=conv.whatsapp_number.instancia_evolution_api,
+                    number=conv.contact.telefone,
+                    media_type=media_type,
+                    mimetype=mimetype,
+                    media=media_data,
+                    file_name=fname,
+                    caption=formatted_caption
+                )
+            else:
+                provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+                agent_name = current_user.nome or "Atendente"
+                formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+
+                # Extract mentions
+                mentioned_list = []
+                c_text = msg_in.conteudo or ""
+                import re
+
+                is_group_chat = bool(
+                    conv.contact and (
+                        conv.contact.telefone.startswith("120363") or
+                        len("".join(filter(str.isdigit, conv.contact.telefone))) > 15
+                    )
+                )
+                if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
+                    try:
+                        g_info = await evolution_service.fetch_group_info(
+                            instance_name=conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None,
+                            group_jid=conv.contact.telefone if "@g.us" in conv.contact.telefone else f"{conv.contact.telefone}@g.us"
+                        )
+                        if g_info and "participants" in g_info:
+                            for p in g_info["participants"]:
+                                raw_p = p.get("phoneNumber") or p.get("id") or ""
+                                digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
+                                if len(digits) >= 8 and digits not in mentioned_list:
+                                    mentioned_list.append(digits)
+                    except Exception as ex:
+                        logger.warning(f"Error resolving @todos participants: {ex}")
+
+                phone_mentions = re.findall(r"@(\d{10,15})", c_text)
+                for pm in phone_mentions:
+                    if pm not in mentioned_list:
+                        mentioned_list.append(pm)
+
+                send_res = await provider.send_text_message(
+                    number=conv.contact.telefone,
+                    text=formatted_whatsapp_text,
+                    mentioned=mentioned_list if mentioned_list else None
+                )
+
+            wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+            final_status = "sent" if (send_res.get("success", False) or wa_key_id) else "failed"
+
+            # Update DB record with WhatsApp Message ID
+            async with async_session_factory() as bg_db:
+                bg_m_stmt = select(Message).where(Message.id == message.id)
+                bg_m_res = await bg_db.execute(bg_m_stmt)
+                db_msg = bg_m_res.scalar_one_or_none()
+                if db_msg:
+                    db_msg.whatsapp_msg_id = wa_key_id
+                    db_msg.status = final_status
+                    await bg_db.commit()
+
+            # Broadcast status update if key id obtained or failed
+            await ws_manager.broadcast_to_department(
+                tenant_id=current_user.tenant_id,
+                whatsapp_number_id=conv.whatsapp_number_id,
+                message_data={
+                    "type": "MESSAGE_STATUS_UPDATE",
+                    "conversation_id": conv.id,
+                    "id": message.id,
+                    "status": final_status,
+                    "whatsapp_msg_id": wa_key_id
+                }
+            )
+        except Exception as bg_err:
+            logger.error(f"Error in background WhatsApp dispatch: {bg_err}")
+
+    asyncio.create_task(_async_dispatch_to_whatsapp())
 
     return message
 
