@@ -530,10 +530,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const scrollToBottom = (behavior: 'smooth' | 'auto' = 'auto') => {
     if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight + 1000;
-    }
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior, block: 'end' });
+      if (behavior === 'smooth') {
+        scrollContainerRef.current.scrollTo({
+          top: scrollContainerRef.current.scrollHeight,
+          behavior: 'smooth'
+        });
+      } else {
+        scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+      }
     }
   };
 
@@ -589,12 +593,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setIsUserScrolledUp(false);
     scrollToBottom('auto');
 
-    // Staggered timers to guarantee full scroll as media, thumbnails & DOM elements finish layout
-    const t1 = setTimeout(() => scrollToBottom('auto'), 50);
-    const t2 = setTimeout(() => scrollToBottom('auto'), 150);
-    const t3 = setTimeout(() => scrollToBottom('auto'), 300);
-    const t4 = setTimeout(() => scrollToBottom('auto'), 600);
-
     if (conversation?.id) {
       const extra = (conversation as any).dados_adicionais || {};
       const msgs = conversation.messages || [];
@@ -613,23 +611,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           .catch(err => console.debug('Auto mark_read error:', err));
       }
     }
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-      clearTimeout(t4);
-    };
   }, [conversation?.id]);
 
   useEffect(() => {
-    if (!isUserScrolledUp) {
-      scrollToBottom('auto');
-      const t = setTimeout(() => scrollToBottom('auto'), 80);
-      return () => clearTimeout(t);
+    if (!isUserScrolledUp && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
     }
     setSendError(null);
-  }, [conversation?.messages]);
+  }, [conversation?.messages, isUserScrolledUp]);
 
   const [isOperatingProtocol, setIsOperatingProtocol] = useState(false);
 
@@ -3086,7 +3075,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                 if (isProtocolClosed) {
                   return (
-                    <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                    <div data-msg-time={msg.timestamp} style={{
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -3120,7 +3109,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
                 if (isProtocolOpened) {
                   return (
-                    <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                    <div data-msg-time={msg.timestamp} style={{
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
@@ -3153,7 +3142,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }
 
                 return (
-                  <div className="animate-fade-in" data-msg-time={msg.timestamp} style={{
+                  <div data-msg-time={msg.timestamp} style={{
                     alignSelf: 'center',
                     margin: '8px 0',
                     padding: '6px 14px',
@@ -3190,7 +3179,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <div
               key={msgKey}
               data-msg-time={msg.timestamp}
-              className="animate-fade-in msg-row-container"
+              className="msg-row-container"
               style={{
                 alignSelf: isCustomer ? 'flex-start' : 'flex-end',
                 maxWidth: '70%',
