@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building, Zap } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building, Zap, Sparkles } from 'lucide-react';
 import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../types';
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
 import { AutomationsSettings } from './AutomationsSettings';
+import { RagTrainingAssistantModal } from './RagTrainingAssistantModal';
 
 interface AdminPanelProps {
   initialNumbers?: WhatsAppNumber[];
@@ -49,6 +50,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [selectedNumIds, setSelectedNumIds] = useState<number[]>([]);
 
   // RAG Upload & Progress State
+  const [isRagTrainerOpen, setIsRagTrainerOpen] = useState(false);
   const [ragScope, setRagScope] = useState<'geral' | 'setor'>('geral');
   const [ragDeptId, setRagDeptId] = useState<number | ''>('');
   const [ragTitle, setRagTitle] = useState('');
@@ -1689,6 +1691,64 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                 Ensine a IA Concierge sobre a sua empresa! Escolha se o conhecimento é <strong>Geral (Todos os Setores)</strong> como horário de funcionamento e localização da loja, ou <strong>Específico do Setor</strong> (ex: preços de produtos para Vendas ou manuais de erro para Assistência).
               </p>
 
+              {/* AI Trainer & Anti-Hallucination Assistant Banner */}
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '16px 20px',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: '24px'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '10px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+                    color: '#60a5fa',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    <Sparkles size={24} />
+                  </div>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: '15px', fontWeight: '700', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      🤖 IA Auxiliar de Treinamento RAG & Anti-Alucinação
+                      <span style={{ fontSize: '10px', backgroundColor: 'rgba(59, 130, 246, 0.3)', color: '#93c5fd', padding: '2px 8px', borderRadius: '10px', fontWeight: '600' }}>
+                        Copilot de Engenharia
+                      </span>
+                    </h4>
+                    <p style={{ margin: '3px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
+                      A IA está alucinando ou errando respostas? Converse com o Auxiliar para diagnosticar a causa e criar diretrizes factuais perfeitas com 1 clique.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsRagTrainerOpen(true)}
+                  className="btn-primary"
+                  style={{
+                    padding: '9px 18px',
+                    fontSize: '13px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    backgroundColor: '#3b82f6',
+                    borderColor: '#3b82f6',
+                    fontWeight: '700',
+                    boxShadow: '0 4px 12px rgba(59, 130, 246, 0.3)'
+                  }}
+                >
+                  <Sparkles size={16} /> Abrir Auxiliar de Treinamento
+                </button>
+              </div>
+
               {/* Scope & Department Selection Cards */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div
@@ -2841,6 +2901,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
         {activeSubTab === 'automations' && (
           <AutomationsSettings />
         )}
+
+        {/* 9. AI RAG Training Assistant Modal */}
+        <RagTrainingAssistantModal
+          isOpen={isRagTrainerOpen}
+          onClose={() => setIsRagTrainerOpen(false)}
+          onDocumentAdded={loadRagDocuments}
+          numbers={numbers}
+        />
       </div>
     </div>
   );
