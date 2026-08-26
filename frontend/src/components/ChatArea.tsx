@@ -790,6 +790,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const renderFormattedMessageText = (text: string) => {
     if (!text || typeof text !== 'string') return null;
+
+    // Check WhatsApp quoted reply format (e.g. "> *Sender:* Quote text\n\nActual message")
+    if (text.startsWith('> ')) {
+      const splitIdx = text.indexOf('\n\n');
+      if (splitIdx !== -1) {
+        const quotePart = text.substring(2, splitIdx).trim();
+        const bodyPart = text.substring(splitIdx + 2).trim();
+
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{
+              padding: '6px 10px',
+              borderLeft: '3px solid var(--accent-primary)',
+              backgroundColor: 'rgba(0, 0, 0, 0.2)',
+              borderRadius: '0 6px 6px 0',
+              fontSize: '12px',
+              color: 'rgba(255, 255, 255, 0.85)',
+              marginBottom: '2px'
+            }}>
+              {quotePart.replace(/^\*|\*$/g, '')}
+            </div>
+            <div>{renderFormattedMessageText(bodyPart)}</div>
+          </div>
+        );
+      }
+    }
+
     if (!text.includes('@')) return text;
 
     const mentionRegex = /@([a-zA-Z0-9À-ÿ_.-]+|\d{10,20})/g;
@@ -926,8 +953,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     let textToSend = inputText.trim();
     if (replyingToMessage) {
       const quoteSender = replyingToMessage.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : 'Atendente';
-      let quoteSnippet = (replyingToMessage.conteudo || '').split('|')[0];
-      if (quoteSnippet.length > 50) quoteSnippet = quoteSnippet.slice(0, 50) + '...';
+      let quoteSnippet = '';
+      if (replyingToMessage.tipo === 'imagem') {
+        const { caption } = extractMediaAndCaption(replyingToMessage.conteudo);
+        quoteSnippet = caption ? `📷 Foto: ${caption}` : '📷 Foto';
+      } else if (replyingToMessage.tipo === 'video') {
+        const { caption } = extractMediaAndCaption(replyingToMessage.conteudo);
+        quoteSnippet = caption ? `🎥 Vídeo: ${caption}` : '🎥 Vídeo';
+      } else if (replyingToMessage.tipo === 'audio') {
+        quoteSnippet = '🎵 Áudio';
+      } else if (replyingToMessage.tipo === 'arquivo') {
+        const { caption, mediaPath } = extractMediaAndCaption(replyingToMessage.conteudo);
+        const fileName = mediaPath.split('/').pop() || 'Documento';
+        quoteSnippet = `📄 ${caption || fileName}`;
+      } else {
+        quoteSnippet = (replyingToMessage.conteudo || '').trim();
+      }
+      if (quoteSnippet.length > 60) quoteSnippet = quoteSnippet.slice(0, 60) + '...';
       textToSend = `> *${quoteSender}:* ${quoteSnippet}\n\n` + textToSend;
       setReplyingToMessage(null);
     }
@@ -4051,48 +4093,92 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
       {/* WhatsApp-Style Quoted Reply Preview Bar */}
-      {replyingToMessage && (
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 18px',
-          backgroundColor: 'var(--bg-secondary)',
-          borderTop: '1px solid var(--border-color)',
-          borderLeft: '4px solid var(--accent-primary)',
-          boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
-          flexShrink: 0
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Reply size={13} />
-              <span>Respondendo a {replyingToMessage.remetente === 'cliente' ? (conversation.contact?.nome || 'Cliente') : 'Atendente'}:</span>
+      {replyingToMessage && (() => {
+        const { mediaPath, caption } = extractMediaAndCaption(replyingToMessage.conteudo);
+        let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+        if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && replyingToMessage.id && replyingToMessage.id > 0) {
+          fullUrl = `http://localhost:8000/api/v1/conversations/messages/${replyingToMessage.id}/media`;
+        }
+
+        const isImg = replyingToMessage.tipo === 'imagem';
+        const isVid = replyingToMessage.tipo === 'video';
+        const isAud = replyingToMessage.tipo === 'audio';
+        const isFile = replyingToMessage.tipo === 'arquivo';
+
+        let snippetText = caption || replyingToMessage.conteudo || '';
+        if (isImg && !caption) snippetText = 'Foto';
+        if (isVid && !caption) snippetText = 'Vídeo';
+        if (isAud) snippetText = 'Áudio';
+        if (isFile && !caption) snippetText = mediaPath.split('/').pop() || 'Documento';
+
+        return (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 16px',
+            backgroundColor: 'var(--bg-secondary)',
+            borderTop: '1px solid var(--border-color)',
+            borderLeft: '4px solid var(--accent-primary)',
+            boxShadow: '0 -2px 10px rgba(0,0,0,0.05)',
+            flexShrink: 0,
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1, minWidth: 0 }}>
+              {isImg && (
+                <div style={{ width: '38px', height: '38px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border-color)', backgroundColor: '#000' }}>
+                  <img src={fullUrl} alt="Foto" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              )}
+              {isVid && (
+                <div style={{ width: '38px', height: '38px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border-color)', backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Video size={18} color="var(--accent-primary)" />
+                </div>
+              )}
+              {isAud && (
+                <div style={{ width: '38px', height: '38px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border-color)', backgroundColor: 'rgba(168, 85, 247, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Music size={18} color="#c084fc" />
+                </div>
+              )}
+              {isFile && (
+                <div style={{ width: '38px', height: '38px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--border-color)', backgroundColor: 'rgba(239, 68, 68, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <FileText size={18} color="#ef4444" />
+                </div>
+              )}
+
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '12px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Reply size={13} />
+                  <span>Respondendo a {replyingToMessage.remetente === 'cliente' ? (conversation.contact?.nome || 'Cliente') : 'Atendente'}:</span>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {snippetText}
+                </div>
+              </div>
             </div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {replyingToMessage.conteudo}
-            </div>
+
+            <button
+              type="button"
+              onClick={() => setReplyingToMessage(null)}
+              title="Cancelar resposta"
+              style={{
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '24px',
+                height: '24px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--text-muted)',
+                cursor: 'pointer'
+              }}
+            >
+              <X size={14} />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setReplyingToMessage(null)}
-            title="Cancelar resposta"
-            style={{
-              background: 'rgba(255, 255, 255, 0.08)',
-              border: 'none',
-              borderRadius: '50%',
-              width: '24px',
-              height: '24px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-muted)',
-              cursor: 'pointer'
-            }}
-          >
-            <X size={14} />
-          </button>
-        </div>
-      )}
+        );
+      })()}
 
       {/* WhatsApp-Style Message Edit Bar (Imagem 3) */}
       {editingMessage && (
