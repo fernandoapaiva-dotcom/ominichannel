@@ -236,9 +236,6 @@ class EvolutionService:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
         clean_number = self._format_target_number(number)
-        if "@" not in str(clean_number):
-            clean_number = await self.resolve_canonical_jid(instance_name, str(clean_number), custom_base_url, custom_api_key)
-            clean_number = self._format_target_number(clean_number)
 
         payload: Dict[str, Any] = {
             "number": clean_number,
@@ -248,7 +245,7 @@ class EvolutionService:
             payload["mentioned"] = mentioned
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                response = await client.post(url, json=payload, headers=headers, timeout=12.0)
                 res_data = response.json() if response.content else {}
 
                 # Auto-retry on Connection Closed (stale socket)
@@ -256,8 +253,8 @@ class EvolutionService:
                     logger.warning(f"Instance {instance_name} socket stale/closed. Attempting auto-restart and retry...")
                     try:
                         await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers, timeout=8.0)
-                        await asyncio.sleep(1.5)
-                        retry_sock_res = await client.post(url, json=payload, headers=headers, timeout=15.0)
+                        await asyncio.sleep(1.2)
+                        retry_sock_res = await client.post(url, json=payload, headers=headers, timeout=12.0)
                         if retry_sock_res.status_code < 400:
                             retry_sock_data = retry_sock_res.json()
                             retry_sock_data["success"] = True
@@ -265,14 +262,25 @@ class EvolutionService:
                     except Exception as rest_err:
                         logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
 
-                if response.status_code == 400 and "@lid" not in clean_number and "@g.us" not in clean_number:
+                # Retry with canonical JID or @lid only if WhatsApp rejected the initial number (400)
+                if response.status_code == 400 and "@g.us" not in str(clean_number):
+                    alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
+                    if alt_number and alt_number != clean_number:
+                        retry_payload = {**payload, "number": self._format_target_number(alt_number)}
+                        retry_res = await client.post(url, json=retry_payload, headers=headers, timeout=12.0)
+                        if retry_res.status_code < 400:
+                            retry_data = retry_res.json()
+                            retry_data["success"] = True
+                            return retry_data
+
                     digits = "".join(filter(str.isdigit, clean_number))
-                    lid_payload = {**payload, "number": f"{digits}@lid"}
-                    retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=15.0)
-                    if retry_res.status_code < 400:
-                        retry_data = retry_res.json()
-                        retry_data["success"] = True
-                        return retry_data
+                    if "@lid" not in clean_number:
+                        lid_payload = {**payload, "number": f"{digits}@lid"}
+                        retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=12.0)
+                        if retry_res.status_code < 400:
+                            retry_data = retry_res.json()
+                            retry_data["success"] = True
+                            return retry_data
 
                 if response.status_code >= 400:
                     err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
