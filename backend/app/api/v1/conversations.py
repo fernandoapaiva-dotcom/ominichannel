@@ -287,6 +287,15 @@ async def start_new_conversation(
     if not wn:
         raise HTTPException(status_code=404, detail="Departamento / Número de WhatsApp não encontrado")
 
+    # Auto-resolve canonical registered WhatsApp number (handling 8 vs 9 digits in Brazil)
+    if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
+        try:
+            canonical_phone = await evolution_service.resolve_canonical_jid(wn.instancia_evolution_api, clean_phone)
+            if canonical_phone and canonical_phone != clean_phone:
+                clean_phone = canonical_phone
+        except Exception as e:
+            logger.debug(f"Could not auto-resolve canonical JID: {e}")
+
     # 2. Find or create Contact (matching phone variants with/without 9th digit)
     phone_variants = [clean_phone]
     if len(clean_phone) == 13 and clean_phone.startswith("55"):
