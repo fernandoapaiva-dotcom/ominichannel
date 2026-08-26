@@ -199,6 +199,21 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formEmployeePhone, setFormEmployeePhone] = useState<string>('');
   const [formSelectedEmployeeIds, setFormSelectedEmployeeIds] = useState<number[]>([]);
   const [isEmployeeDropdownOpen, setIsEmployeeDropdownOpen] = useState<boolean>(false);
+  const employeeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (employeeDropdownRef.current && !employeeDropdownRef.current.contains(event.target as Node)) {
+        setIsEmployeeDropdownOpen(false);
+      }
+    };
+    if (isEmployeeDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isEmployeeDropdownOpen]);
   const [formNotifyWhatsApp, setFormNotifyWhatsApp] = useState<boolean>(true);
   const [formCustomReminderHours, setFormCustomReminderHours] = useState<number>(2);
   const [formConfirmedByEmployee, setFormConfirmedByEmployee] = useState<boolean>(false);
@@ -2175,7 +2190,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               </div>
 
               {/* Employee Row (Multi-Select Support) */}
-              <div style={{ position: 'relative' }}>
+              <div ref={employeeDropdownRef} style={{ position: 'relative' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                   <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>
                     👥 FUNCIONÁRIOS RESPONSÁVEIS {formSelectedEmployeeIds.length > 0 && `(${formSelectedEmployeeIds.length} selecionado${formSelectedEmployeeIds.length > 1 ? 's' : ''})`}
@@ -2203,128 +2218,161 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   )}
                 </div>
 
-                {/* Selected Employees Chips */}
+                {/* Selected Employees Chips / Trigger Box */}
                 <div
                   onClick={() => setIsEmployeeDropdownOpen(!isEmployeeDropdownOpen)}
                   style={{
-                    minHeight: '40px',
+                    minHeight: '42px',
                     width: '100%',
                     boxSizing: 'border-box',
-                    padding: '6px 10px',
+                    padding: '6px 12px',
                     borderRadius: '8px',
                     border: isEmployeeDropdownOpen ? '1px solid #10b981' : '1px solid var(--border-color)',
                     backgroundColor: 'var(--bg-primary)',
                     display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: '6px',
+                    justifyContent: 'space-between',
                     alignItems: 'center',
+                    gap: '8px',
                     cursor: 'pointer'
                   }}
                 >
-                  {formSelectedEmployeeIds.length === 0 ? (
-                    <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
-                      Clique para selecionar 1 ou mais colaboradores...
-                    </span>
-                  ) : (
-                    employees.filter(e => formSelectedEmployeeIds.includes(e.id)).map(emp => (
-                      <span
-                        key={emp.id}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                          border: '1px solid rgba(16, 185, 129, 0.4)',
-                          color: '#10b981',
-                          padding: '3px 8px',
-                          borderRadius: '6px',
-                          fontSize: '12px',
-                          fontWeight: '600'
-                        }}
-                      >
-                        👤 {emp.nome}
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleToggleEmployee(emp);
-                          }}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', flex: 1 }}>
+                    {formSelectedEmployeeIds.length === 0 ? (
+                      <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                        Clique para selecionar 1 ou mais colaboradores...
+                      </span>
+                    ) : (
+                      employees.filter(e => formSelectedEmployeeIds.includes(e.id)).map(emp => (
+                        <span
+                          key={emp.id}
                           style={{
-                            background: 'transparent',
-                            border: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                            border: '1px solid rgba(16, 185, 129, 0.6)',
                             color: '#10b981',
-                            cursor: 'pointer',
-                            padding: 0,
-                            display: 'flex',
-                            alignItems: 'center'
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            fontSize: '12px',
+                            fontWeight: '600'
                           }}
                         >
-                          ✕
-                        </button>
-                      </span>
-                    ))
-                  )}
+                          👤 {emp.nome}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleEmployee(emp);
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#10b981',
+                              cursor: 'pointer',
+                              padding: 0,
+                              display: 'flex',
+                              alignItems: 'center',
+                              fontWeight: 'bold'
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))
+                    )}
+                  </div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px', userSelect: 'none' }}>
+                    {isEmployeeDropdownOpen ? '▲' : '▼'}
+                  </span>
                 </div>
 
-                {/* Dropdown with Checkboxes */}
+                {/* Solid Opaque Dropdown with Checkboxes */}
                 {isEmployeeDropdownOpen && (
                   <div
                     style={{
                       position: 'absolute',
-                      top: '100%',
+                      top: 'calc(100% + 4px)',
                       left: 0,
                       right: 0,
-                      zIndex: 100,
-                      marginTop: '4px',
-                      backgroundColor: 'var(--bg-card)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '8px',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                      maxHeight: '220px',
-                      overflowY: 'auto',
-                      padding: '6px'
+                      zIndex: 99999,
+                      backgroundColor: '#18202f',
+                      border: '1px solid #3b82f6',
+                      borderRadius: '10px',
+                      boxShadow: '0 20px 50px rgba(0,0,0,0.98)',
+                      maxHeight: '280px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      overflow: 'hidden'
                     }}
                   >
-                    {employees.filter(e => e.ativo).length === 0 ? (
-                      <div style={{ padding: '10px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                        Nenhum colaborador ativo cadastrado
-                      </div>
-                    ) : (
-                      employees.filter(e => e.ativo).map(emp => {
-                        const isSelected = formSelectedEmployeeIds.includes(emp.id);
-                        return (
-                          <div
-                            key={emp.id}
-                            onClick={() => handleToggleEmployee(emp)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '10px',
-                              padding: '8px 10px',
-                              borderRadius: '6px',
-                              cursor: 'pointer',
-                              backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
-                              transition: 'background 0.15s'
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => {}}
-                              style={{ cursor: 'pointer', accentColor: '#10b981' }}
-                            />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: '13px', fontWeight: isSelected ? '600' : '400', color: isSelected ? '#10b981' : '#fff' }}>
-                                {emp.nome}
-                              </div>
-                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                                {emp.cargo || 'Equipe'} • {emp.telefone}
+                    <div style={{ padding: '8px 12px', borderBottom: '1px solid #283548', fontSize: '11px', color: '#94a3b8', fontWeight: 'bold' }}>
+                      Selecione quem receberá o aviso no WhatsApp:
+                    </div>
+
+                    <div style={{ overflowY: 'auto', padding: '6px', flex: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      {employees.filter(e => e.ativo).length === 0 ? (
+                        <div style={{ padding: '12px', fontSize: '12px', color: '#94a3b8', textAlign: 'center' }}>
+                          Nenhum colaborador ativo cadastrado
+                        </div>
+                      ) : (
+                        employees.filter(e => e.ativo).map(emp => {
+                          const isSelected = formSelectedEmployeeIds.includes(emp.id);
+                          return (
+                            <div
+                              key={emp.id}
+                              onClick={() => handleToggleEmployee(emp)}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                                padding: '8px 10px',
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.18)' : '#1e293b',
+                                border: isSelected ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid transparent',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => {}}
+                                style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: '#10b981' }}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: '13px', fontWeight: isSelected ? 'bold' : '500', color: isSelected ? '#10b981' : '#f8fafc' }}>
+                                  {emp.nome}
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                                  {emp.cargo || 'Equipe'} • {emp.telefone}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                      })
-                    )}
+                          );
+                        })
+                      )}
+                    </div>
+
+                    {/* Dropdown Footer */}
+                    <div style={{ padding: '6px 8px', borderTop: '1px solid #283548', backgroundColor: '#131a26', display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => setIsEmployeeDropdownOpen(false)}
+                        style={{
+                          backgroundColor: '#10b981',
+                          color: '#000',
+                          border: 'none',
+                          borderRadius: '6px',
+                          padding: '5px 14px',
+                          fontSize: '12px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ✓ Concluir
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
