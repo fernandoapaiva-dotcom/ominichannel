@@ -197,6 +197,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formEmployeeId, setFormEmployeeId] = useState<number | ''>('');
   const [formEmployeeName, setFormEmployeeName] = useState<string>('');
   const [formEmployeePhone, setFormEmployeePhone] = useState<string>('');
+  const [formSelectedEmployeeIds, setFormSelectedEmployeeIds] = useState<number[]>([]);
+  const [isEmployeeDropdownOpen, setIsEmployeeDropdownOpen] = useState<boolean>(false);
   const [formNotifyWhatsApp, setFormNotifyWhatsApp] = useState<boolean>(true);
   const [formCustomReminderHours, setFormCustomReminderHours] = useState<number>(2);
   const [formConfirmedByEmployee, setFormConfirmedByEmployee] = useState<boolean>(false);
@@ -253,6 +255,22 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return `${year}-${month}-${day}T${hours}:${mins}:${secs}`;
   };
 
+  const handleToggleEmployee = (emp: AuthorizedTechnician) => {
+    setFormSelectedEmployeeIds(prev => {
+      let next: number[];
+      if (prev.includes(emp.id)) {
+        next = prev.filter(id => id !== emp.id);
+      } else {
+        next = [...prev, emp.id];
+      }
+      const selected = employees.filter(e => next.includes(e.id));
+      setFormEmployeeId(selected[0]?.id || '');
+      setFormEmployeeName(selected.map(e => e.nome).join(', '));
+      setFormEmployeePhone(selected.map(e => e.telefone).join(', '));
+      return next;
+    });
+  };
+
   const openNewEventModal = (prefill?: Partial<CalendarEvent>, selectedDay?: Date) => {
     setEditingEvent(null);
     const targetDate = selectedDay || new Date();
@@ -285,6 +303,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormEmployeeId(prefill?.employee_id || '');
     setFormEmployeeName(prefill?.employee_name || '');
     setFormEmployeePhone(prefill?.employee_phone || '');
+    
+    let initEmpIds: number[] = [];
+    if (prefill?.employee_id) initEmpIds = [prefill.employee_id];
+    else if (prefill?.employee_phone) {
+      const phones = prefill.employee_phone.split(',').map(p => p.trim());
+      initEmpIds = employees.filter(e => phones.includes(e.telefone)).map(e => e.id);
+    }
+    setFormSelectedEmployeeIds(initEmpIds);
+    setIsEmployeeDropdownOpen(false);
+
     setFormNotifyWhatsApp(prefill?.notify_whatsapp ?? true);
     setFormCustomReminderHours(prefill?.custom_reminder_hours || 2);
     setFormConfirmedByEmployee(prefill?.confirmed_by_employee || false);
@@ -319,6 +347,19 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormEmployeeId(event.employee_id || '');
     setFormEmployeeName(event.employee_name || '');
     setFormEmployeePhone(event.employee_phone || '');
+
+    let initEmpIds: number[] = [];
+    if (event.employee_phone) {
+      const phones = event.employee_phone.split(',').map(p => p.trim());
+      const names = (event.employee_name || '').split(',').map(n => n.trim().toLowerCase());
+      initEmpIds = employees.filter(e => phones.includes(e.telefone) || (e.nome && names.includes(e.nome.toLowerCase()))).map(e => e.id);
+    }
+    if (initEmpIds.length === 0 && event.employee_id) {
+      initEmpIds = [event.employee_id];
+    }
+    setFormSelectedEmployeeIds(initEmpIds);
+    setIsEmployeeDropdownOpen(false);
+
     setFormNotifyWhatsApp(event.notify_whatsapp ?? true);
     setFormCustomReminderHours(event.custom_reminder_hours || 2);
     setFormConfirmedByEmployee(event.confirmed_by_employee || false);
@@ -2133,43 +2174,159 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 </div>
               </div>
 
-              {/* Employee Row */}
-              <div>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
-                  👤 FUNCIONÁRIO RESPONSÁVEL
-                </label>
-                <select
-                  value={formEmployeeId}
-                  onChange={e => {
-                    const empId = e.target.value ? Number(e.target.value) : '';
-                    setFormEmployeeId(empId);
-                    const emp = employees.find(x => x.id === empId);
-                    if (emp) {
-                      setFormEmployeeName(emp.nome);
-                      setFormEmployeePhone(emp.telefone);
-                    } else {
-                      setFormEmployeeName('');
-                      setFormEmployeePhone('');
-                    }
-                  }}
+              {/* Employee Row (Multi-Select Support) */}
+              <div style={{ position: 'relative' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)' }}>
+                    👥 FUNCIONÁRIOS RESPONSÁVEIS {formSelectedEmployeeIds.length > 0 && `(${formSelectedEmployeeIds.length} selecionado${formSelectedEmployeeIds.length > 1 ? 's' : ''})`}
+                  </label>
+                  {formSelectedEmployeeIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormSelectedEmployeeIds([]);
+                        setFormEmployeeId('');
+                        setFormEmployeeName('');
+                        setFormEmployeePhone('');
+                      }}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#ef4444',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        fontWeight: '600'
+                      }}
+                    >
+                      Limpar todos
+                    </button>
+                  )}
+                </div>
+
+                {/* Selected Employees Chips */}
+                <div
+                  onClick={() => setIsEmployeeDropdownOpen(!isEmployeeDropdownOpen)}
                   style={{
+                    minHeight: '40px',
                     width: '100%',
-                    padding: '8px 12px',
+                    boxSizing: 'border-box',
+                    padding: '6px 10px',
                     borderRadius: '8px',
-                    border: '1px solid var(--border-color)',
+                    border: isEmployeeDropdownOpen ? '1px solid #10b981' : '1px solid var(--border-color)',
                     backgroundColor: 'var(--bg-primary)',
-                    color: '#fff',
-                    fontSize: '13px',
-                    outline: 'none'
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '6px',
+                    alignItems: 'center',
+                    cursor: 'pointer'
                   }}
                 >
-                  <option value="">-- Nenhum funcionário selecionado --</option>
-                  {employees.filter(e => e.ativo).map(emp => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.nome} ({emp.cargo || 'Equipe'} - {emp.telefone})
-                    </option>
-                  ))}
-                </select>
+                  {formSelectedEmployeeIds.length === 0 ? (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>
+                      Clique para selecionar 1 ou mais colaboradores...
+                    </span>
+                  ) : (
+                    employees.filter(e => formSelectedEmployeeIds.includes(e.id)).map(emp => (
+                      <span
+                        key={emp.id}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          color: '#10b981',
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          fontSize: '12px',
+                          fontWeight: '600'
+                        }}
+                      >
+                        👤 {emp.nome}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleEmployee(emp);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#10b981',
+                            cursor: 'pointer',
+                            padding: 0,
+                            display: 'flex',
+                            alignItems: 'center'
+                          }}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+
+                {/* Dropdown with Checkboxes */}
+                {isEmployeeDropdownOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      zIndex: 100,
+                      marginTop: '4px',
+                      backgroundColor: 'var(--bg-card)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '8px',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                      padding: '6px'
+                    }}
+                  >
+                    {employees.filter(e => e.ativo).length === 0 ? (
+                      <div style={{ padding: '10px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                        Nenhum colaborador ativo cadastrado
+                      </div>
+                    ) : (
+                      employees.filter(e => e.ativo).map(emp => {
+                        const isSelected = formSelectedEmployeeIds.includes(emp.id);
+                        return (
+                          <div
+                            key={emp.id}
+                            onClick={() => handleToggleEmployee(emp)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '10px',
+                              padding: '8px 10px',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              backgroundColor: isSelected ? 'rgba(16, 185, 129, 0.12)' : 'transparent',
+                              transition: 'background 0.15s'
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {}}
+                              style={{ cursor: 'pointer', accentColor: '#10b981' }}
+                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '13px', fontWeight: isSelected ? '600' : '400', color: isSelected ? '#10b981' : '#fff' }}>
+                                {emp.nome}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                {emp.cargo || 'Equipe'} • {emp.telefone}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Optional Client Information Row */}

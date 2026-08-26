@@ -25,7 +25,7 @@ async def send_whatsapp_to_employee(
     employee_phone: str,
     title: str,
     description: str,
-    footer: str = "Servsolda • Sistema de Tarefas",
+    footer: str,
     event_id: Optional[int] = None,
     buttons: Optional[List[dict]] = None
 ) -> bool:
@@ -36,35 +36,12 @@ async def send_whatsapp_to_employee(
         if not clean_phone.startswith("55") and len(clean_phone) in [10, 11]:
             clean_phone = f"55{clean_phone}"
 
-        # Fetch live instances from Evolution API to prioritize truly connected ('open') instances
-        open_instances = set()
-        try:
-            ping_data = await evolution_service.ping_server()
-            if ping_data.get("success") and ping_data.get("data"):
-                for inst_info in ping_data["data"]:
-                    if inst_info.get("connectionStatus") == "open":
-                        open_instances.add(inst_info.get("name"))
-        except Exception as ping_err:
-            logger.warning(f"Não foi possível obter instâncias online: {ping_err}")
+        # If specific instance(s) provided, strictly use them without falling back to other unselected departments
+        candidates = [inst for inst in instances if inst]
+        if not candidates:
+            candidates = ["instancia_locacao", "instancia_tecnica", "instancia_vendas"]
 
-        # Combine instances, prioritizing open ones that were requested for this department
-        ordered_candidates = []
-        for inst in instances:
-            if inst in open_instances and inst not in ordered_candidates:
-                ordered_candidates.append(inst)
-
-        for inst in open_instances:
-            if inst and inst not in ordered_candidates:
-                ordered_candidates.append(inst)
-
-        for inst in instances:
-            if inst and inst not in ordered_candidates:
-                ordered_candidates.append(inst)
-
-        if not ordered_candidates:
-            ordered_candidates = ["instancia_locacao", "instancia_tecnica", "instancia_vendas"]
-
-        for inst_name in ordered_candidates:
+        for inst_name in candidates:
             try:
                 full_card = f"*{title}*\n\n{description}\n\n_{footer}_"
                 res_txt = await evolution_service.send_text_message(
@@ -77,7 +54,7 @@ async def send_whatsapp_to_employee(
                     logger.info(f"Mensagem de tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
                     return True
             except Exception as inst_err:
-                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima instância...")
+                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}.")
 
         return False
     except Exception as e:
@@ -85,7 +62,7 @@ async def send_whatsapp_to_employee(
         return False
 
 async def send_immediate_creation_notification(event_id: int):
-    """Sends immediate WhatsApp notification with complete task details to the assigned employee upon event creation."""
+    """Sends immediate WhatsApp notification with complete task details to all assigned employees upon event creation."""
     try:
         async with AsyncSessionLocal() as session:
             stmt = (
@@ -99,53 +76,51 @@ async def send_immediate_creation_notification(event_id: int):
             if not ev or not ev.notify_whatsapp or not ev.employee_phone:
                 return
 
-            # Fetch all active department numbers registered for the tenant dynamically
+            # Fetch active department numbers registered for the tenant
             stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.status == True, WhatsAppNumber.tenant_id == ev.tenant_id)
             res_w = await session.execute(stmt_w)
             wns = res_w.scalars().all()
 
-            preferred_instances = []
-            other_instances = []
-
-            # 1. Explicitly selected department instance on event
+            # 1. Strictly resolve selected department instance on event
+            ordered_inst_names = []
             if ev.whatsapp_instance:
-                preferred_instances.append(ev.whatsapp_instance)
+                ordered_inst_names = [ev.whatsapp_instance]
             elif ev.whatsapp_number_id:
                 for w in wns:
                     if w.id == ev.whatsapp_number_id and w.instancia_evolution_api:
-                        preferred_instances.append(w.instancia_evolution_api)
+                        ordered_inst_names = [w.instancia_evolution_api]
                         break
 
-            # 2. Dynamic prioritization based on linked conversation or event_type keywords
-            type_keywords = {
-                "visita_tecnica": ["tecnica", "assistencia", "suporte", "servico"],
-                "manutencao": ["tecnica", "manutencao", "assistencia", "oficina"],
-                "entrega_gas": ["locacao", "gas", "entrega", "logistica"],
-                "vendas": ["vendas", "comercial", "loja", "atendimento"],
-                "atendimento": ["atendimento", "vendas", "recepcao"],
-                "financeiro": ["financeiro", "cobranca", "contas"]
-            }
-            keywords = type_keywords.get(ev.event_type, [])
+            # 2. If no department was explicitly chosen, use smart fallback based on event type keywords
+            if not ordered_inst_names:
+                type_keywords = {
+                    "visita_tecnica": ["tecnica", "assistencia", "suporte", "servico"],
+                    "manutencao": ["tecnica", "manutencao", "assistencia", "oficina"],
+                    "entrega_gas": ["locacao", "gas", "entrega", "logistica"],
+                    "vendas": ["vendas", "comercial", "loja", "atendimento"],
+                    "atendimento": ["atendimento", "vendas", "recepcao"],
+                    "financeiro": ["financeiro", "cobranca", "contas"]
+                }
+                keywords = type_keywords.get(ev.event_type, [])
 
-            for w in wns:
-                inst = w.instancia_evolution_api
-                if not inst:
-                    continue
-                dept_name_lower = (w.nome_departamento or "").lower()
-                inst_lower = inst.lower()
+                preferred_instances = []
+                other_instances = []
+                for w in wns:
+                    inst = w.instancia_evolution_api
+                    if not inst:
+                        continue
+                    dept_name_lower = (w.nome_departamento or "").lower()
+                    inst_lower = inst.lower()
 
-                # If matches the event type keywords
-                if any(kw in dept_name_lower or kw in inst_lower for kw in keywords):
-                    if inst not in preferred_instances:
-                        preferred_instances.append(inst)
-                else:
-                    if inst not in other_instances and inst not in preferred_instances:
-                        other_instances.append(inst)
+                    if any(kw in dept_name_lower or kw in inst_lower for kw in keywords):
+                        if inst not in preferred_instances:
+                            preferred_instances.append(inst)
+                    else:
+                        if inst not in other_instances and inst not in preferred_instances:
+                            other_instances.append(inst)
 
-            ordered_inst_names = preferred_instances + other_instances
+                ordered_inst_names = preferred_instances or other_instances
 
-            emp_name = ev.employee_name or "Colaborador"
-            emp_phone = ev.employee_phone
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
             client_info = "Não informado"
@@ -161,22 +136,31 @@ async def send_immediate_creation_notification(event_id: int):
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            title = "🔔 NOVA ATIVIDADE AGENDADA"
-            description = (
-                f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
-                f"📌 *Tipo:* {type_label}\n"
-                f"🏷️ *Atividade:* {ev.title}\n"
-                f"⏰ *Data e Hora:* {time_str}\n"
-                f"👤 *Cliente:* {client_info}\n"
-                f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
-            )
-            footer = "Servsolda • Sistema de Tarefas"
+            phone_list = [p.strip() for p in (ev.employee_phone or "").replace(';', ',').replace('/', ',').split(',') if p.strip()]
+            name_list = [n.strip() for n in (ev.employee_name or "").replace(';', ',').replace('/', ',').split(',') if n.strip()]
 
-            success = await send_whatsapp_to_employee(ordered_inst_names, emp_phone, title, description, footer, event_id=ev.id)
-            if success:
+            sent_any = False
+            for idx, raw_phone in enumerate(phone_list):
+                emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                title = "🔔 NOVA ATIVIDADE AGENDADA"
+                description = (
+                    f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
+                    f"📌 *Tipo:* {type_label}\n"
+                    f"🏷️ *Atividade:* {ev.title}\n"
+                    f"⏰ *Data e Hora:* {time_str}\n"
+                    f"👤 *Cliente:* {client_info}\n"
+                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                )
+                footer = "Servsolda • Sistema de Tarefas"
+
+                success = await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id)
+                if success:
+                    sent_any = True
+                    logger.info(f"Notificação de tarefa enviada para {emp_name} ({raw_phone}) via {ordered_inst_names} - Evento #{ev.id}")
+
+            if sent_any:
                 ev.notified_creation = True
                 await session.commit()
-                logger.info(f"Notificação de tarefa enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 
@@ -205,6 +189,7 @@ async def check_and_send_calendar_reminders():
         res_w = await session.execute(stmt_w)
         whatsapp_numbers = res_w.scalars().all()
 
+        wn_id_map = {wn.id: wn.instancia_evolution_api for wn in whatsapp_numbers if wn.instancia_evolution_api}
         tenant_instance_map = {}
         for wn in whatsapp_numbers:
             if wn.tenant_id not in tenant_instance_map:
@@ -213,9 +198,15 @@ async def check_and_send_calendar_reminders():
                 tenant_instance_map[wn.tenant_id].append(wn.instancia_evolution_api)
 
         for ev in events:
-            inst_list = tenant_instance_map.get(ev.tenant_id, [])
-            emp_name = ev.employee_name or "Colaborador"
-            emp_phone = ev.employee_phone
+            # Strictly select instance if chosen on event
+            inst_list = []
+            if ev.whatsapp_instance:
+                inst_list = [ev.whatsapp_instance]
+            elif ev.whatsapp_number_id and ev.whatsapp_number_id in wn_id_map:
+                inst_list = [wn_id_map[ev.whatsapp_number_id]]
+            else:
+                inst_list = tenant_instance_map.get(ev.tenant_id, [])
+
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
             client_info = "Não informado"
@@ -225,42 +216,49 @@ async def check_and_send_calendar_reminders():
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
 
-            # 1. Immediate creation notification
+            phone_list = [p.strip() for p in (ev.employee_phone or "").replace(';', ',').replace('/', ',').split(',') if p.strip()]
+            name_list = [n.strip() for n in (ev.employee_name or "").replace(';', ',').replace('/', ',').split(',') if n.strip()]
+
+            # 1. Immediate creation notification fallback
             if not ev.notified_creation:
-                title = "🔔 NOVA ATIVIDADE AGENDADA"
-                description = (
-                    f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
-                    f"📌 *Tipo:* {type_label}\n"
-                    f"🏷️ *Atividade:* {ev.title}\n"
-                    f"⏰ *Data e Hora:* {time_str}\n"
-                    f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
-                )
-                footer = "Servsolda • Sistema de Tarefas"
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
-                if success:
+                sent_any = False
+                for idx, raw_phone in enumerate(phone_list):
+                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                    title = "🔔 NOVA ATIVIDADE AGENDADA"
+                    description = (
+                        f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
+                        f"📌 *Tipo:* {type_label}\n"
+                        f"🏷️ *Atividade:* {ev.title}\n"
+                        f"⏰ *Data e Hora:* {time_str}\n"
+                        f"👤 *Cliente:* {client_info}\n"
+                        f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                    )
+                    footer = "Servsolda • Sistema de Tarefas"
+                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
+                        sent_any = True
+                if sent_any:
                     ev.notified_creation = True
-                    logger.info(f"Notificação de criação enviada para {emp_name} ({emp_phone}) - Evento #{ev.id}")
 
             # 2. Morning reminder on the day of the event
             is_same_day = (event_time_brt.date() == now_brt.date())
             if is_same_day and not ev.notified_day_of:
-                status_txt = "✅ Confirmado por você" if ev.confirmed_by_employee else "⏳ Aguardando sua confirmação"
-                title = "☀️ LEMBRETE: COMPROMISSO HOJE"
-                description = (
-                    f"Olá, *{emp_name}*! Lembramos que você tem um compromisso agendado para hoje:\n\n"
-                    f"📌 *Tipo:* {type_label}\n"
-                    f"🏷️ *Compromisso:* {ev.title}\n"
-                    f"⏰ *Horário:* {time_str}\n"
-                    f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
-                    f"Status: {status_txt}"
-                )
-                footer = "Servsolda • Sistema de Tarefas"
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
-                if success:
+                sent_any = False
+                for idx, raw_phone in enumerate(phone_list):
+                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                    title = "☀️ LEMBRETE: COMPROMISSO HOJE"
+                    description = (
+                        f"Olá, *{emp_name}*! Lembramos que você tem um compromisso agendado para hoje:\n\n"
+                        f"📌 *Tipo:* {type_label}\n"
+                        f"🏷️ *Compromisso:* {ev.title}\n"
+                        f"⏰ *Horário:* {time_str}\n"
+                        f"👤 *Cliente:* {client_info}\n"
+                        f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                    )
+                    footer = "Servsolda • Sistema de Tarefas"
+                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
+                        sent_any = True
+                if sent_any:
                     ev.notified_day_of = True
-                    logger.info(f"Lembrete do dia enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")
 
             # 3. Hours before reminder (ex: 2h before)
             hours_before = ev.custom_reminder_hours or 2
@@ -268,19 +266,22 @@ async def check_and_send_calendar_reminders():
             diff_hours = diff_seconds / 3600.0
 
             if 0 < diff_hours <= hours_before and not ev.notified_hours_before:
-                title = f"⏰ ATENÇÃO: COMPROMISSO EM BREVE (~{max(1, int(round(diff_hours)))}h)"
-                description = (
-                    f"Olá, *{emp_name}*! Faltam poucas horas para o seu compromisso:\n\n"
-                    f"📌 *Compromisso:* {ev.title}\n"
-                    f"⏰ *Horário:* {time_str}\n"
-                    f"👤 *Cliente:* {client_info}\n\n"
-                    f"Por favor, prepare-se para o atendimento/entrega!"
-                )
-                footer = "Servsolda • Sistema de Tarefas"
-                success = await send_whatsapp_to_employee(inst_list, emp_phone, title, description, footer, event_id=ev.id)
-                if success:
+                sent_any = False
+                for idx, raw_phone in enumerate(phone_list):
+                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                    title = f"⏰ ATENÇÃO: COMPROMISSO EM BREVE (~{max(1, int(round(diff_hours)))}h)"
+                    description = (
+                        f"Olá, *{emp_name}*! Faltam poucas horas para o seu compromisso:\n\n"
+                        f"📌 *Compromisso:* {ev.title}\n"
+                        f"⏰ *Horário:* {time_str}\n"
+                        f"👤 *Cliente:* {client_info}\n\n"
+                        f"Por favor, prepare-se para o atendimento/entrega!"
+                    )
+                    footer = "Servsolda • Sistema de Tarefas"
+                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
+                        sent_any = True
+                if sent_any:
                     ev.notified_hours_before = True
-                    logger.info(f"Lembrete de antecedência enviado para {emp_name} ({emp_phone}) - Evento #{ev.id}")
 
         await session.commit()
 
