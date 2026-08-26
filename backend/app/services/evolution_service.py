@@ -11,6 +11,15 @@ class EvolutionService:
         self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
         self.default_api_key = settings.EVOLUTION_API_KEY
         self.qr_code_cache: Dict[str, str] = {}
+        self._http_client: Optional[httpx.AsyncClient] = None
+
+    def get_client(self) -> httpx.AsyncClient:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                limits=httpx.Limits(max_keepalive_connections=30, max_connections=60),
+                timeout=httpx.Timeout(15.0, connect=3.0)
+            )
+        return self._http_client
 
     def _get_headers_and_url(self, custom_base_url: Optional[str] = None, custom_api_key: Optional[str] = None):
         base_url = (custom_base_url or self.default_base_url).rstrip('/')
@@ -243,55 +252,55 @@ class EvolutionService:
         }
         if mentioned:
             payload["mentioned"] = mentioned
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, json=payload, headers=headers, timeout=12.0)
-                res_data = response.json() if response.content else {}
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            res_data = response.json() if response.content else {}
 
-                # Auto-retry on Connection Closed (stale socket)
-                if response.status_code >= 500 or "connection closed" in str(res_data).lower():
-                    logger.warning(f"Instance {instance_name} socket stale/closed. Attempting auto-restart and retry...")
-                    try:
-                        await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers, timeout=8.0)
-                        await asyncio.sleep(1.2)
-                        retry_sock_res = await client.post(url, json=payload, headers=headers, timeout=12.0)
-                        if retry_sock_res.status_code < 400:
-                            retry_sock_data = retry_sock_res.json()
-                            retry_sock_data["success"] = True
-                            return retry_sock_data
-                    except Exception as rest_err:
-                        logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
+            # Auto-retry on Connection Closed (stale socket)
+            if response.status_code >= 500 or "connection closed" in str(res_data).lower():
+                logger.warning(f"Instance {instance_name} socket stale/closed. Attempting auto-restart and retry...")
+                try:
+                    await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers)
+                    await asyncio.sleep(1.0)
+                    retry_sock_res = await client.post(url, json=payload, headers=headers)
+                    if retry_sock_res.status_code < 400:
+                        retry_sock_data = retry_sock_res.json()
+                        retry_sock_data["success"] = True
+                        return retry_sock_data
+                except Exception as rest_err:
+                    logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
 
-                # Retry with canonical JID or @lid only if WhatsApp rejected the initial number (400)
-                if response.status_code == 400 and "@g.us" not in str(clean_number):
-                    alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
-                    if alt_number and alt_number != clean_number:
-                        retry_payload = {**payload, "number": self._format_target_number(alt_number)}
-                        retry_res = await client.post(url, json=retry_payload, headers=headers, timeout=12.0)
-                        if retry_res.status_code < 400:
-                            retry_data = retry_res.json()
-                            retry_data["success"] = True
-                            return retry_data
+            # Retry with canonical JID or @lid only if WhatsApp rejected the initial number (400)
+            if response.status_code == 400 and "@g.us" not in str(clean_number):
+                alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
+                if alt_number and alt_number != clean_number:
+                    retry_payload = {**payload, "number": self._format_target_number(alt_number)}
+                    retry_res = await client.post(url, json=retry_payload, headers=headers)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
 
-                    digits = "".join(filter(str.isdigit, clean_number))
-                    if "@lid" not in clean_number:
-                        lid_payload = {**payload, "number": f"{digits}@lid"}
-                        retry_res = await client.post(url, json=lid_payload, headers=headers, timeout=12.0)
-                        if retry_res.status_code < 400:
-                            retry_data = retry_res.json()
-                            retry_data["success"] = True
-                            return retry_data
+                digits = "".join(filter(str.isdigit, clean_number))
+                if "@lid" not in clean_number:
+                    lid_payload = {**payload, "number": f"{digits}@lid"}
+                    retry_res = await client.post(url, json=lid_payload, headers=headers)
+                    if retry_res.status_code < 400:
+                        retry_data = retry_res.json()
+                        retry_data["success"] = True
+                        return retry_data
 
-                if response.status_code >= 400:
-                    err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
-                    if not err_msg and "connection closed" in str(res_data).lower():
-                        err_msg = "A conexão do WhatsApp oscilou. Tentando reconectar..."
-                    return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
-                res_data["success"] = True
-                return res_data
-            except Exception as e:
-                logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
-                return {"success": False, "error": str(e)}
+            if response.status_code >= 400:
+                err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
+                if not err_msg and "connection closed" in str(res_data).lower():
+                    err_msg = "A conexão do WhatsApp oscilou. Tentando reconectar..."
+                return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
+            res_data["success"] = True
+            return res_data
+        except Exception as e:
+            logger.error(f"Error sending text message to {number} via instance {instance_name}: {e}")
+            return {"success": False, "error": str(e)}
 
     async def send_button_message(
         self,

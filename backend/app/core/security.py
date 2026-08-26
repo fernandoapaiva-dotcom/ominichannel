@@ -28,18 +28,24 @@ def _get_fernet_key() -> bytes:
         key_bytes = key_bytes[:32]
     return base64.urlsafe_b64encode(key_bytes)
 
+_FERNET_INSTANCE: Optional[Fernet] = None
+
+def _get_fernet() -> Fernet:
+    global _FERNET_INSTANCE
+    if _FERNET_INSTANCE is None:
+        _FERNET_INSTANCE = Fernet(_get_fernet_key())
+    return _FERNET_INSTANCE
+
 def encrypt_data(plain_text: str) -> str:
     if not plain_text:
         return ""
-    f = Fernet(_get_fernet_key())
-    return f.encrypt(plain_text.encode("utf-8")).decode("utf-8")
+    return _get_fernet().encrypt(plain_text.encode("utf-8")).decode("utf-8")
 
 def decrypt_data(cipher_text: str) -> str:
     if not cipher_text:
         return ""
     try:
-        f = Fernet(_get_fernet_key())
-        return f.decrypt(cipher_text.encode("utf-8")).decode("utf-8")
+        return _get_fernet().decrypt(cipher_text.encode("utf-8")).decode("utf-8")
     except Exception:
         return ""
 

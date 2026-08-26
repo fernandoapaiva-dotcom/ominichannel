@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uuid
 import base64
 import zipfile
@@ -39,7 +40,7 @@ from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
 
-@router.get("/", response_model=List[ConversationResponse])
+@router.get("/")
 async def list_conversations(
     status_filter: Optional[ConversationStatus] = None,
     whatsapp_number_id: Optional[int] = None,
@@ -79,25 +80,64 @@ async def list_conversations(
     conversations = result.scalars().all()
 
     user_ids = {c.assigned_user_id for c in conversations if c.assigned_user_id}
-    contact_ids = {c.contact_id for c in conversations if c.contact_id}
-
     user_map = {}
     if user_ids:
         u_res = await db.execute(select(User).where(User.id.in_(user_ids)))
         user_map = {u.id: u.nome for u in u_res.scalars().all()}
 
-    mem_map = {}
-    if contact_ids:
-        from app.models.models import ConversationMemory
-        m_res = await db.execute(select(ConversationMemory).where(ConversationMemory.tenant_id == current_user.tenant_id, ConversationMemory.contact_id.in_(contact_ids)))
-        mem_map = {m.contact_id: m.resumo_estruturado for m in m_res.scalars().all()}
-
     response_list = []
     for c in conversations:
-        c_dict = ConversationResponse.model_validate(c).model_dump()
-        c_dict["assigned_user_name"] = user_map.get(c.assigned_user_id)
-        c_dict["resumo_ia"] = mem_map.get(c.contact_id)
-        response_list.append(c_dict)
+        contact_dict = None
+        if c.contact:
+            contact_dict = {
+                "id": c.contact.id,
+                "tenant_id": c.contact.tenant_id,
+                "nome": c.contact.nome,
+                "telefone": c.contact.telefone,
+                "foto_perfil_url": c.contact.foto_perfil_url,
+                "dados_adicionais": c.contact.dados_adicionais or {}
+            }
+        wn_dict = None
+        if c.whatsapp_number:
+            wn_dict = {
+                "id": c.whatsapp_number.id,
+                "tenant_id": c.whatsapp_number.tenant_id,
+                "numero": c.whatsapp_number.numero,
+                "nome_departamento": c.whatsapp_number.nome_departamento,
+                "instancia_evolution_api": c.whatsapp_number.instancia_evolution_api,
+                "provider_type": c.whatsapp_number.provider_type or "evolution",
+                "status": c.whatsapp_number.status
+            }
+        msgs = []
+        for m in (c.messages or []):
+            msgs.append({
+                "id": m.id,
+                "conversation_id": m.conversation_id,
+                "remetente": m.remetente.value if hasattr(m.remetente, 'value') else str(m.remetente).lower(),
+                "conteudo": m.conteudo,
+                "tipo": m.tipo.value if hasattr(m.tipo, 'value') else str(m.tipo),
+                "status": m.status or "sent",
+                "whatsapp_msg_id": m.whatsapp_msg_id,
+                "dados_adicionais": m.dados_adicionais or {},
+                "timestamp": m.timestamp.isoformat() if m.timestamp else None
+            })
+        response_list.append({
+            "id": c.id,
+            "tenant_id": c.tenant_id,
+            "whatsapp_number_id": c.whatsapp_number_id,
+            "contact_id": c.contact_id,
+            "protocol_number": c.protocol_number,
+            "status": c.status.value if hasattr(c.status, 'value') else str(c.status),
+            "assigned_user_id": c.assigned_user_id,
+            "assigned_user_name": user_map.get(c.assigned_user_id),
+            "assunto_atual": c.assunto_atual,
+            "dados_adicionais": c.dados_adicionais or {},
+            "criado_em": c.criado_em.isoformat() if c.criado_em else None,
+            "ultima_interacao_em": c.ultima_interacao_em.isoformat() if c.ultima_interacao_em else None,
+            "contact": contact_dict,
+            "whatsapp_number": wn_dict,
+            "messages": msgs
+        })
 
     return response_list
 
@@ -811,13 +851,22 @@ async def send_agent_message(
         }
     )
 
+    target_conv_id = conv.id
+    target_tenant_id = current_user.tenant_id
+    target_number_id = conv.whatsapp_number_id
+    target_phone = conv.contact.telefone if conv.contact else ""
+    target_instance_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None
+    agent_nome = current_user.nome or "Atendente"
+    msg_id = message.id
+    provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
+
     # 3. Background WhatsApp API Dispatch (Non-blocking async task)
     async def _async_dispatch_to_whatsapp():
         try:
-            from app.core.database import async_session_factory
+            from app.core.database import AsyncSessionLocal
             send_res = {"success": False}
 
-            if is_sticker and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+            if is_sticker and target_instance_name:
                 sticker_media = raw_content
                 if "/uploads/" in raw_content:
                     fname = raw_content.split("/uploads/")[-1]
@@ -827,24 +876,23 @@ async def send_agent_message(
                             sticker_media = base64.b64encode(f.read()).decode("utf-8")
 
                 send_res = await evolution_service.send_sticker(
-                    instance_name=conv.whatsapp_number.instancia_evolution_api,
-                    number=conv.contact.telefone,
+                    instance_name=target_instance_name,
+                    number=target_phone,
                     sticker_media=sticker_media
                 )
-            elif is_gif and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+            elif is_gif and target_instance_name:
                 send_res = await evolution_service.send_media_message(
-                    instance_name=conv.whatsapp_number.instancia_evolution_api,
-                    number=conv.contact.telefone,
+                    instance_name=target_instance_name,
+                    number=target_phone,
                     media_type="video",
                     mimetype="video/mp4",
                     media=raw_content,
                     file_name="animacao.mp4"
                 )
-            elif is_media and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+            elif is_media and target_instance_name:
                 media_path = raw_content.split("|")[0].strip()
                 caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
-                agent_name = current_user.nome or "Atendente"
-                formatted_caption = f"*👤 {agent_name}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_name}:*"
+                formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_nome}:*"
 
                 media_data = media_path
                 fname = "arquivo"
@@ -889,8 +937,8 @@ async def send_agent_message(
                         mimetype = "application/octet-stream"
 
                 send_res = await evolution_service.send_media_message(
-                    instance_name=conv.whatsapp_number.instancia_evolution_api,
-                    number=conv.contact.telefone,
+                    instance_name=target_instance_name,
+                    number=target_phone,
                     media_type=media_type,
                     mimetype=mimetype,
                     media=media_data,
@@ -898,9 +946,7 @@ async def send_agent_message(
                     caption=formatted_caption
                 )
             else:
-                provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
-                agent_name = current_user.nome or "Atendente"
-                formatted_whatsapp_text = f"*👤 {agent_name}:*\n\n{msg_in.conteudo}"
+                formatted_whatsapp_text = f"*👤 {agent_nome}:*\n\n{msg_in.conteudo}"
 
                 # Extract mentions
                 mentioned_list = []
@@ -908,16 +954,16 @@ async def send_agent_message(
                 import re
 
                 is_group_chat = bool(
-                    conv.contact and (
-                        conv.contact.telefone.startswith("120363") or
-                        len("".join(filter(str.isdigit, conv.contact.telefone))) > 15
+                    target_phone and (
+                        target_phone.startswith("120363") or
+                        len("".join(filter(str.isdigit, target_phone))) > 15
                     )
                 )
                 if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
                     try:
                         g_info = await evolution_service.fetch_group_info(
-                            instance_name=conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None,
-                            group_jid=conv.contact.telefone if "@g.us" in conv.contact.telefone else f"{conv.contact.telefone}@g.us"
+                            instance_name=target_instance_name,
+                            group_jid=target_phone if "@g.us" in target_phone else f"{target_phone}@g.us"
                         )
                         if g_info and "participants" in g_info:
                             for p in g_info["participants"]:
@@ -934,7 +980,7 @@ async def send_agent_message(
                         mentioned_list.append(pm)
 
                 send_res = await provider.send_text_message(
-                    number=conv.contact.telefone,
+                    number=target_phone,
                     text=formatted_whatsapp_text,
                     mentioned=mentioned_list if mentioned_list else None
                 )
@@ -943,8 +989,8 @@ async def send_agent_message(
             final_status = "sent" if (send_res.get("success", False) or wa_key_id) else "failed"
 
             # Update DB record with WhatsApp Message ID
-            async with async_session_factory() as bg_db:
-                bg_m_stmt = select(Message).where(Message.id == message.id)
+            async with AsyncSessionLocal() as bg_db:
+                bg_m_stmt = select(Message).where(Message.id == msg_id)
                 bg_m_res = await bg_db.execute(bg_m_stmt)
                 db_msg = bg_m_res.scalar_one_or_none()
                 if db_msg:
@@ -954,12 +1000,12 @@ async def send_agent_message(
 
             # Broadcast status update if key id obtained or failed
             await ws_manager.broadcast_to_department(
-                tenant_id=current_user.tenant_id,
-                whatsapp_number_id=conv.whatsapp_number_id,
+                tenant_id=target_tenant_id,
+                whatsapp_number_id=target_number_id,
                 message_data={
                     "type": "MESSAGE_STATUS_UPDATE",
-                    "conversation_id": conv.id,
-                    "id": message.id,
+                    "conversation_id": target_conv_id,
+                    "id": msg_id,
                     "status": final_status,
                     "whatsapp_msg_id": wa_key_id
                 }

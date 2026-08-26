@@ -117,7 +117,7 @@ async def receive_evolution_webhook(
     instance_name = payload.get("instance") or data.get("instance")
 
     print(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}'", flush=True)
-    logger.info(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}' | Payload: {payload}")
+    logger.info(f"[WEBHOOK RECEBIDO] Evento: '{event_type}' | Instancia: '{instance_name}'")
 
     key = data.get("key", {}) if isinstance(data, dict) else {}
     msg_id = key.get("id") if isinstance(key, dict) else None

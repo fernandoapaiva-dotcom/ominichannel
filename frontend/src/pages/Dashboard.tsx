@@ -240,7 +240,55 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             setNotificationAlert(payload.message || "🚨 ATENÇÃO: Nova conversa transferida para atendimento humano!");
             setTimeout(() => setNotificationAlert(null), 10000);
           } else if (payload.type === 'NEW_MESSAGE') {
-            fetchConversations();
+            const newMsg: Message = {
+              id: payload.id || Date.now(),
+              conversation_id: payload.conversation_id,
+              remetente: payload.remetente,
+              conteudo: payload.conteudo,
+              tipo: payload.tipo || 'texto',
+              status: payload.status || 'sent',
+              whatsapp_msg_id: payload.whatsapp_msg_id,
+              dados_adicionais: payload.dados_adicionais || {},
+              timestamp: payload.timestamp || new Date().toISOString()
+            };
+
+            setConversations(prev => {
+              let found = false;
+              const updated = prev.map(c => {
+                if (c.id === payload.conversation_id) {
+                  found = true;
+                  const currentMsgs = c.messages || [];
+                  const hasSameId = currentMsgs.some(m => m.id === newMsg.id);
+                  if (hasSameId) {
+                    return {
+                      ...c,
+                      ultima_interacao_em: newMsg.timestamp,
+                      messages: currentMsgs.map(m => m.id === newMsg.id ? { ...m, ...newMsg } : m)
+                    };
+                  }
+                  const replacedSending = currentMsgs.map(m => {
+                    if ((m.id < 0 || m.status === 'sending') && m.conteudo === newMsg.conteudo && m.remetente === newMsg.remetente) {
+                      return newMsg;
+                    }
+                    return m;
+                  });
+                  const alreadyPresent = replacedSending.some(m => m.id === newMsg.id);
+                  return {
+                    ...c,
+                    ultima_interacao_em: newMsg.timestamp,
+                    messages: alreadyPresent ? replacedSending : [...replacedSending, newMsg]
+                  };
+                }
+                return c;
+              });
+
+              if (!found) {
+                fetchConversations();
+                return prev;
+              }
+              return updated;
+            });
+
             if (payload.remetente === 'cliente') {
               playNotificationSound();
             }
@@ -261,13 +309,61 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
               return c;
             }));
-            fetchConversations();
-          } else if (
-            payload.type === 'MESSAGE_STATUS_UPDATE' ||
-            payload.type === 'MESSAGE_REACTION_UPDATE' ||
-            payload.type === 'CONVERSATIONS_MARKED_READ'
-          ) {
-            fetchConversations();
+          } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
+            setConversations(prev => prev.map(c => {
+              if (c.id === payload.conversation_id) {
+                return {
+                  ...c,
+                  messages: (c.messages || []).map(m => {
+                    if (
+                      (payload.id && m.id === payload.id) ||
+                      (payload.whatsapp_msg_id && m.whatsapp_msg_id === payload.whatsapp_msg_id) ||
+                      (payload.status === 'read' && m.remetente === 'cliente')
+                    ) {
+                      return {
+                        ...m,
+                        status: payload.status,
+                        whatsapp_msg_id: payload.whatsapp_msg_id || m.whatsapp_msg_id
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }
+              return c;
+            }));
+          } else if (payload.type === 'MESSAGE_REACTION_UPDATE') {
+            setConversations(prev => prev.map(c => {
+              if (c.id === payload.conversation_id) {
+                return {
+                  ...c,
+                  messages: (c.messages || []).map(m => {
+                    if (m.id === payload.message_id) {
+                      return {
+                        ...m,
+                        dados_adicionais: {
+                          ...(m.dados_adicionais || {}),
+                          reaction: payload.reaction
+                        }
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }
+              return c;
+            }));
+          } else if (payload.type === 'CONVERSATIONS_MARKED_READ') {
+            setConversations(prev => prev.map(c => {
+              if (!payload.whatsapp_number_id || c.whatsapp_number_id === payload.whatsapp_number_id) {
+                return {
+                  ...c,
+                  dados_adicionais: { ...(c.dados_adicionais || {}), marked_as_read: true, pending_dismissed: true },
+                  messages: (c.messages || []).map(m => m.remetente === 'cliente' ? { ...m, status: 'read' } : m)
+                };
+              }
+              return c;
+            }));
           }
         } catch (err) {
           console.error('WebSocket parse error:', err);

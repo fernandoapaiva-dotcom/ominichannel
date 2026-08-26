@@ -54,8 +54,8 @@ async def lifespan(app: FastAPI):
     inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=15))
     logger.info("Inactivity and unreplied customer sweeper background loop started.")
 
-    # Start WhatsApp profile picture background syncer
-    profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=60))
+    # Start WhatsApp profile picture background syncer (gentle 30m interval)
+    profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=1800))
     logger.info("WhatsApp profile picture automatic syncer background loop started.")
 
     # Start Business Hours 18:00 Shift Closing Scheduler
@@ -96,6 +96,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+import time
+from fastapi import Request
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+    response.headers["X-Process-Time-Ms"] = str(round(process_time, 2))
+    if process_time > 100:
+        logger.info(f"⚡ [TIMING] {request.method} {request.url.path} processed in {process_time:.2f}ms")
+    return response
 
 # Ensure uploads directory exists and mount static files
 os.makedirs("uploads", exist_ok=True)
