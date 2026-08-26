@@ -4,9 +4,14 @@ import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../ty
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
 
-export const AdminPanel: React.FC = () => {
+interface AdminPanelProps {
+  initialNumbers?: WhatsAppNumber[];
+  onRefreshNumbers?: () => void;
+}
+
+export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers }) => {
   const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix'>('numbers');
-  const [numbers, setNumbers] = useState<WhatsAppNumber[]>([]);
+  const [numbers, setNumbers] = useState<WhatsAppNumber[]>(initialNumbers);
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
@@ -270,58 +275,67 @@ export const AdminPanel: React.FC = () => {
   };
 
   const fetchAllStatuses = async (numList: WhatsAppNumber[]) => {
+    if (!numList || numList.length === 0) return;
     const statuses: { [id: number]: { connected: boolean; state: string } } = {};
-    for (const num of numList) {
-      if (num.provider_type === 'meta') {
-        statuses[num.id] = { connected: true, state: 'open' };
-      } else {
-        try {
-          const res = await apiFetch(`/whatsapp-numbers/${num.id}/connection-status`);
-          statuses[num.id] = { connected: res.connected, state: res.state };
-        } catch {
-          statuses[num.id] = { connected: false, state: 'close' };
+    
+    await Promise.allSettled(
+      numList.map(async num => {
+        if (num.provider_type === 'meta') {
+          statuses[num.id] = { connected: true, state: 'open' };
+        } else {
+          try {
+            const res = await apiFetch(`/whatsapp-numbers/${num.id}/connection-status`);
+            statuses[num.id] = { connected: res.connected, state: res.state };
+          } catch {
+            statuses[num.id] = { connected: false, state: 'close' };
+          }
         }
-      }
-    }
-    setConnectionStatuses(statuses);
+      })
+    );
+    setConnectionStatuses(prev => ({ ...prev, ...statuses }));
   };
 
   const loadData = async () => {
     try {
-      const numData: WhatsAppNumber[] = await apiFetch('/whatsapp-numbers/');
-      if (Array.isArray(numData)) {
-        setNumbers(numData);
-        fetchAllStatuses(numData);
-      }
-    } catch (err) {
-      console.error('Error loading whatsapp numbers:', err);
-    }
+      const [numData, userData] = await Promise.allSettled([
+        apiFetch('/whatsapp-numbers/'),
+        apiFetch('/users/')
+      ]);
 
-    try {
-      const userData = await apiFetch('/users/');
-      if (Array.isArray(userData)) {
-        setUsers(userData);
+      if (numData.status === 'fulfilled' && Array.isArray(numData.value)) {
+        setNumbers(numData.value);
+        fetchAllStatuses(numData.value);
+      }
+      if (userData.status === 'fulfilled' && Array.isArray(userData.value)) {
+        setUsers(userData.value);
       }
     } catch (err) {
-      console.error('Error loading users:', err);
+      console.error('Error loading admin numbers and users:', err);
     }
   };
 
   const loadSettingsAndAudit = async () => {
     try {
-      const settingsData = await apiFetch('/settings/');
-      setMaskedSettings(settingsData);
-      setGeminiModelInput(settingsData.gemini_model_name || 'gemini-2.5-flash');
+      const [settingsData, logs] = await Promise.allSettled([
+        apiFetch('/settings/'),
+        apiFetch('/settings/audit-logs')
+      ]);
 
-      setEvoUrlInput(settingsData.evolution_api_url);
-      setInactivityInput(settingsData.inatividade_minutos);
-      setGdriveFolderInput(settingsData.google_drive_folder_id);
-      setGdriveClientIdInput(settingsData.google_client_id || '');
+      if (settingsData.status === 'fulfilled' && settingsData.value) {
+        const s = settingsData.value;
+        setMaskedSettings(s);
+        setGeminiModelInput(s.gemini_model_name || 'gemini-2.5-flash');
+        setEvoUrlInput(s.evolution_api_url);
+        setInactivityInput(s.inatividade_minutos);
+        setGdriveFolderInput(s.google_drive_folder_id);
+        setGdriveClientIdInput(s.google_client_id || '');
+      }
 
-      const logs = await apiFetch('/settings/audit-logs');
-      setAuditLogs(logs);
+      if (logs.status === 'fulfilled' && Array.isArray(logs.value)) {
+        setAuditLogs(logs.value);
+      }
     } catch (err) {
-      console.error(err);
+      console.error('Error loading settings and audit logs:', err);
     }
   };
 
@@ -329,7 +343,9 @@ export const AdminPanel: React.FC = () => {
     try {
       setGroupsLoading(true);
       const data: WhatsAppGroup[] = await apiFetch('/whatsapp-groups/');
-      setGroups(data);
+      if (Array.isArray(data)) {
+        setGroups(data);
+      }
     } catch (err: any) {
       console.error('Error loading whatsapp groups:', err);
     } finally {
@@ -364,6 +380,9 @@ export const AdminPanel: React.FC = () => {
   };
 
   useEffect(() => {
+    if (initialNumbers && initialNumbers.length > 0) {
+      setNumbers(initialNumbers);
+    }
     loadData();
     loadSettingsAndAudit();
     loadWhatsAppGroups();
@@ -375,7 +394,7 @@ export const AdminPanel: React.FC = () => {
       if (numbers.length > 0) {
         fetchAllStatuses(numbers);
       }
-    }, 10000);
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
 

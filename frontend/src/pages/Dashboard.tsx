@@ -621,7 +621,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       )}
 
       {activeTab === 'admin' && (
-        <AdminPanel />
+        <AdminPanel initialNumbers={whatsappNumbers} onRefreshNumbers={fetchWhatsAppNumbers} />
       )}
 
       {/* Modals */}
