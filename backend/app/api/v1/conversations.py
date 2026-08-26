@@ -652,7 +652,7 @@ async def get_conversation_media_files(
     stmt = select(Message).join(Conversation).where(
         Conversation.id == conversation_id,
         Conversation.tenant_id == current_user.tenant_id,
-        Message.tipo.in_([MessageType.AUDIO, MessageType.IMAGEM, MessageType.ARQUIVO])
+        Message.tipo.in_([MessageType.AUDIO, MessageType.IMAGEM, MessageType.VIDEO, MessageType.ARQUIVO])
     ).order_by(Message.timestamp.desc())
     
     res = await db.execute(stmt)
