@@ -30,6 +30,7 @@ interface ChatAreaProps {
   onBack?: () => void;
   isChatListCollapsed?: boolean;
   onToggleChatList?: () => void;
+  whatsappNumbers?: WhatsAppNumber[];
 }
 
 const normalizeIsoDate = (ts: string | Date | undefined): Date => {
@@ -116,7 +117,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onStatusToggle,
   onBack,
   isChatListCollapsed = false,
-  onToggleChatList
+  onToggleChatList,
+  whatsappNumbers
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -4621,6 +4623,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}
         messagesToForward={selectedMessagesForForward}
         conversations={allConversations || []}
+        whatsappNumbers={whatsappNumbers}
+        currentDepartmentId={conversation?.whatsapp_number_id}
+        activeConversation={conversation}
         onForwardSuccess={() => {
           setIsSelectionMode(false);
           setSelectedMessagesForForward([]);

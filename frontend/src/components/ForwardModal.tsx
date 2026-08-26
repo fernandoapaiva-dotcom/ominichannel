@@ -9,6 +9,8 @@ interface ForwardModalProps {
   messagesToForward: Message[] | Message | null;
   conversations: Conversation[];
   whatsappNumbers?: WhatsAppNumber[];
+  currentDepartmentId?: number | 'all';
+  activeConversation?: Conversation | null;
   onForwardSuccess?: () => void;
 }
 
@@ -29,6 +31,8 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
   messagesToForward,
   conversations,
   whatsappNumbers: initialWhatsappNumbers,
+  currentDepartmentId,
+  activeConversation,
   onForwardSuccess
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,6 +44,13 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
   const [selectedTargets, setSelectedTargets] = useState<{ [key: string]: ForwardTarget }>({});
   const [isForwarding, setIsForwarding] = useState(false);
   const [forwardProgress, setForwardProgress] = useState<string | null>(null);
+
+  // Determine active sending department ID
+  const effectiveSendingDeptId = useMemo(() => {
+    if (typeof currentDepartmentId === 'number') return currentDepartmentId;
+    if (activeConversation?.whatsapp_number_id) return activeConversation.whatsapp_number_id;
+    return undefined;
+  }, [currentDepartmentId, activeConversation]);
 
   // Fetch whatsapp numbers / departments if not provided
   useEffect(() => {
@@ -72,28 +83,44 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
       );
 
       const name = c.contact?.nome || (isGroup ? 'Grupo de WhatsApp' : 'Cliente');
-      const deptName = c.whatsapp_number?.nome_departamento || 'Geral';
-      const wnId = c.whatsapp_number_id || (c.whatsapp_number?.id || 1);
-      
-      const key = isGroup ? `group_${c.id}` : `contact_${phone || c.id}`;
+      const key = isGroup ? `group_${phone || c.id}` : `contact_${phone || c.id}`;
 
       if (!seenKeys.has(key)) {
         seenKeys.add(key);
+
+        // Find the conversation for this contact/group in the current active department if available
+        let bestConv = c;
+        let chosenWnId = effectiveSendingDeptId || c.whatsapp_number_id || (c.whatsapp_number?.id || 1);
+        
+        if (effectiveSendingDeptId) {
+          const inActiveDept = conversations.find(other => 
+            other.whatsapp_number_id === effectiveSendingDeptId &&
+            other.contact?.telefone === phone
+          );
+          if (inActiveDept) {
+            bestConv = inActiveDept;
+            chosenWnId = effectiveSendingDeptId;
+          }
+        }
+
+        const matchedWn = whatsappNumbers.find(w => w.id === chosenWnId);
+        const deptName = matchedWn?.nome_departamento || bestConv.whatsapp_number?.nome_departamento || 'Geral';
+
         items.push({
           key,
           type: isGroup ? 'group' : 'contact',
-          conversationId: c.id,
+          conversationId: bestConv.id,
           contactName: name,
           contactPhone: phone,
           avatarUrl: c.contact?.foto_perfil_url,
-          whatsappNumberId: wnId,
+          whatsappNumberId: chosenWnId,
           departmentName: deptName
         });
       }
     }
 
     return items;
-  }, [conversations]);
+  }, [conversations, effectiveSendingDeptId, whatsappNumbers]);
 
   // Filter items by Tab, Search and Department
   const filteredItems = useMemo(() => {
@@ -165,10 +192,9 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
 
         let targetConvId = target.conversationId;
 
-        // If it is an individual contact and department was explicitly chosen, ensure conversation in that department
-        if (target.type === 'contact' && target.whatsappNumberId) {
+        // Ensure conversation in the intended sending department
+        if (target.whatsappNumberId) {
           try {
-            // Find existing conversation in target department or start/get it
             const matchedConv = conversations.find(
               c => c.whatsapp_number_id === target.whatsappNumberId &&
                    c.contact?.telefone === target.contactPhone
@@ -190,11 +216,11 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
               }
             }
           } catch (createErr) {
-            console.warn(`Usando conversa original para ${target.contactName}:`, createErr);
+            console.warn(`Usando conversa padrão para ${target.contactName}:`, createErr);
           }
         }
 
-        // Send all messages to target conversation
+        // Send all selected messages to the resolved conversation
         for (const msg of msgsList) {
           await apiFetch(`/conversations/${targetConvId}/messages`, {
             method: 'POST',

@@ -605,6 +605,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onBack={() => setActiveConversationId(null)}
                 isChatListCollapsed={isChatListCollapsed}
                 onToggleChatList={() => setIsChatListCollapsed(!isChatListCollapsed)}
+                whatsappNumbers={whatsappNumbers}
               />
             </div>
           </div>
