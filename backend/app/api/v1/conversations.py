@@ -894,6 +894,7 @@ async def send_agent_message(
             mentioned=mentioned_list if mentioned_list else None
         )
 
+    if send_res and not send_res.get("success", False) and send_res.get("error"):
         error_detail = send_res.get("error", "Erro no envio")
         dept_name = conv.whatsapp_number.nome_departamento if conv.whatsapp_number else "do setor"
         err_str = str(error_detail).lower()
