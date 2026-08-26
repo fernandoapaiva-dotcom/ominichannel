@@ -311,3 +311,28 @@ async def test_automation_simulation(
         "messages": []
     }
 
+
+@router.post("/automations/ai-copilot")
+async def chat_with_automation_copilot(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Conversational Copilot that helps attendants and admins create and refine automation rules.
+    """
+    from app.services.automation_service import automation_service
+    history = payload.get("history", [])
+    user_message = payload.get("message", "")
+
+    if not user_message.strip():
+        raise HTTPException(status_code=400, detail="Mensagem do usuário não pode estar vazia.")
+
+    return await automation_service.chat_ai_rule_copilot(
+        db=db,
+        tenant_id=current_user.tenant_id,
+        conversation_history=history,
+        user_message=user_message
+    )
+
+

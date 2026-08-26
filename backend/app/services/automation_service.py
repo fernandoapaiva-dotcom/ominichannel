@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import json
+import re
 import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
@@ -9,6 +11,8 @@ from sqlalchemy import select
 
 from app.models.models import Tenant, Conversation, Message, MessageSender, MessageType, WhatsAppNumber
 from app.services.evolution_service import evolution_service
+from app.services.gemini_service import gemini_service
+from app.services.settings_service import settings_service
 from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("automation_service")
@@ -20,6 +24,7 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
         "trigger_on_attendant": True,
         "trigger_on_customer": True,
         "keywords": ["posto autorizado", "status:", "aberto a os", "ordem de servico", "servsolda", "servweld"],
+        "match_mode": "any",
         "typing_delay_ms": 2000,
         "diagnostic_prices": {
             "alimentador de arame": 150,
@@ -70,8 +75,12 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
             "name": "Chave Pix e Pagamento",
             "enabled": True,
             "trigger_on": "both",
+            "match_mode": "any",
             "keywords": ["qual o pix", "chave pix", "como pagar", "dados bancarios", "pix da loja"],
-            "reply_text": "📌 *Dados Oficiais para Pagamento via Pix:*\nChave: contato@servweld.com.br\nFavorecido: SERVWELD / SERVSOLDA\n\nPor favor, envie o comprovante nesta conversa para confirmação."
+            "reply_type": "single",
+            "reply_text": "📌 *Dados Oficiais para Pagamento via Pix:*\nChave: contato@servweld.com.br\nFavorecido: SERVWELD / SERVSOLDA\n\nPor favor, envie o comprovante nesta conversa para confirmação.",
+            "reply_sequence": [],
+            "typing_delay_ms": 2000
         }
     ],
     "ai_fallback_intent": True
@@ -142,12 +151,20 @@ class AutomationService:
 
         norm_text = normalize_text(text)
         keywords = [normalize_text(k) for k in os_cfg.get("keywords", []) if k]
-        
-        if keywords and not any(k in norm_text for k in keywords):
-            return None
+        match_mode = os_cfg.get("match_mode", "any")
+
+        if keywords:
+            if match_mode == "all":
+                # Must contain ALL keywords
+                if not all(k in norm_text for k in keywords):
+                    return None
+            else:
+                # Must contain AT LEAST ONE keyword
+                if not any(k in norm_text for k in keywords):
+                    return None
 
         status = None
-        if "status: orcamento" in norm_text or "status:orcamento" in norm_text or ("orcamento" in norm_text and ("aberto a os" in norm_text or "posto autorizado" in norm_text)):
+        if "status: orcamento" in norm_text or "status:orcamento" in norm_text or ("orcamento" in norm_text and ("aberto a os" in norm_text or "posto autorizado" in norm_text or "os " in norm_text)):
             status = "orcamento"
         elif "garantia de loja" in norm_text or "garantia loja" in norm_text:
             status = "garantia_loja"
@@ -202,10 +219,12 @@ class AutomationService:
     def match_custom_rules(
         text: str,
         config: Dict[str, Any],
-        from_me: bool
+        from_me: bool,
+        client_name: str = "Cliente"
     ) -> Optional[List[str]]:
         rules = config.get("custom_rules", [])
         norm_text = normalize_text(text)
+        saudacao = get_greeting()
 
         for r in rules:
             if not r.get("enabled", True):
@@ -218,11 +237,165 @@ class AutomationService:
                 continue
 
             keywords = [normalize_text(k) for k in r.get("keywords", []) if k]
-            if any(k in norm_text for k in keywords):
+            match_mode = r.get("match_mode", "any")
+
+            matched = False
+            if keywords:
+                if match_mode == "all":
+                    matched = all(k in norm_text for k in keywords)
+                else:
+                    matched = any(k in norm_text for k in keywords)
+
+            if matched:
+                # Check if it's a sequence or single reply
+                seq = r.get("reply_sequence")
+                if isinstance(seq, list) and len(seq) > 0:
+                    formatted_seq = []
+                    for s in seq:
+                        msg_str = (
+                            s
+                            .replace("{nome_cliente}", client_name)
+                            .replace("{saudacao}", saudacao)
+                        )
+                        formatted_seq.append(msg_str)
+                    return formatted_seq
+                
                 reply = r.get("reply_text")
                 if reply:
-                    return [reply]
+                    formatted = (
+                        reply
+                        .replace("{nome_cliente}", client_name)
+                        .replace("{saudacao}", saudacao)
+                    )
+                    return [formatted]
+
         return None
+
+    @classmethod
+    async def chat_ai_rule_copilot(
+        cls,
+        db: AsyncSession,
+        tenant_id: int,
+        conversation_history: List[Dict[str, str]],
+        user_message: str
+    ) -> Dict[str, Any]:
+        """
+        Interactive AI Copilot that converses with the user in Portuguese,
+        gathers required requirements, asks clarifying questions, and outputs a complete JSON automation rule.
+        """
+        decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+        api_key = decrypted.get("gemini_api_key")
+        model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+
+        if not api_key:
+            return {
+                "reply": "⚠️ Nenhuma chave de API do Google Gemini configurada. Por favor, configure a chave na aba 'Integrações & Segurança' para usar o Copilot.",
+                "proposed_rule": None
+            }
+
+        client = gemini_service.get_client_for_key(api_key)
+
+        current_automations = await cls.get_tenant_automations(db, tenant_id)
+
+        system_instruction = (
+            "Você é o 'Copilot de Automações & Gatilhos Inteligentes' do sistema Omnichannel SERVWELD / SERVSOLDA.
+"
+            "Seu objetivo é conversar de forma amigável, clara e prestativa com o proprietário/atendente, coletando os detalhes da automação desejada.
+
+"
+            "COMO AGIR:
+"
+            "1. Ouça a necessidade do usuário (ex: aviso de garantia, regras de orçamento, cobrança de taxa, respostas a dúvidas frequentes, recados padrão de entrega, etc.).
+"
+            "2. Se faltarem informações importantes (ex: quem dispara — atendente ou cliente?, quais palavras-chave?, tempo de digitação?, balão único ou sequência?), faça perguntas pontuais e objetivas de forma cordial.
+"
+            "3. Quando você tiver informações suficientes para criar ou refinar o gatilho, apresente uma explicação clara em texto e, NO FINAL DA RESPOSTA, inclua OBRIGATORIAMENTE um bloco formatado com ```json_rule ... ``` contendo a regra estruturada pronta para ser aplicada no sistema.
+
+"
+            "FORMATO DO BLOCO json_rule:
+"
+            "```json_rule
+"
+            "{
+"
+            '  "id": "rule_' + str(int(datetime.utcnow().timestamp())) + '",
+'
+            '  "name": "Título Descritivo e Claro do Gatilho",
+'
+            '  "enabled": true,
+'
+            '  "trigger_on": "both", // "attendant" | "customer" | "both"
+'
+            '  "match_mode": "any", // "any" (qualquer palavra) ou "all" (todas obrigatórias)
+'
+            '  "keywords": ["palavra1", "palavra2", "expressao completa"],
+'
+            '  "reply_type": "sequence", // "single" ou "sequence"
+'
+            '  "reply_text": "Texto completo principal com emojis e quebras de linha...",
+'
+            '  "reply_sequence": [
+'
+            '    "Balão 1: Olá, {nome_cliente}! 👋 {saudacao}, tudo bem?",
+'
+            '    "Balão 2: Informamos que seu equipamento..."
+'
+            '  ],
+'
+            '  "typing_delay_ms": 2000
+'
+            "}
+"
+            "```
+
+"
+            "Tags dinâmicas suportadas que você pode usar nas mensagens: {nome_cliente}, {saudacao}.
+"
+            "Seja proativo sugerindo boas práticas de atendimento no WhatsApp!"
+        )
+
+        formatted_contents = []
+        for turn in conversation_history:
+            role = "user" if turn.get("sender") == "user" else "model"
+            formatted_contents.append({"role": role, "parts": [{"text": turn.get("text", "")}]})
+
+        formatted_contents.append({"role": "user", "parts": [{"text": user_message}]})
+
+        try:
+            res = client.models.generate_content(
+                model=model_name,
+                contents=formatted_contents,
+                config={
+                    "system_instruction": system_instruction,
+                    "temperature": 0.4
+                }
+            )
+
+            reply_text = res.text or "Desculpe, não consegui processar a resposta."
+
+            # Check if json_rule is present in response
+            proposed_rule = None
+            json_match = re.search(r'```json_rule\s*(\{[\s\S]*?\})\s*```', reply_text)
+            if json_match:
+                try:
+                    proposed_rule = json.loads(json_match.group(1))
+                except Exception as ex:
+                    logger.warning(f"Failed to parse json_rule from Copilot: {ex}")
+
+            # Strip the raw json_rule block from the text display for clean readability if needed, or leave it intact
+            clean_reply = reply_text.replace(json_match.group(0), '').strip() if json_match else reply_text
+
+            return {
+                "reply": clean_reply,
+                "proposed_rule": proposed_rule
+            }
+
+        except Exception as err:
+            logger.error(f"Error in chat_ai_rule_copilot: {err}", exc_info=True)
+            return {
+                "reply": f"❌ Erro ao consultar a IA Copilot: {str(err)}",
+                "proposed_rule": None
+            }
 
     @classmethod
     async def process_and_dispatch_automation(
@@ -248,21 +421,21 @@ class AutomationService:
                 # 1. Try OS Handler Match
                 os_match = cls.match_os_handler(message_text, config, from_me, contact_name)
                 messages_to_send: List[str] = []
+                delay_ms = config.get("os_handler", {}).get("typing_delay_ms", 2000)
 
                 if os_match:
                     _, messages_to_send = os_match
                     logger.info(f"⚡ [AUTOMAÇÃO OS] Disparando {len(messages_to_send)} mensagens automáticas para {recipient_phone} ({contact_name})")
                 else:
                     # 2. Try Custom Rules
-                    custom_match = cls.match_custom_rules(message_text, config, from_me)
+                    custom_match = cls.match_custom_rules(message_text, config, from_me, contact_name)
                     if custom_match:
                         messages_to_send = custom_match
-                        logger.info(f"⚡ [AUTOMAÇÃO REGRA] Disparando resposta padrão para {recipient_phone} ({contact_name})")
+                        logger.info(f"⚡ [AUTOMAÇÃO REGRA] Disparando {len(messages_to_send)} resposta(s) padrão para {recipient_phone} ({contact_name})")
 
                 if not messages_to_send:
                     return
 
-                delay_ms = config.get("os_handler", {}).get("typing_delay_ms", 2000)
                 delay_sec = max(0.5, float(delay_ms) / 1000.0)
 
                 for msg_content in messages_to_send:

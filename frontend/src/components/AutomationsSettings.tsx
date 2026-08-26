@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Zap, Wrench, CheckCircle2, AlertTriangle, Plus, Trash2, Pencil, 
   Search, Play, RefreshCw, Save, Clock, MessageSquare, Bot, 
-  HelpCircle, Sliders, Check, X, Shield, FileText, DollarSign
+  HelpCircle, Sliders, Check, X, Shield, FileText, DollarSign, Send, Sparkles, UserCheck, CheckSquare, CornerDownRight
 } from 'lucide-react';
 import { apiFetch } from '../services/api';
 
@@ -19,6 +19,7 @@ export const AutomationsSettings: React.FC = () => {
   const [osEnabled, setOsEnabled] = useState(true);
   const [triggerOnAttendant, setTriggerOnAttendant] = useState(true);
   const [triggerOnCustomer, setTriggerOnCustomer] = useState(true);
+  const [osMatchMode, setOsMatchMode] = useState<'any' | 'all'>('any');
   const [typingDelaySec, setTypingDelaySec] = useState(2.0);
   const [keywordsText, setKeywordsText] = useState('posto autorizado, status:, aberto a os, ordem de servico, servsolda, servweld');
   
@@ -86,15 +87,31 @@ export const AutomationsSettings: React.FC = () => {
       name: 'Chave Pix e Pagamento',
       enabled: true,
       trigger_on: 'both',
+      match_mode: 'any',
       keywords: ['qual o pix', 'chave pix', 'como pagar', 'dados bancarios', 'pix da loja'],
-      reply_text: '📌 *Dados Oficiais para Pagamento via Pix:*\nChave: contato@servweld.com.br\nFavorecido: SERVWELD / SERVSOLDA\n\nPor favor, envie o comprovante nesta conversa para confirmação.'
+      reply_type: 'single',
+      reply_text: '📌 *Dados Oficiais para Pagamento via Pix:*\nChave: contato@servweld.com.br\nFavorecido: SERVWELD / SERVSOLDA\n\nPor favor, envie o comprovante nesta conversa para confirmação.',
+      reply_sequence: []
     }
   ]);
 
   const [newRuleName, setNewRuleName] = useState('');
   const [newRuleKeywords, setNewRuleKeywords] = useState('');
   const [newRuleReply, setNewRuleReply] = useState('');
+  const [newRuleMatchMode, setNewRuleMatchMode] = useState<'any' | 'all'>('any');
   const [isAddingRule, setIsAddingRule] = useState(false);
+
+  // AI Copilot State
+  const [isAiCopilotOpen, setIsAiCopilotOpen] = useState(false);
+  const [copilotHistory, setCopilotHistory] = useState<Array<{ sender: 'user' | 'assistant'; text: string; proposedRule?: any }>>([
+    {
+      sender: 'assistant',
+      text: '👋 Olá! Sou seu **Copilot de Automações com IA**. Diga o que você precisa que o sistema responda automaticamente (ex: regras de aprovação de OS, localização da loja, prazos de garantia ou dúvidas frequentes) que eu crio a regra completa para você!'
+    }
+  ]);
+  const [copilotInput, setCopilotInput] = useState('');
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement | null>(null);
 
   // Simulator State
   const [testText, setTestText] = useState(
@@ -109,6 +126,12 @@ export const AutomationsSettings: React.FC = () => {
     loadAutomations();
   }, []);
 
+  useEffect(() => {
+    if (isAiCopilotOpen) {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [copilotHistory, isAiCopilotOpen]);
+
   const loadAutomations = async () => {
     try {
       setLoading(true);
@@ -119,6 +142,7 @@ export const AutomationsSettings: React.FC = () => {
         setOsEnabled(os.enabled ?? true);
         setTriggerOnAttendant(os.trigger_on_attendant ?? true);
         setTriggerOnCustomer(os.trigger_on_customer ?? true);
+        setOsMatchMode(os.match_mode || 'any');
         setTypingDelaySec((os.typing_delay_ms || 2000) / 1000.0);
         if (Array.isArray(os.keywords)) {
           setKeywordsText(os.keywords.join(', '));
@@ -158,6 +182,7 @@ export const AutomationsSettings: React.FC = () => {
           enabled: osEnabled,
           trigger_on_attendant: triggerOnAttendant,
           trigger_on_customer: triggerOnCustomer,
+          match_mode: osMatchMode,
           typing_delay_ms: Math.round(typingDelaySec * 1000),
           keywords,
           diagnostic_prices: diagnosticPrices,
@@ -199,6 +224,7 @@ export const AutomationsSettings: React.FC = () => {
           enabled: osEnabled,
           trigger_on_attendant: triggerOnAttendant,
           trigger_on_customer: triggerOnCustomer,
+          match_mode: osMatchMode,
           typing_delay_ms: Math.round(typingDelaySec * 1000),
           keywords,
           diagnostic_prices: diagnosticPrices,
@@ -224,6 +250,80 @@ export const AutomationsSettings: React.FC = () => {
     } finally {
       setTestLoading(false);
     }
+  };
+
+  const handleSendCopilotMessage = async (textToSend?: string) => {
+    const msg = (textToSend || copilotInput).trim();
+    if (!msg || copilotLoading) return;
+
+    const newHistory = [...copilotHistory, { sender: 'user' as const, text: msg }];
+    setCopilotHistory(newHistory);
+    setCopilotInput('');
+    setCopilotLoading(true);
+
+    try {
+      const historyPayload = newHistory.map(h => ({
+        sender: h.sender,
+        text: h.text
+      }));
+
+      const res = await apiFetch('/settings/automations/ai-copilot', {
+        method: 'POST',
+        body: JSON.stringify({
+          history: historyPayload,
+          message: msg
+        })
+      });
+
+      if (res && res.reply) {
+        setCopilotHistory(prev => [
+          ...prev,
+          {
+            sender: 'assistant',
+            text: res.reply,
+            proposedRule: res.proposed_rule
+          }
+        ]);
+      }
+    } catch (err: any) {
+      console.error('Error chatting with copilot:', err);
+      setCopilotHistory(prev => [
+        ...prev,
+        {
+          sender: 'assistant',
+          text: `❌ Falha ao conversar com a IA: ${err.message || 'Erro de conexão.'}`
+        }
+      ]);
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
+
+  const handleApplyProposedRule = (rule: any) => {
+    if (!rule) return;
+    const ruleObj = {
+      id: rule.id || `rule_${Date.now()}`,
+      name: rule.name || 'Nova Regra da IA',
+      enabled: rule.enabled ?? true,
+      trigger_on: rule.trigger_on || 'both',
+      match_mode: rule.match_mode || 'any',
+      keywords: Array.isArray(rule.keywords) ? rule.keywords : [],
+      reply_type: rule.reply_type || (Array.isArray(rule.reply_sequence) && rule.reply_sequence.length > 0 ? 'sequence' : 'single'),
+      reply_text: rule.reply_text || '',
+      reply_sequence: Array.isArray(rule.reply_sequence) ? rule.reply_sequence : []
+    };
+
+    setCustomRules(prev => {
+      // Replace if exists, or append
+      const exists = prev.some(r => r.id === ruleObj.id);
+      if (exists) {
+        return prev.map(r => (r.id === ruleObj.id ? ruleObj : r));
+      }
+      return [...prev, ruleObj];
+    });
+
+    alert(`✨ Gatilho "${ruleObj.name}" aplicado com sucesso aos seus Gatilhos Customizados! Lembre-se de clicar em "Salvar Alterações".`);
+    setIsAiCopilotOpen(false);
   };
 
   const handleAddEquipment = () => {
@@ -271,8 +371,11 @@ export const AutomationsSettings: React.FC = () => {
       name: newRuleName.trim(),
       enabled: true,
       trigger_on: 'both',
+      match_mode: newRuleMatchMode,
       keywords: kList,
-      reply_text: newRuleReply.trim()
+      reply_type: 'single',
+      reply_text: newRuleReply.trim(),
+      reply_sequence: []
     };
     setCustomRules(prev => [...prev, newRule]);
     setNewRuleName('');
@@ -345,7 +448,26 @@ export const AutomationsSettings: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <button
+            type="button"
+            onClick={() => setIsAiCopilotOpen(true)}
+            className="btn-secondary"
+            style={{
+              padding: '8px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '13px',
+              backgroundColor: 'rgba(59, 130, 246, 0.15)',
+              borderColor: 'rgba(59, 130, 246, 0.4)',
+              color: '#93c5fd'
+            }}
+          >
+            <Sparkles size={16} color="#60a5fa" />
+            <strong>🤖 Criar Gatilho com IA Copilot</strong>
+          </button>
+
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}>
             <span style={{ fontSize: '13px', fontWeight: '600', color: enabled ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
               {enabled ? 'Motor Ativado' : 'Motor Pausado'}
@@ -451,11 +573,40 @@ export const AutomationsSettings: React.FC = () => {
             </div>
           </div>
 
-          {/* Keywords */}
+          {/* Keywords & Matching Mode */}
           <div>
-            <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)', display: 'block', marginBottom: '4px' }}>
-              Palavras-Chave de Ativação (separadas por vírgula):
-            </label>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)' }}>
+                Palavras-Chave de Ativação (separadas por vírgula):
+              </label>
+
+              {/* Mode Toggle */}
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <label style={{ fontSize: '11px', color: osMatchMode === 'any' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="radio"
+                    name="osMatchMode"
+                    value="any"
+                    checked={osMatchMode === 'any'}
+                    onChange={() => setOsMatchMode('any')}
+                    style={{ accentColor: 'var(--accent-primary)' }}
+                  />
+                  Qualquer uma das palavras (OU)
+                </label>
+                <label style={{ fontSize: '11px', color: osMatchMode === 'all' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="radio"
+                    name="osMatchMode"
+                    value="all"
+                    checked={osMatchMode === 'all'}
+                    onChange={() => setOsMatchMode('all')}
+                    style={{ accentColor: 'var(--accent-primary)' }}
+                  />
+                  Todas obrigatórias (E)
+                </label>
+              </div>
+            </div>
+
             <input
               type="text"
               value={keywordsText}
@@ -471,6 +622,9 @@ export const AutomationsSettings: React.FC = () => {
                 fontSize: '12px'
               }}
             />
+            <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
+              💡 {osMatchMode === 'any' ? 'O gatilho ativa se a mensagem contiver PELO MENOS UMA das palavras acima junto ao status da OS.' : 'O gatilho só ativará se TODAS as palavras acima estiverem presentes na mensagem.'}
+            </p>
           </div>
 
           {/* Templates Editor */}
@@ -736,7 +890,7 @@ export const AutomationsSettings: React.FC = () => {
       </div>
 
       {/* Custom Rules & Interactive Simulator */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
         {/* Custom Quick Rules */}
         <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
@@ -746,18 +900,28 @@ export const AutomationsSettings: React.FC = () => {
                 Gatilhos Customizados de Respostas Rápidas
               </h4>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsAddingRule(true)}
-              className="btn-secondary"
-              style={{ fontSize: '11px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
-            >
-              <Plus size={13} /> Novo Gatilho
-            </button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setIsAiCopilotOpen(true)}
+                className="btn-secondary"
+                style={{ fontSize: '11px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px', color: '#93c5fd' }}
+              >
+                <Sparkles size={13} color="#60a5fa" /> Criar com IA
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddingRule(true)}
+                className="btn-secondary"
+                style={{ fontSize: '11px', padding: '4px 10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              >
+                <Plus size={13} /> Manual
+              </button>
+            </div>
           </div>
 
           {isAddingRule && (
-            <div style={{ padding: '12px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ padding: '14px', backgroundColor: 'rgba(255,255,255,0.03)', border: '1px solid var(--accent-primary)', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <input
                 type="text"
                 value={newRuleName}
@@ -765,6 +929,33 @@ export const AutomationsSettings: React.FC = () => {
                 placeholder="Nome da regra (ex: Horário de Funcionamento)..."
                 style={{ width: '100%', padding: '6px 10px', fontSize: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', color: '#fff', borderRadius: '4px' }}
               />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Modo de Ativação:</span>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <label style={{ fontSize: '11px', color: newRuleMatchMode === 'any' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <input
+                      type="radio"
+                      name="newRuleMatchMode"
+                      value="any"
+                      checked={newRuleMatchMode === 'any'}
+                      onChange={() => setNewRuleMatchMode('any')}
+                      style={{ accentColor: 'var(--accent-primary)' }}
+                    />
+                    Qualquer palavra (OU)
+                  </label>
+                  <label style={{ fontSize: '11px', color: newRuleMatchMode === 'all' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <input
+                      type="radio"
+                      name="newRuleMatchMode"
+                      value="all"
+                      checked={newRuleMatchMode === 'all'}
+                      onChange={() => setNewRuleMatchMode('all')}
+                      style={{ accentColor: 'var(--accent-primary)' }}
+                    />
+                    Todas obrigatórias (E)
+                  </label>
+                </div>
+              </div>
               <input
                 type="text"
                 value={newRuleKeywords}
@@ -810,6 +1001,9 @@ export const AutomationsSettings: React.FC = () => {
                     <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', backgroundColor: rule.enabled ? 'rgba(0,230,153,0.15)' : 'rgba(239,68,68,0.15)', color: rule.enabled ? 'var(--accent-primary)' : '#f87171' }}>
                       {rule.enabled ? 'Ativo' : 'Inativo'}
                     </span>
+                    <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>
+                      {rule.match_mode === 'all' ? 'Condição: E (Todas)' : 'Condição: OU (Qualquer)'}
+                    </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <button
@@ -833,9 +1027,20 @@ export const AutomationsSettings: React.FC = () => {
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                   <strong>Gatilhos:</strong> {rule.keywords?.join(', ')}
                 </div>
-                <div style={{ fontSize: '12px', color: 'var(--text-main)', backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 8px', borderRadius: '4px', whiteSpace: 'pre-wrap' }}>
-                  {rule.reply_text}
-                </div>
+
+                {Array.isArray(rule.reply_sequence) && rule.reply_sequence.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {rule.reply_sequence.map((seqMsg: string, sIdx: number) => (
+                      <div key={sIdx} style={{ fontSize: '11px', color: '#fff', backgroundColor: 'rgba(0,0,0,0.25)', padding: '4px 8px', borderRadius: '4px', borderLeft: '2px solid var(--accent-primary)', whiteSpace: 'pre-wrap' }}>
+                        <strong style={{ color: 'var(--accent-primary)' }}>Balão {sIdx + 1}:</strong> {seqMsg}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '12px', color: 'var(--text-main)', backgroundColor: 'rgba(0,0,0,0.2)', padding: '6px 8px', borderRadius: '4px', whiteSpace: 'pre-wrap' }}>
+                    {rule.reply_text}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -977,6 +1182,250 @@ export const AutomationsSettings: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* AI Copilot Modal / Drawer */}
+      {isAiCopilotOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.75)',
+          backdropFilter: 'blur(4px)',
+          zIndex: 9999,
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: '20px'
+        }}>
+          <div style={{
+            width: '100%',
+            maxWidth: '750px',
+            height: '80vh',
+            backgroundColor: '#0f172a',
+            border: '1px solid rgba(59, 130, 246, 0.4)',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+          }}>
+            {/* Copilot Header */}
+            <div style={{
+              padding: '16px 20px',
+              backgroundColor: 'rgba(59, 130, 246, 0.12)',
+              borderBottom: '1px solid rgba(59, 130, 246, 0.3)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(59, 130, 246, 0.25)',
+                  color: '#60a5fa',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Sparkles size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '16px', fontWeight: '700', color: '#fff', margin: 0 }}>
+                    Assistente Copilot de Criação de Gatilhos (IA)
+                  </h3>
+                  <p style={{ fontSize: '11px', color: '#94a3b8', margin: '2px 0 0 0' }}>
+                    Converse em linguagem natural. A IA entende sua necessidade, sugere melhorias e desenvolve o gatilho automaticamente!
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsAiCopilotOpen(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Starter Suggestion Chips */}
+            <div style={{
+              padding: '10px 16px',
+              backgroundColor: 'rgba(0,0,0,0.2)',
+              borderBottom: '1px solid var(--border-color)',
+              display: 'flex',
+              gap: '8px',
+              overflowX: 'auto'
+            }}>
+              <button
+                type="button"
+                onClick={() => handleSendCopilotMessage('Quero um gatilho para quando enviarmos "Aguardando aprovação" de orçamento, avisar o cliente sobre o prazo de 5 dias.')}
+                style={{ fontSize: '11px', padding: '4px 10px', backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', color: '#cbd5e1', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                💡 Aviso de Orçamento Aguardando Aprovação
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSendCopilotMessage('Crie um gatilho para quando o cliente perguntar se consertamos máquina de solda Balmer/Esab, informando que somos autorizada e passando o endereço SOF Sul.')}
+                style={{ fontSize: '11px', padding: '4px 10px', backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', color: '#cbd5e1', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                💡 Assistência Autorizada & Endereço
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSendCopilotMessage('Crie uma automação para quando o equipamento estiver pronto para retirada, avisando o horário e forma de pagamento.')}
+                style={{ fontSize: '11px', padding: '4px 10px', backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px', color: '#cbd5e1', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                💡 Pronto para Retirada
+              </button>
+            </div>
+
+            {/* Chat Conversation Scroll Area */}
+            <div style={{
+              flex: 1,
+              padding: '16px 20px',
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px'
+            }}>
+              {copilotHistory.map((item, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: item.sender === 'user' ? 'flex-end' : 'flex-start',
+                    gap: '6px'
+                  }}
+                >
+                  <div style={{
+                    maxWidth: '85%',
+                    padding: '10px 14px',
+                    borderRadius: item.sender === 'user' ? '14px 14px 2px 14px' : '14px 14px 14px 2px',
+                    backgroundColor: item.sender === 'user' ? 'var(--accent-primary)' : 'rgba(30, 41, 59, 0.8)',
+                    color: item.sender === 'user' ? '#000' : '#f8fafc',
+                    fontSize: '13px',
+                    lineHeight: '1.5',
+                    border: item.sender === 'user' ? 'none' : '1px solid rgba(255,255,255,0.08)',
+                    whiteSpace: 'pre-wrap'
+                  }}>
+                    {item.text}
+                  </div>
+
+                  {/* If AI proposed a ready rule, render a Card with Action Button */}
+                  {item.proposedRule && (
+                    <div style={{
+                      maxWidth: '85%',
+                      padding: '14px',
+                      backgroundColor: 'rgba(0, 230, 153, 0.08)',
+                      border: '1px solid rgba(0, 230, 153, 0.4)',
+                      borderRadius: '12px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      marginTop: '4px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <strong style={{ fontSize: '13px', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <CheckCircle2 size={16} /> Gatilho Desenvolvido pela IA
+                        </strong>
+                        <span style={{ fontSize: '11px', backgroundColor: 'rgba(0, 230, 153, 0.2)', color: 'var(--accent-primary)', padding: '2px 8px', borderRadius: '12px', fontWeight: '600' }}>
+                          Pronto para Aplicar
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '12px', color: '#e2e8f0' }}>
+                        <div><strong>Nome:</strong> {item.proposedRule.name}</div>
+                        <div><strong>Gatilhos:</strong> {item.proposedRule.keywords?.join(', ')}</div>
+                        <div><strong>Condição:</strong> {item.proposedRule.match_mode === 'all' ? 'Todas as palavras obrigatórias (E)' : 'Qualquer uma das palavras (OU)'}</div>
+                        <div><strong>Disparo:</strong> {item.proposedRule.trigger_on === 'attendant' ? 'Atendente' : item.proposedRule.trigger_on === 'customer' ? 'Cliente' : 'Ambos'}</div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleApplyProposedRule(item.proposedRule)}
+                        className="btn-primary"
+                        style={{
+                          padding: '8px 14px',
+                          fontSize: '12px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          marginTop: '4px',
+                          fontWeight: '700'
+                        }}
+                      >
+                        <Sparkles size={14} /> ✨ Aplicar Gatilho no Sistema
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {copilotLoading && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '12px', fontStyle: 'italic' }}>
+                  <RefreshCw size={14} className="animate-spin" color="var(--accent-primary)" />
+                  A IA está analisando sua solicitação e estruturando o gatilho...
+                </div>
+              )}
+              <div ref={chatBottomRef} />
+            </div>
+
+            {/* Input Bar */}
+            <div style={{
+              padding: '12px 16px',
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+              display: 'flex',
+              gap: '8px',
+              alignItems: 'center'
+            }}>
+              <input
+                type="text"
+                value={copilotInput}
+                onChange={e => setCopilotInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSendCopilotMessage();
+                  }
+                }}
+                placeholder="Ex: Quero um gatilho para quando o cliente mandar 'garantia'..."
+                style={{
+                  flex: 1,
+                  padding: '10px 14px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  borderRadius: 'var(--radius-md)',
+                  color: '#fff',
+                  fontSize: '13px'
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => handleSendCopilotMessage()}
+                disabled={copilotLoading || !copilotInput.trim()}
+                className="btn-primary"
+                style={{
+                  padding: '10px 16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '13px'
+                }}
+              >
+                <Send size={15} /> Enviar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
