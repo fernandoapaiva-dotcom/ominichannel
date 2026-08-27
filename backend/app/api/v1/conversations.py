@@ -1686,11 +1686,15 @@ async def update_conversation_status(
                     for m in (conv.messages or [])
                 ]
             }
+            gdrive_settings = await settings_service.get_tenant_decrypted_settings(db, conv.tenant_id)
             await gdrive_service.sync_conversation_to_drive(
-                tenant_drive_folder_id=None,
+                tenant_drive_folder_id=gdrive_settings.get("gdrive_folder_id") or "1Xv8qI4NLU9pjbbUvCZami3TfkgsjRfd0",
                 conversation_id=conv.id,
                 contact_phone=conv_export["contact_phone"],
-                conversation_data=conv_export
+                conversation_data=conv_export,
+                refresh_token=gdrive_settings.get("gdrive_refresh_token", ""),
+                client_id=gdrive_settings.get("google_client_id", ""),
+                client_secret=gdrive_settings.get("google_client_secret", ""),
             )
         except Exception as b_err:
             logger.warning(f"Error exporting backup on finalization: {b_err}")

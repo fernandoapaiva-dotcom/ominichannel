@@ -189,7 +189,7 @@ async def get_google_oauth_url(
         )
 
     csrf_state = create_oauth_state(tenant_id=admin_user.tenant_id, user_id=admin_user.id)
-    redirect_uri = "http://localhost:8000/api/v1/settings/auth/google/callback"
+    redirect_uri = "http://147.15.74.89/api/v1/settings/auth/google/callback"
     scope = "https://www.googleapis.com/auth/drive.file"
     
     oauth_url = (
@@ -213,21 +213,55 @@ async def google_oauth_callback(
     """
     Google OAuth2 authorization code callback. Strictly validates signed CSRF state token before token exchange.
     """
+    import httpx as _httpx
     state_payload = verify_oauth_state(state)
     tenant_id = state_payload["tenant_id"]
 
-    access_token = f"ya29.mock_access_token_{code[:10]}"
-    refresh_token = f"1//mock_refresh_token_{code[:10]}"
+    # Get stored client credentials
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+    client_id = decrypted.get("google_client_id", "")
+    client_secret = decrypted.get("google_client_secret", "")
+    redirect_uri = "http://147.15.74.89/api/v1/settings/auth/google/callback"
 
+    if not client_id or not client_secret:
+        return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=error&msg=credentials_missing")
+
+    # Exchange authorization code for tokens
+    try:
+        async with _httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code"
+                }
+            )
+            token_data = resp.json()
+    except Exception as e:
+        return RedirectResponse(url=f"http://147.15.74.89/?tab=admin&gdrive=error&msg=token_exchange_failed")
+
+    access_token = token_data.get("access_token", "")
+    refresh_token = token_data.get("refresh_token", "")
+
+    if not access_token:
+        return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=error&msg=no_access_token")
+
+    # Save tokens + preserve existing folder_id
+    existing_folder_id = decrypted.get("gdrive_folder_id", "") or "1Xv8qI4NLU9pjbbUvCZami3TfkgsjRfd0"
     await settings_service.save_gdrive_tokens(
         db=db,
         tenant_id=tenant_id,
         user_name="Administrador Google OAuth",
         access_token=access_token,
-        refresh_token=refresh_token
+        refresh_token=refresh_token,
+        folder_id=existing_folder_id
     )
 
-    return RedirectResponse(url="http://localhost:3000/?tab=admin&gdrive=success")
+    return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=success")
+
 
 
 @router.get("/automations")

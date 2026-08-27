@@ -185,11 +185,20 @@ class InactivityService:
                                 } for m in (conv.messages or [])
                             ]
                         }
+                        # Auto JSON backup to Google Drive
+                        try:
+                            async with AsyncSessionLocal() as gdrive_db:
+                                gdrive_settings = await settings_service.get_tenant_decrypted_settings(gdrive_db, conv.tenant_id)
+                        except Exception:
+                            gdrive_settings = {}
                         await gdrive_service.sync_conversation_to_drive(
-                            tenant_drive_folder_id=None,
+                            tenant_drive_folder_id=gdrive_settings.get("gdrive_folder_id") or "1Xv8qI4NLU9pjbbUvCZami3TfkgsjRfd0",
                             conversation_id=conv.id,
                             contact_phone=conv.contact.telefone if conv.contact else "desconhecido",
-                            conversation_data=conv_data
+                            conversation_data=conv_data,
+                            refresh_token=gdrive_settings.get("gdrive_refresh_token", ""),
+                            client_id=gdrive_settings.get("google_client_id", ""),
+                            client_secret=gdrive_settings.get("google_client_secret", ""),
                         )
 
                         changes_made = True
