@@ -1,6 +1,5 @@
 const getApiBase = () => {
-  const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
-  return `http://${host}:8000/api/v1`;
+  return `/api/v1`;
 };
 
 export async function apiFetch(endpoint: string, options: RequestInit = {}) {
