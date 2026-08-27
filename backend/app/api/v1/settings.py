@@ -189,7 +189,7 @@ async def get_google_oauth_url(
         )
 
     csrf_state = create_oauth_state(tenant_id=admin_user.tenant_id, user_id=admin_user.id)
-    redirect_uri = "http://147.15.74.89/api/v1/settings/auth/google/callback"
+    redirect_uri = "https://ominichannel.duckdns.org/api/v1/settings/auth/google/callback"
     scope = "https://www.googleapis.com/auth/drive.file"
     
     oauth_url = (
@@ -221,10 +221,10 @@ async def google_oauth_callback(
     decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
     client_id = decrypted.get("google_client_id", "")
     client_secret = decrypted.get("google_client_secret", "")
-    redirect_uri = "http://147.15.74.89/api/v1/settings/auth/google/callback"
+    redirect_uri = "https://ominichannel.duckdns.org/api/v1/settings/auth/google/callback"
 
     if not client_id or not client_secret:
-        return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=error&msg=credentials_missing")
+        return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=credentials_missing")
 
     # Exchange authorization code for tokens
     try:
@@ -241,13 +241,13 @@ async def google_oauth_callback(
             )
             token_data = resp.json()
     except Exception as e:
-        return RedirectResponse(url=f"http://147.15.74.89/?tab=admin&gdrive=error&msg=token_exchange_failed")
+        return RedirectResponse(url=f"https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=token_exchange_failed")
 
     access_token = token_data.get("access_token", "")
     refresh_token = token_data.get("refresh_token", "")
 
     if not access_token:
-        return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=error&msg=no_access_token")
+        return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=no_access_token")
 
     # Save tokens + preserve existing folder_id
     existing_folder_id = decrypted.get("gdrive_folder_id", "") or "1Xv8qI4NLU9pjbbUvCZami3TfkgsjRfd0"
@@ -260,7 +260,7 @@ async def google_oauth_callback(
         folder_id=existing_folder_id
     )
 
-    return RedirectResponse(url="http://147.15.74.89/?tab=admin&gdrive=success")
+    return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=success")
 
 
 
