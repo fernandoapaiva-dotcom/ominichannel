@@ -60,6 +60,7 @@ interface ChatListProps {
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   currentUserId?: number | null;
+  drafts?: { [convId: number]: string };
 }
 
 interface ContactGroup {
@@ -86,7 +87,8 @@ export const ChatList: React.FC<ChatListProps> = ({
   onStatusToggle,
   isCollapsed = false,
   onToggleCollapse,
-  currentUserId
+  currentUserId,
+  drafts = {}
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
@@ -819,44 +821,57 @@ export const ChatList: React.FC<ChatListProps> = ({
                     )}
                   </div>
 
-                  {/* Last Message Preview & WhatsApp Unread Badge */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                    <p style={{
-                      fontSize: '11px',
-                      color: group.hasUnread ? '#ffffff' : 'var(--text-dim)',
-                      fontWeight: group.hasUnread ? '700' : 'normal',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      flex: 1,
-                      margin: 0
-                    }}>
-                      {lastMessage ? lastMessage.conteudo : 'Conversa iniciada'}
-                    </p>
+                  {/* Last Message Preview or Draft & WhatsApp Unread Badge */}
+                  {(() => {
+                    const draftText = drafts ? (drafts[group.primaryConv.id] || group.allConversations.map(c => drafts[c.id]).find(Boolean)) : null;
 
-                    {group.unreadCount > 0 && (
-                      <span
-                        title={`${group.unreadCount} mensagem(ns) não lida(s)`}
-                        style={{
-                          backgroundColor: '#22c55e',
-                          color: '#ffffff',
-                          fontSize: '10px',
-                          fontWeight: '800',
-                          borderRadius: '10px',
-                          minWidth: '18px',
-                          height: '18px',
-                          padding: '0 5px',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                          boxShadow: '0 2px 6px rgba(34, 197, 94, 0.45)'
-                        }}
-                      >
-                        {group.unreadCount > 99 ? '99+' : group.unreadCount}
-                      </span>
-                    )}
-                  </div>
+                    return (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                        <p style={{
+                          fontSize: '11px',
+                          color: draftText ? 'var(--text-main)' : (group.hasUnread ? '#ffffff' : 'var(--text-dim)'),
+                          fontWeight: (group.hasUnread || draftText) ? '700' : 'normal',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          flex: 1,
+                          margin: 0
+                        }}>
+                          {draftText ? (
+                            <>
+                              <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
+                              <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>
+                            </>
+                          ) : (
+                            lastMessage ? lastMessage.conteudo : 'Conversa iniciada'
+                          )}
+                        </p>
+
+                        {group.unreadCount > 0 && (
+                          <span
+                            title={`${group.unreadCount} mensagem(ns) não lida(s)`}
+                            style={{
+                              backgroundColor: '#22c55e',
+                              color: '#ffffff',
+                              fontSize: '10px',
+                              fontWeight: '800',
+                              borderRadius: '10px',
+                              minWidth: '18px',
+                              height: '18px',
+                              padding: '0 5px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              flexShrink: 0,
+                              boxShadow: '0 2px 6px rgba(34, 197, 94, 0.45)'
+                            }}
+                          >
+                            {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                   </div>
                 </div>
 
@@ -991,7 +1006,18 @@ export const ChatList: React.FC<ChatListProps> = ({
                               <span>#{subConv.id} • {subConv.whatsapp_number?.nome_departamento || 'Geral'}</span>
                             </div>
                             <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '160px' }}>
-                              {subLastMsg ? subLastMsg.conteudo : 'Sem mensagens'}
+                              {(() => {
+                                const subDraft = drafts ? drafts[subConv.id] : null;
+                                if (subDraft) {
+                                  return (
+                                    <>
+                                      <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
+                                      <span>{subDraft}</span>
+                                    </>
+                                  );
+                                }
+                                return subLastMsg ? subLastMsg.conteudo : 'Sem mensagens';
+                              })()}
                             </div>
                           </div>
 

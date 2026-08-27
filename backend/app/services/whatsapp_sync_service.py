@@ -325,35 +325,76 @@ class WhatsAppSyncService:
                         for attempt in range(5):
                             try:
                                 async with AsyncSessionLocal() as session:
-                                    # 2. Get or create Contact (with 8-digit suffix match)
-                                    if len(phone) >= 8 and not phone.startswith("120363"):
+                                    # 2. Get or create Contact (differentiating groups from individual contacts)
+                                    is_chat_group = (
+                                        "@g.us" in str(jid).lower() or
+                                        str(phone).startswith("120363") or
+                                        ("-" in str(phone) and len(str(phone)) > 15) or
+                                        (len(str(phone)) >= 16 and not str(phone).startswith("55"))
+                                    )
+
+                                    if is_chat_group:
                                         contact_stmt = select(Contact).where(
                                             Contact.tenant_id == tenant_id,
-                                            (Contact.telefone == phone) | (Contact.telefone.like(f"%{phone[-8:]}%"))
+                                            (Contact.telefone == phone) | (Contact.telefone == jid) | (Contact.telefone == f"{phone}@g.us")
                                         )
                                     else:
                                         contact_stmt = select(Contact).where(
                                             Contact.tenant_id == tenant_id,
-                                            Contact.telefone == phone
+                                            Contact.telefone.notlike("%@g.us%"),
+                                            Contact.telefone.notlike("%-%"),
+                                            Contact.telefone.notlike("120363%"),
+                                            (Contact.telefone == phone) | (Contact.telefone.like(f"%{phone[-8:]}%") if len(phone) >= 8 else False)
                                         )
                                     c_res = await session.execute(contact_stmt)
                                     contact = c_res.scalars().first()
 
                                     if not contact:
+                                        initial_group_name = name
+                                        if is_chat_group:
+                                            g_raw = phone.split("@")[0]
+                                            g_res_tbl = await session.execute(
+                                                select(WhatsAppGroup.nome).where(
+                                                    WhatsAppGroup.tenant_id == tenant_id,
+                                                    (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
+                                                )
+                                            )
+                                            official_gname = g_res_tbl.scalar_one_or_none()
+                                            if official_gname:
+                                                initial_group_name = official_gname
+
                                         contact = Contact(
                                             tenant_id=tenant_id,
                                             telefone=phone,
-                                            nome=name,
-                                            foto_perfil_url=profile_pic
+                                            nome=initial_group_name,
+                                            foto_perfil_url=profile_pic,
+                                            dados_adicionais={"is_group": True} if is_chat_group else {}
                                         )
                                         session.add(contact)
                                         await session.flush()
                                         stats["contacts_synced"] += 1
                                     else:
-                                        if (not contact.nome or contact.nome == phone) and name != phone:
-                                            contact.nome = name
-                                        elif ab_entry and contact.nome != ab_entry["name"]:
-                                            contact.nome = ab_entry["name"]
+                                        if is_chat_group:
+                                            extra_g = dict(contact.dados_adicionais or {})
+                                            extra_g["is_group"] = True
+                                            contact.dados_adicionais = extra_g
+                                            g_raw = phone.split("@")[0]
+                                            g_res_tbl = await session.execute(
+                                                select(WhatsAppGroup.nome).where(
+                                                    WhatsAppGroup.tenant_id == tenant_id,
+                                                    (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
+                                                )
+                                            )
+                                            official_gname = g_res_tbl.scalar_one_or_none()
+                                            if official_gname:
+                                                contact.nome = official_gname
+                                            elif not contact.nome or contact.nome in ["Grupo WhatsApp", "Cliente"]:
+                                                contact.nome = name
+                                        else:
+                                            if (not contact.nome or contact.nome == phone or contact.nome == "Cliente") and name != phone:
+                                                contact.nome = name
+                                            elif ab_entry and contact.nome != ab_entry["name"]:
+                                                contact.nome = ab_entry["name"]
                                         if not contact.foto_perfil_url and profile_pic:
                                             contact.foto_perfil_url = profile_pic
 

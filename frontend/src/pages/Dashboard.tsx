@@ -31,6 +31,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [calendarPrefill, setCalendarPrefill] = useState<any>(null);
   const [calendarSummary, setCalendarSummary] = useState<{ today_pending: number; overdue: number; total_pending: number } | null>(null);
 
+  // WhatsApp-style individual conversation drafts (Rascunhos por cliente)
+  const [conversationDrafts, setConversationDrafts] = useState<{ [convId: number]: string }>(() => {
+    try {
+      const saved = localStorage.getItem('omini_conversation_drafts');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const handleSaveDraft = useCallback((convId: number, text: string) => {
+    setConversationDrafts(prev => {
+      const next = { ...prev };
+      if (text && text.trim()) {
+        next[convId] = text;
+      } else {
+        delete next[convId];
+      }
+      try {
+        localStorage.setItem('omini_conversation_drafts', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }, []);
+
   const displayedConversations = React.useMemo(() => {
     return conversations.filter(c => {
       const phone = c.contact?.telefone || '';
@@ -661,6 +686,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}
                 onStatusToggle={fetchConversations}
                 currentUserId={user?.id}
+                drafts={conversationDrafts}
               />
             </div>
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
@@ -681,6 +707,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 isChatListCollapsed={isChatListCollapsed}
                 onToggleChatList={() => setIsChatListCollapsed(!isChatListCollapsed)}
                 whatsappNumbers={whatsappNumbers}
+                drafts={conversationDrafts}
+                onSaveDraft={handleSaveDraft}
               />
             </div>
           </div>

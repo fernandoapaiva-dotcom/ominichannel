@@ -105,9 +105,24 @@ async def sync_whatsapp_groups(
                 )
                 db.add(new_group)
 
+            # Keep Contact table in sync for this WhatsApp Group
+            raw_g_id = group_jid.split("@")[0]
+            c_grp_stmt = select(Contact).where(
+                Contact.tenant_id == current_user.tenant_id,
+                (Contact.telefone == group_jid) |
+                (Contact.telefone == raw_g_id) |
+                (Contact.telefone == f"{raw_g_id}@g.us")
+            )
+            c_grp_res = await db.execute(c_grp_stmt)
+            for c_grp in c_grp_res.scalars().all():
+                c_grp.nome = subject
+                extra_g = dict(c_grp.dados_adicionais or {})
+                extra_g["is_group"] = True
+                c_grp.dados_adicionais = extra_g
+
             total_synced += 1
 
-    await db.commit()
+        await db.commit()
 
     # Log audit
     audit = AuditLog(

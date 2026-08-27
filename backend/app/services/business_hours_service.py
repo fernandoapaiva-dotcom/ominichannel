@@ -77,28 +77,32 @@ class BusinessHoursService:
         )
 
     @staticmethod
-    def get_shift_closing_message(protocol_number: str) -> str:
+    def get_shift_closing_message(customer_name: Optional[str], protocol_number: str) -> str:
         """
-        Returns the shift closing message sent at 18:00 (Seção 4 - Job das 18:00).
+        Returns the shift closing and appreciation message sent at 18:00.
         """
+        from app.services.gemini_service import sanitize_customer_name
+        clean_name = sanitize_customer_name(customer_name or "Cliente")
         return (
-            f"⏰ *ENCERRAMENTO DO EXPEDIENTE COMERCIAL (18:00)*\n\n"
-            f"Informamos que nosso expediente de atendimento encerrou às 18:00.\n\n"
-            f"O seu atendimento (Protocolo: {protocol_number}) foi registrado e será retomado com prioridade pela nossa equipe no próximo dia útil a partir das 08:00.\n\n"
-            f"Agradecemos a sua compreensão e desejamos um ótimo descanso!"
+            f"⏰ *Servweld - Encerramento do Atendimento (18:00)*\n\n"
+            f"Olá, {clean_name}! Informamos que nosso expediente de atendimento encerrou às 18:00 e o seu chamado referente ao *Protocolo #{protocol_number}* foi finalizado pelo sistema.\n\n"
+            f"🙏 Agradecemos imensamente pelo seu contato!\n\n"
+            f"Caso necessite de novo atendimento ou tenha novas dúvidas no futuro, basta nos enviar uma nova mensagem a qualquer momento para abrir um novo chamado. Desejamos uma excelente noite e um ótimo descanso!"
         )
 
     async def execute_18h_shift_closing_job(self) -> Dict[str, Any]:
         """
         Job das 18:00 (Horário de Brasília):
-        - Scans all ongoing conversations in COM_HUMANO or AGUARDANDO_ATENDENTE.
-        - Dispatches the shift closing notice to the customer on WhatsApp.
-        - Adds system audit message in timeline.
-        - Updates status to ENCERRADA_FORA_EXPEDIENTE.
-        - Exports JSON backup.
+        - Varre todos os atendimentos ativos em COM_HUMANO, AGUARDANDO_ATENDENTE ou COM_IA.
+        - Envia mensagem de encerramento e agradecimento ao cliente no WhatsApp.
+        - Registra mensagem de auditoria do sistema na timeline.
+        - Atualiza status para ENCERRADA_FORA_EXPEDIENTE e finaliza o protocol_number (set to None).
+        - Limpa a memória de curto prazo da conversa.
+        - Realiza backup e emite broadcast WebSockets.
+        - No dia seguinte NÃO reabre sozinho para não ficar abrindo e fechando continuamente.
         """
         now_br = self.get_brasilia_now()
-        logger.info(f"[JOB 18:00] Iniciando encerramento de expediente comercial ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
+        logger.info(f"[JOB 18:00] Iniciando finalização e encerramento de expediente comercial ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
 
         closed_count = 0
         async with AsyncSessionLocal() as db:
@@ -126,17 +130,13 @@ class BusinessHoursService:
                     if conv.contact and ("@g.us" in str(conv.contact.telefone) or len(str(conv.contact.telefone)) > 15):
                         continue
 
-                    # Ensure the conversation had interaction TODAY (within the last 14 hours)
+                    # Ensure the conversation had interaction TODAY (within the last 14 hours) or has active protocol
                     if not conv.ultima_interacao_em or (datetime.utcnow() - conv.ultima_interacao_em).total_seconds() > 14 * 3600:
                         continue
 
-                    # Ensure conversation has a daily protocol
-                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
-                        from app.api.v1.conversations import generate_daily_protocol
-                        conv.protocol_number = await generate_daily_protocol(db, conv.tenant_id)
-
-                    proto = conv.protocol_number
-                    closing_text = self.get_shift_closing_message(proto)
+                    proto = conv.protocol_number or "S/N"
+                    cust_name = conv.contact.nome if conv.contact else "Cliente"
+                    closing_text = self.get_shift_closing_message(cust_name, proto)
 
                     # 1. Send WhatsApp message to customer
                     if conv.contact and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
@@ -153,25 +153,37 @@ class BusinessHoursService:
                     sys_msg = Message(
                         conversation_id=conv.id,
                         remetente="sistema",
-                        conteudo=f"⏰ Atendimento pausado/encerrado pelo fim de expediente comercial das 18:00 (Horário de Brasília).",
+                        conteudo=f"⏰ Atendimento e protocolo #{proto} finalizados automaticamente pelo encerramento de expediente comercial das 18:00 (Horário de Brasília). Agradecimento enviado ao cliente.",
                         tipo=MessageType.TEXTO,
                         timestamp=datetime.utcnow()
                     )
                     db.add(sys_msg)
 
-                    # 3. Update Conversation Status
+                    # 3. Update Conversation Status and Finalize Protocol
                     conv.status = ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
+                    conv.protocol_number = None
                     conv.ultima_interacao_em = datetime.utcnow()
                     closed_count += 1
 
-                    # 4. JSON Backup
+                    # 4. Clear temporary conversation memory
+                    if conv.contact_id:
+                        from app.models.models import ConversationMemory
+                        from sqlalchemy import delete
+                        await db.execute(
+                            delete(ConversationMemory).where(
+                                ConversationMemory.tenant_id == conv.tenant_id,
+                                ConversationMemory.contact_id == conv.contact_id
+                            )
+                        )
+
+                    # 5. JSON Backup
                     try:
                         conv_export = {
                             "conversation_id": conv.id,
                             "tenant_id": conv.tenant_id,
                             "contact_phone": conv.contact.telefone if conv.contact else "",
                             "contact_name": conv.contact.nome if conv.contact else "",
-                            "protocol_number": conv.protocol_number,
+                            "protocol_number": proto,
                             "status": "encerrada_fora_expediente",
                             "criado_em": conv.criado_em,
                             "ultima_interacao_em": conv.ultima_interacao_em,
@@ -195,22 +207,24 @@ class BusinessHoursService:
                     except Exception as b_err:
                         logger.warning(f"Error exporting backup on 18h shift closing: {b_err}")
 
-                    # 5. Broadcast WS update
+                    # 6. Broadcast WS update to agents
                     try:
                         await ws_manager.broadcast_to_department(
                             tenant_id=conv.tenant_id,
                             whatsapp_number_id=conv.whatsapp_number_id,
                             message_data={
-                                "type": "NEW_MESSAGE",
+                                "type": "conversation_updated",
                                 "conversation_id": conv.id,
-                                "status_updated": conv.status.value
+                                "protocol_number": None,
+                                "status": conv.status.value,
+                                "assigned_user_id": conv.assigned_user_id
                             }
                         )
                     except Exception:
                         pass
 
                 await db.commit()
-                logger.info(f"[JOB 18:00] Concluído com sucesso! {closed_count} atendimentos pausados/encerrados pelo fim do expediente.")
+                logger.info(f"[JOB 18:00] Concluído com sucesso! {closed_count} atendimentos finalizados pelo encerramento de expediente.")
             except Exception as e:
                 logger.error(f"[JOB 18:00] Erro ao executar job das 18:00: {e}")
 
@@ -219,7 +233,7 @@ class BusinessHoursService:
     @staticmethod
     def get_shift_opening_message(protocol_number: str) -> str:
         """
-        Returns the shift reopening message sent at 08:00 on business days.
+        Legacy helper for shift opening message.
         """
         return (
             f"🌅 *INÍCIO DO EXPEDIENTE COMERCIAL (08:00)*\n\n"
@@ -229,99 +243,21 @@ class BusinessHoursService:
 
     async def execute_08h_shift_opening_job(self) -> Dict[str, Any]:
         """
-        Job das 08:00 (Horário de Brasília):
-        - Scans conversations in ENCERRADA_FORA_EXPEDIENTE.
-        - Automatically reopens them into AGUARDANDO_ATENDENTE.
-        - Dispatches morning resumption notice to customer on WhatsApp.
-        - Adds system audit message in timeline.
-        - Drains pending queue via distribution_service.
+        Legacy helper: no auto-reopen per requirement to prevent constant open/close cycle.
         """
-        from app.services.distribution_service import distribution_service
-        now_br = self.get_brasilia_now()
-        logger.info(f"[JOB 08:00] Retomando atendimentos pausados da noite anterior ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
-
-        reopened_count = 0
-        async with AsyncSessionLocal() as db:
-            try:
-                stmt = (
-                    select(Conversation)
-                    .options(
-                        selectinload(Conversation.contact),
-                        selectinload(Conversation.whatsapp_number)
-                    )
-                    .where(
-                        Conversation.status == ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
-                    )
-                )
-                res = await db.execute(stmt)
-                convs = res.scalars().all()
-
-                for conv in convs:
-                    if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
-                        continue
-
-                    extra = dict(conv.dados_adicionais or {})
-                    if extra.get("is_migrated") or extra.get("migrated_from_whatsapp"):
-                        continue
-
-                    proto = conv.protocol_number
-                    morning_text = self.get_shift_opening_message(proto)
-
-                    # 1. Send WhatsApp message
-                    if conv.contact and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
-                        try:
-                            await evolution_service.send_text_message(
-                                instance_name=conv.whatsapp_number.instancia_evolution_api,
-                                number=conv.contact.telefone,
-                                text=morning_text
-                            )
-                        except Exception as send_err:
-                            logger.warning(f"Error sending 08h resumption message to #{conv.id}: {send_err}")
-
-                    # 2. Add System Message
-                    sys_msg = Message(
-                        conversation_id=conv.id,
-                        remetente="sistema",
-                        conteudo=f"🌅 Atendimento retomado automaticamente pelo início de expediente comercial das 08:00 (Horário de Brasília).",
-                        tipo=MessageType.TEXTO,
-                        timestamp=datetime.utcnow()
-                    )
-                    db.add(sys_msg)
-
-                    # 3. Put in AGUARDANDO_ATENDENTE
-                    conv.status = ConversationStatus.AGUARDANDO_ATENDENTE
-                    conv.assigned_user_id = None
-                    conv.ultima_interacao_em = datetime.utcnow()
-                    reopened_count += 1
-
-                await db.commit()
-
-                # 4. Drain and auto-assign pending queue across tenants/departments
-                departments_stmt = select(WhatsAppNumber.tenant_id, WhatsAppNumber.id).where(WhatsAppNumber.status == True)
-                d_res = await db.execute(departments_stmt)
-                for t_id, wn_id in d_res.all():
-                    try:
-                        await distribution_service.process_pending_queue(db, t_id, wn_id)
-                    except Exception:
-                        pass
-
-                logger.info(f"[JOB 08:00] Concluído com sucesso! {reopened_count} atendimentos retomados e enfileirados.")
-            except Exception as e:
-                logger.error(f"[JOB 08:00] Erro ao executar job das 08:00: {e}")
-
-        return {"status": "success", "reopened_conversations": reopened_count}
+        logger.info("[JOB 08:00] Reabertura automática desativada conforme regra de negócio (atendimentos não são reabertos sozinhos).")
+        return {"status": "skipped", "message": "Auto-reopening disabled per business rule."}
 
 business_hours_service = BusinessHoursService()
 
 async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
     """
     Continuous background loop that checks Brasília time (America/Sao_Paulo).
-    - Exactly at 08:00 on business days (Mon-Fri), triggers the 08:00 shift opening resumption job.
-    - Exactly at 18:00 on business days (Mon-Fri), triggers the 18:00 shift closing job.
+    - Exactly at 18:00 on business days (Mon-Fri), triggers the 18:00 shift closing and protocol finalization job.
+    - Does NOT auto-reopen conversations on the next morning at 08:00.
     """
     last_executed_18h: Optional[str] = None
-    last_executed_08h: Optional[str] = None
-    logger.info("Business hours (08:00 / 18:00) scheduler background loop started.")
+    logger.info("Business hours 18:00 shift closing scheduler background loop started.")
 
     while True:
         try:
@@ -330,13 +266,6 @@ async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
             weekday = now_br.weekday()  # 0=Mon ... 4=Fri (Sat=5, Sun=6)
 
             if weekday < 5:
-                # 08:00 Morning Resumption Job
-                if now_br.hour == 8 and now_br.minute == 0:
-                    if last_executed_08h != today_str:
-                        logger.info(f"[SCHEDULER 08:00] Triggering 08:00 morning shift opening job for {today_str}...")
-                        await business_hours_service.execute_08h_shift_opening_job()
-                        last_executed_08h = today_str
-
                 # 18:00 Evening Shift Closing Job
                 if now_br.hour == 18 and now_br.minute == 0:
                     if last_executed_18h != today_str:

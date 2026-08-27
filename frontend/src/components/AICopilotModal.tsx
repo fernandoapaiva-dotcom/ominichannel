@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Send, X, Sparkles, Copy, Check, CornerDownLeft, RefreshCw, MessageSquare, Wrench, DollarSign, FileText, Trash2 } from 'lucide-react';
+import { Bot, Send, X, Sparkles, Copy, Check, CornerDownLeft, RefreshCw, MessageSquare, Wrench, DollarSign, FileText, Trash2, MapPin, Clock } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, User } from '../types';
 
@@ -8,6 +8,13 @@ interface CopilotMessage {
   sender: 'user' | 'assistant';
   text: string;
   suggestedReply?: string;
+  hasLocation?: boolean;
+  locationData?: {
+    name: string;
+    address: string;
+    latitude: number;
+    longitude: number;
+  };
   timestamp: string;
 }
 
@@ -31,6 +38,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [insertedId, setInsertedId] = useState<string | null>(null);
+  const [sendingActionId, setSendingActionId] = useState<string | null>(null);
+  const [sentActionId, setSentActionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Initialize or reset when conversation changes
@@ -43,7 +52,7 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
           {
             id: 'init_1',
             sender: 'assistant',
-            text: `Olá, ${currentUser.nome}! Sou seu **Copiloto IA Especialista**.\n\nAnalisei o histórico deste chamado com **${custName}** no setor de **${deptName}** e estou conectado à nossa base de manuais técnicos, procedimentos e tabelas (RAG).\n\nComo posso te orientar agora? Escolha uma das opções rápidas abaixo ou faça qualquer pergunta técnica/comercial!`,
+            text: `Olá, ${currentUser.nome}! Sou seu **Copiloto IA Especialista**.\n\nAnalisei o histórico deste chamado com **${custName}** no setor de **${deptName}** e estou conectado à nossa base de manuais técnicos, procedimentos, localização e dados oficiais da Servweld.\n\nComo posso te orientar agora? Escolha uma das opções rápidas abaixo ou faça qualquer pergunta técnica/comercial!`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           }
         ]);
@@ -101,6 +110,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
             sender: 'assistant',
             text: res.answer || 'Análise concluída.',
             suggestedReply: res.suggested_message || undefined,
+            hasLocation: Boolean(res.has_location),
+            locationData: res.location_data || undefined,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           }
         ]);
@@ -145,13 +156,79 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
     }, 400);
   };
 
+  const handleSendTextAndLocation = async (msgId: string, textToSend: string, locData?: any) => {
+    if (!conversation) return;
+    setSendingActionId(msgId);
+    try {
+      // 1. Send the text message
+      await apiFetch(`/conversations/${conversation.id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({
+          conteudo: textToSend,
+          tipo: 'texto'
+        })
+      });
+
+      // 2. Send the native interactive WhatsApp location pinpoint card
+      const targetLoc = locData || {
+        name: 'Servweld / Servsolda',
+        address: 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226',
+        latitude: -15.820418,
+        longitude: -47.956467
+      };
+
+      await apiFetch(`/conversations/${conversation.id}/send-location`, {
+        method: 'POST',
+        body: JSON.stringify(targetLoc)
+      });
+
+      setSentActionId(msgId);
+      setTimeout(() => {
+        setSentActionId(null);
+        onClose();
+      }, 1000);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao enviar mensagem e localização.');
+    } finally {
+      setSendingActionId(null);
+    }
+  };
+
+  const handleSendDirectLocationPin = async (msgId: string, locData?: any) => {
+    if (!conversation) return;
+    setSendingActionId(`direct_${msgId}`);
+    try {
+      const targetLoc = locData || {
+        name: 'Servweld / Servsolda',
+        address: 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226',
+        latitude: -15.820418,
+        longitude: -47.956467
+      };
+
+      await apiFetch(`/conversations/${conversation.id}/send-location`, {
+        method: 'POST',
+        body: JSON.stringify(targetLoc)
+      });
+
+      setSentActionId(`direct_${msgId}`);
+      setTimeout(() => {
+        setSentActionId(null);
+        onClose();
+      }, 1000);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao enviar localização.');
+    } finally {
+      setSendingActionId(null);
+    }
+  };
+
   const handleClearHistory = () => {
     const custName = conversation.contact?.nome || conversation.contact?.telefone || 'o cliente';
     setMessages([
       {
-        id: `init_${Date.now()}`,
+        id: `reset_${Date.now()}`,
         sender: 'assistant',
-        text: `Histórico limpo. Estou pronto para novas consultas sobre o atendimento de **${custName}**. O que deseja saber?`,
+        text: `Histórico limpo. Como posso te orientar agora no atendimento com **${custName}**?`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ]);
@@ -164,13 +241,10 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
     <div
       style={{
         position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
+        inset: 0,
         backgroundColor: 'rgba(0, 0, 0, 0.75)',
-        backdropFilter: 'blur(4px)',
-        zIndex: 1100,
+        backdropFilter: 'blur(6px)',
+        zIndex: 9999,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -181,9 +255,9 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: '680px',
-          maxWidth: '95vw',
-          height: '82vh',
+          width: '780px',
+          maxWidth: '96vw',
+          height: '84vh',
           backgroundColor: '#0f172a',
           borderRadius: '16px',
           border: '1px solid rgba(0, 230, 153, 0.35)',
@@ -203,7 +277,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: '12px'
+            gap: '12px',
+            flexShrink: 0
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -293,17 +368,17 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
           </div>
         </div>
 
-        {/* Quick Action Suggestion Chips */}
+        {/* Quick Action Suggestion Chips (Wrap-enabled for all screen sizes) */}
         <div
           style={{
-            padding: '8px 16px',
+            padding: '10px 16px',
             backgroundColor: '#131d31',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
             display: 'flex',
+            flexWrap: 'wrap',
             alignItems: 'center',
             gap: '8px',
-            overflowX: 'auto',
-            scrollbarWidth: 'none'
+            flexShrink: 0
           }}
         >
           <button
@@ -312,8 +387,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
             disabled={isLoading}
             style={{
               padding: '6px 12px',
-              backgroundColor: 'rgba(0, 230, 153, 0.1)',
-              border: '1px solid rgba(0, 230, 153, 0.3)',
+              backgroundColor: 'rgba(0, 230, 153, 0.12)',
+              border: '1px solid rgba(0, 230, 153, 0.35)',
               borderRadius: '20px',
               color: 'var(--accent-primary)',
               fontSize: '12px',
@@ -322,11 +397,76 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
               whiteSpace: 'nowrap',
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
-              flexShrink: 0
+              gap: '5px'
             }}
           >
             <Sparkles size={13} /> Sugerir Próxima Resposta
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSendPrompt(`Elabore uma mensagem pronta calorosa e personalizada para o cliente ${customerName} com base no histórico da conversa dele, informando o endereço oficial da Servweld, horários de funcionamento e avisando que o localizador interativo com mapa GPS está sendo enviado logo abaixo para ele apenas clicar e navegar.`)}
+            disabled={isLoading}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: 'rgba(16, 185, 129, 0.12)',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              borderRadius: '20px',
+              color: '#34d399',
+              fontSize: '12px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <MapPin size={13} /> Endereço & Localização GPS
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSendPrompt('Gere a mensagem pronta com o horário oficial de funcionamento da Servweld para eu enviar ao cliente agora.')}
+            disabled={isLoading}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: 'rgba(14, 165, 233, 0.12)',
+              border: '1px solid rgba(14, 165, 233, 0.35)',
+              borderRadius: '20px',
+              color: '#38bdf8',
+              fontSize: '12px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <Clock size={13} /> Horário de Atendimento
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSendPrompt('Gere a mensagem pronta com as orientações e dados oficiais para pagamento via PIX para o cliente.')}
+            disabled={isLoading}
+            style={{
+              padding: '6px 12px',
+              backgroundColor: 'rgba(168, 85, 247, 0.12)',
+              border: '1px solid rgba(168, 85, 247, 0.35)',
+              borderRadius: '20px',
+              color: '#c084fc',
+              fontSize: '12px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '5px'
+            }}
+          >
+            <DollarSign size={13} /> Dados PIX
           </button>
 
           <button
@@ -335,8 +475,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
             disabled={isLoading}
             style={{
               padding: '6px 12px',
-              backgroundColor: 'rgba(59, 130, 246, 0.1)',
-              border: '1px solid rgba(59, 130, 246, 0.3)',
+              backgroundColor: 'rgba(59, 130, 246, 0.12)',
+              border: '1px solid rgba(59, 130, 246, 0.35)',
               borderRadius: '20px',
               color: '#60a5fa',
               fontSize: '12px',
@@ -345,8 +485,7 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
               whiteSpace: 'nowrap',
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
-              flexShrink: 0
+              gap: '5px'
             }}
           >
             <FileText size={13} /> Resumo dos Pontos-Chave
@@ -358,8 +497,8 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
             disabled={isLoading}
             style={{
               padding: '6px 12px',
-              backgroundColor: 'rgba(234, 179, 8, 0.1)',
-              border: '1px solid rgba(234, 179, 8, 0.3)',
+              backgroundColor: 'rgba(234, 179, 8, 0.12)',
+              border: '1px solid rgba(234, 179, 8, 0.35)',
               borderRadius: '20px',
               color: '#facc15',
               fontSize: '12px',
@@ -368,34 +507,10 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
               whiteSpace: 'nowrap',
               display: 'flex',
               alignItems: 'center',
-              gap: '5px',
-              flexShrink: 0
+              gap: '5px'
             }}
           >
             <Wrench size={13} /> Diagnóstico / Manuais RAG
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSendPrompt('Verifique se há condições comerciais, prazos ou dados de garantia aplicáveis para este caso.')}
-            disabled={isLoading}
-            style={{
-              padding: '6px 12px',
-              backgroundColor: 'rgba(168, 85, 247, 0.1)',
-              border: '1px solid rgba(168, 85, 247, 0.3)',
-              borderRadius: '20px',
-              color: '#c084fc',
-              fontSize: '12px',
-              fontWeight: '600',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px',
-              flexShrink: 0
-            }}
-          >
-            <DollarSign size={13} /> Políticas & Garantia
           </button>
         </div>
 
@@ -458,88 +573,198 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
                   {msg.text}
 
                   {/* Ready-to-Send Suggested Message Card */}
-                  {msg.suggestedReply && (
-                    <div
-                      style={{
-                        marginTop: '12px',
-                        padding: '12px',
-                        backgroundColor: '#0a1e17',
-                        border: '1px solid rgba(0, 230, 153, 0.4)',
-                        borderRadius: '10px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '8px'
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          <MessageSquare size={13} /> Sugestão Pronta para Enviar ao Cliente:
-                        </span>
-                      </div>
+                  {msg.suggestedReply && (() => {
+                    const isLocationSuggestion = Boolean(
+                      msg.hasLocation ||
+                      msg.suggestedReply.toLowerCase().includes('localiza') ||
+                      msg.suggestedReply.includes('SOF') ||
+                      msg.suggestedReply.includes('71215-226') ||
+                      msg.suggestedReply.toLowerCase().includes('gps') ||
+                      msg.suggestedReply.toLowerCase().includes('mapa') ||
+                      msg.suggestedReply.toLowerCase().includes('endereço') ||
+                      msg.suggestedReply.toLowerCase().includes('endereco')
+                    );
 
+                    return (
                       <div
                         style={{
-                          padding: '8px 10px',
-                          backgroundColor: 'rgba(0, 0, 0, 0.3)',
-                          borderRadius: '6px',
-                          fontStyle: 'italic',
-                          color: '#e2e8f0',
-                          fontSize: '12px',
-                          borderLeft: '3px solid var(--accent-primary)'
+                          marginTop: '12px',
+                          padding: '12px',
+                          backgroundColor: '#0a1e17',
+                          border: isLocationSuggestion ? '1px solid rgba(16, 185, 129, 0.6)' : '1px solid rgba(0, 230, 153, 0.4)',
+                          borderRadius: '10px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px',
+                          boxShadow: isLocationSuggestion ? '0 4px 16px rgba(16, 185, 129, 0.15)' : 'none'
                         }}
                       >
-                        "{msg.suggestedReply}"
-                      </div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                            <MessageSquare size={13} /> Sugestão Pronta para Enviar ao Cliente:
+                          </span>
+                          {isLocationSuggestion && (
+                            <span style={{
+                              fontSize: '10px',
+                              fontWeight: '700',
+                              backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                              color: '#34d399',
+                              padding: '2px 8px',
+                              borderRadius: '12px',
+                              border: '1px solid rgba(16, 185, 129, 0.4)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px'
+                            }}>
+                              <MapPin size={11} /> Inclui Localizador GPS
+                            </span>
+                          )}
+                        </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                        <button
-                          type="button"
-                          onClick={() => handleInsert(msg.id, msg.suggestedReply!)}
+                        <div
                           style={{
-                            flex: 1,
-                            padding: '8px 14px',
-                            backgroundColor: 'var(--accent-primary)',
-                            color: '#051a12',
-                            border: 'none',
+                            padding: '8px 10px',
+                            backgroundColor: 'rgba(0, 0, 0, 0.3)',
                             borderRadius: '6px',
+                            fontStyle: 'italic',
+                            color: '#e2e8f0',
                             fontSize: '12px',
-                            fontWeight: '700',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '6px',
-                            boxShadow: '0 2px 6px rgba(0, 230, 153, 0.3)',
-                            transition: 'all 0.15s'
+                            borderLeft: isLocationSuggestion ? '3px solid #10b981' : '3px solid var(--accent-primary)',
+                            whiteSpace: 'pre-wrap'
                           }}
                         >
-                          {insertedId === msg.id ? <Check size={14} /> : <CornerDownLeft size={14} />}
-                          <span>{insertedId === msg.id ? 'Inserido no Chat!' : 'Inserir no Chat do Cliente'}</span>
-                        </button>
+                          "{msg.suggestedReply}"
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleCopy(msg.id, msg.suggestedReply!)}
-                          style={{
-                            padding: '8px 12px',
-                            backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                            color: '#f8fafc',
-                            border: '1px solid rgba(255, 255, 255, 0.15)',
-                            borderRadius: '6px',
-                            fontSize: '12px',
-                            fontWeight: '600',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '5px'
-                          }}
-                        >
-                          {copiedId === msg.id ? <Check size={13} color="var(--accent-primary)" /> : <Copy size={13} />}
-                          <span>{copiedId === msg.id ? 'Copiado!' : 'Copiar'}</span>
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '4px' }}>
+                          {/* 1-CLICK SEND TEXT + NATIVE GPS LOCATION PIN */}
+                          {isLocationSuggestion && (
+                            <button
+                              type="button"
+                              onClick={() => handleSendTextAndLocation(msg.id, msg.suggestedReply!, msg.locationData)}
+                              disabled={sendingActionId === msg.id}
+                              style={{
+                                width: '100%',
+                                padding: '9px 14px',
+                                background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: '700',
+                                cursor: sendingActionId === msg.id ? 'not-allowed' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px',
+                                boxShadow: '0 2px 10px rgba(16, 185, 129, 0.4)',
+                                transition: 'all 0.15s'
+                              }}
+                            >
+                              {sentActionId === msg.id ? (
+                                <>
+                                  <Check size={15} />
+                                  <span>Enviado no WhatsApp com Card GPS!</span>
+                                </>
+                              ) : sendingActionId === msg.id ? (
+                                <>
+                                  <RefreshCw size={15} className="animate-spin" />
+                                  <span>Enviando Texto + Card GPS no WhatsApp...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <MapPin size={15} />
+                                  <span>📍 Enviar Mensagem + Localizador GPS no WhatsApp</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleInsert(msg.id, msg.suggestedReply!)}
+                              style={{
+                                flex: 1,
+                                padding: '8px 14px',
+                                backgroundColor: isLocationSuggestion ? 'rgba(255, 255, 255, 0.1)' : 'var(--accent-primary)',
+                                color: isLocationSuggestion ? '#ffffff' : '#051a12',
+                                border: isLocationSuggestion ? '1px solid rgba(255, 255, 255, 0.2)' : 'none',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: '700',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '6px',
+                                boxShadow: isLocationSuggestion ? 'none' : '0 2px 6px rgba(0, 230, 153, 0.3)',
+                                transition: 'all 0.15s'
+                              }}
+                            >
+                              {insertedId === msg.id ? <Check size={14} /> : <CornerDownLeft size={14} />}
+                              <span>{insertedId === msg.id ? 'Inserido no Chat!' : 'Inserir no Chat do Cliente'}</span>
+                            </button>
+
+                            {isLocationSuggestion && (
+                              <button
+                                type="button"
+                                onClick={() => handleSendDirectLocationPin(msg.id, msg.locationData)}
+                                disabled={sendingActionId === `direct_${msg.id}`}
+                                title="Enviar apenas o pin de localização do mapa sem texto"
+                                style={{
+                                  padding: '8px 12px',
+                                  backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                                  color: '#34d399',
+                                  border: '1px solid rgba(16, 185, 129, 0.4)',
+                                  borderRadius: '6px',
+                                  fontSize: '12px',
+                                  fontWeight: '600',
+                                  cursor: sendingActionId === `direct_${msg.id}` ? 'not-allowed' : 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '5px'
+                                }}
+                              >
+                                {sentActionId === `direct_${msg.id}` ? (
+                                  <>
+                                    <Check size={13} color="#34d399" />
+                                    <span>Pin Enviado!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <MapPin size={13} />
+                                    <span>Apenas Pin GPS</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(msg.id, msg.suggestedReply!)}
+                              style={{
+                                padding: '8px 12px',
+                                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                                color: '#f8fafc',
+                                border: '1px solid rgba(255, 255, 255, 0.15)',
+                                borderRadius: '6px',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px'
+                              }}
+                            >
+                              {copiedId === msg.id ? <Check size={13} color="var(--accent-primary)" /> : <Copy size={13} />}
+                              <span>{copiedId === msg.id ? 'Copiado!' : 'Copiar'}</span>
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             );

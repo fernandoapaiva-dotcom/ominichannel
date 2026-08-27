@@ -616,6 +616,19 @@ async def import_whatsapp_backup_file(
 
     return {"message": f"Backup do WhatsApp importado com sucesso! {imported} mensagens adicionadas.", "imported": imported}
 
+
+@router.get("/link_preview")
+async def get_url_link_preview(
+    url: str = Query(..., description="Target URL to fetch OpenGraph preview for")
+):
+    """
+    Fetches OpenGraph title, description, domain, and thumbnail image preview for a link.
+    """
+    from app.services.link_preview_service import link_preview_service
+    preview = await link_preview_service.get_preview(url)
+    return preview or {"url": url, "title": url, "description": None, "image": None, "domain": ""}
+
+
 @router.get("/{conversation_id}", response_model=ConversationResponse)
 async def get_conversation_detail(
     conversation_id: int,
@@ -1927,10 +1940,37 @@ async def copilot_chat_for_conversation(
         tenant_gemini_model_name=decrypted.get("gemini_model_name")
     )
 
+    suggested_msg = result.get("suggested_message", "")
+    answer_text = result.get("answer", "")
+
+    # Detect if user prompt or suggestion relates to location
+    prompt_lower = (payload.user_prompt or "").lower()
+    combined_text = f"{prompt_lower} {suggested_msg.lower()} {answer_text.lower()}"
+    has_location = (
+        "localiza" in combined_text or
+        "endereço" in combined_text or
+        "endereco" in combined_text or
+        "como chegar" in combined_text or
+        "onde fica" in combined_text or
+        "maps" in combined_text or
+        "gps" in combined_text or
+        "sof sul" in combined_text or
+        "71215-226" in combined_text
+    )
+
+    location_payload = {
+        "name": "Servweld / Servsolda",
+        "address": "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226",
+        "latitude": -15.820418,
+        "longitude": -47.956467
+    } if has_location else None
+
     return {
         "success": True,
-        "answer": result.get("answer", ""),
-        "suggested_message": result.get("suggested_message", "")
+        "answer": answer_text,
+        "suggested_message": suggested_msg,
+        "has_location": bool(has_location),
+        "location_data": location_payload
     }
 
 
@@ -2467,5 +2507,6 @@ async def get_conversation_participants(
         "total_participants": len(mapped_participants),
         "participants": mapped_participants
     }
+
 
 

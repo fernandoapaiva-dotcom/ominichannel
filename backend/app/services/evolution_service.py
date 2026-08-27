@@ -1001,15 +1001,18 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                         pic_fetches = 0
 
                         for c_id, c_tel, c_nome, c_pic in contacts_data:
-                            clean_num = c_tel.replace("+", "").replace("-", "").replace(" ", "").strip()
+                            raw_tel = c_tel.split("@")[0] if "@" in str(c_tel) else str(c_tel)
+                            clean_num = raw_tel.replace("+", "").replace(" ", "").strip()
+                            clean_digits = "".join(filter(str.isdigit, raw_tel))
 
                             # A. Check if Contact is a WhatsApp Group
-                            if clean_num in group_map:
-                                g_info = group_map[clean_num]
-                                new_name = g_info["subject"] if c_nome != g_info["subject"] else None
-                                new_pic = g_info["pictureUrl"] if g_info["pictureUrl"] and c_pic != g_info["pictureUrl"] else None
-                                if new_name or new_pic:
-                                    updates.append({"id": c_id, "nome": new_name or c_nome, "foto_perfil_url": new_pic or c_pic})
+                            if raw_tel in group_map or clean_num in group_map or f"{raw_tel}@g.us" in group_map or clean_digits in group_map:
+                                g_info = group_map.get(raw_tel) or group_map.get(clean_num) or group_map.get(f"{raw_tel}@g.us") or group_map.get(clean_digits)
+                                if g_info and g_info.get("subject"):
+                                    new_name = g_info["subject"] if c_nome != g_info["subject"] else None
+                                    new_pic = g_info["pictureUrl"] if g_info.get("pictureUrl") and c_pic != g_info["pictureUrl"] else None
+                                    if new_name or new_pic:
+                                        updates.append({"id": c_id, "nome": new_name or c_nome, "foto_perfil_url": new_pic or c_pic})
                                 continue
 
                             # B. Check if Contact is an internal WhatsApp LID

@@ -189,21 +189,36 @@ async def receive_evolution_webhook(
             jid = c_entry.get("remoteJid") or c_entry.get("id") or ""
             if not jid or "status@broadcast" in jid:
                 continue
+            
+            # NEVER match or sync individual names onto WhatsApp Groups
+            is_entry_group = "@g.us" in str(jid).lower() or str(jid).startswith("120363") or ("-" in str(jid).split("@")[0] and len(str(jid).split("@")[0]) > 15)
+            if is_entry_group:
+                continue
+
             clean_phone = jid.split("@")[0].split(":")[0]
-            if not clean_phone:
+            clean_digits = "".join(filter(str.isdigit, clean_phone))
+            if not clean_digits or len(clean_digits) < 8:
                 continue
             
             contact_name = c_entry.get("pushName") or c_entry.get("name") or c_entry.get("verifiedName")
             profile_pic = c_entry.get("profilePicUrl")
 
             if contact_name or profile_pic:
+                # Exclude groups from matching individual contact phones!
                 c_stmt = select(Contact).where(
                     Contact.tenant_id == tenant_id,
-                    Contact.telefone.like(f"%{clean_phone[-8:]}%")
+                    Contact.telefone.notlike("%@g.us%"),
+                    Contact.telefone.notlike("%-%"),
+                    Contact.telefone.notlike("120363%"),
+                    (Contact.telefone == clean_digits) | (Contact.telefone.like(f"%{clean_digits[-8:]}%"))
                 )
                 c_matches = await db.execute(c_stmt)
                 for existing_c in c_matches.scalars().all():
-                    if contact_name and contact_name != clean_phone:
+                    # Double check that contact is not a group
+                    c_extra = existing_c.dados_adicionais or {}
+                    if c_extra.get("is_group") or "@g.us" in str(existing_c.telefone) or "-" in str(existing_c.telefone) or str(existing_c.telefone).startswith("120363"):
+                        continue
+                    if contact_name and contact_name != clean_digits and contact_name not in ["Cliente", "WhatsApp", "WhatsApp Business"]:
                         existing_c.nome = contact_name
                     if profile_pic and not existing_c.foto_perfil_url:
                         existing_c.foto_perfil_url = profile_pic
@@ -1032,14 +1047,12 @@ async def receive_evolution_webhook(
     # 2. Get or Create Contact (matching exact phone, 8/9 digit variants or group JID)
     if is_group:
         group_raw = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
-        group_digits = "".join(filter(str.isdigit, group_raw))
         contact_stmt = select(Contact).where(
             Contact.tenant_id == tenant_id,
             (Contact.telefone == phone_number) |
             (Contact.telefone == remote_jid) |
             (Contact.telefone == group_raw) |
-            (Contact.telefone == group_digits) |
-            (Contact.telefone.like(f"%{group_digits}%"))
+            (Contact.telefone == f"{group_raw}@g.us")
         )
     else:
         phone_variants = [phone_number]
@@ -1048,16 +1061,14 @@ async def receive_evolution_webhook(
         elif len(phone_number) == 12 and phone_number.startswith("55"):
             phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
 
-        if len(phone_number) >= 8:
-            contact_stmt = select(Contact).where(
-                Contact.tenant_id == tenant_id,
-                (Contact.telefone.in_(phone_variants) | Contact.telefone.like(f"%{phone_number[-8:]}%"))
-            )
-        else:
-            contact_stmt = select(Contact).where(
-                Contact.tenant_id == tenant_id,
-                Contact.telefone.in_(phone_variants)
-            )
+        # Exclude groups from individual phone matching!
+        contact_stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.telefone.notlike("%@g.us%"),
+            Contact.telefone.notlike("%-%"),
+            Contact.telefone.notlike("120363%"),
+            (Contact.telefone.in_(phone_variants) | (Contact.telefone.like(f"%{phone_number[-8:]}%") if len(phone_number) >= 8 else False))
+        )
 
     contact_res = await db.execute(contact_stmt)
     contact = contact_res.scalars().first()
@@ -1067,14 +1078,27 @@ async def receive_evolution_webhook(
     # If message is from a WhatsApp Group, fetch official group subject / title
     group_subject = None
     if is_group:
-        group_subject = (
-            data.get("groupName") or
-            data.get("groupSubject") or
-            data.get("subject") or
-            (data.get("conversation") if data.get("isGroup") else None)
+        # 1. First check WhatsAppGroup table for official name
+        raw_jid_clean = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+        g_tbl_stmt = select(WhatsAppGroup).where(
+            WhatsAppGroup.tenant_id == tenant_id,
+            (WhatsAppGroup.group_jid == remote_jid) |
+            (WhatsAppGroup.group_jid == f"{raw_jid_clean}@g.us") |
+            (WhatsAppGroup.group_jid.like(f"%{raw_jid_clean}%"))
         )
+        g_tbl_res = await db.execute(g_tbl_stmt)
+        g_tbl_obj = g_tbl_res.scalars().first()
+        if g_tbl_obj and g_tbl_obj.nome:
+            group_subject = g_tbl_obj.nome
+
+        if not group_subject:
+            group_subject = (
+                data.get("groupName") or
+                data.get("groupSubject") or
+                data.get("subject")
+            )
         try:
-            if not group_subject or group_subject.lower() in ["none", "null", "undefined"]:
+            if not group_subject or group_subject.lower() in ["none", "null", "undefined", "grupo whatsapp"]:
                 g_info = await asyncio.wait_for(
                     evolution_service.fetch_group_info(whatsapp_number.instancia_evolution_api, remote_jid),
                     timeout=2.0
@@ -1103,6 +1127,9 @@ async def receive_evolution_webhook(
         if clean_push_name and clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] and not is_group:
             nm_stmt = select(Contact).where(
                 Contact.tenant_id == tenant_id,
+                Contact.telefone.notlike("%@g.us%"),
+                Contact.telefone.notlike("%-%"),
+                Contact.telefone.notlike("120363%"),
                 Contact.nome.ilike(clean_push_name)
             )
             nm_res = await db.execute(nm_stmt)
@@ -1114,7 +1141,9 @@ async def receive_evolution_webhook(
                     contact.telefone = phone_number
 
     if not contact:
-        initial_name = group_subject or (clean_push_name if not is_group else f"Grupo WhatsApp")
+        initial_name = group_subject if is_group else (clean_push_name if clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] else f"Contato {phone_number}")
+        if is_group and not initial_name:
+            initial_name = "Grupo WhatsApp"
         extra_c = {"is_group": True} if is_group else {}
         contact = Contact(tenant_id=tenant_id, telefone=phone_number, nome=initial_name, foto_perfil_url=profile_pic_url, dados_adicionais=extra_c)
         db.add(contact)
@@ -1125,7 +1154,8 @@ async def receive_evolution_webhook(
             extra_c["is_group"] = True
             contact.dados_adicionais = extra_c
             contact.telefone = phone_number
-            if group_subject and group_subject.lower() not in ["grupo whatsapp", "none", "null", "undefined"]:
+            # CRITICAL RULE: NEVER overwrite group name with participant name or message!
+            if group_subject and group_subject.lower() not in ["grupo whatsapp", "none", "null", "undefined", "cliente", clean_push_name.lower()]:
                 contact.nome = group_subject
         else:
             # Upgrade phone if contact had a LID and we now have a real number
@@ -1378,6 +1408,24 @@ async def receive_evolution_webhook(
         msg_extra["participant"] = str(participant_jid or sender_jid)
         msg_extra["is_group"] = True
 
+    # Extract WhatsApp OpenGraph Link Preview metadata if present
+    ext_msg = message_obj.get("extendedTextMessage")
+    if ext_msg and isinstance(ext_msg, dict):
+        preview_title = ext_msg.get("title")
+        preview_desc = ext_msg.get("description")
+        preview_thumb = ext_msg.get("jpegThumbnail")
+        preview_url = ext_msg.get("matchedText") or ext_msg.get("canonicalUrl")
+        if preview_title or preview_thumb or preview_desc:
+            thumb_url = None
+            if preview_thumb:
+                thumb_url = f"data:image/jpeg;base64,{preview_thumb}" if not str(preview_thumb).startswith("data:") else preview_thumb
+            msg_extra["link_preview"] = {
+                "url": preview_url,
+                "title": preview_title,
+                "description": preview_desc,
+                "image": thumb_url
+            }
+
     user_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
@@ -1430,9 +1478,119 @@ async def receive_evolution_webhook(
         await db.commit()
         return {"status": "success", "action": "internal_number_or_bot_silenced"}
 
-    # Safe Re-engagement logic: Only reactivate AI if customer explicitly asks for it
+    # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
     if conversation.status == ConversationStatus.COM_HUMANO:
         text_lower = text_content.strip().lower()
+
+        # Check for basic institutional questions (Location, Business hours)
+        is_asking_location = bool(re.search(
+            r'\b(onde\s+(voc[eê]s?\s+)?fic(am?|a)|qual\s+(o\s+)?endere[cç]o|como\s+(fa[cç]o\s+pra\s+)?cheg(ar?|o)|localiza[cç][aã]o|passa\s+(a\s+)?localiza[cç][aã]o|manda\s+(a\s+)?localiza[cç][aã]o|link\s+do\s+maps|onde\s+fica\s+a\s+loja|onde\s+[eé]\s+a\s+loja|qual\s+[eé]\s+o\s+endere[cç]o|ponto\s+de\s+refer[eê]ncia)\b',
+            text_lower
+        ))
+
+        is_asking_hours = bool(re.search(
+            r'\b(hor[aá]rio\s+de\s+(atendimento|funcionamento)|que\s+horas\s+(voc[eê]s?\s+)?(abrem?|fecham?|come[cç]am?)|at[eé]\s+que\s+horas|abre\s+(hoje|s[aá]bado|domingo)|funciona\s+(hoje|s[aá]bado|domingo)|est[aã]o\s+abertos?|qual\s+(o\s+)?hor[aá]rio|expediente)\b',
+            text_lower
+        ))
+
+        if is_asking_location:
+            auto_loc_text = (
+                "📍 *Olá! Aqui está a localização da Servweld:*\n\n"
+                "*Servweld Equipamentos & Assistência Técnica*\n"
+                "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF\n"
+                "CEP: 71215-226\n\n"
+                "🗺️ *Como Chegar (Google Maps / GPS):*\n"
+                "https://maps.google.com/?q=-15.820418,-47.956467\n\n"
+                "Você também pode clicar no mapa interativo abaixo para abrir direto no seu GPS (Google Maps / Waze)!"
+            )
+            if whatsapp_number and whatsapp_number.instancia_evolution_api:
+                try:
+                    await evolution_service.send_text_message(
+                        instance_name=whatsapp_number.instancia_evolution_api,
+                        number=phone_number,
+                        text=auto_loc_text
+                    )
+                    # Disparar também o card interativo nativo do WhatsApp com o mapa e o pin vermelho
+                    await evolution_service.send_location_message(
+                        instance_name=whatsapp_number.instancia_evolution_api,
+                        number=phone_number,
+                        latitude=-15.820418,
+                        longitude=-47.956467,
+                        name="Servweld / Servsolda",
+                        address="SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
+                    )
+                except Exception as e:
+                    logger.warning(f"Error sending auto location reply: {e}")
+
+            loc_msg = Message(
+                conversation_id=conversation.id,
+                remetente=MessageSender.ATENDENTE,
+                conteudo=auto_loc_text,
+                tipo=MessageType.TEXTO,
+                status="delivered",
+                dados_adicionais={"auto_reply": True, "info_type": "location"},
+                timestamp=datetime.utcnow()
+            )
+            db.add(loc_msg)
+            await db.commit()
+
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conversation.id,
+                    "id": loc_msg.id,
+                    "remetente": "atendente",
+                    "tipo": "texto",
+                    "conteudo": auto_loc_text,
+                    "timestamp": loc_msg.timestamp.isoformat() + "Z"
+                }
+            )
+
+        elif is_asking_hours:
+            auto_hours_text = (
+                "⏰ *Horário de Atendimento Servweld:*\n\n"
+                "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
+                "• *Sábados, Domingos e Feriados:* Fechado\n\n"
+                "Nosso laboratório e loja estão à disposição durante todo o horário comercial!"
+            )
+            if whatsapp_number and whatsapp_number.instancia_evolution_api:
+                try:
+                    await evolution_service.send_text_message(
+                        instance_name=whatsapp_number.instancia_evolution_api,
+                        number=phone_number,
+                        text=auto_hours_text
+                    )
+                except Exception as e:
+                    logger.warning(f"Error sending auto hours reply: {e}")
+
+            hours_msg = Message(
+                conversation_id=conversation.id,
+                remetente=MessageSender.ATENDENTE,
+                conteudo=auto_hours_text,
+                tipo=MessageType.TEXTO,
+                status="delivered",
+                dados_adicionais={"auto_reply": True, "info_type": "hours"},
+                timestamp=datetime.utcnow()
+            )
+            db.add(hours_msg)
+            await db.commit()
+
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number.id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conversation.id,
+                    "id": hours_msg.id,
+                    "remetente": "atendente",
+                    "tipo": "texto",
+                    "conteudo": auto_hours_text,
+                    "timestamp": hours_msg.timestamp.isoformat() + "Z"
+                }
+            )
+
         explicit_ai_keywords = ["falar com ia", "reativar ia", "chamar ia", "iniciar ia", "menu ia"]
         if any(k in text_lower for k in explicit_ai_keywords):
             conversation.status = ConversationStatus.COM_IA

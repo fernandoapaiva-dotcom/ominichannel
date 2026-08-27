@@ -4,7 +4,8 @@ import {
   AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
-  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare
+  Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
+  Globe, Navigation
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -31,6 +32,8 @@ interface ChatAreaProps {
   isChatListCollapsed?: boolean;
   onToggleChatList?: () => void;
   whatsappNumbers?: WhatsAppNumber[];
+  drafts?: { [convId: number]: string };
+  onSaveDraft?: (convId: number, text: string) => void;
 }
 
 const normalizeIsoDate = (ts: string | Date | undefined): Date => {
@@ -105,6 +108,160 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   return str.replace('@lid', '').replace('@s.whatsapp.net', '');
 };
 
+// Global memory cache for link preview across all components and renders
+const globalLinkPreviewCache = new Map<string, any>();
+
+export const LinkPreviewCardComponent: React.FC<{ url: string; initialData?: any }> = ({ url, initialData }) => {
+  const [preview, setPreview] = useState<any>(() => {
+    if (initialData && (initialData.title || initialData.image)) return initialData;
+    if (globalLinkPreviewCache.has(url)) return globalLinkPreviewCache.get(url);
+    return null;
+  });
+
+  useEffect(() => {
+    if (preview && (preview.title || preview.image)) return;
+    if (globalLinkPreviewCache.has(url)) {
+      setPreview(globalLinkPreviewCache.get(url));
+      return;
+    }
+
+    let isMounted = true;
+    apiFetch(`/conversations/link_preview?url=${encodeURIComponent(url)}`)
+      .then((res: any) => {
+        if (isMounted && res) {
+          globalLinkPreviewCache.set(url, res);
+          setPreview(res);
+        }
+      })
+      .catch(() => {
+        try {
+          const u = new URL(url.startsWith('http') ? url : `https://${url}`);
+          const fallback = { url, domain: u.hostname.replace('www.', ''), title: u.hostname };
+          globalLinkPreviewCache.set(url, fallback);
+          if (isMounted) setPreview(fallback);
+        } catch {
+          // ignore
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [url]);
+
+  if (!preview) {
+    return null;
+  }
+
+  const domainName = preview?.domain || (preview?.url ? (() => { try { return new URL(preview.url).hostname.replace('www.', ''); } catch { return ''; } })() : '');
+
+  // Hide empty boxes without image or descriptive title
+  if (!preview.image && (!preview.title || preview.title.toLowerCase() === domainName.toLowerCase() || preview.title.toLowerCase() === `www.${domainName.toLowerCase()}`)) {
+    return null;
+  }
+
+  return (
+    <a
+      href={preview.url || url}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        maxWidth: '340px',
+        backgroundColor: 'rgba(0, 0, 0, 0.35)',
+        borderRadius: '10px',
+        overflow: 'hidden',
+        margin: '4px 0 8px 0',
+        textDecoration: 'none',
+        color: 'inherit',
+        border: '1px solid rgba(255, 255, 255, 0.12)',
+        boxShadow: '0 3px 10px rgba(0, 0, 0, 0.25)',
+        transition: 'background-color 0.15s ease, transform 0.15s ease',
+        cursor: 'pointer'
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+        e.currentTarget.style.transform = 'translateY(-1px)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.35)';
+        e.currentTarget.style.transform = 'none';
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {preview.image && (
+        <div style={{
+          width: '100%',
+          maxHeight: '190px',
+          overflow: 'hidden',
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center'
+        }}>
+          <img
+            src={preview.image}
+            alt={preview.title || 'Prévia do Link'}
+            style={{
+              width: '100%',
+              height: 'auto',
+              maxHeight: '190px',
+              objectFit: 'cover',
+              display: 'block'
+            }}
+            onError={(e) => (e.currentTarget.style.display = 'none')}
+          />
+        </div>
+      )}
+      <div style={{ padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {preview.title && (
+          <div style={{
+            fontSize: '13px',
+            fontWeight: '700',
+            color: '#ffffff',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            lineHeight: '1.3'
+          }}>
+            {preview.title}
+          </div>
+        )}
+        {preview.description && (
+          <div style={{
+            fontSize: '11.5px',
+            color: 'rgba(255, 255, 255, 0.75)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            lineHeight: '1.35'
+          }}>
+            {preview.description}
+          </div>
+        )}
+        <div style={{
+          fontSize: '10.5px',
+          color: 'rgba(255, 255, 255, 0.5)',
+          marginTop: '2px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px'
+        }}>
+          <Globe size={11} />
+          <span>{domainName}</span>
+        </div>
+      </div>
+    </a>
+  );
+};
+
 export const ChatArea: React.FC<ChatAreaProps> = ({
   conversation,
   allConversations,
@@ -118,7 +275,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onBack,
   isChatListCollapsed = false,
   onToggleChatList,
-  whatsappNumbers
+  whatsappNumbers,
+  drafts = {},
+  onSaveDraft
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -240,7 +399,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return groups;
   }, [conversation?.messages]);
 
-  const [inputText, setInputText] = useState('');
+  const [inputText, setInputText] = useState(() => {
+    if (conversation?.id && drafts && drafts[conversation.id]) {
+      return drafts[conversation.id];
+    }
+    return '';
+  });
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
@@ -273,6 +437,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [showParticipantsModal, setShowParticipantsModal] = useState<boolean>(false);
   const [participantsSearch, setParticipantsSearch] = useState<string>('');
 
+  // Real-time Link Preview state for input composer (like WhatsApp)
+  const [inputLinkPreview, setInputLinkPreview] = useState<{
+    url: string;
+    title?: string | null;
+    description?: string | null;
+    image?: string | null;
+    domain?: string | null;
+    loading?: boolean;
+  } | null>(null);
+  const [dismissedUrls, setDismissedUrls] = useState<string[]>([]);
+
   useEffect(() => {
     if (!conversation) {
       setGroupParticipants([]);
@@ -292,6 +467,70 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     fetchParticipants();
     return () => { isMounted = false; };
   }, [conversation?.id]);
+
+  // Real-time link preview detector for message input (identical to WhatsApp)
+  useEffect(() => {
+    const urlMatch = inputText.match(/https?:\/\/[^\s]+/i);
+    if (!urlMatch) {
+      if (inputLinkPreview) setInputLinkPreview(null);
+      return;
+    }
+
+    const detectedUrl = urlMatch[0];
+    if (dismissedUrls.includes(detectedUrl)) {
+      return;
+    }
+
+    if (inputLinkPreview && inputLinkPreview.url === detectedUrl) {
+      return;
+    }
+
+    let domain = '';
+    try {
+      domain = new URL(detectedUrl).hostname.replace('www.', '');
+    } catch {}
+
+    const cached = linkPreviewCacheRef.current.get(detectedUrl);
+    if (cached) {
+      setInputLinkPreview({ ...cached, loading: false });
+      return;
+    }
+
+    setInputLinkPreview({
+      url: detectedUrl,
+      title: domain,
+      description: detectedUrl,
+      domain: domain,
+      loading: true
+    });
+
+    let isMounted = true;
+    const timer = setTimeout(() => {
+      apiFetch(`/conversations/link_preview?url=${encodeURIComponent(detectedUrl)}`)
+        .then((res: any) => {
+          if (isMounted && res) {
+            linkPreviewCacheRef.current.set(detectedUrl, res);
+            setInputLinkPreview({ ...res, loading: false });
+          }
+        })
+        .catch(() => {
+          if (isMounted) {
+            setInputLinkPreview({
+              url: detectedUrl,
+              title: domain,
+              description: detectedUrl,
+              domain: domain,
+              loading: false
+            });
+          }
+        });
+    }, 250);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [inputText, dismissedUrls]);
 
   // Lightbox Zoom, Pan & Rotation State
   const [zoomScale, setZoomScale] = useState<number>(1);
@@ -588,10 +827,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return () => observer.disconnect();
   }, [conversation?.id, isUserScrolledUp]);
 
-  // Auto-mark conversation as read and scroll to the absolute bottom on conversation change
+  // Auto-mark conversation as read, load draft, and scroll to the absolute bottom on conversation change
   useEffect(() => {
     setIsUserScrolledUp(false);
     scrollToBottom('auto');
+
+    // Load draft specific to this conversation
+    const currentDraft = (conversation?.id && drafts) ? (drafts[conversation.id] || '') : '';
+    setInputText(currentDraft);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const nextH = Math.min(textareaRef.current.scrollHeight, 140);
+      textareaRef.current.style.height = `${Math.max(nextH, 42)}px`;
+    }
 
     if (conversation?.id) {
       const extra = (conversation as any).dados_adicionais || {};
@@ -777,6 +1025,155 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }, 0);
   };
 
+  // Link Preview client-side memory cache
+  const linkPreviewCacheRef = useRef<Map<string, any>>(new Map());
+
+  const LinkPreviewCardComponent: React.FC<{ url: string; initialData?: any }> = ({ url, initialData }) => {
+    const [preview, setPreview] = useState<any>(() => {
+      if (initialData && (initialData.title || initialData.image)) return initialData;
+      if (linkPreviewCacheRef.current.has(url)) return linkPreviewCacheRef.current.get(url);
+      return null;
+    });
+
+    useEffect(() => {
+      if (preview && (preview.title || preview.image)) return;
+      if (linkPreviewCacheRef.current.has(url)) {
+        setPreview(linkPreviewCacheRef.current.get(url));
+        return;
+      }
+
+      let isMounted = true;
+      apiFetch(`/conversations/link_preview?url=${encodeURIComponent(url)}`)
+        .then((res: any) => {
+          if (isMounted && res) {
+            linkPreviewCacheRef.current.set(url, res);
+            setPreview(res);
+          }
+        })
+        .catch(() => {
+          try {
+            const u = new URL(url.startsWith('http') ? url : `https://${url}`);
+            const fallback = { url, domain: u.hostname.replace('www.', ''), title: u.hostname };
+            linkPreviewCacheRef.current.set(url, fallback);
+            if (isMounted) setPreview(fallback);
+          } catch {
+            // ignore
+          }
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    }, [url]);
+
+    const domainName = preview?.domain || (preview?.url ? (() => { try { return new URL(preview.url).hostname.replace('www.', ''); } catch { return ''; } })() : '');
+
+    if (!preview || (!preview.image && (!preview.title || preview.title.toLowerCase() === domainName.toLowerCase() || preview.title.toLowerCase() === `www.${domainName.toLowerCase()}`))) {
+      return null;
+    }
+
+    return (
+      <a
+        href={preview.url || url}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          maxWidth: '340px',
+          backgroundColor: 'rgba(0, 0, 0, 0.3)',
+          borderRadius: '10px',
+          overflow: 'hidden',
+          margin: '4px 0 8px 0',
+          textDecoration: 'none',
+          color: 'inherit',
+          border: '1px solid rgba(255, 255, 255, 0.12)',
+          boxShadow: '0 3px 10px rgba(0, 0, 0, 0.25)',
+          transition: 'background-color 0.15s ease, transform 0.15s ease',
+          cursor: 'pointer'
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.45)';
+          e.currentTarget.style.transform = 'translateY(-1px)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.3)';
+          e.currentTarget.style.transform = 'none';
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {preview.image && (
+          <div style={{
+            width: '100%',
+            maxHeight: '190px',
+            overflow: 'hidden',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <img
+              src={preview.image}
+              alt={preview.title || 'Prévia do Link'}
+              style={{
+                width: '100%',
+                height: 'auto',
+                maxHeight: '190px',
+                objectFit: 'cover',
+                display: 'block'
+              }}
+              onError={(e) => (e.currentTarget.style.display = 'none')}
+            />
+          </div>
+        )}
+        <div style={{ padding: '9px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {preview.title && (
+            <div style={{
+              fontSize: '13px',
+              fontWeight: '700',
+              color: '#ffffff',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              lineHeight: '1.3'
+            }}>
+              {preview.title}
+            </div>
+          )}
+          {preview.description && (
+            <div style={{
+              fontSize: '11.5px',
+              color: 'rgba(255, 255, 255, 0.75)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              lineHeight: '1.35'
+            }}>
+              {preview.description}
+            </div>
+          )}
+          <div style={{
+            fontSize: '10.5px',
+            color: 'rgba(255, 255, 255, 0.5)',
+            marginTop: '2px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}>
+            <Globe size={11} />
+            <span>{domainName}</span>
+          </div>
+        </div>
+      </a>
+    );
+  };
+
   const renderFormattedMessageText = (text: string) => {
     if (!text || typeof text !== 'string') return null;
 
@@ -806,9 +1203,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     }
 
-    if (!text.includes('@')) return text;
-
-    const mentionRegex = /@([a-zA-Z0-9À-ÿ_.-]+|\d{10,20})/g;
+    // Tokenize text for @mentions AND clickable URLs
+    const tokenRegex = /(https?:\/\/[^\s]+)|@([a-zA-Z0-9À-ÿ_.-]+|\d{10,20})/g;
     const participantMap: { [key: string]: string } = {};
     groupParticipants.forEach(p => {
       if (p.lid) participantMap[p.lid] = p.name;
@@ -821,36 +1217,59 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     let match;
     let keyIdx = 0;
 
-    while ((match = mentionRegex.exec(text)) !== null) {
+    while ((match = tokenRegex.exec(text)) !== null) {
       const matchStart = match.index;
-      const matchEnd = mentionRegex.lastIndex;
-      const rawTag = match[1];
+      const matchEnd = tokenRegex.lastIndex;
+      const urlMatch = match[1];
+      const rawTag = match[2];
 
       if (matchStart > lastIndex) {
         parts.push(text.substring(lastIndex, matchStart));
       }
 
-      const isAll = ['todos', 'everyone', 'all'].includes(rawTag.toLowerCase());
-      const resolvedName = isAll ? 'todos' : (participantMap[rawTag] || rawTag);
+      if (urlMatch) {
+        parts.push(
+          <a
+            key={`url-link-${keyIdx++}`}
+            href={urlMatch}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: '#00e699',
+              textDecoration: 'underline',
+              wordBreak: 'break-all',
+              fontWeight: '500',
+              cursor: 'pointer',
+              display: 'inline'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {urlMatch}
+          </a>
+        );
+      } else if (rawTag) {
+        const isAll = ['todos', 'everyone', 'all'].includes(rawTag.toLowerCase());
+        const resolvedName = isAll ? 'todos' : (participantMap[rawTag] || rawTag);
 
-      parts.push(
-        <span
-          key={`mention-${keyIdx++}`}
-          style={{
-            color: isAll ? '#00e699' : '#38bdf8',
-            backgroundColor: isAll ? 'rgba(0, 230, 153, 0.18)' : 'rgba(56, 189, 248, 0.18)',
-            padding: '1px 5px',
-            borderRadius: '4px',
-            fontWeight: '700',
-            display: 'inline-flex',
-            alignItems: 'center',
-            margin: '0 2px'
-          }}
-          title={isAll ? 'Mencionou todos os membros' : `Mencionou @${resolvedName}`}
-        >
-          @{resolvedName}
-        </span>
-      );
+        parts.push(
+          <span
+            key={`mention-${keyIdx++}`}
+            style={{
+              color: isAll ? '#00e699' : '#38bdf8',
+              backgroundColor: isAll ? 'rgba(0, 230, 153, 0.18)' : 'rgba(56, 189, 248, 0.18)',
+              padding: '1px 5px',
+              borderRadius: '4px',
+              fontWeight: '700',
+              display: 'inline-flex',
+              alignItems: 'center',
+              margin: '0 2px'
+            }}
+            title={isAll ? 'Mencionou todos os membros' : `Mencionou @${resolvedName}`}
+          >
+            @{resolvedName}
+          </span>
+        );
+      }
 
       lastIndex = matchEnd;
     }
@@ -859,7 +1278,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       parts.push(text.substring(lastIndex));
     }
 
-    return parts;
+    return parts.length > 0 ? parts : text;
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -966,6 +1385,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setSendError(null);
 
     try {
+      if (conversation?.id && onSaveDraft) {
+        onSaveDraft(conversation.id, '');
+      }
+
       if (pendingFiles.length > 0) {
         setIsSending(true);
         for (let i = 0; i < pendingFiles.length; i++) {
@@ -979,13 +1402,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }
         setPendingFiles([]);
         setInputText('');
+        setInputLinkPreview(null);
         if (textareaRef.current) textareaRef.current.style.height = '42px';
         setIsSending(false);
+        setIsUserScrolledUp(false);
+        scrollToBottom('smooth');
+        setTimeout(() => scrollToBottom('smooth'), 50);
+        setTimeout(() => scrollToBottom('smooth'), 200);
       } else if (textToSend) {
         const textCopy = textToSend;
         setInputText('');
+        setInputLinkPreview(null);
         if (textareaRef.current) textareaRef.current.style.height = '42px';
-        onSendMessage(textCopy);
+        setIsUserScrolledUp(false);
+        scrollToBottom('smooth');
+        setTimeout(() => scrollToBottom('smooth'), 50);
+        setTimeout(() => scrollToBottom('smooth'), 200);
+        await onSendMessage(textCopy);
+        setIsUserScrolledUp(false);
+        scrollToBottom('smooth');
+        setTimeout(() => scrollToBottom('smooth'), 100);
       }
     } catch (err: any) {
       console.error('Send error:', err);
@@ -1181,6 +1617,166 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
     );
   }
+
+  const renderLocationCard = (rawLoc: string, extra?: any) => {
+    const safeRawLoc = typeof rawLoc === 'string' ? rawLoc : String(rawLoc || '');
+
+    // Extract coordinates:
+    let lat = -15.820418;
+    let lng = -47.956467;
+
+
+    if (extra && extra.latitude && extra.longitude) {
+      lat = parseFloat(extra.latitude);
+      lng = parseFloat(extra.longitude);
+    } else {
+      const qMatch = safeRawLoc.match(/q=(-?\d+\.\d+),(-?\d+\.\d+)/i);
+      if (qMatch) {
+        lat = parseFloat(qMatch[1]);
+        lng = parseFloat(qMatch[2]);
+      } else {
+        const coordMatch = safeRawLoc.match(/(-?\d+\.\d+)[\s,]+(-?\d+\.\d+)/);
+        if (coordMatch) {
+          lat = parseFloat(coordMatch[1]);
+          lng = parseFloat(coordMatch[2]);
+        }
+      }
+    }
+
+    // Extract place name and address from raw text:
+    let placeName = 'Servweld / Servsolda';
+    let addressText = 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226';
+
+    const lines = safeRawLoc.split('\n').map(l => l.trim()).filter(Boolean);
+    const cleanLines = lines.filter(l =>
+      !l.startsWith('http') &&
+      !l.includes('LOCALIZAÇÃO') &&
+      !l.includes('Localização GPS') &&
+      !l.includes('WhatsApp Map')
+    );
+
+    if (cleanLines.length > 0) {
+      placeName = cleanLines[0].replace(/\*/g, '');
+      if (cleanLines.length > 1) {
+        addressText = cleanLines.slice(1).join(' - ').replace(/\*/g, '');
+      }
+    }
+
+    const googleMapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
+    const wazeUrl = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
+    const mapBbox = `${lng - 0.004},${lat - 0.0022},${lng + 0.004},${lat + 0.0022}`;
+    const mapIframeUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${mapBbox}&layer=mapnik&marker=${lat},${lng}`;
+
+    return (
+      <div style={{
+        width: '320px',
+        maxWidth: '100%',
+        backgroundColor: '#0a1e17',
+        border: '1px solid rgba(16, 185, 129, 0.45)',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
+        display: 'flex',
+        flexDirection: 'column'
+      }}>
+        {/* Interactive Map Frame / Preview */}
+        <div style={{ position: 'relative', width: '100%', height: '160px', backgroundColor: '#131d31', overflow: 'hidden' }}>
+          <iframe
+            title="Mapa de Localização"
+            src={mapIframeUrl}
+            style={{ width: '100%', height: '100%', border: 'none' }}
+            loading="lazy"
+          />
+          <div style={{
+            position: 'absolute',
+            top: '8px',
+            left: '8px',
+            backgroundColor: 'rgba(10, 30, 23, 0.9)',
+            backdropFilter: 'blur(6px)',
+            padding: '4px 10px',
+            borderRadius: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            fontSize: '11px',
+            fontWeight: '700',
+            color: '#34d399',
+            border: '1px solid rgba(16, 185, 129, 0.5)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+            pointerEvents: 'none'
+          }}>
+            <MapPin size={13} color="#10b981" />
+            <span>Localização WhatsApp</span>
+          </div>
+        </div>
+
+        {/* Place Details */}
+        <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div style={{ fontSize: '13px', fontWeight: '800', color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span>{placeName}</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: '1.4' }}>
+            {addressText}
+          </div>
+
+          {/* GPS Action Buttons */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
+            <a
+              href={googleMapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: '8px 10px',
+                backgroundColor: '#059669',
+                color: '#ffffff',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: '700',
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                boxShadow: '0 2px 6px rgba(5, 150, 105, 0.35)',
+                transition: 'background-color 0.15s'
+              }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = '#047857'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = '#059669'}
+            >
+              <MapPin size={13} />
+              <span>Google Maps</span>
+            </a>
+
+            <a
+              href={wazeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                padding: '8px 10px',
+                backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.4)',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: '700',
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px',
+                transition: 'all 0.15s'
+              }}
+              onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.3)'}
+              onMouseLeave={e => e.currentTarget.style.backgroundColor = 'rgba(59, 130, 246, 0.2)'}
+            >
+              <Navigation size={13} />
+              <span>Waze GPS</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   const renderMediaContent = (msg: any) => {
     const raw = msg.conteudo || '';
@@ -1446,30 +2042,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
       case 'localizacao':
-        const safeRawLoc = typeof raw === 'string' ? raw : String(raw || '');
-        const mapsLinkMatch = safeRawLoc.match(/(https?:\/\/[^\s]+maps[^\s]+)/i);
-        const mapsUrl = mapsLinkMatch ? mapsLinkMatch[0] : null;
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 12px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', borderRadius: '10px', maxWidth: '320px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981', fontWeight: '700', fontSize: '13px' }}>
-              <MapPin size={18} /> Localização GPS (WhatsApp Map)
-            </div>
-            <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', margin: 0, whiteSpace: 'pre-wrap' }}>
-              {safeRawLoc}
-            </p>
-            {mapsUrl && (
-              <a
-                href={mapsUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-primary"
-                style={{ fontSize: '12px', padding: '6px 12px', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '4px' }}
-              >
-                <MapPin size={14} /> Abrir no Google Maps / GPS
-              </a>
-            )}
-          </div>
-        );
+        return renderLocationCard(raw, msg.dados_adicionais);
 
       default:
         // WhatsApp Contact Card renderer
@@ -1612,10 +2185,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           );
         }
 
+        const rawText = typeof raw === 'string' ? raw : String(raw || '');
+        const isLocationText = (
+          rawText.includes('LOCALIZAÇÃO ENVIADA') ||
+          rawText.startsWith('📍 *LOCALIZAÇÃO') ||
+          rawText.includes('Localização GPS (WhatsApp Map)')
+        );
+        if (isLocationText) {
+          return renderLocationCard(rawText, msg.dados_adicionais);
+        }
+
+        const firstUrlMatch = rawText.match(/https?:\/\/[^\s]+/i);
+        const linkPreviewData = msg.dados_adicionais?.link_preview;
+
         return (
-          <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'inherit', whiteSpace: 'pre-wrap' }}>
-            {renderFormattedMessageText(raw)}
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {(linkPreviewData || firstUrlMatch) && (
+              <LinkPreviewCardComponent
+                url={linkPreviewData?.url || (firstUrlMatch ? firstUrlMatch[0] : '')}
+                initialData={linkPreviewData}
+              />
+            )}
+            <p style={{ fontSize: '14px', lineHeight: '1.4', color: 'inherit', whiteSpace: 'pre-wrap', margin: 0 }}>
+              {renderFormattedMessageText(rawText)}
+            </p>
+          </div>
         );
     }
   };
@@ -4375,24 +4969,150 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         );
 
         return (
-          <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => {
-                setReactingMsgForPicker(null);
-                setShowEmojiPicker(!showEmojiPicker);
-              }}
-              className="btn-secondary"
-              style={{
-                height: '42px',
-                padding: '0 12px',
-                color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)',
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', flexShrink: 0, position: 'relative' }}>
+            {/* WhatsApp Link Preview Banner in Input Composer */}
+            {inputLinkPreview && (
+              <div style={{
+                margin: '0 20px',
+                padding: '10px 14px',
+                backgroundColor: 'rgba(15, 23, 42, 0.96)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderBottom: 'none',
+                borderTopLeftRadius: '10px',
+                borderTopRightRadius: '10px',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center'
-              }}
-              title="Emojis, GIFs e Figurinhas do WhatsApp"
-            >
+                justifyContent: 'space-between',
+                gap: '12px',
+                boxShadow: '0 -3px 12px rgba(0, 0, 0, 0.3)',
+                backdropFilter: 'blur(8px)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+                  {inputLinkPreview.image ? (
+                    <img
+                      src={inputLinkPreview.image}
+                      alt="Prévia do Link"
+                      style={{
+                        width: '130px',
+                        height: '74px',
+                        borderRadius: '8px',
+                        objectFit: 'cover',
+                        flexShrink: 0,
+                        backgroundColor: 'rgba(0,0,0,0.3)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)'
+                      }}
+                      onError={(e) => (e.currentTarget.style.display = 'none')}
+                    />
+                  ) : (
+                    <div style={{
+                      width: '52px',
+                      height: '52px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(0, 230, 153, 0.15)',
+                      color: 'var(--accent-primary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <Globe size={24} />
+                    </div>
+                  )}
+
+                  <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                    <div style={{
+                      fontSize: '13.5px',
+                      fontWeight: '700',
+                      color: '#ffffff',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 1,
+                      WebkitBoxOrient: 'vertical'
+                    }}>
+                      {inputLinkPreview.title || inputLinkPreview.domain || inputLinkPreview.url}
+                    </div>
+                    {inputLinkPreview.description && inputLinkPreview.description !== inputLinkPreview.url && (
+                      <div style={{
+                        fontSize: '11.5px',
+                        color: 'rgba(255, 255, 255, 0.75)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        lineHeight: '1.3'
+                      }}>
+                        {inputLinkPreview.description}
+                      </div>
+                    )}
+                    <div style={{
+                      fontSize: '10.5px',
+                      color: 'rgba(255, 255, 255, 0.45)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {inputLinkPreview.domain || inputLinkPreview.url}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (inputLinkPreview) {
+                      setDismissedUrls(prev => [...prev, inputLinkPreview.url]);
+                      setInputLinkPreview(null);
+                    }
+                  }}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: 'none',
+                    borderRadius: '50%',
+                    width: '30px',
+                    height: '30px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'rgba(255, 255, 255, 0.75)',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.2)';
+                    e.currentTarget.style.color = '#ffffff';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.08)';
+                    e.currentTarget.style.color = 'rgba(255, 255, 255, 0.75)';
+                  }}
+                  title="Fechar prévia do link"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+
+            <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: inputLinkPreview ? 'none' : '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setReactingMsgForPicker(null);
+                  setShowEmojiPicker(!showEmojiPicker);
+                }}
+                className="btn-secondary"
+                style={{
+                  height: '42px',
+                  padding: '0 12px',
+                  color: showEmojiPicker ? 'var(--accent-primary)' : 'var(--text-muted)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                title="Emojis, GIFs e Figurinhas do WhatsApp"
+              >
               <Smile size={18} />
             </button>
             <button
@@ -4559,6 +5279,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               onChange={(e) => {
                 const val = e.target.value;
                 setInputText(val);
+                if (conversation?.id && onSaveDraft) {
+                  onSaveDraft(conversation.id, val);
+                }
                 e.target.style.height = 'auto';
                 const nextH = Math.min(e.target.scrollHeight, 140);
                 e.target.style.height = `${Math.max(nextH, 42)}px`;
@@ -4654,6 +5377,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
             </button>
           </form>
+        </div>
         );
       })()}
 
