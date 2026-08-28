@@ -115,9 +115,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [isMediaGalleryOpen, setIsMediaGalleryOpen] = useState(false);
 
-  const fetchConversations = useCallback(async () => {
+  const fetchConversations = useCallback(async (searchQuery?: string) => {
     try {
-      const data = await apiFetch('/conversations/');
+      const url = searchQuery && searchQuery.trim()
+        ? `/conversations/?search=${encodeURIComponent(searchQuery.trim())}`
+        : '/conversations/';
+      const data = await apiFetch(url);
       if (Array.isArray(data)) {
         setConversations(prev => {
           // Collect all optimistic/sending messages across all conversations
@@ -686,6 +689,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onStatusToggle={fetchConversations}
                 currentUserId={user?.id}
                 drafts={conversationDrafts}
+                onSearch={fetchConversations}
               />
             </div>
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>

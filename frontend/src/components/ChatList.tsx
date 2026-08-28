@@ -61,6 +61,7 @@ interface ChatListProps {
   onToggleCollapse?: () => void;
   currentUserId?: number | null;
   drafts?: { [convId: number]: string };
+  onSearch?: (term: string) => void;
 }
 
 interface ContactGroup {
@@ -88,11 +89,22 @@ export const ChatList: React.FC<ChatListProps> = ({
   isCollapsed = false,
   onToggleCollapse,
   currentUserId,
-  drafts = {}
+  drafts = {},
+  onSearch
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
   const [avatarModalData, setAvatarModalData] = useState<{ name: string; phone?: string; avatarUrl?: string | null } | null>(null);
+
+  // Debounced search to trigger global backend search across all contacts & conversations
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      if (onSearch) {
+        onSearch(searchTerm);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm, onSearch]);
 
   const toggleExpand = (e: React.MouseEvent, contactId: number) => {
     e.stopPropagation();
