@@ -75,7 +75,7 @@ async def list_conversations(
             raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
         stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
 
-    stmt = stmt.order_by(Conversation.ultima_interacao_em.desc())
+    stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
@@ -109,7 +109,8 @@ async def list_conversations(
                 "status": c.whatsapp_number.status
             }
         msgs = []
-        for m in (c.messages or []):
+        sorted_msgs = sorted((c.messages or []), key=lambda x: x.id)
+        for m in sorted_msgs[-50:]:
             msgs.append({
                 "id": m.id,
                 "conversation_id": m.conversation_id,
