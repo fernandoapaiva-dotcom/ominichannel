@@ -981,19 +981,9 @@ async def receive_evolution_webhook(
             msg_type = MessageType.AUDIO
             ext = ".ogg"
             if media_bytes:
-                # Transcribe/understand voice audio note via Gemini Multimodal SDK
-                try:
-                    dec_sets = await settings_service.get_tenant_decrypted_settings(db, 1)
-                    audio_transcription = await gemini_service.process_audio_message(
-                        audio_bytes=media_bytes,
-                        mime_type="audio/ogg",
-                        tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
-                        tenant_gemini_model_name=dec_sets.get("gemini_model_name")
-                    )
-                    if audio_transcription:
-                        caption = f"🎙️ *Transcrição do Áudio:*\n_{audio_transcription}_"
-                except Exception as audio_err:
-                    logger.error(f"Error transcribing customer audio note: {audio_err}")
+                # Transcrição adiada: só vamos transcrever se a conversa for com a IA (COM_IA)
+                # para economizar tokens do Gemini, conforme estratégia do usuário.
+                pass
         elif doc_msg:
             msg_type = MessageType.ARQUIVO
             caption = doc_msg.get("caption") or ""
@@ -1425,6 +1415,30 @@ async def receive_evolution_webhook(
                 "description": preview_desc,
                 "image": thumb_url
             }
+
+    # Lazy audio transcription: only transcribe if AI is going to answer (COM_IA) and not in a group
+    if msg_type == MessageType.AUDIO and media_bytes and conversation.status == ConversationStatus.COM_IA and not is_group and not is_internal_company_number and not is_bot_echo:
+        try:
+            dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+            audio_transcription = await gemini_service.process_audio_message(
+                audio_bytes=media_bytes,
+                mime_type="audio/ogg",
+                tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
+                tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+            )
+            if audio_transcription:
+                new_caption = f"🎙️ *Transcrição do Áudio:*\n_{audio_transcription}_"
+                if saved_media_url:
+                    text_content = f"{saved_media_url}|{new_caption}"
+                else:
+                    target_obj = message_obj.get("audioMessage") or {}
+                    fallback_url = target_obj.get("url") or target_obj.get("directPath") or ""
+                    if fallback_url:
+                        text_content = f"{fallback_url}|{new_caption}"
+                    else:
+                        text_content = new_caption
+        except Exception as audio_err:
+            logger.error(f"Error transcribing customer audio note lazily: {audio_err}")
 
     user_msg = Message(
         conversation_id=conversation.id,
