@@ -719,11 +719,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`}
               style={{
                 height: '100%',
-                flex: '0 0 360px',
-                width: '360px',
-                minWidth: '360px',
-                maxWidth: '360px',
-                flexShrink: 0,
                 display: 'flex',
                 boxSizing: 'border-box',
                 overflow: 'hidden'
