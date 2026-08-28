@@ -24,6 +24,32 @@ TIMEOUT_INATIVIDADE = timedelta(hours=4)
 AVISO_1 = timedelta(minutes=30)   # 30 minutos antes do fechamento (210 min úteis)
 AVISO_2 = timedelta(minutes=10)   # 10 minutos antes do fechamento (230 min úteis)
 
+# ══════════════════════════════════════════════════════════════════════
+# ANTI-SPAM / WHATSAPP PROTECTION LIMITS
+# These limits exist to prevent WhatsApp from detecting automated mass
+# messaging and restricting/banning the account.
+# ══════════════════════════════════════════════════════════════════════
+MAX_WHATSAPP_MSGS_PER_CYCLE = 3     # Max automated messages sent per 15s cycle
+MAX_WHATSAPP_MSGS_PER_DAY  = 30    # Max automated messages per calendar day (all types)
+DELAY_BETWEEN_MSGS_SECS    = 3.0   # Seconds to wait between each message send
+
+# In-memory daily counter (resets at midnight automatically via date check)
+_daily_msg_counter: Dict[str, int] = {}   # key: "YYYY-MM-DD", value: count
+
+def _check_and_increment_daily_counter() -> bool:
+    """Returns True if we can still send a message today, False if daily cap reached."""
+    today = datetime.now(tz=BRASILIA_TZ).strftime("%Y-%m-%d")
+    # Reset counter if it's a new day
+    keys_to_delete = [k for k in _daily_msg_counter if k != today]
+    for k in keys_to_delete:
+        del _daily_msg_counter[k]
+    current = _daily_msg_counter.get(today, 0)
+    if current >= MAX_WHATSAPP_MSGS_PER_DAY:
+        logger.warning(f"[ANTI-SPAM] Daily WhatsApp message cap ({MAX_WHATSAPP_MSGS_PER_DAY}) reached for {today}. No more automated messages will be sent today.")
+        return False
+    _daily_msg_counter[today] = current + 1
+    return True
+
 
 def esta_aberta(momento: datetime) -> bool:
     """Verifica se o momento está dentro do horário de funcionamento comercial (08:00 às 18:00 seg-sex em Brasília)."""
@@ -101,8 +127,14 @@ class InactivityService:
 
                 now = datetime.utcnow()
                 changes_made = False
+                msgs_sent_this_cycle = 0  # Anti-spam: reset every cycle
 
                 for conv in conversations:
+                    # Anti-spam: stop sending if per-cycle cap reached
+                    if msgs_sent_this_cycle >= MAX_WHATSAPP_MSGS_PER_CYCLE:
+                        logger.warning(f"[ANTI-SPAM] Per-cycle cap ({MAX_WHATSAPP_MSGS_PER_CYCLE}) reached. Stopping sends for this cycle.")
+                        break
+
                     tenant = tenant_config_map.get(conv.tenant_id)
                     if not tenant:
                         continue
@@ -168,13 +200,19 @@ class InactivityService:
                         )
                         if inst_name and conv.contact:
                             try:
-                                await evolution_service.send_text_message(
-                                    instance_name=inst_name,
-                                    number=conv.contact.telefone,
-                                    text=closing_msg
-                                )
+                                if _check_and_increment_daily_counter():
+                                    await evolution_service.send_text_message(
+                                        instance_name=inst_name,
+                                        number=conv.contact.telefone,
+                                        text=closing_msg
+                                    )
+                                    msgs_sent_this_cycle += 1
+                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                else:
+                                    logger.warning(f"[ANTI-SPAM] Skipped closing message for conv #{conv.id} — daily cap reached.")
                             except Exception as err:
                                 logger.warning(f"Failed to send inactivity closing message to #{conv.id}: {err}")
+
 
                         # System audit message
                         sys_msg = Message(
@@ -259,13 +297,19 @@ class InactivityService:
                         )
                         if inst_name and conv.contact:
                             try:
-                                await evolution_service.send_text_message(
-                                    instance_name=inst_name,
-                                    number=conv.contact.telefone,
-                                    text=warning_text
-                                )
+                                if _check_and_increment_daily_counter():
+                                    await evolution_service.send_text_message(
+                                        instance_name=inst_name,
+                                        number=conv.contact.telefone,
+                                        text=warning_text
+                                    )
+                                    msgs_sent_this_cycle += 1
+                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                else:
+                                    logger.warning(f"[ANTI-SPAM] Skipped 10m warning for conv #{conv.id} — daily cap reached.")
                             except Exception as err:
                                 logger.warning(f"Failed to send 10m warning message to #{conv.id}: {err}")
+
 
                         sys_msg = Message(
                             conversation_id=conv.id,
@@ -296,13 +340,19 @@ class InactivityService:
                         )
                         if inst_name and conv.contact:
                             try:
-                                await evolution_service.send_text_message(
-                                    instance_name=inst_name,
-                                    number=conv.contact.telefone,
-                                    text=warning_text
-                                )
+                                if _check_and_increment_daily_counter():
+                                    await evolution_service.send_text_message(
+                                        instance_name=inst_name,
+                                        number=conv.contact.telefone,
+                                        text=warning_text
+                                    )
+                                    msgs_sent_this_cycle += 1
+                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                else:
+                                    logger.warning(f"[ANTI-SPAM] Skipped 30m warning for conv #{conv.id} — daily cap reached.")
                             except Exception as err:
                                 logger.warning(f"Failed to send 30m warning message to #{conv.id}: {err}")
+
 
                         sys_msg = Message(
                             conversation_id=conv.id,
@@ -440,11 +490,15 @@ class InactivityService:
 
                             if conv.whatsapp_number.instancia_evolution_api:
                                 formatted_ai_text = f"*🤖 IA Concierge:*\n\n{reply_text}"
-                                await evolution_service.send_text_message(
-                                    instance_name=conv.whatsapp_number.instancia_evolution_api,
-                                    number=conv.contact.telefone,
-                                    text=formatted_ai_text
-                                )
+                                if _check_and_increment_daily_counter():
+                                    await evolution_service.send_text_message(
+                                        instance_name=conv.whatsapp_number.instancia_evolution_api,
+                                        number=conv.contact.telefone,
+                                        text=formatted_ai_text
+                                    )
+                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                else:
+                                    logger.warning(f"[ANTI-SPAM] Skipped AI auto-reply for conv #{conv.id} — daily cap reached.")
 
                             if escalar:
                                 conv.status = ConversationStatus.AGUARDANDO_ATENDENTE

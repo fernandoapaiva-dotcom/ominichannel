@@ -50,9 +50,10 @@ async def lifespan(app: FastAPI):
     backup_task = asyncio.create_task(start_backup_scheduler_loop(interval_hours=6))
     logger.info("💾 Database ACID persistence snapshot background loop started.")
 
-    # Start inactivity background monitor task (sweeps every 15 seconds for unreplied customer chats)
-    inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=15))
-    logger.info("Inactivity and unreplied customer sweeper background loop started.")
+    # Start inactivity background monitor task (sweeps every 60 seconds — reduced from 15s to prevent WhatsApp rate-limit/ban)
+    inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=60))
+    logger.info("Inactivity and unreplied customer sweeper background loop started (60s interval).")
+
 
     # Start WhatsApp profile picture background syncer (gentle 30m interval)
     profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=1800))
