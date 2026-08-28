@@ -190,6 +190,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
+  const fetchNumbers = async () => {
+    try {
+      const data = await apiFetch('/whatsapp-numbers/');
+      setWhatsappNumbers(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchCalendarSummary = useCallback(async () => {
+    try {
+      const data = await apiFetch('/calendar/summary');
+      setCalendarSummary(data);
+    } catch (err) {
+      console.debug('Error fetching calendar summary:', err);
+    }
+  }, []);
+
   const loadActiveConversationDetail = useCallback(async (convId: number) => {
     try {
       const detail = await apiFetch(`/conversations/${convId}`);
