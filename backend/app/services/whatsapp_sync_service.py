@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus
+from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus, WhatsAppGroup
 from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("whatsapp_sync_service")

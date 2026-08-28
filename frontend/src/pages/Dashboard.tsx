@@ -284,9 +284,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     const connectWebSocket = () => {
       if (!isSubscribed) return;
 
-      const host = window.location.hostname || 'localhost';
       const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProtocol}//${host}:8000/ws?token=${token}`;
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws?token=${token}`;
 
       socket = new WebSocket(wsUrl);
 

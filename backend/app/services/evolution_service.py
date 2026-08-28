@@ -73,7 +73,7 @@ class EvolutionService:
             "qrcode": True,
             "integration": "WHATSAPP-BAILEYS",
             "webhook": {
-                "url": "http://host.docker.internal:8000/api/v1/webhooks/evolution",
+                "url": f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/v1/webhooks/evolution",
                 "byEvents": False,
                 "base64": True,
                 "events": [
@@ -944,7 +944,7 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                     instances = [i.get("name") for i in r.json() if isinstance(i, dict) and i.get("connectionStatus") == "open"]
                     if instances:
                         # 0. Ensure Webhooks are active for all connected instances
-                        webhook_url = "http://host.docker.internal:8000/api/v1/webhooks/evolution"
+                        webhook_url = f"{settings.WEBHOOK_BASE_URL.rstrip('/')}/api/v1/webhooks/evolution"
                         for inst in instances:
                             try:
                                 await client.post(

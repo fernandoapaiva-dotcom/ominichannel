@@ -87,9 +87,9 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
   const parsedMediaItems = useMemo(() => {
     return mediaMessages.map(msg => {
       const { mediaPath, caption } = extractMediaAndCaption(msg.conteudo);
-      let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+      let fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
       if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
-        fullUrl = `http://localhost:8000/api/v1/conversations/messages/${msg.id}/media`;
+        fullUrl = `/api/v1/conversations/messages/${msg.id}/media`;
       }
       
       const rawFileName = mediaPath.split('/').pop() || 'Arquivo';

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.core.security import get_admin_user, get_current_user, encrypt_data, decrypt_data, mask_sensitive_string
 from app.models.models import WhatsAppNumber, User, user_number_access
 from app.schemas.schemas import WhatsAppNumberCreate, WhatsAppNumberResponse
@@ -405,7 +406,7 @@ async def reset_whatsapp_connection(
     # 2.1 Clean Postgres session record if accessible to prevent zombie 'open' state
     try:
         import asyncpg
-        pg_conn = await asyncpg.connect("postgresql://omini_user:omini_password@localhost:5432/omini_db", timeout=3.0)
+        pg_conn = await asyncpg.connect(settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://").replace("sqlite+aiosqlite:///", "sqlite:///"), timeout=3.0)
         inst_row = await pg_conn.fetchrow('SELECT id FROM "Instance" WHERE name = $1', instance)
         if inst_row:
             await pg_conn.execute('DELETE FROM "Session" WHERE "sessionId" = $1', inst_row['id'])

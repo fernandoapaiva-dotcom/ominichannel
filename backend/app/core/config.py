@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     EVOLUTION_API_URL: str = "http://localhost:8080"
     EVOLUTION_API_KEY: str = "omini_master_key_123"
 
+    # Webhook base URL (used by Evolution API to send events back to this server)
+    # In OCI/production, set this to your public domain, e.g. https://ominichannel.duckdns.org
+    # In local Docker, use http://host.docker.internal:8000
+    WEBHOOK_BASE_URL: str = "http://host.docker.internal:8000"
+
     # Gemini AI
     GEMINI_API_KEY: str = ""
 

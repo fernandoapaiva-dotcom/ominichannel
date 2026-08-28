@@ -704,7 +704,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     .filter(m => ['imagem', 'video', 'audio', 'arquivo'].includes(m.tipo))
     .map(m => {
       const { mediaPath, caption } = extractMediaAndCaption(m.conteudo);
-      const fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+      const fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
       const fileName = mediaPath.split('/').pop() || 'Arquivo';
       return {
         id: m.id,
@@ -1439,7 +1439,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleDownloadMedia = (msg: Message) => {
     const { mediaPath } = extractMediaAndCaption(msg.conteudo);
-    const url = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+    const url = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = mediaPath.split('/').pop() || 'arquivo';
@@ -1781,9 +1781,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const renderMediaContent = (msg: any) => {
     const raw = msg.conteudo || '';
     const { mediaPath, caption } = extractMediaAndCaption(raw);
-    let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+    let fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
     if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
-      fullUrl = `http://localhost:8000/api/v1/conversations/messages/${msg.id}/media`;
+      fullUrl = `/api/v1/conversations/messages/${msg.id}/media`;
     }
     const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
 
@@ -2241,9 +2241,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         }}>
           {displayed.map((m, idx) => {
             const { mediaPath } = extractMediaAndCaption(m.conteudo);
-            let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+            let fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
             if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && m.id && m.id > 0) {
-              fullUrl = `http://localhost:8000/api/v1/conversations/messages/${m.id}/media`;
+              fullUrl = `/api/v1/conversations/messages/${m.id}/media`;
             }
             const mediaIndex = conversationMedia.findIndex(item => item.id === m.id);
             const isLastOfFour = idx === 3 && extraCount > 0;
@@ -4261,7 +4261,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           type="button"
                           onClick={() => {
                             const parts = (msg.conteudo || '').split('|');
-                            const url = parts[0].startsWith('http') ? parts[0] : `http://localhost:8000${parts[0]}`;
+                            const url = parts[0].startsWith('http') ? parts[0] : `${parts[0]}`;
                             handleSaveSticker(url);
                             setActiveActionMenuMsgId(null);
                           }}
@@ -4678,9 +4678,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* WhatsApp-Style Quoted Reply Preview Bar */}
       {replyingToMessage && (() => {
         const { mediaPath, caption } = extractMediaAndCaption(replyingToMessage.conteudo);
-        let fullUrl = mediaPath.startsWith('http') ? mediaPath : `http://localhost:8000${mediaPath}`;
+        let fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
         if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && replyingToMessage.id && replyingToMessage.id > 0) {
-          fullUrl = `http://localhost:8000/api/v1/conversations/messages/${replyingToMessage.id}/media`;
+          fullUrl = `/api/v1/conversations/messages/${replyingToMessage.id}/media`;
         }
 
         const isImg = replyingToMessage.tipo === 'imagem';

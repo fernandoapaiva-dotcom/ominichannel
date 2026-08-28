@@ -123,9 +123,8 @@ export const ContactsPanel: React.FC = () => {
     if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:') || url.startsWith('blob:')) {
       return url;
     }
-    const host = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
     const clean = url.startsWith('/') ? url : `/${url}`;
-    return `http://${host}:8000${clean}`;
+    return `${window.location.protocol}//${window.location.host}${clean}`;
   };
 
   /**
