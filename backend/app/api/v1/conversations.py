@@ -206,7 +206,7 @@ async def mark_single_conversation_read(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Conversation).where(
+    stmt = select(Conversation).options(selectinload(Conversation.contact)).where(
         Conversation.id == conversation_id,
         Conversation.tenant_id == current_user.tenant_id
     )
@@ -250,6 +250,44 @@ async def mark_single_conversation_read(
     extra["pending_dismissed"] = True
     conv.dados_adicionais = extra
     flag_modified(conv, "dados_adicionais")
+
+    # Call Evolution API to mark messages as read on the WhatsApp device
+    last_msg_stmt = select(Message, WhatsAppNumber).join(
+        WhatsAppNumber, WhatsAppNumber.id == Conversation.whatsapp_number_id
+    ).join(
+        Conversation, Conversation.id == Message.conversation_id
+    ).where(
+        Message.conversation_id == conv.id,
+        func.lower(Message.remetente) == "cliente",
+        Message.whatsapp_msg_id.isnot(None)
+    ).order_by(Message.id.desc()).limit(1)
+    
+    last_msg_res = await db.execute(last_msg_stmt)
+    last_msg_row = last_msg_res.first()
+    if last_msg_row:
+        last_msg, wn = last_msg_row
+        if wn and wn.instancia_evolution_api and last_msg.whatsapp_msg_id:
+            # We need the remote_jid (which is the phone number with @s.whatsapp.net or @g.us)
+            remote_jid = conv.contact.telefone + "@s.whatsapp.net" if conv.contact and conv.contact.telefone else ""
+            if not remote_jid and conv.dados_adicionais and "raw_phone" in conv.dados_adicionais:
+                remote_jid = str(conv.dados_adicionais["raw_phone"])
+                if "@" not in remote_jid:
+                    remote_jid += "@s.whatsapp.net"
+            
+            if remote_jid:
+                # Need to use create_task to not block the response if it takes a second
+                decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
+                asyncio.create_task(
+                    evolution_service.mark_message_as_read(
+                        instance_name=wn.instancia_evolution_api,
+                        message_id=last_msg.whatsapp_msg_id,
+                        remote_jid=remote_jid,
+                        from_me=False,
+                        custom_base_url=decrypted.get("evolution_api_url"),
+                        custom_api_key=decrypted.get("evolution_api_key")
+                    )
+                )
+
     await db.commit()
 
     await ws_manager.broadcast_to_department(

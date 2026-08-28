@@ -948,7 +948,9 @@ async def receive_evolution_webhook(
 
     if (img_msg or vid_msg or aud_msg or doc_msg or stk_msg) and not media_base64 and msg_id:
         try:
-            media_base64 = await evolution_service.get_media_base64(instance_name, msg_id, from_me=from_me, remote_jid=remote_jid)
+            media_base64 = await evolution_service.get_media_base64(
+                instance_name, msg_id, from_me=from_me, remote_jid=remote_jid, full_message=message_obj
+            )
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
@@ -1016,6 +1018,8 @@ async def receive_evolution_webhook(
                 text_content = caption
             elif stk_msg:
                 text_content = "[Figurinha do WhatsApp]"
+            elif img_msg or vid_msg or aud_msg or doc_msg:
+                text_content = "[Mídia não carregada ou formato não suportado]"
 
     if not text_content:
         return {"status": "ignored", "reason": "Non-text or empty message payload"}

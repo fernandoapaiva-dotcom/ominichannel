@@ -622,7 +622,8 @@ class EvolutionService:
         from_me: bool = False,
         remote_jid: Optional[str] = None,
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        full_message: Optional[Dict] = None
     ) -> Optional[str]:
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/chat/getBase64FromMediaMessage/{instance_name}"
@@ -633,10 +634,11 @@ class EvolutionService:
         if remote_jid:
             key_obj["remoteJid"] = remote_jid
 
+        msg_payload = dict(full_message) if full_message else {}
+        msg_payload["key"] = key_obj
+
         payload = {
-            "message": {
-                "key": key_obj
-            },
+            "message": msg_payload,
             "convertToMp4": False
         }
         async with httpx.AsyncClient() as client:
@@ -655,6 +657,40 @@ class EvolutionService:
             except Exception as e:
                 logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {e}")
         return None
+
+    async def mark_message_as_read(
+        self,
+        instance_name: str,
+        message_id: str,
+        remote_jid: str,
+        from_me: bool = False,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> bool:
+        """Marks a WhatsApp message (and all prior) as read via Evolution API."""
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/chat/markMessageAsRead/{instance_name}"
+        payload = {
+            "readMessages": [
+                {
+                    "remoteJid": remote_jid,
+                    "fromMe": from_me,
+                    "id": message_id
+                }
+            ]
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                res = await client.post(url, json=payload, headers=headers, timeout=10.0)
+                if res.status_code in (200, 201):
+                    logger.info(f"[MARK_READ] Marked msg {message_id} as read on WhatsApp via {instance_name}")
+                    return True
+                else:
+                    logger.warning(f"[MARK_READ] Failed to mark read, status {res.status_code}: {res.text[:200]}")
+                    return False
+            except Exception as e:
+                logger.error(f"[MARK_READ] Error marking message as read via instance {instance_name}: {e}")
+                return False
 
     async def fetch_chat_history(
         self,
