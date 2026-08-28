@@ -14,6 +14,7 @@ import { SyncTaskbar } from '../components/SyncTaskbar';
 import { CalendarModal } from '../components/CalendarModal';
 
 import { DepartmentBar } from '../components/DepartmentBar';
+import { MobileBottomNav } from '../components/MobileBottomNav';
 
 interface DashboardProps {
   user: User;
@@ -109,6 +110,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
     return displayedConversations.length > 0 ? displayedConversations[0] : null;
   }, [conversations, displayedConversations, activeConversationId, selectedDeptId]);
+
+  const pendingBadgeCount = useMemo(() => {
+    return conversations.filter(c => {
+      const phone = c.contact?.telefone || '';
+      const isGroup = phone.includes('@g.us') || phone.startsWith('120363') || phone.includes('-') || phone.length >= 18;
+      if (isGroup) return false;
+      const msgs = c.messages || [];
+      if (msgs.length === 0) return false;
+      const lastMsg = msgs[msgs.length - 1];
+      return lastMsg && lastMsg.remetente?.toLowerCase() === 'cliente' && lastMsg.status !== 'read';
+    }).length;
+  }, [conversations]);
+
+  const groupPendingBadgeCount = useMemo(() => {
+    return conversations.filter(c => {
+      const phone = c.contact?.telefone || '';
+      const isGroup = phone.includes('@g.us') || phone.startsWith('120363') || phone.includes('-') || phone.length >= 18;
+      if (!isGroup) return false;
+      const msgs = c.messages || [];
+      if (msgs.length === 0) return false;
+      const lastMsg = msgs[msgs.length - 1];
+      return lastMsg && lastMsg.remetente?.toLowerCase() === 'cliente' && lastMsg.status !== 'read';
+    }).length;
+  }, [conversations]);
 
   // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -796,6 +821,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           setActiveConversationId(convId);
           setActiveTab('chats');
         }}
+      />
+
+      {/* Dedicated Mobile Bottom Navigation Bar (WhatsApp style) */}
+      <MobileBottomNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        pendingBadgeCount={pendingBadgeCount}
+        groupPendingBadgeCount={groupPendingBadgeCount}
+        user={user}
       />
 
       {/* Global Real-time WhatsApp Sync Progress Taskbar */}

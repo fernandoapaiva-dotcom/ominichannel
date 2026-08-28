@@ -683,210 +683,145 @@ export const ChatList: React.FC<ChatListProps> = ({
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <span style={{
-                        fontWeight: '700',
-                        fontSize: '13px',
-                        color: 'var(--text-main)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        maxWidth: '140px'
-                      }}>
+                    {/* Row 1: Name, Badges & Timestamp */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flex: 1, minWidth: 0 }}>
                         {isGroupPinned && (
                           <span title="Conversa Fixada no Topo" style={{ display: 'inline-flex', alignItems: 'center', color: '#eab308', flexShrink: 0 }}>
                             <Pin size={12} fill="#eab308" />
                           </span>
                         )}
-                        {group.contactName}
-                        {group.hasUnread && (
-                          <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: 'var(--accent-primary)', flexShrink: 0 }} title="Mensagem não lida do cliente" />
-                        )}
-                      </span>
-                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
+                        <span style={{
+                          fontWeight: '700',
+                          fontSize: '13px',
+                          color: 'var(--text-main)',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {group.contactName}
+                        </span>
+
+                        {/* IA / Humano Status Badge */}
+                        <button
+                          onClick={(e) => handleToggleStatus(e, primaryConv)}
+                          title={primaryConv.status === 'com_ia' ? 'Alternar para Humano' : 'Alternar para IA'}
+                          className={`badge badge-${primaryConv.status}`}
+                          style={{
+                            cursor: 'pointer',
+                            border: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '2px',
+                            padding: '1px 5px',
+                            fontSize: '9px',
+                            whiteSpace: 'nowrap',
+                            flexShrink: 0,
+                            height: '16px'
+                          }}
+                        >
+                          {primaryConv.status === 'com_ia' ? <Bot size={9} /> : <Headphones size={9} />}
+                          <span>{primaryConv.status === 'com_ia' ? 'IA' : 'Humano'}</span>
+                        </button>
+
+                        {/* Pin Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => handleTogglePin(e, primaryConv, group.allConversations)}
+                          title={isGroupPinned ? "Desafixar" : "Fixar no topo"}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: isGroupPinned ? '#eab308' : 'var(--text-muted)',
+                            padding: '1px 3px',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            flexShrink: 0
+                          }}
+                        >
+                          <Pin size={10} fill={isGroupPinned ? '#eab308' : 'none'} color={isGroupPinned ? '#eab308' : 'currentColor'} />
+                        </button>
+                      </div>
+
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0, marginLeft: '6px' }}>
                         {formatTime(primaryConv.ultima_interacao_em)}
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                        <Phone size={11} /> {formatWhatsAppPhone(group.contactPhone)}
-                      </span>
+                    {/* Row 2: Message preview / Draft & Unread badge */}
+                    {(() => {
+                      const draftText = drafts ? (drafts[group.primaryConv.id] || group.allConversations.map(c => drafts[c.id]).find(Boolean)) : null;
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                      {/* Pin / Fix Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => handleTogglePin(e, primaryConv, group.allConversations)}
-                        title={isGroupPinned ? "Desafixar do topo" : "Fixar no topo"}
-                        style={{
-                          background: isGroupPinned ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)',
-                          border: isGroupPinned ? '1px solid rgba(234, 179, 8, 0.6)' : '1px solid rgba(255, 255, 255, 0.15)',
-                          borderRadius: '5px',
-                          color: isGroupPinned ? '#eab308' : 'var(--text-muted)',
-                          padding: '2px 6px',
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '3px',
-                          fontSize: '10px',
-                          fontWeight: '700',
-                          zIndex: 5,
-                          transition: 'all 0.15s ease'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = isGroupPinned ? 'rgba(234, 179, 8, 0.35)' : 'rgba(255, 255, 255, 0.15)';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = isGroupPinned ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)';
-                        }}
-                      >
-                        <Pin size={11} fill={isGroupPinned ? '#eab308' : 'none'} color={isGroupPinned ? '#eab308' : 'currentColor'} />
-                        <span>{isGroupPinned ? 'Fixado' : 'Fixar'}</span>
-                      </button>
+                      return (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
+                          <p style={{
+                            fontSize: '11px',
+                            color: draftText ? 'var(--text-main)' : (group.hasUnread ? '#ffffff' : 'var(--text-dim)'),
+                            fontWeight: (group.hasUnread || draftText) ? '700' : 'normal',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            flex: 1,
+                            margin: 0
+                          }}>
+                            {draftText ? (
+                              <>
+                                <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
+                                <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>
+                              </>
+                            ) : (
+                              lastMessage ? lastMessage.conteudo : 'Conversa iniciada'
+                            )}
+                          </p>
 
-                      <button
-                        onClick={(e) => handleToggleStatus(e, primaryConv)}
-                        title={primaryConv.status === 'com_ia' ? 'Alternar para Humano' : 'Alternar para IA'}
-                        className={`badge badge-${primaryConv.status}`}
-                        style={{ cursor: 'pointer', border: 'none', display: 'flex', alignItems: 'center', gap: '3px', padding: '2px 6px', fontSize: '9px', whiteSpace: 'nowrap' }}
-                      >
-                        {primaryConv.status === 'com_ia' ? <Bot size={9} /> : <Headphones size={9} />}
-                        {primaryConv.status.replace('_', ' ')}
-                      </button>
-
-                      {/* Expand Sub-threads or Community Groups Button */}
-                      {(group.allConversations.length > 1 || (group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda'))) && (
-                        <button
-                          type="button"
-                          onClick={(e) => toggleExpand(e, group.contactId)}
-                          style={{
-                            background: 'rgba(0, 230, 153, 0.12)',
-                            border: '1px solid rgba(0, 230, 153, 0.3)',
-                            borderRadius: '4px',
-                            color: 'var(--accent-primary)',
-                            padding: '1px 6px',
-                            fontSize: '9px',
-                            fontWeight: '700',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '3px'
-                          }}
-                          title="Ver grupos desta comunidade / chamados deste cliente"
-                        >
-                          {(group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda')) ? (
-                            <>
-                              <Users size={11} /> Grupos
-                            </>
-                          ) : (
-                            <>
-                              <Layers size={10} /> {group.allConversations.length}
-                            </>
-                          )}
-                          {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Attendant & Waiting Alert Row */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    {primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente' ? (
-                      <span style={{
-                        fontSize: '9px',
-                        fontWeight: '700',
-                        color: '#93c5fd',
-                        backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                        border: '1px solid rgba(59, 130, 246, 0.35)',
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        maxWidth: '170px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}>
-                        <UserIcon size={9} />
-                        Atendente: {primaryConv.assigned_user_name || 'Sem Atendente'}
-                      </span>
-                    ) : (
-                      <span style={{
-                        fontSize: '9px',
-                        fontWeight: '700',
-                        color: '#c084fc',
-                        backgroundColor: 'rgba(168, 85, 247, 0.15)',
-                        border: '1px solid rgba(168, 85, 247, 0.35)',
-                        padding: '1px 6px',
-                        borderRadius: '4px',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}>
-                        <Bot size={9} /> Atendimento IA
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Last Message Preview or Draft & WhatsApp Unread Badge */}
-                  {(() => {
-                    const draftText = drafts ? (drafts[group.primaryConv.id] || group.allConversations.map(c => drafts[c.id]).find(Boolean)) : null;
-
-                    return (
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                        <p style={{
-                          fontSize: '11px',
-                          color: draftText ? 'var(--text-main)' : (group.hasUnread ? '#ffffff' : 'var(--text-dim)'),
-                          fontWeight: (group.hasUnread || draftText) ? '700' : 'normal',
-                          whiteSpace: 'nowrap',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          flex: 1,
-                          margin: 0
-                        }}>
-                          {draftText ? (
-                            <>
-                              <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
-                              <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>
-                            </>
-                          ) : (
-                            lastMessage ? lastMessage.conteudo : 'Conversa iniciada'
-                          )}
-                        </p>
-
-                        {group.unreadCount > 0 && (
-                          <span
-                            title={`${group.unreadCount} mensagem(ns) não lida(s)`}
-                            style={{
-                              backgroundColor: '#22c55e',
-                              color: '#ffffff',
-                              fontSize: '10px',
-                              fontWeight: '800',
-                              borderRadius: '10px',
-                              minWidth: '18px',
-                              height: '18px',
-                              padding: '0 5px',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
+                          {/* Attendant badge if assigned */}
+                          {primaryConv.assigned_user_name && (
+                            <span style={{
+                              fontSize: '9px',
+                              color: '#93c5fd',
+                              backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                              padding: '1px 4px',
+                              borderRadius: '3px',
                               flexShrink: 0,
-                              boxShadow: '0 2px 6px rgba(34, 197, 94, 0.45)'
-                            }}
-                          >
-                            {group.unreadCount > 99 ? '99+' : group.unreadCount}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
+                              maxWidth: '90px',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap'
+                            }} title={`Atendente: ${primaryConv.assigned_user_name}`}>
+                              {primaryConv.assigned_user_name.split(' ')[0]}
+                            </span>
+                          )}
+
+                          {/* Unread message count badge */}
+                          {group.unreadCount > 0 && (
+                            <span
+                              title={`${group.unreadCount} mensagem(ns) não lida(s)`}
+                              style={{
+                                backgroundColor: '#22c55e',
+                                color: '#ffffff',
+                                fontSize: '10px',
+                                fontWeight: '800',
+                                borderRadius: '10px',
+                                minWidth: '18px',
+                                height: '18px',
+                                padding: '0 5px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                                boxShadow: '0 2px 6px rgba(34, 197, 94, 0.45)'
+                              }}
+                            >
+                              {group.unreadCount > 99 ? '99+' : group.unreadCount}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
+
 
                 {/* WhatsApp Community Sub-Groups (Identical to WhatsApp Web 'Grupos em Comum') */}
                 {(group.contactPhone === '120363424944423399' || group.contactName.includes('Servweld/Servsolda')) && isExpanded && (

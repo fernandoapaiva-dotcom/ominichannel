@@ -265,70 +265,21 @@ button {
     max-height: 100dvh !important;
     overflow: hidden !important;
     position: relative !important;
+    padding-bottom: 60px !important; /* Space for MobileBottomNav */
   }
 
-  /* ── Bottom Navigation Bar ─────────────── */
-  /* The sidebar becomes a bottom tab-bar, like WhatsApp */
+  /* ── Hide desktop sidebar completely on mobile ── */
   .sidebar-container {
-    /* Position at the very bottom */
-    order: 10 !important;
-    width: 100% !important;
-    height: 60px !important;
-    min-height: 60px !important;
-    max-height: 60px !important;
-    flex-direction: row !important;
-    flex-shrink: 0 !important;
-    padding: 0 8px !important;
-    padding-bottom: env(safe-area-inset-bottom, 0px) !important;
-    border-right: none !important;
-    border-top: 1px solid var(--border-color) !important;
-    border-bottom: none !important;
-    justify-content: space-around !important;
-    align-items: center !important;
-    background: var(--bg-secondary) !important;
-    z-index: 100 !important;
-  }
-
-  /* Nav within sidebar — horizontal */
-  .sidebar-container nav {
-    flex-direction: row !important;
-    gap: 4px !important;
-    margin: 0 !important;
-    width: 100% !important;
-    justify-content: space-around !important;
-    align-items: center !important;
-  }
-
-  /* Hide elements that don't belong in a bottom tab bar */
-  .sidebar-brand,
-  .sidebar-user,
-  .hide-on-mobile {
     display: none !important;
   }
 
-  /* Make each nav button a full-height tab */
-  .sidebar-container nav button {
-    width: auto !important;
-    height: 52px !important;
-    min-width: 52px !important;
-    flex: 1 !important;
-    border-radius: 12px !important;
-    flex-direction: column !important;
-    gap: 3px !important;
-    font-size: 10px !important;
+  /* ── Show mobile bottom navigation bar ── */
+  .mobile-bottom-nav {
     display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 4px 2px !important;
-  }
-
-  /* Show nav labels on mobile */
-  .sidebar-container nav button .mobile-nav-label {
-    display: block !important;
   }
 
   /* ── Main content area (takes all space above bottom nav) */
-  .dashboard-layout > div:not(.sidebar-container) {
+  .dashboard-layout > div:not(.sidebar-container):not(.mobile-bottom-nav) {
     flex: 1 1 0 !important;
     min-height: 0 !important;
     overflow: hidden !important;
