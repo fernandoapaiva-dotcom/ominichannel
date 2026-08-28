@@ -25,10 +25,12 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
     sender: 'user' | 'assistant';
     text: string;
     proposedDoc?: any;
+    timestamp: Date;
   }>>([
     {
       sender: 'assistant',
-      text: '👋 Olá! Sou seu **Auxiliar de Treinamento RAG & Especialista Anti-Alucinação**.\n\nMe conte o que a IA do sistema está errando ou qual assunto você deseja ensinar a ela (ex: *a IA está inventando preços*, *está dizendo que entrega fora do DF*, *não sabe regras de garantia*). Eu analiso a causa e crio a diretriz perfeita para blindar a IA!'
+      text: '👋 Olá! Sou seu **Auxiliar de Treinamento RAG & Especialista Anti-Alucinação**.\n\nMe conte o que a IA do sistema está errando ou qual assunto você deseja ensinar a ela (ex: *a IA está inventando preços*, *está dizendo que entrega fora do DF*, *não sabe regras de garantia*). Eu analiso a causa e crio a diretriz perfeita para blindar a IA!',
+      timestamp: new Date()
     }
   ]);
   const [inputVal, setInputVal] = useState('');
@@ -54,7 +56,7 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
     const text = (customText || inputVal).trim();
     if (!text || loadingChat) return;
 
-    const newHist = [...messages, { sender: 'user' as const, text }];
+    const newHist = [...messages, { sender: 'user' as const, text, timestamp: new Date() }];
     setMessages(newHist);
     setInputVal('');
     setLoadingChat(true);
@@ -76,7 +78,8 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
           {
             sender: 'assistant',
             text: res.reply,
-            proposedDoc: res.proposed_document
+            proposedDoc: res.proposed_document,
+            timestamp: new Date()
           }
         ]);
       }
@@ -85,7 +88,8 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
         ...prev,
         {
           sender: 'assistant',
-          text: `❌ Falha ao consultar o Auxiliar de Treinamento: ${err.message || 'Erro de conexão'}`
+          text: `❌ Falha ao consultar o Auxiliar de Treinamento: ${err.message || 'Erro de conexão'}`,
+          timestamp: new Date()
         }
       ]);
     } finally {
@@ -158,6 +162,15 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
       alignItems: 'center',
       padding: '20px'
     }}>
+      <style>{`
+        @keyframes custom-spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+        .custom-spin-anim {
+          animation: custom-spin 1s linear infinite;
+        }
+      `}</style>
       <div style={{
         width: '100%',
         maxWidth: '850px',
@@ -303,6 +316,14 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
                     whiteSpace: 'pre-wrap'
                   }}>
                     {item.text}
+                    <div style={{
+                      fontSize: '10px',
+                      color: item.sender === 'user' ? 'rgba(0,0,0,0.5)' : '#94a3b8',
+                      marginTop: '6px',
+                      textAlign: 'right'
+                    }}>
+                      {item.timestamp ? new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                    </div>
                   </div>
 
                   {/* Proposed RAG Document Card */}
@@ -353,7 +374,7 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
                         }}
                       >
                         {addingDocId === `doc_btn_${idx}` ? (
-                          <RefreshCw size={14} className="animate-spin" />
+                          <RefreshCw size={14} className="custom-spin-anim" />
                         ) : addedSuccess[`doc_btn_${idx}`] ? (
                           <Check size={14} />
                         ) : (
@@ -368,7 +389,7 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
 
               {loadingChat && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#94a3b8', fontSize: '12px', fontStyle: 'italic' }}>
-                  <RefreshCw size={14} className="animate-spin" color="var(--accent-primary)" />
+                  <RefreshCw size={14} className="custom-spin-anim" color="var(--accent-primary)" />
                   O Engenheiro de RAG está formulando a diretriz anti-alucinação...
                 </div>
               )}
@@ -463,7 +484,7 @@ export const RagTrainingAssistantModal: React.FC<RagTrainingAssistantModalProps>
                   className="btn-primary"
                   style={{ padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' }}
                 >
-                  {diagnoseLoading ? <RefreshCw size={15} className="animate-spin" /> : <Play size={15} fill="currentColor" />}
+                  {diagnoseLoading ? <RefreshCw size={15} className="custom-spin-anim" /> : <Play size={15} fill="currentColor" />}
                   {diagnoseLoading ? 'Diagnosticando...' : 'Executar Diagnóstico'}
                 </button>
               </div>

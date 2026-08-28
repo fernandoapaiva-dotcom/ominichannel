@@ -1471,12 +1471,18 @@ async def receive_evolution_webhook(
         )
     )
 
-    # Internal Number / Bot Echo Shield: Never run AI if sender is another internal company phone or automated bot
-    if is_internal_company_number or is_bot_echo:
-        logger.info(f"[ANTI-LOOP ESCUDO] Mensagem de número interno ({phone_number}) ou eco de bot detectado. Silenciando IA.")
-        conversation.status = ConversationStatus.COM_HUMANO
+    # Internal Number / Bot Echo / Group Shield: Never run AI if sender is another internal phone, bot, or a Group
+    if is_group or is_internal_company_number or is_bot_echo:
+        if is_group:
+            logger.info(f"[GROUP SHIELD] Mensagem de grupo detectada ({phone_number}). Silenciando IA para evitar spam e economizar tokens.")
+        else:
+            logger.info(f"[ANTI-LOOP ESCUDO] Mensagem de número interno ({phone_number}) ou eco de bot detectado. Silenciando IA.")
+        
+        if conversation.status == ConversationStatus.COM_IA:
+            conversation.status = ConversationStatus.COM_HUMANO
+            
         await db.commit()
-        return {"status": "success", "action": "internal_number_or_bot_silenced"}
+        return {"status": "success", "action": "group_or_bot_silenced"}
 
     # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
     if conversation.status == ConversationStatus.COM_HUMANO:
