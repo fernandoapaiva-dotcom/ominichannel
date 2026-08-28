@@ -676,6 +676,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
       {(activeTab === 'chats' || activeTab === 'groups') && (
         <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
+          {/* DepartmentBar — always visible header on mobile */}
           <DepartmentBar
             whatsappNumbers={whatsappNumbers}
             selectedDepartmentId={selectedDeptId}
@@ -687,6 +688,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             }}
             calendarSummary={calendarSummary}
           />
+          {/* Chat list + chat area row — takes remaining height */}
           <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', overflow: 'hidden', boxSizing: 'border-box' }}>
             <div
               className={`chat-list-column ${activeConversationId ? 'mobile-hidden' : ''}`}

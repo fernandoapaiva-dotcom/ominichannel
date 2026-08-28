@@ -420,9 +420,9 @@ export const ChatList: React.FC<ChatListProps> = ({
       overflow: 'hidden'
     }}>
       {/* Header & Search */}
-      <div style={{ padding: '16px', borderBottom: '1px solid var(--border-color)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '18px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+      <div className="chatlist-header" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
             Clientes & Chats
           </h2>
 
@@ -498,6 +498,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             {onToggleCollapse && (
               <button
                 onClick={onToggleCollapse}
+                className="hide-on-mobile"
                 style={{
                   background: 'rgba(255,255,255,0.06)',
                   border: '1px solid var(--border-color)',
@@ -518,8 +519,8 @@ export const ChatList: React.FC<ChatListProps> = ({
         </div>
 
         {/* Search Bar */}
-        <div style={{ position: 'relative' }}>
-          <Search size={15} style={{ position: 'absolute', left: '10px', top: '10px', color: 'var(--text-muted)' }} />
+        <div className="chatlist-search" style={{ position: 'relative' }}>
+          <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
             type="text"
             placeholder="Buscar por cliente ou telefone..."
@@ -527,12 +528,12 @@ export const ChatList: React.FC<ChatListProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
               width: '100%',
-              padding: '8px 10px 8px 32px',
+              padding: '9px 10px 9px 34px',
               backgroundColor: 'var(--bg-secondary)',
               border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md)',
+              borderRadius: '20px',
               color: 'var(--text-main)',
-              fontSize: '12px',
+              fontSize: '13px',
               outline: 'none',
               boxSizing: 'border-box'
             }}

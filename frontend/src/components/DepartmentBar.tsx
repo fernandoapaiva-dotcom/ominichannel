@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   LayoutGrid, ShoppingBag, Key, Wrench, CreditCard,
-  MessageSquare, Building, Headphones, Truck, HelpCircle, Layers, Calendar
+  Building, Headphones, Truck, HelpCircle, Calendar
 } from 'lucide-react';
 import { WhatsAppNumber, Conversation } from '../types';
 
@@ -23,21 +23,19 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   calendarSummary
 }) => {
 
-  // Helper to pick context icon based on department name
-  const getDepartmentIcon = (name: string) => {
+  const getDepartmentIcon = (name: string, size = 16) => {
     const lower = name.toLowerCase();
-    if (lower.includes('todos') || lower.includes('geral')) return <LayoutGrid size={22} />;
-    if (lower.includes('venda') || lower.includes('e-commerce') || lower.includes('comercial')) return <ShoppingBag size={22} />;
-    if (lower.includes('loca') || lower.includes('alug')) return <Key size={22} />;
-    if (lower.includes('assist') || lower.includes('téc') || lower.includes('tec')) return <Wrench size={22} />;
-    if (lower.includes('finan') || lower.includes('cobr')) return <CreditCard size={22} />;
-    if (lower.includes('supor') || lower.includes('ajuda')) return <HelpCircle size={22} />;
-    if (lower.includes('entrega') || lower.includes('logís')) return <Truck size={22} />;
-    if (lower.includes('atend')) return <Headphones size={22} />;
-    return <Building size={22} />;
+    if (lower.includes('todos') || lower.includes('geral')) return <LayoutGrid size={size} />;
+    if (lower.includes('venda') || lower.includes('e-commerce') || lower.includes('comercial')) return <ShoppingBag size={size} />;
+    if (lower.includes('loca') || lower.includes('alug')) return <Key size={size} />;
+    if (lower.includes('assist') || lower.includes('téc') || lower.includes('tec')) return <Wrench size={size} />;
+    if (lower.includes('finan') || lower.includes('cobr')) return <CreditCard size={size} />;
+    if (lower.includes('supor') || lower.includes('ajuda')) return <HelpCircle size={size} />;
+    if (lower.includes('entrega') || lower.includes('logís')) return <Truck size={size} />;
+    if (lower.includes('atend')) return <Headphones size={size} />;
+    return <Building size={size} />;
   };
 
-  // Helper to compute unread messages count per department
   const getUnreadCount = (numberId: number | 'all') => {
     return conversations.filter(c => {
       if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
@@ -64,51 +62,93 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
     }).length;
   };
 
-  const totalUnread = getUnreadCount('all');
+  const calendarPending = calendarSummary?.today_pending ?? 0;
+
+  const tabBtnStyle = (isSelected: boolean): React.CSSProperties => ({
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    height: '34px',
+    padding: '0 14px',
+    borderRadius: '17px',
+    border: isSelected
+      ? '1.5px solid var(--accent-primary)'
+      : '1px solid rgba(255, 255, 255, 0.10)',
+    backgroundColor: isSelected
+      ? 'rgba(0, 230, 153, 0.15)'
+      : 'rgba(255, 255, 255, 0.04)',
+    color: isSelected ? 'var(--accent-primary)' : 'var(--text-muted)',
+    fontSize: '12px',
+    fontWeight: isSelected ? '700' : '500',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    flexShrink: 0,
+    boxShadow: isSelected ? '0 2px 10px rgba(0, 230, 153, 0.2)' : 'none',
+    transition: 'all 0.15s ease',
+    position: 'relative',
+  });
+
+  const desktopCardStyle = (isSelected: boolean): React.CSSProperties => ({
+    width: '78px',
+    height: '72px',
+    borderRadius: '12px',
+    border: isSelected
+      ? '2px solid var(--accent-primary)'
+      : '1px solid rgba(255, 255, 255, 0.08)',
+    backgroundColor: isSelected
+      ? 'rgba(0, 230, 153, 0.16)'
+      : 'rgba(255, 255, 255, 0.03)',
+    color: isSelected ? 'var(--accent-primary)' : '#94a3b8',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    cursor: 'pointer',
+    position: 'relative',
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+    boxShadow: isSelected ? '0 4px 14px rgba(0, 230, 153, 0.25)' : 'none',
+    flexShrink: 0,
+  });
 
   return (
-    <div style={{
-      width: '100%',
-      backgroundColor: 'var(--bg-primary)',
-      borderBottom: '1px solid var(--border-color)',
-      padding: '10px 16px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: '12px',
-      overflowX: 'auto',
-      scrollbarWidth: 'thin'
-    }}>
-      <div style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginRight: '4px', whiteSpace: 'nowrap' }}>
+    <div
+      className="dept-bar-outer"
+      style={{
+        width: '100%',
+        backgroundColor: 'var(--bg-primary)',
+        borderBottom: '1px solid var(--border-color)',
+        padding: '8px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        overflowX: 'auto',
+        scrollbarWidth: 'thin',
+      }}
+    >
+      {/* "Departamentos:" label — hidden on mobile via CSS */}
+      <div
+        className="dept-bar-label"
+        style={{
+          fontSize: '11px',
+          fontWeight: '700',
+          color: 'var(--text-muted)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+          marginRight: '4px',
+          whiteSpace: 'nowrap',
+        }}
+      >
         Departamentos:
       </div>
 
-      {/* Module Card for "Todos Dptos" */}
+      {/* "Todos" button — pill on mobile, card on desktop */}
       <button
+        className="dept-bar-btn"
         onClick={() => onSelectDepartment('all')}
-        style={{
-          width: '78px',
-          height: '72px',
-          borderRadius: '12px',
-          border: selectedDepartmentId === 'all'
-            ? '2px solid var(--accent-primary)'
-            : '1px solid rgba(255, 255, 255, 0.08)',
-          backgroundColor: selectedDepartmentId === 'all'
-            ? 'rgba(0, 230, 153, 0.16)'
-            : 'rgba(255, 255, 255, 0.03)',
-          color: selectedDepartmentId === 'all' ? 'var(--accent-primary)' : '#94a3b8',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '6px',
-          cursor: 'pointer',
-          position: 'relative',
-          transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: selectedDepartmentId === 'all'
-            ? '0 4px 14px rgba(0, 230, 153, 0.25)'
-            : 'none',
-          flexShrink: 0
-        }}
+        style={desktopCardStyle(selectedDepartmentId === 'all')}
         onMouseEnter={(e) => {
           if (selectedDepartmentId !== 'all') {
             e.currentTarget.style.transform = 'translateY(-3px)';
@@ -119,54 +159,31 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
         }}
         onMouseLeave={(e) => {
           if (selectedDepartmentId !== 'all') {
-            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.transform = '';
             e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
             e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.03)';
             e.currentTarget.style.color = '#94a3b8';
           }
         }}
       >
-        <div style={{ transition: 'transform 0.2s' }}>
-          <LayoutGrid size={22} />
-        </div>
+        <LayoutGrid size={18} />
         <span style={{ fontSize: '11px', fontWeight: '600', textAlign: 'center', lineHeight: '1.1', maxWidth: '70px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Todos
         </span>
       </button>
 
-      {/* Module Cards for each Department */}
+      {/* Department cards */}
       {whatsappNumbers.map(wn => {
         const isSelected = selectedDepartmentId === wn.id;
-        const icon = getDepartmentIcon(wn.nome_departamento);
+        const unread = getUnreadCount(wn.id);
+        const shortName = wn.nome_departamento.split(' ')[0]; // first word for mobile
 
         return (
           <button
             key={wn.id}
+            className="dept-bar-btn"
             onClick={() => onSelectDepartment(wn.id)}
-            style={{
-              width: '78px',
-              height: '72px',
-              borderRadius: '12px',
-              border: isSelected
-                ? '2px solid var(--accent-primary)'
-                : '1px solid rgba(255, 255, 255, 0.08)',
-              backgroundColor: isSelected
-                ? 'rgba(0, 230, 153, 0.16)'
-                : 'rgba(255, 255, 255, 0.03)',
-              color: isSelected ? 'var(--accent-primary)' : '#94a3b8',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-              cursor: 'pointer',
-              position: 'relative',
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-              boxShadow: isSelected
-                ? '0 4px 14px rgba(0, 230, 153, 0.25)'
-                : 'none',
-              flexShrink: 0
-            }}
+            style={desktopCardStyle(isSelected)}
             onMouseEnter={(e) => {
               if (!isSelected) {
                 e.currentTarget.style.transform = 'translateY(-3px)';
@@ -177,31 +194,50 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
             }}
             onMouseLeave={(e) => {
               if (!isSelected) {
-                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.transform = '';
                 e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.08)';
                 e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.03)';
                 e.currentTarget.style.color = '#94a3b8';
               }
             }}
           >
-            <div style={{ transition: 'transform 0.2s' }}>
-              {icon}
-            </div>
+            {getDepartmentIcon(wn.nome_departamento, 18)}
             <span style={{ fontSize: '11px', fontWeight: '600', textAlign: 'center', lineHeight: '1.1', maxWidth: '70px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {wn.nome_departamento}
             </span>
+            {unread > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: '4px',
+                right: '4px',
+                backgroundColor: '#ef4444',
+                color: '#fff',
+                borderRadius: '10px',
+                fontSize: '9px',
+                fontWeight: '800',
+                minWidth: '16px',
+                height: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 3px',
+              }}>
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
           </button>
         );
       })}
 
-      {/* Spacer to push Calendar button to the right */}
+      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Agenda & Tarefas Button (Marked in User Screenshot) */}
+      {/* Calendar / Agenda button */}
       {onOpenCalendar && (
         <button
+          className="calendar-btn-mobile"
           onClick={onOpenCalendar}
-          title="Abrir Agenda & Tarefas (Google Calendar)"
+          title="Abrir Agenda & Tarefas"
           style={{
             height: '72px',
             padding: '0 16px',
@@ -216,46 +252,44 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
             position: 'relative',
             transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
             boxShadow: '0 4px 14px rgba(0, 0, 0, 0.2)',
-            flexShrink: 0
+            flexShrink: 0,
           }}
           onMouseEnter={(e) => {
             e.currentTarget.style.transform = 'translateY(-2px)';
             e.currentTarget.style.borderColor = 'var(--accent-primary)';
             e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.16)';
-            e.currentTarget.style.boxShadow = '0 6px 20px rgba(16, 185, 129, 0.25)';
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.transform = 'translateY(0)';
+            e.currentTarget.style.transform = '';
             e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.3)';
             e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.08)';
-            e.currentTarget.style.boxShadow = '0 4px 14px rgba(0, 0, 0, 0.2)';
           }}
         >
           <div style={{
-            width: '40px',
-            height: '40px',
+            width: '36px',
+            height: '36px',
             borderRadius: '10px',
             backgroundColor: 'rgba(16, 185, 129, 0.2)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            color: 'var(--accent-primary)'
+            color: 'var(--accent-primary)',
+            flexShrink: 0,
           }}>
-            <Calendar size={22} />
+            <Calendar size={20} />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
+          {/* Text — hidden on mobile via CSS class */}
+          <div className="calendar-btn-text" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', textAlign: 'left' }}>
             <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>
               Minha Agenda
             </span>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              {calendarSummary && calendarSummary.today_pending > 0
-                ? `${calendarSummary.today_pending} pendente(s) hoje`
-                : 'Tarefas & Lembretes'}
+              {calendarPending > 0 ? `${calendarPending} pendente(s) hoje` : 'Tarefas & Lembretes'}
             </span>
           </div>
 
-          {calendarSummary && calendarSummary.today_pending > 0 && (
+          {calendarPending > 0 && (
             <span style={{
               backgroundColor: 'rgba(0, 230, 153, 0.2)',
               color: 'var(--accent-primary)',
@@ -264,9 +298,8 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
               fontWeight: 'bold',
               borderRadius: '12px',
               padding: '2px 8px',
-              marginLeft: '4px'
             }}>
-              {calendarSummary.today_pending}
+              {calendarPending}
             </span>
           )}
         </button>

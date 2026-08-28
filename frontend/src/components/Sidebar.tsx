@@ -622,8 +622,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Compact Navigation Icons */}
+        {/* Compact Navigation Icons — with labels for mobile bottom nav */}
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Chats */}
           <button
             onClick={() => setActiveTab('chats')}
             title="Conversas com Clientes"
@@ -638,10 +639,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              position: 'relative'
+              position: 'relative',
+              flexDirection: 'column',
+              gap: '2px',
             }}
           >
-            <MessageSquare size={16} />
+            <MessageSquare size={18} />
+            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Chats</span>
             {pendingBadgeCount > 0 && (
               <span style={{
                 position: 'absolute',
@@ -666,6 +670,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </button>
 
+          {/* Groups */}
           <button
             onClick={() => setActiveTab('groups')}
             title="Grupos & Comunidades WhatsApp"
@@ -680,10 +685,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               alignItems: 'center',
               justifyContent: 'center',
               cursor: 'pointer',
-              position: 'relative'
+              position: 'relative',
+              flexDirection: 'column',
+              gap: '2px',
             }}
           >
-            <Users size={16} />
+            <Users size={18} />
+            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Grupos</span>
             {groupPendingBadgeCount > 0 && (
               <span style={{
                 position: 'absolute',
@@ -708,6 +716,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             )}
           </button>
 
+          {/* Contacts */}
           <button
             onClick={() => setActiveTab('contacts')}
             title="Histórico de Clientes"
@@ -721,12 +730,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              flexDirection: 'column',
+              gap: '2px',
             }}
           >
-            <ContactIcon size={16} />
+            <ContactIcon size={18} />
+            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Clientes</span>
           </button>
 
+          {/* Admin */}
           {user.role === 'admin' && (
             <button
               onClick={() => setActiveTab('admin')}
@@ -741,10 +754,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                flexDirection: 'column',
+                gap: '2px',
               }}
             >
-              <Settings size={16} />
+              <Settings size={18} />
+              <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Config</span>
             </button>
           )}
         </nav>
