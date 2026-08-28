@@ -78,9 +78,11 @@ class SettingsService:
         user: User,
         payload: Dict[str, Any]
     ) -> bool:
+        # Load existing settings ONCE to prevent redundant DB calls and decryptions
+        existing = await self.get_tenant_decrypted_settings(db, tenant_id)
+
         # 1. Update Gemini
         if "gemini_api_key" in payload or "gemini_model_name" in payload:
-            existing = await self.get_tenant_decrypted_settings(db, tenant_id)
             new_gemini_key = payload.get("gemini_api_key")
             final_gemini_key = new_gemini_key.strip() if (new_gemini_key and str(new_gemini_key).strip()) else existing["gemini_api_key"]
             raw_gemini = {
@@ -92,7 +94,6 @@ class SettingsService:
 
         # 2. Update Evolution API
         if "evolution_api_url" in payload or "evolution_api_key" in payload:
-            existing = await self.get_tenant_decrypted_settings(db, tenant_id)
             new_evo_key = payload.get("evolution_api_key")
             final_evo_key = new_evo_key.strip() if (new_evo_key and str(new_evo_key).strip()) else existing["evolution_api_key"]
             raw_evo = {
@@ -110,7 +111,6 @@ class SettingsService:
 
         # 4. Update Google Drive Settings
         if "google_drive_folder_id" in payload or "google_client_id" in payload or "google_client_secret" in payload:
-            existing = await self.get_tenant_decrypted_settings(db, tenant_id)
             raw_gdrive = {
                 "folder_id": payload.get("google_drive_folder_id") if "google_drive_folder_id" in payload else existing["gdrive_folder_id"],
                 "client_id": payload.get("google_client_id") if "google_client_id" in payload else existing["google_client_id"],

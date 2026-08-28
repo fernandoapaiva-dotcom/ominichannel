@@ -73,7 +73,9 @@ async def test_integration_connection(
 
         try:
             client = gemini_service.get_client_for_key(api_key)
-            res = client.models.generate_content(
+            import asyncio
+            res = await asyncio.to_thread(
+                client.models.generate_content,
                 model=model_name,
                 contents="Responda apenas a palavra OK."
             )
