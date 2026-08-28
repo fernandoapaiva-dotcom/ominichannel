@@ -458,6 +458,43 @@ button {
     margin-left: auto !important;
     padding: 0 14px !important;
   }
+
+  /* ── Mobile Attachment Bottom Sheet (WhatsApp Style) ── */
+  .chat-attachment-backdrop {
+    display: block !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    background: rgba(0, 0, 0, 0.65) !important;
+    z-index: 9999 !important;
+    backdrop-filter: blur(4px) !important;
+  }
+
+  .chat-attachment-menu {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    border-radius: 24px 24px 0 0 !important;
+    padding: 24px 20px 32px 20px !important;
+    box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.85) !important;
+    background: var(--bg-secondary) !important;
+    border: 1px solid var(--border-color) !important;
+    border-bottom: none !important;
+    z-index: 10000 !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 16px !important;
+    animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards !important;
+  }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
 }
 
 /* ═══════════════════════════════════════════

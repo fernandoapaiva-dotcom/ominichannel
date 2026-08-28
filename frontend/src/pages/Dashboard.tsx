@@ -253,9 +253,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
+  // Android System Back Button Interceptor for Mobile PWA
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      if (activeConversationId !== null) {
+        setActiveConversationId(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [activeConversationId]);
+
   const handleSelectConversation = useCallback((convId: number) => {
     setActiveConversationId(convId);
     loadActiveConversationDetail(convId);
+    try {
+      if (window.history.state?.chatOpen !== true) {
+        window.history.pushState({ chatOpen: true }, '');
+      }
+    } catch {}
     // Optimistically mark as read for all conversations and messages of this contact
     setConversations(prev => {
       const selected = prev.find(c => c.id === convId);

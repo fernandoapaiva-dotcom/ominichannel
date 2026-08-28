@@ -664,9 +664,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const extractMediaAndCaption = (raw: string | undefined | null) => {
@@ -1347,6 +1348,50 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  // Client-side image compression helper for ultra-fast mobile uploading
+  const compressImageIfNeeded = async (file: File): Promise<File> => {
+    if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.type.includes('webp')) {
+      return file;
+    }
+    if (file.size < 350 * 1024) return file; // Skip compression if already under 350KB
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1920;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return resolve(file);
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob || blob.size >= file.size) return resolve(file);
+            resolve(new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() }));
+          },
+          'image/jpeg',
+          0.82
+        );
+      };
+      img.onerror = () => resolve(file);
+      img.src = url;
+    });
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() && pendingFiles.length === 0) return;
@@ -1391,24 +1436,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       if (pendingFiles.length > 0) {
         setIsSending(true);
-        for (let i = 0; i < pendingFiles.length; i++) {
-          const file = pendingFiles[i];
-          const formData = new FormData();
-          formData.append('file', file);
-          if (i === 0 && textToSend) {
-            formData.append('caption', textToSend);
-          }
-          await apiUpload(`/conversations/${conversation?.id}/media`, formData);
-        }
+        const filesToUpload = [...pendingFiles];
+        const captionText = textToSend;
+
+        // Clear UI immediately for instant feedback
         setPendingFiles([]);
         setInputText('');
         setInputLinkPreview(null);
         if (textareaRef.current) textareaRef.current.style.height = '42px';
-        setIsSending(false);
         setIsUserScrolledUp(false);
         scrollToBottom('smooth');
-        setTimeout(() => scrollToBottom('smooth'), 50);
-        setTimeout(() => scrollToBottom('smooth'), 200);
+
+        // Parallel compressed upload
+        const uploadPromises = filesToUpload.map(async (file, idx) => {
+          const compressed = await compressImageIfNeeded(file);
+          const formData = new FormData();
+          formData.append('file', compressed);
+          if (idx === 0 && captionText) {
+            formData.append('caption', captionText);
+          }
+          return apiUpload(`/conversations/${conversation?.id}/media`, formData);
+        });
+
+        await Promise.all(uploadPromises);
+        setIsSending(false);
+        if (onStatusToggle) onStatusToggle();
+        scrollToBottom('smooth');
+        setTimeout(() => scrollToBottom('smooth'), 100);
       } else if (textToSend) {
         const textCopy = textToSend;
         setInputText('');
@@ -1429,6 +1483,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setIsSending(false);
     }
   };
+
 
   const handleCopyMessage = (msg: Message) => {
     const { caption, mediaPath } = extractMediaAndCaption(msg.conteudo);
@@ -4507,173 +4562,181 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* WhatsApp-Style Attachment & Quick Actions Popover Menu */}
+      {/* WhatsApp-Style Attachment & Quick Actions Popover / BottomSheet Menu */}
       {showAttachmentMenu && (
-        <div
-          className="animate-fade-in"
-          style={{
-            position: 'absolute',
-            bottom: '80px',
-            left: '24px',
-            zIndex: 100,
-            backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '16px',
-            boxShadow: '0 12px 32px rgba(0, 0, 0, 0.6)',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: '14px',
-            width: '340px'
-          }}
-        >
-          {/* 1. Galeria / Mídia */}
+        <>
+          <div className="chat-attachment-backdrop" onClick={() => setShowAttachmentMenu(false)} />
           <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              fileInputRef.current?.click();
-            }}
+            className="chat-attachment-menu animate-fade-in"
             style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(59, 130, 246, 0.1)',
-              border: '1px solid rgba(59, 130, 246, 0.25)',
-              cursor: 'pointer'
+              position: 'absolute',
+              bottom: '80px',
+              left: '24px',
+              zIndex: 10000,
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '18px',
+              boxShadow: '0 12px 36px rgba(0, 0, 0, 0.7)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: '14px',
+              width: '340px'
             }}
           >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <ImageIcon size={20} />
+            {/* 1. Galeria / Mídia (Opens Native Media Picker directly) */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                mediaInputRef.current?.click();
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#3b82f6', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(59, 130, 246, 0.4)' }}>
+                <ImageIcon size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Galeria / Mídia</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Galeria / Mídia</span>
-          </div>
 
-          {/* 2. Documento */}
-          <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              fileInputRef.current?.click();
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(168, 85, 247, 0.1)',
-              border: '1px solid rgba(168, 85, 247, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#a855f7', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <FileText size={20} />
+            {/* 2. Câmera (Opens Camera directly on mobile) */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                cameraInputRef.current?.click();
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(236, 72, 153, 0.12)',
+                border: '1px solid rgba(236, 72, 153, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#ec4899', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(236, 72, 153, 0.4)' }}>
+                <Camera size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Câmera</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Documento</span>
-          </div>
 
-          {/* 3. Localização */}
-          <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              setShowLocationModal(true);
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(0, 230, 153, 0.1)',
-              border: '1px solid rgba(0, 230, 153, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#00e699', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <MapPin size={20} />
+            {/* 3. Documento (Opens File Manager for PDF/DOC/etc) */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                documentInputRef.current?.click();
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(168, 85, 247, 0.12)',
+                border: '1px solid rgba(168, 85, 247, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#a855f7', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(168, 85, 247, 0.4)' }}>
+                <FileText size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Documento</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Localização</span>
-          </div>
 
-          {/* 4. Dados Pix */}
-          <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              setShowPixModal(true);
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(234, 179, 8, 0.1)',
-              border: '1px solid rgba(234, 179, 8, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#eab308', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <QrCode size={20} />
+            {/* 4. Localização */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                setShowLocationModal(true);
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                border: '1px solid rgba(0, 230, 153, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#00e699', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0, 230, 153, 0.3)' }}>
+                <MapPin size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Localização</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Dados Pix</span>
-          </div>
 
-          {/* 5. Contato */}
-          <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              setShowContactModal(true);
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(14, 165, 233, 0.1)',
-              border: '1px solid rgba(14, 165, 233, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#0ea5e9', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Share2 size={20} />
+            {/* 5. Dados Pix */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                setShowPixModal(true);
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(234, 179, 8, 0.12)',
+                border: '1px solid rgba(234, 179, 8, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#eab308', color: '#0b0f19', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(234, 179, 8, 0.3)' }}>
+                <QrCode size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Dados Pix</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Contato</span>
-          </div>
 
-          {/* 6. Horário Loja */}
-          <div
-            onClick={() => {
-              setShowAttachmentMenu(false);
-              setInputText(prev => (prev ? prev + '\n' : '') + '⏰ *Horário de Atendimento Servweld:* Segunda a Sexta-feira das 08h00 às 18h00.');
-            }}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 8px',
-              borderRadius: 'var(--radius-md)',
-              backgroundColor: 'rgba(236, 72, 153, 0.1)',
-              border: '1px solid rgba(236, 72, 153, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#ec4899', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Zap size={20} />
+            {/* 6. Contato */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                setShowContactModal(true);
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(14, 165, 233, 0.12)',
+                border: '1px solid rgba(14, 165, 233, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#0ea5e9', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(14, 165, 233, 0.3)' }}>
+                <Share2 size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Contato</span>
             </div>
-            <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Horário Loja</span>
           </div>
-        </div>
+        </>
       )}
 
+      {/* Hidden File Input Pickers for Native OS Integration */}
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
+      <input type="file" ref={mediaInputRef} accept="image/*,video/*" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
+      <input type="file" ref={cameraInputRef} accept="image/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
+      <input type="file" ref={documentInputRef} accept="*/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,application/pdf" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
+
 
       {/* WhatsApp-Style Quoted Reply Preview Bar */}
       {replyingToMessage && (() => {
