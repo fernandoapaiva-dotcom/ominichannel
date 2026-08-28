@@ -637,10 +637,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              position: 'relative'
             }}
           >
             <MessageSquare size={16} />
+            {pendingBadgeCount > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-5px',
+                background: '#ef4444',
+                color: '#fff',
+                borderRadius: '50%',
+                fontSize: '9px',
+                fontWeight: '700',
+                minWidth: '16px',
+                height: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 2px',
+                lineHeight: 1,
+                boxShadow: '0 0 0 2px var(--bg-primary)'
+              }}>
+                {pendingBadgeCount > 99 ? '99+' : pendingBadgeCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -656,10 +679,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              position: 'relative'
             }}
           >
             <Users size={16} />
+            {groupPendingBadgeCount > 0 && (
+              <span style={{
+                position: 'absolute',
+                top: '-5px',
+                right: '-5px',
+                background: '#f59e0b',
+                color: '#fff',
+                borderRadius: '50%',
+                fontSize: '9px',
+                fontWeight: '700',
+                minWidth: '16px',
+                height: '16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0 2px',
+                lineHeight: 1,
+                boxShadow: '0 0 0 2px var(--bg-primary)'
+              }}>
+                {groupPendingBadgeCount > 99 ? '99+' : groupPendingBadgeCount}
+              </span>
+            )}
           </button>
 
           <button
