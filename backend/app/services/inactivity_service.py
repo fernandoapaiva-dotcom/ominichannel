@@ -122,6 +122,26 @@ class InactivityService:
                     if not conv.ultima_interacao_em:
                         continue
 
+                    # ══════════════════════════════════════════════════════════
+                    # CRITICAL SAFETY GUARD: NEVER process conversations from
+                    # previous days. Only conversations that had real interaction
+                    # TODAY (Brasília timezone) are eligible for inactivity checks.
+                    # This prevents mass-expiration of old/stale conversations
+                    # and prevents WhatsApp spam/disconnect caused by sending
+                    # automated messages to clients who spoke days/weeks ago.
+                    # ══════════════════════════════════════════════════════════
+                    from datetime import timezone
+                    ultima = conv.ultima_interacao_em
+                    if ultima.tzinfo is None:
+                        ultima = ultima.replace(tzinfo=timezone.utc)
+                    ultima_local = ultima.astimezone(BRASILIA_TZ)
+                    now_local = datetime.now(tz=BRASILIA_TZ)
+                    if ultima_local.date() < now_local.date():
+                        # Last interaction was BEFORE today — do NOT send any
+                        # WhatsApp messages or expire this conversation.
+                        # These old open conversations must be closed manually by staff.
+                        continue
+
                     # Calcula inatividade útil (somente minutos dentro do expediente)
                     inatividade_util = calcula_inatividade_util(conv.ultima_interacao_em, now)
                     minutos_uteis = inatividade_util.total_seconds() / 60.0
@@ -343,6 +363,18 @@ class InactivityService:
 
                     sorted_msgs = sorted(conv.messages, key=lambda m: m.timestamp)
                     last_msg = sorted_msgs[-1]
+
+                    # SAFETY GUARD: Only auto-respond to messages received TODAY.
+                    # Never send AI responses to old messages from previous days.
+                    if last_msg.timestamp:
+                        from datetime import timezone as _tz
+                        lm_ts = last_msg.timestamp
+                        if lm_ts.tzinfo is None:
+                            lm_ts = lm_ts.replace(tzinfo=_tz.utc)
+                        lm_local = lm_ts.astimezone(BRASILIA_TZ)
+                        now_local = datetime.now(tz=BRASILIA_TZ)
+                        if lm_local.date() < now_local.date():
+                            continue
 
                     last_remetente = getattr(last_msg.remetente, 'value', last_msg.remetente)
                     if last_remetente == "cliente":
