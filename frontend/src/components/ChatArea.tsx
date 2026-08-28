@@ -5095,14 +5095,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSend} style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: inputLinkPreview ? 'none' : '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}>
+            <form
+              onSubmit={handleSend}
+              className="chat-input-form"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '12px 20px', borderTop: inputLinkPreview ? 'none' : '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', display: 'flex', gap: '10px', alignItems: 'flex-end', flexShrink: 0, position: 'relative' }}
+            >
               <button
                 type="button"
                 onClick={() => {
                   setReactingMsgForPicker(null);
                   setShowEmojiPicker(!showEmojiPicker);
                 }}
-                className="btn-secondary"
+                className="btn-secondary chat-emoji-btn"
                 style={{
                   height: '42px',
                   padding: '0 12px',
@@ -5113,17 +5117,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }}
                 title="Emojis, GIFs e Figurinhas do WhatsApp"
               >
-              <Smile size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-              className="btn-secondary"
-              style={{ height: '42px', padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              title="Menu de Anexos e Ações Rápidas"
-            >
-              <Paperclip size={18} />
-            </button>
+                <Smile size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+                className="btn-secondary chat-attach-btn"
+                style={{ height: '42px', padding: '0 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                title="Menu de Anexos e Ações Rápidas"
+              >
+                <Paperclip size={18} />
+              </button>
 
             {showMentionMenu && (() => {
               const cursor = textareaRef.current ? (textareaRef.current.selectionStart || inputText.length) : inputText.length;
@@ -5267,6 +5271,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             
             <textarea
               ref={textareaRef}
+              className="chat-input-textarea"
               rows={1}
               placeholder={isGroupChat ? 'Enviar mensagem no grupo... (@ menciona alguém ou @todos)' : 'Digite sua mensagem... (Cole Ctrl+V imagens/arquivos aqui)'}
               value={inputText}
@@ -5347,7 +5352,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <button
               type="button"
               onClick={() => setShowCopilotModal(true)}
-              className="btn-secondary"
+              className="btn-secondary chat-consultar-ia-btn"
               style={{
                 height: '42px',
                 padding: '0 14px',
@@ -5366,17 +5371,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               title="Conversar com a IA (Abre o Copiloto IA para analisar todo o teor da conversa, consultar manuais e ajudar a responder o cliente)"
             >
               <Bot size={16} />
-              <span>Consultar IA</span>
+              <span className="chat-btn-text">Consultar IA</span>
             </button>
             <button
               type="submit"
-              className="btn-primary"
+              className="btn-primary chat-enviar-btn"
               disabled={(!inputText.trim() && pendingFiles.length === 0) || isSending}
               style={{ height: '42px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
             >
-              <Send size={16} /> {isSending ? 'Enviando...' : 'Enviar'}
+              <Send size={16} /> <span className="chat-btn-text">{isSending ? 'Enviando...' : 'Enviar'}</span>
             </button>
           </form>
+
         </div>
         );
       })()}

@@ -425,6 +425,39 @@ button {
     padding: 6px 12px !important;
   }
   .status-filter-bar::-webkit-scrollbar { display: none !important; }
+
+  /* ── Mobile Chat Input Form (2-row WhatsApp layout) ── */
+  .chat-input-form {
+    padding: 8px 10px !important;
+    gap: 6px !important;
+    flex-wrap: wrap !important;
+    align-items: center !important;
+  }
+
+  .chat-input-textarea {
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 100% !important;
+    order: 1 !important;
+    font-size: 14px !important;
+    min-height: 44px !important;
+  }
+
+  .chat-emoji-btn,
+  .chat-attach-btn,
+  .chat-consultar-ia-btn,
+  .chat-enviar-btn {
+    order: 2 !important;
+    height: 38px !important;
+    padding: 0 10px !important;
+    font-size: 12px !important;
+  }
+
+  .chat-enviar-btn {
+    margin-left: auto !important;
+    padding: 0 14px !important;
+  }
 }
 
 /* ═══════════════════════════════════════════
