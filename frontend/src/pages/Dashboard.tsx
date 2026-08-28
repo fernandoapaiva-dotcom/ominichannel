@@ -82,16 +82,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     });
   }, [conversations, activeTab]);
   
-  // Computes active conversation prioritizing selected department
+  // Computes active conversation prioritizing active selected ID then department
   const activeConversation = useMemo(() => {
     if (activeConversationId) {
-      const found = displayedConversations.find(c => c.id === activeConversationId);
+      // Direct lookup in all conversations to prevent chat disappearance during search/filters
+      const found = conversations.find(c => c.id === activeConversationId);
       if (found) {
-        // If a specific department is selected and the active conversation belongs to another department:
         if (selectedDeptId !== 'all' && String(found.whatsapp_number_id) !== String(selectedDeptId)) {
           const cid = found.contact_id || found.contact?.id;
           const cleanPhone = (found.contact?.telefone || '').replace(/\D/g, '');
-          const sameContactInDept = displayedConversations.find(c =>
+          const sameContactInDept = conversations.find(c =>
             String(c.whatsapp_number_id) === String(selectedDeptId) &&
             ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
              (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
@@ -108,17 +108,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
 
     return displayedConversations.length > 0 ? displayedConversations[0] : null;
-  }, [displayedConversations, activeConversationId, selectedDeptId]);
+  }, [conversations, displayedConversations, activeConversationId, selectedDeptId]);
 
   // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [isMediaGalleryOpen, setIsMediaGalleryOpen] = useState(false);
 
+  const currentSearchTermRef = useRef<string>('');
+
   const fetchConversations = useCallback(async (searchQuery?: string) => {
     try {
-      const url = searchQuery && searchQuery.trim()
-        ? `/conversations/?search=${encodeURIComponent(searchQuery.trim())}`
+      const term = searchQuery !== undefined ? searchQuery : currentSearchTermRef.current;
+      currentSearchTermRef.current = term;
+
+      const url = term && term.trim()
+        ? `/conversations/?search=${encodeURIComponent(term.trim())}`
         : '/conversations/';
       const data = await apiFetch(url);
       if (Array.isArray(data)) {
@@ -185,26 +190,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
-  const fetchNumbers = async () => {
+  const loadActiveConversationDetail = useCallback(async (convId: number) => {
     try {
-      const data = await apiFetch('/whatsapp-numbers/');
-      setWhatsappNumbers(data);
+      const detail = await apiFetch(`/conversations/${convId}`);
+      if (detail && detail.id) {
+        setConversations(prev => {
+          const index = prev.findIndex(c => c.id === convId);
+          if (index >= 0) {
+            const next = [...prev];
+            next[index] = { ...next[index], ...detail };
+            return next;
+          } else {
+            return [detail, ...prev];
+          }
+        });
+      }
     } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const fetchCalendarSummary = useCallback(async () => {
-    try {
-      const data = await apiFetch('/calendar/summary');
-      setCalendarSummary(data);
-    } catch (err) {
-      console.debug('Error fetching calendar summary:', err);
+      console.error('Error loading active conversation detail:', err);
     }
   }, []);
 
   const handleSelectConversation = useCallback((convId: number) => {
     setActiveConversationId(convId);
+    loadActiveConversationDetail(convId);
     // Optimistically mark as read for all conversations and messages of this contact
     setConversations(prev => {
       const selected = prev.find(c => c.id === convId);
@@ -236,7 +244,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     // Persist to backend silently
     apiFetch(`/conversations/${convId}/mark_read`, { method: 'POST' })
       .catch(err => console.debug('Error auto-marking conversation read:', err));
-  }, []);
+  }, [loadActiveConversationDetail]);
 
   useEffect(() => {
     fetchConversations();
