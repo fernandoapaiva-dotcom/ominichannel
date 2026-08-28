@@ -247,9 +247,26 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   }, [isOpen]);
 
   // Handle incoming initialEventData (e.g. from WhatsApp message context menu)
+  // Wait for employees to be loaded first to avoid empty dropdown
   useEffect(() => {
     if (initialEventData && isOpen) {
-      openNewEventModal(initialEventData);
+      // If employees haven't loaded yet, fetch them first then open modal
+      const openWithData = async () => {
+        if (employees.length === 0) {
+          try {
+            const [empData, wnData] = await Promise.all([
+              apiFetch('/technicians/'),
+              apiFetch('/whatsapp-numbers/')
+            ]);
+            setEmployees(empData || []);
+            setWhatsappNumbers(wnData || []);
+          } catch (e) {
+            console.error('Error pre-loading employees:', e);
+          }
+        }
+        openNewEventModal(initialEventData);
+      };
+      openWithData();
     }
   }, [initialEventData, isOpen]);
 
@@ -2220,7 +2237,18 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
 
                 {/* Selected Employees Chips / Trigger Box */}
                 <div
-                  onClick={() => setIsEmployeeDropdownOpen(!isEmployeeDropdownOpen)}
+                  onClick={async () => {
+                    // If employees list is empty, fetch it before opening dropdown
+                    if (employees.length === 0) {
+                      try {
+                        const empData = await apiFetch('/technicians/');
+                        setEmployees(empData || []);
+                      } catch (e) {
+                        console.error('Failed to fetch employees:', e);
+                      }
+                    }
+                    setIsEmployeeDropdownOpen(!isEmployeeDropdownOpen);
+                  }}
                   style={{
                     minHeight: '42px',
                     width: '100%',
