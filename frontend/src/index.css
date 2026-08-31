@@ -427,9 +427,23 @@ button {
   .status-filter-bar::-webkit-scrollbar { display: none !important; }
 
   /* ── Mobile Chat Input Form (2-row WhatsApp layout) ── */
+  /* Mobile font sizing & bubble text adjustments */
+  .chat-message-bubble {
+    font-size: 13.5px !important;
+    line-height: 1.4 !important;
+    padding: 8px 10px !important;
+    max-width: 88% !important;
+  }
+
+  .chat-message-text {
+    font-size: 13.5px !important;
+    line-height: 1.4 !important;
+  }
+
+  /* ── Mobile Chat Input Form (WhatsApp 2-row clean circular action bar) ── */
   .chat-input-form {
     padding: 8px 10px !important;
-    gap: 6px !important;
+    gap: 8px !important;
     flex-wrap: wrap !important;
     align-items: center !important;
   }
@@ -440,20 +454,28 @@ button {
     max-width: 100% !important;
     flex: 1 1 100% !important;
     order: 1 !important;
-    font-size: 14px !important;
-    min-height: 44px !important;
+    font-size: 13.5px !important;
+    min-height: 42px !important;
+    padding: 8px 12px !important;
+    border-radius: 12px !important;
   }
 
   .chat-emoji-btn,
   .chat-attach-btn,
   .chat-mic-btn,
-  .chat-consultar-ia-btn,
-  .chat-enviar-btn {
+  .chat-consultar-ia-btn {
     order: 2 !important;
+    width: 38px !important;
     height: 38px !important;
+    min-width: 38px !important;
+    border-radius: 50% !important;
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    padding: 0 !important;
+    color: var(--text-main) !important;
     flex-shrink: 0 !important;
   }
 
@@ -462,8 +484,20 @@ button {
   }
 
   .chat-enviar-btn {
+    order: 2 !important;
+    width: 42px !important;
+    height: 42px !important;
+    min-width: 42px !important;
+    border-radius: 50% !important;
+    background: linear-gradient(135deg, #00e699 0%, #059669 100%) !important;
+    color: #051a12 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
     margin-left: auto !important;
-    padding: 0 14px !important;
+    padding: 0 !important;
+    flex-shrink: 0 !important;
+    box-shadow: 0 3px 10px rgba(0, 230, 153, 0.3) !important;
   }
 
   /* ── Mobile Admin & Config Panel Responsive Rules ── */

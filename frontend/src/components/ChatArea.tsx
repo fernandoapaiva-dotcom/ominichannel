@@ -451,6 +451,59 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   } | null>(null);
   const [dismissedUrls, setDismissedUrls] = useState<string[]>([]);
 
+  // Unified Sub-Layer Close Handler for Back Button & Esc key
+  const closeTopmostSublayer = useCallback(() => {
+    if (showCopilotModal) { setShowCopilotModal(false); return true; }
+    if (showAttachmentMenu) { setShowAttachmentMenu(false); return true; }
+    if (showEmojiPicker) { setShowEmojiPicker(false); return true; }
+    if (showLocationModal) { setShowLocationModal(false); return true; }
+    if (showContactModal) { setShowContactModal(false); return true; }
+    if (showPixModal) { setShowPixModal(false); return true; }
+    if (showAvatarZoom) { setShowAvatarZoom(false); return true; }
+    if (showParticipantsModal) { setShowParticipantsModal(false); return true; }
+    if (showReportAIModal) { setShowReportAIModal(false); return true; }
+    if (isSelectionMode) { setIsSelectionMode(false); setSelectedMessagesForForward([]); return true; }
+    return false;
+  }, [
+    showCopilotModal, showAttachmentMenu, showEmojiPicker,
+    showLocationModal, showContactModal, showPixModal,
+    showAvatarZoom, showParticipantsModal, showReportAIModal, isSelectionMode
+  ]);
+
+  // Sync browser history state (pushState) whenever a modal/sub-layer opens
+  const hasSublayer = 
+    showCopilotModal || showAttachmentMenu || showEmojiPicker ||
+    showLocationModal || showContactModal || showPixModal ||
+    showAvatarZoom || showParticipantsModal || showReportAIModal || isSelectionMode;
+
+  useEffect(() => {
+    if (hasSublayer) {
+      window.history.pushState({ sublayerOpen: true }, '');
+    }
+  }, [hasSublayer]);
+
+  useEffect(() => {
+    const handlePopState = (e: PopStateEvent) => {
+      const closed = closeTopmostSublayer();
+      if (closed) {
+        e.preventDefault();
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeTopmostSublayer();
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeTopmostSublayer]);
+
   useEffect(() => {
     if (!conversation) {
       setGroupParticipants([]);
@@ -1970,12 +2023,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       case 'audio':
         return (
-          <WhatsAppAudioPlayer
-            message={msg}
-            conversation={conversation || undefined}
-            allMessages={conversation?.messages || []}
-            isCustomer={isCustomer}
-          />
+          <div style={{ width: '100%', maxWidth: '280px', minWidth: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+            <WhatsAppAudioPlayer
+              message={msg}
+              conversation={conversation || undefined}
+              allMessages={conversation?.messages || []}
+              isCustomer={isCustomer}
+            />
+          </div>
         );
 
       case 'arquivo':
@@ -2952,24 +3007,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {onBack && (
             <button
               onClick={() => {
-                if (showCopilotModal) {
-                  setShowCopilotModal(false);
-                  return;
-                }
-                if (showAttachmentMenu) {
-                  setShowAttachmentMenu(false);
-                  return;
-                }
-                if (showEmojiPicker) {
-                  setShowEmojiPicker(false);
-                  return;
-                }
-                if (isSelectionMode) {
-                  setIsSelectionMode(false);
-                  setSelectedMessagesForForward([]);
-                  return;
-                }
-                if (onBack) {
+                const closed = closeTopmostSublayer();
+                if (!closed && onBack) {
                   onBack();
                 }
               }}
