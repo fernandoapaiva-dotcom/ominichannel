@@ -3,6 +3,7 @@ import { User } from './types';
 import { apiFetch } from './services/api';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
+import { AudioProvider } from './context/AudioContext';
 
 export const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -57,7 +58,11 @@ export const App: React.FC = () => {
     return <Login onLoginSuccess={checkAuth} />;
   }
 
-  return <Dashboard user={user} onLogout={handleLogout} />;
+  return (
+    <AudioProvider>
+      <Dashboard user={user} onLogout={handleLogout} />
+    </AudioProvider>
+  );
 };
 
 export default App;

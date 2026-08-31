@@ -16,6 +16,9 @@ import { ForwardModal } from './ForwardModal';
 import { MessageInfoModal } from './MessageInfoModal';
 import { EmojiGifStickerPicker } from './EmojiGifStickerPicker';
 import { AICopilotModal } from './AICopilotModal';
+import { WhatsAppAudioPlayer } from './WhatsAppAudioPlayer';
+import { AudioRecorder } from './AudioRecorder';
+import { StickyAudioPlayer } from './StickyAudioPlayer';
 import { Conversation, User, Message, CalendarEvent } from '../types';
 
 interface ChatAreaProps {
@@ -1010,6 +1013,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  const handleSendAudioMessage = async (audioUrl: string) => {
+    if (!conversation) return;
+    try {
+      const payload = {
+        tipo: 'audio',
+        conteudo: audioUrl
+      };
+      const newMsg: any = await apiFetch(`/conversations/${conversation.id}/messages`, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      if (newMsg) {
+        setMessages(prev => [...prev, newMsg]);
+        scrollToBottom();
+      }
+    } catch (err) {
+      console.error('Error sending audio message:', err);
+      setSendError('Erro ao enviar mensagem de áudio.');
+    }
+  };
+
   const [showMentionMenu, setShowMentionMenu] = useState(false);
 
 
@@ -1945,15 +1969,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       case 'audio':
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '300px' }}>
-            <audio controls style={{ width: '100%', height: '40px', outline: 'none' }}>
-              <source src={fullUrl} type="audio/ogg" />
-              <source src={fullUrl} type="audio/mpeg" />
-              <source src={fullUrl} />
-              Seu navegador não suporta reprodução de áudio.
-            </audio>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
-          </div>
+          <WhatsAppAudioPlayer
+            message={msg}
+            conversation={conversation || undefined}
+            allMessages={messages}
+            isCustomer={isCustomer}
+          />
         );
 
       case 'arquivo':
@@ -3631,13 +3652,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               padding: '4px',
               display: 'flex',
               alignItems: 'center',
-              borderRadius: '4px'
             }}
           >
             <X size={15} />
           </button>
         </div>
       )}
+
+      <StickyAudioPlayer />
 
       <div
         ref={scrollContainerRef}
@@ -5477,6 +5499,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 wordBreak: 'break-word'
               }}
             />
+
+            <AudioRecorder onSendAudio={handleSendAudioMessage} />
 
             <button
               type="button"
