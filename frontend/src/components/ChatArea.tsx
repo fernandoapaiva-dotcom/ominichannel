@@ -1882,6 +1882,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       fullUrl = `/api/v1/conversations/messages/${msg.id}/media`;
     }
     const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
+    const isCustomer = msg.remetente === 'cliente' || msg.remetente === 'contact';
 
     switch (msg.tipo) {
       case 'imagem':
