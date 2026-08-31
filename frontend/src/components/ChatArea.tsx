@@ -994,9 +994,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } finally {
       setIsTogglingPin(false);
     }
+  const handleRetryMessage = async (msgId: number) => {
+    setActiveActionMenuMsgId(null);
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: 'sending' } : m));
+    try {
+      const res: any = await apiFetch(`/conversations/messages/${msgId}/retry`, { method: 'POST' });
+      if (res && res.status) {
+        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: res.status } : m));
+      }
+    } catch (err) {
+      console.error('Failed to retry message:', err);
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: 'failed' } : m));
+    }
   };
 
   const [showMentionMenu, setShowMentionMenu] = useState(false);
+
 
   const handleInsertMention = (mentionTag: string) => {
     const target = textareaRef.current;
@@ -3933,7 +3946,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       lastMsg.status === 'sending' || lastMsg.status === 'pending' ? (
                         <Clock size={12} style={{ color: 'var(--text-muted)' }} title="Enviando..." />
                       ) : lastMsg.status === 'failed' ? (
-                        <AlertCircle size={12} style={{ color: '#ef4444' }} title="Falha no envio" />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRetryMessage(lastMsg.id);
+                          }}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            padding: '0 2px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                            color: '#ef4444'
+                          }}
+                          title="Falha no envio. Clique para reenviar a mensagem!"
+                        >
+                          <AlertCircle size={13} style={{ color: '#ef4444' }} />
+                          <span style={{ fontSize: '10px', fontWeight: 'bold', color: '#ef4444', textDecoration: 'underline' }}>Reenviar</span>
+                        </button>
                       ) : lastMsg.status === 'sent' ? (
                         <Check size={14} style={{ color: 'var(--text-muted)' }} title="Enviada ao servidor" />
                       ) : lastMsg.status === 'delivered' ? (
@@ -4072,9 +4105,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
                         >
                           <Plus size={14} />
-                        </button>
                       </div>
 
+                      {/* 0. Reenviar Mensagem (se falhou no envio) */}
+                      {msg.status === 'failed' && (
+                        <button
+                          type="button"
+                          onClick={() => handleRetryMessage(msg.id)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                            padding: '8px 12px',
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            color: '#ef4444',
+                            fontSize: '13px',
+                            fontWeight: '600',
+                            textAlign: 'left',
+                            cursor: 'pointer',
+                            borderRadius: 'var(--radius-sm)',
+                            marginBottom: '4px'
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.25)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'rgba(239, 68, 68, 0.15)')}
+                        >
+                          <RotateCw size={15} style={{ color: '#ef4444' }} />
+                          <span>Reenviar mensagem</span>
+                        </button>
+                      )}
                       {/* Menu Actions (Idêntico ao WhatsApp Web) */}
 
                       {/* 1. Responder (Imagem 1, 2, 3) */}

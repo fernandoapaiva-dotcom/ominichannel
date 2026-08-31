@@ -1006,130 +1006,143 @@ async def send_agent_message(
     msg_id = message.id
     provider = WhatsAppProviderFactory.get_provider(conv.whatsapp_number)
 
-    # 3. Background WhatsApp API Dispatch (Non-blocking async task)
+    # 3. Background WhatsApp API Dispatch (Non-blocking async task with auto-retry)
     async def _async_dispatch_to_whatsapp():
         try:
             from app.core.database import AsyncSessionLocal
             send_res = {"success": False}
+            wa_key_id = None
 
-            if is_sticker and target_instance_name:
-                sticker_media = raw_content
-                if "/uploads/" in raw_content:
-                    fname = raw_content.split("/uploads/")[-1]
-                    lpath = os.path.join("uploads", fname)
-                    if os.path.exists(lpath):
-                        with open(lpath, "rb") as f:
-                            sticker_media = base64.b64encode(f.read()).decode("utf-8")
+            # Retry loop: attempt up to 3 times before marking as failed
+            for attempt in range(1, 4):
+                try:
+                    if is_sticker and target_instance_name:
+                        sticker_media = raw_content
+                        if "/uploads/" in raw_content:
+                            fname = raw_content.split("/uploads/")[-1]
+                            lpath = os.path.join("uploads", fname)
+                            if os.path.exists(lpath):
+                                with open(lpath, "rb") as f:
+                                    sticker_media = base64.b64encode(f.read()).decode("utf-8")
 
-                send_res = await evolution_service.send_sticker(
-                    instance_name=target_instance_name,
-                    number=target_phone,
-                    sticker_media=sticker_media
-                )
-            elif is_gif and target_instance_name:
-                send_res = await evolution_service.send_media_message(
-                    instance_name=target_instance_name,
-                    number=target_phone,
-                    media_type="video",
-                    mimetype="video/mp4",
-                    media=raw_content,
-                    file_name="animacao.mp4"
-                )
-            elif is_media and target_instance_name:
-                media_path = raw_content.split("|")[0].strip()
-                caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
-                formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_nome}:*"
-
-                media_data = media_path
-                fname = "arquivo"
-                mimetype = "image/jpeg"
-                media_type = "image"
-
-                if "/uploads/" in media_path:
-                    fname = media_path.split("/uploads/")[-1]
-                    lpath = os.path.join("uploads", fname)
-                    if os.path.exists(lpath):
-                        with open(lpath, "rb") as f:
-                            media_data = base64.b64encode(f.read()).decode("utf-8")
-
-                f_lower = fname.lower()
-                if f_lower.endswith(".png"):
-                    mimetype = "image/png"
-                    media_type = "image"
-                elif f_lower.endswith((".jpg", ".jpeg")):
-                    mimetype = "image/jpeg"
-                    media_type = "image"
-                elif f_lower.endswith(".mp4"):
-                    mimetype = "video/mp4"
-                    media_type = "video"
-                elif f_lower.endswith((".ogg", ".mp3", ".wav")):
-                    mimetype = "audio/ogg"
-                    media_type = "audio"
-                elif f_lower.endswith(".pdf"):
-                    mimetype = "application/pdf"
-                    media_type = "document"
-                else:
-                    if str(msg_in.tipo).lower() in ("imagem", "image"):
-                        media_type = "image"
-                        mimetype = "image/jpeg"
-                    elif str(msg_in.tipo).lower() == "video":
-                        media_type = "video"
-                        mimetype = "video/mp4"
-                    elif str(msg_in.tipo).lower() == "audio":
-                        media_type = "audio"
-                        mimetype = "audio/ogg"
-                    else:
-                        media_type = "document"
-                        mimetype = "application/octet-stream"
-
-                send_res = await evolution_service.send_media_message(
-                    instance_name=target_instance_name,
-                    number=target_phone,
-                    media_type=media_type,
-                    mimetype=mimetype,
-                    media=media_data,
-                    file_name=fname,
-                    caption=formatted_caption
-                )
-            else:
-                formatted_whatsapp_text = f"*👤 {agent_nome}:*\n\n{msg_in.conteudo}"
-
-                # Extract mentions
-                mentioned_list = []
-                c_text = msg_in.conteudo or ""
-                import re
-
-                is_group_chat = bool(
-                    target_phone and (
-                        target_phone.startswith("120363") or
-                        len("".join(filter(str.isdigit, target_phone))) > 15
-                    )
-                )
-                if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
-                    try:
-                        g_info = await evolution_service.fetch_group_info(
+                        send_res = await evolution_service.send_sticker(
                             instance_name=target_instance_name,
-                            group_jid=target_phone if "@g.us" in target_phone else f"{target_phone}@g.us"
+                            number=target_phone,
+                            sticker_media=sticker_media
                         )
-                        if g_info and "participants" in g_info:
-                            for p in g_info["participants"]:
-                                raw_p = p.get("phoneNumber") or p.get("id") or ""
-                                digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
-                                if len(digits) >= 8 and digits not in mentioned_list:
-                                    mentioned_list.append(digits)
-                    except Exception as ex:
-                        logger.warning(f"Error resolving @todos participants: {ex}")
+                    elif is_gif and target_instance_name:
+                        send_res = await evolution_service.send_media_message(
+                            instance_name=target_instance_name,
+                            number=target_phone,
+                            media_type="video",
+                            mimetype="video/mp4",
+                            media=raw_content,
+                            file_name="animacao.mp4"
+                        )
+                    elif is_media and target_instance_name:
+                        media_path = raw_content.split("|")[0].strip()
+                        caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
+                        formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_nome}:*"
 
-                phone_mentions = re.findall(r"@(\d{10,15})", c_text)
-                for pm in phone_mentions:
-                    if pm not in mentioned_list:
-                        mentioned_list.append(pm)
+                        media_data = media_path
+                        fname = "arquivo"
+                        mimetype = "image/jpeg"
+                        media_type = "image"
 
-                send_res = await provider.send_text_message(
-                    number=target_phone,
-                    text=formatted_whatsapp_text,
-                    mentioned=mentioned_list if mentioned_list else None
-                )
+                        if "/uploads/" in media_path:
+                            fname = media_path.split("/uploads/")[-1]
+                            lpath = os.path.join("uploads", fname)
+                            if os.path.exists(lpath):
+                                with open(lpath, "rb") as f:
+                                    media_data = base64.b64encode(f.read()).decode("utf-8")
+
+                        f_lower = fname.lower()
+                        if f_lower.endswith(".png"):
+                            mimetype = "image/png"
+                            media_type = "image"
+                        elif f_lower.endswith((".jpg", ".jpeg")):
+                            mimetype = "image/jpeg"
+                            media_type = "image"
+                        elif f_lower.endswith(".mp4"):
+                            mimetype = "video/mp4"
+                            media_type = "video"
+                        elif f_lower.endswith((".ogg", ".mp3", ".wav")):
+                            mimetype = "audio/ogg"
+                            media_type = "audio"
+                        elif f_lower.endswith(".pdf"):
+                            mimetype = "application/pdf"
+                            media_type = "document"
+                        else:
+                            if str(msg_in.tipo).lower() in ("imagem", "image"):
+                                media_type = "image"
+                                mimetype = "image/jpeg"
+                            elif str(msg_in.tipo).lower() == "video":
+                                media_type = "video"
+                                mimetype = "video/mp4"
+                            elif str(msg_in.tipo).lower() == "audio":
+                                media_type = "audio"
+                                mimetype = "audio/ogg"
+                            else:
+                                media_type = "document"
+                                mimetype = "application/octet-stream"
+
+                        send_res = await evolution_service.send_media_message(
+                            instance_name=target_instance_name,
+                            number=target_phone,
+                            media_type=media_type,
+                            mimetype=mimetype,
+                            media=media_data,
+                            file_name=fname,
+                            caption=formatted_caption
+                        )
+                    else:
+                        formatted_whatsapp_text = f"*👤 {agent_nome}:*\n\n{msg_in.conteudo}"
+
+                        # Extract mentions
+                        mentioned_list = []
+                        c_text = msg_in.conteudo or ""
+                        import re
+
+                        is_group_chat = bool(
+                            target_phone and (
+                                target_phone.startswith("120363") or
+                                len("".join(filter(str.isdigit, target_phone))) > 15
+                            )
+                        )
+                        if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
+                            try:
+                                g_info = await evolution_service.fetch_group_info(
+                                    instance_name=target_instance_name,
+                                    group_jid=target_phone if "@g.us" in target_phone else f"{target_phone}@g.us"
+                                )
+                                if g_info and "participants" in g_info:
+                                    for p in g_info["participants"]:
+                                        raw_p = p.get("phoneNumber") or p.get("id") or ""
+                                        digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
+                                        if len(digits) >= 8 and digits not in mentioned_list:
+                                            mentioned_list.append(digits)
+                            except Exception as ex:
+                                logger.warning(f"Error resolving @todos participants: {ex}")
+
+                        phone_mentions = re.findall(r"@(\d{10,15})", c_text)
+                        for pm in phone_mentions:
+                            if pm not in mentioned_list:
+                                mentioned_list.append(pm)
+
+                        send_res = await provider.send_text_message(
+                            number=target_phone,
+                            text=formatted_whatsapp_text,
+                            mentioned=mentioned_list if mentioned_list else None
+                        )
+
+                    wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+                    if send_res.get("success", False) or wa_key_id:
+                        break
+                except Exception as attempt_err:
+                    logger.warning(f"Dispatch attempt {attempt} failed for msg #{msg_id}: {attempt_err}")
+
+                if attempt < 3:
+                    await asyncio.sleep(1.5)
 
             wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
             final_status = "sent" if (send_res.get("success", False) or wa_key_id) else "failed"
@@ -1145,12 +1158,12 @@ async def send_agent_message(
                     await bg_db.commit()
 
                 # Mark customer's prior messages as read on WhatsApp since attendant is replying
-                bg_c_stmt = select(Conversation).options(selectinload(Conversation.contact)).where(Conversation.id == target_conv_id)
-                bg_c_res = await bg_db.execute(bg_c_stmt)
-                bg_conv = bg_c_res.scalar_one_or_none()
-                if bg_conv:
-                    await trigger_whatsapp_mark_read(bg_db, bg_conv, target_tenant_id)
-
+                if final_status == "sent":
+                    bg_c_stmt = select(Conversation).options(selectinload(Conversation.contact)).where(Conversation.id == target_conv_id)
+                    bg_c_res = await bg_db.execute(bg_c_stmt)
+                    bg_conv = bg_c_res.scalar_one_or_none()
+                    if bg_conv:
+                        await trigger_whatsapp_mark_read(bg_db, bg_conv, target_tenant_id)
 
             # Broadcast status update if key id obtained or failed
             await ws_manager.broadcast_to_department(
@@ -1168,6 +1181,187 @@ async def send_agent_message(
             logger.error(f"Error in background WhatsApp dispatch: {bg_err}")
 
     asyncio.create_task(_async_dispatch_to_whatsapp())
+
+    # 4. Trigger Smart Automation Engine (OS Handler & Custom Rules) in background
+    from app.services.automation_service import automation_service
+    asyncio.create_task(
+        automation_service.process_and_dispatch_automation(
+            db=db,
+            conversation=conv,
+            user_message=payload_content if 'payload_content' in locals() else (msg_in.conteudo or ""),
+            tenant_id=current_user.tenant_id
+        )
+    )
+
+    return message
+
+@router.post("/messages/{message_id}/retry", response_model=MessageResponse)
+async def retry_message_send(
+    message_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Retries sending a failed message to WhatsApp.
+    """
+    stmt = (
+        select(Message)
+        .options(selectinload(Message.conversation))
+        .where(Message.id == message_id)
+    )
+    res = await db.execute(stmt)
+    msg = res.scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada")
+
+    conv = msg.conversation
+    if not conv or conv.tenant_id != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Acesso não autorizado")
+
+    wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.id == conv.whatsapp_number_id)
+    wn_res = await db.execute(wn_stmt)
+    wn = wn_res.scalar_one_or_none()
+    if not wn:
+        raise HTTPException(status_code=400, detail="Número de WhatsApp não configurado")
+
+    msg.status = "sending"
+    await db.commit()
+
+    target_conv_id = conv.id
+    target_tenant_id = current_user.tenant_id
+    target_number_id = conv.whatsapp_number_id
+    target_phone = conv.contact.telefone if conv.contact else ""
+    target_instance_name = wn.instancia_evolution_api
+    agent_nome = current_user.nome or "Atendente"
+    provider = WhatsAppProviderFactory.get_provider(wn)
+    raw_content = msg.conteudo or ""
+
+    is_sticker = str(msg.tipo).lower() in ("sticker", "figurinha") or raw_content.lower().endswith(".webp")
+    is_gif = raw_content.lower().endswith(".gif") or "giphy.com" in raw_content.lower() or "tenor.com" in raw_content.lower()
+    is_media = not is_sticker and not is_gif and (
+        str(msg.tipo).lower() in (MessageType.IMAGEM, MessageType.VIDEO, MessageType.AUDIO, MessageType.ARQUIVO, "imagem", "video", "audio", "arquivo", "document", "documento") or
+        "/uploads/" in raw_content or
+        (raw_content.startswith("http") and any(raw_content.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".mp4", ".ogg", ".mp3", ".pdf"]))
+    )
+
+    async def _async_retry_dispatch():
+        try:
+            send_res = {"success": False}
+            wa_key_id = None
+
+            for attempt in range(1, 4):
+                try:
+                    if is_sticker and target_instance_name:
+                        sticker_media = raw_content
+                        if "/uploads/" in raw_content:
+                            fname = raw_content.split("/uploads/")[-1]
+                            lpath = os.path.join("uploads", fname)
+                            if os.path.exists(lpath):
+                                with open(lpath, "rb") as f:
+                                    sticker_media = base64.b64encode(f.read()).decode("utf-8")
+                        send_res = await evolution_service.send_sticker(
+                            instance_name=target_instance_name,
+                            number=target_phone,
+                            sticker_media=sticker_media
+                        )
+                    elif is_gif and target_instance_name:
+                        send_res = await evolution_service.send_media_message(
+                            instance_name=target_instance_name,
+                            number=target_phone,
+                            media_type="video",
+                            mimetype="video/mp4",
+                            media=raw_content,
+                            file_name="animacao.mp4"
+                        )
+                    elif is_media and target_instance_name:
+                        media_path = raw_content.split("|")[0].strip()
+                        caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
+                        formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else None
+                        fname = os.path.basename(media_path)
+                        
+                        media_data = media_path
+                        if media_path.startswith("/uploads/"):
+                            local_filepath = os.path.join("uploads", os.path.basename(media_path))
+                            if os.path.exists(local_filepath):
+                                with open(local_filepath, "rb") as f:
+                                    media_data = base64.b64encode(f.read()).decode("utf-8")
+
+                        ext = os.path.splitext(fname)[1].lower()
+                        if ext in (".png", ".jpg", ".jpeg", ".webp"):
+                            media_type = "image"
+                            mimetype = f"image/{ext.replace('.', '')}"
+                        elif ext in (".mp4", ".mov", ".avi"):
+                            media_type = "video"
+                            mimetype = "video/mp4"
+                        elif ext in (".ogg", ".mp3", ".wav", ".m4a"):
+                            media_type = "audio"
+                            mimetype = "audio/ogg"
+                        else:
+                            media_type = "document"
+                            mimetype = "application/octet-stream"
+
+                        send_res = await evolution_service.send_media_message(
+                            instance_name=target_instance_name,
+                            number=target_phone,
+                            media_type=media_type,
+                            mimetype=mimetype,
+                            media=media_data,
+                            file_name=fname,
+                            caption=formatted_caption
+                        )
+                    else:
+                        formatted_whatsapp_text = raw_content if raw_content.startswith("*👤") else f"*👤 {agent_nome}:*\n\n{raw_content}"
+                        send_res = await provider.send_text_message(
+                            number=target_phone,
+                            text=formatted_whatsapp_text
+                        )
+
+                    wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+                    if send_res.get("success", False) or wa_key_id:
+                        break
+                except Exception as attempt_err:
+                    logger.warning(f"Retry attempt {attempt} failed for msg #{message_id}: {attempt_err}")
+
+                if attempt < 3:
+                    await asyncio.sleep(1.5)
+
+            wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+            final_status = "sent" if (send_res.get("success", False) or wa_key_id) else "failed"
+
+            from app.core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as bg_db:
+                bg_m_stmt = select(Message).where(Message.id == message_id)
+                bg_m_res = await bg_db.execute(bg_m_stmt)
+                db_msg = bg_m_res.scalar_one_or_none()
+                if db_msg:
+                    db_msg.whatsapp_msg_id = wa_key_id
+                    db_msg.status = final_status
+                    await bg_db.commit()
+
+                if final_status == "sent":
+                    bg_c_stmt = select(Conversation).options(selectinload(Conversation.contact)).where(Conversation.id == target_conv_id)
+                    bg_c_res = await bg_db.execute(bg_c_stmt)
+                    bg_conv = bg_c_res.scalar_one_or_none()
+                    if bg_conv:
+                        await trigger_whatsapp_mark_read(bg_db, bg_conv, target_tenant_id)
+
+            await ws_manager.broadcast_to_department(
+                tenant_id=target_tenant_id,
+                whatsapp_number_id=target_number_id,
+                message_data={
+                    "type": "MESSAGE_STATUS_UPDATE",
+                    "conversation_id": target_conv_id,
+                    "id": message_id,
+                    "status": final_status,
+                    "whatsapp_msg_id": wa_key_id
+                }
+            )
+        except Exception as bg_err:
+            logger.error(f"Error in background WhatsApp retry dispatch: {bg_err}")
+
+    asyncio.create_task(_async_retry_dispatch())
+    return msg
+
 
     # 4. Trigger Smart Automation Engine (OS Handler & Custom Rules) in background
     from app.services.automation_service import automation_service
