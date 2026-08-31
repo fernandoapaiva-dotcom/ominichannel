@@ -74,6 +74,12 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, disab
       // Stop all microphone tracks
       recorder.stream.getTracks().forEach(track => track.stop());
 
+      if (audioChunksRef.current.length === 0) {
+        setIsUploading(false);
+        setRecordingTime(0);
+        return;
+      }
+
       const mimeType = recorder.mimeType || 'audio/webm';
       const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm';
       const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
@@ -89,13 +95,17 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, disab
         }
       } catch (err) {
         console.error('Error uploading voice note:', err);
-        alert('Erro ao enviar áudio gravado.');
       } finally {
         setIsUploading(false);
         setRecordingTime(0);
       }
     };
 
+    try {
+      recorder.requestData();
+    } catch (e) {
+      console.warn('requestData warning:', e);
+    }
     recorder.stop();
   };
 

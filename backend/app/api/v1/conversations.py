@@ -2,6 +2,7 @@ import os
 import asyncio
 import uuid
 import base64
+import subprocess
 import zipfile
 import io
 import re
@@ -1693,13 +1694,44 @@ async def upload_general_file(
     current_user: User = Depends(get_current_user)
 ):
     os.makedirs("uploads", exist_ok=True)
-    file_ext = os.path.splitext(file.filename)[1] or ".ogg"
-    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
-    file_path = os.path.join("uploads", unique_filename)
+    raw_ext = (os.path.splitext(file.filename)[1] or ".webm").lower()
+    unique_base = uuid.uuid4().hex
+    temp_filename = f"{unique_base}_raw{raw_ext}"
+    temp_path = os.path.join("uploads", temp_filename)
 
     file_bytes = await file.read()
-    with open(file_path, "wb") as f:
+    with open(temp_path, "wb") as f:
         f.write(file_bytes)
+
+    # If file is audio (webm, ogg, wav, mp3, m4a), convert to standardized WhatsApp Ogg Opus with exact duration headers
+    if raw_ext in [".webm", ".ogg", ".wav", ".mp3", ".m4a", ".aac", ".flac"]:
+        final_filename = f"{unique_base}.ogg"
+        final_path = os.path.join("uploads", final_filename)
+        try:
+            cmd = [
+                "ffmpeg", "-y", "-i", temp_path,
+                "-c:a", "libopus",
+                "-b:a", "32k",
+                "-ar", "48000",
+                "-ac", "1",
+                "-application", "voip",
+                final_path
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+            if res.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+                return {"url": f"/uploads/{final_filename}", "filename": final_filename}
+        except Exception as err:
+            logger.error(f"Error converting audio upload with ffmpeg: {err}")
+
+    # Fallback for non-audio or if ffmpeg conversion failed
+    unique_filename = f"{unique_base}{raw_ext}"
+    final_path = os.path.join("uploads", unique_filename)
+    if temp_path != final_path:
+        os.rename(temp_path, final_path)
 
     return {"url": f"/uploads/{unique_filename}", "filename": file.filename}
 
