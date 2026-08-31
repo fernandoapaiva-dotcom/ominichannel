@@ -256,7 +256,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      if (e.state?.sublayerOpen || (window.history.state && window.history.state.sublayerOpen)) {
+      const state = e.state || window.history.state;
+      if (state?.page === 'chat' || state?.page === 'sublayer' || state?.sublayerOpen) {
         return;
       }
       if (activeConversationId !== null) {
@@ -271,9 +272,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     setActiveConversationId(convId);
     loadActiveConversationDetail(convId);
     try {
-      if (window.history.state?.chatOpen !== true) {
-        window.history.pushState({ chatOpen: true }, '');
-      }
+      window.history.pushState({ page: 'chat', chatOpen: true, convId }, '');
     } catch {}
     // Optimistically mark as read for all conversations and messages of this contact
     setConversations(prev => {

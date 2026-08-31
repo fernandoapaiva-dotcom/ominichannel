@@ -478,7 +478,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   useEffect(() => {
     if (hasSublayer) {
-      window.history.pushState({ sublayerOpen: true }, '');
+      try {
+        window.history.pushState({ page: 'sublayer', sublayerOpen: true }, '');
+      } catch {}
     }
   }, [hasSublayer]);
 

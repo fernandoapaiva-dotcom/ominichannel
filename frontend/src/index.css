@@ -460,11 +460,13 @@ button {
     border-radius: 12px !important;
   }
 
+  .chat-emoji-btn { order: 2 !important; }
+  .chat-attach-btn { order: 3 !important; }
+  .chat-consultar-ia-btn { order: 4 !important; }
+
   .chat-emoji-btn,
   .chat-attach-btn,
-  .chat-mic-btn,
   .chat-consultar-ia-btn {
-    order: 2 !important;
     width: 38px !important;
     height: 38px !important;
     min-width: 38px !important;
@@ -479,12 +481,29 @@ button {
     flex-shrink: 0 !important;
   }
 
+  .chat-mic-btn {
+    order: 5 !important;
+    width: 38px !important;
+    height: 38px !important;
+    min-width: 38px !important;
+    border-radius: 50% !important;
+    background-color: rgba(0, 230, 153, 0.15) !important;
+    border: 1px solid rgba(0, 230, 153, 0.35) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    color: var(--accent-primary) !important;
+    flex-shrink: 0 !important;
+    margin-left: auto !important;
+  }
+
   .chat-btn-text {
     display: none !important;
   }
 
   .chat-enviar-btn {
-    order: 2 !important;
+    order: 6 !important;
     width: 42px !important;
     height: 42px !important;
     min-width: 42px !important;
@@ -494,10 +513,10 @@ button {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    margin-left: auto !important;
     padding: 0 !important;
     flex-shrink: 0 !important;
     box-shadow: 0 3px 10px rgba(0, 230, 153, 0.3) !important;
+    margin-left: 6px !important;
   }
 
   /* ── Mobile Admin & Config Panel Responsive Rules ── */

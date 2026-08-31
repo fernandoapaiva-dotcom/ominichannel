@@ -71,7 +71,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      setActiveAudio(prev => prev ? { ...prev, isPlaying: false, currentTime: 0 } : null);
+      // Audio finished and no sequential audio to play -> automatically dismiss sticky player header bar!
+      setActiveAudio(null);
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
