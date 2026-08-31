@@ -532,8 +532,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     if (!activeConversation) return;
 
     let targetConv = activeConversation;
-    const isMedia = tipo !== 'texto' || text.endsWith('.webp') || text.endsWith('.gif') || text.includes('/uploads/');
-    const actualTipo = isMedia ? (text.endsWith('.gif') ? 'video' : 'imagem') : (tipo || 'texto');
+    let actualTipo = tipo || 'texto';
+    if (tipo === 'texto') {
+      const lower = text.toLowerCase();
+      if (lower.endsWith('.gif')) actualTipo = 'video';
+      else if (lower.endsWith('.ogg') || lower.endsWith('.webm') || lower.endsWith('.mp3') || lower.endsWith('.wav') || lower.endsWith('.m4a') || lower.includes('voice_note')) actualTipo = 'audio';
+      else if (lower.endsWith('.webp') || lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) actualTipo = 'imagem';
+      else if (lower.endsWith('.pdf')) actualTipo = 'arquivo';
+    }
     const tempId = -Date.now();
     const optimisticMsg: Message = {
       id: tempId,
