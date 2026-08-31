@@ -486,6 +486,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const handlePopState = (e: PopStateEvent) => {
       const closed = closeTopmostSublayer();
       if (closed) {
+        e.stopImmediatePropagation();
         e.preventDefault();
       }
     };
@@ -496,10 +497,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     };
 
-    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('popstate', handlePopState, true);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('popstate', handlePopState, true);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeTopmostSublayer]);

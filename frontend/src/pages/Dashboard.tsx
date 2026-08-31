@@ -256,6 +256,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
+      if (e.state?.sublayerOpen || (window.history.state && window.history.state.sublayerOpen)) {
+        return;
+      }
       if (activeConversationId !== null) {
         setActiveConversationId(null);
       }

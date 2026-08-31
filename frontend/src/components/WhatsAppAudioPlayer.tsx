@@ -51,10 +51,10 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: '8px',
-        padding: '4px 2px',
+        gap: '6px',
+        padding: '2px 0',
         width: '100%',
-        maxWidth: '100%',
+        maxWidth: '220px',
         minWidth: 0,
         boxSizing: 'border-box',
         overflow: 'hidden',
