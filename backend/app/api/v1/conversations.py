@@ -1193,10 +1193,13 @@ async def send_agent_message(
     from app.services.automation_service import automation_service
     asyncio.create_task(
         automation_service.process_and_dispatch_automation(
-            db=db,
-            conversation=conv,
-            user_message=payload_content if 'payload_content' in locals() else (msg_in.conteudo or ""),
-            tenant_id=current_user.tenant_id
+            tenant_id=current_user.tenant_id,
+            conversation_id=conv.id,
+            message_text=raw_content,
+            from_me=True,
+            contact_name=conv.contact.nome if conv.contact else "Cliente",
+            instance_name=target_instance_name,
+            recipient_phone=target_phone
         )
     )
 
