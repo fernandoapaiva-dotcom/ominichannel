@@ -123,18 +123,6 @@ async def create_whatsapp_number(
     await db.commit()
     await db.refresh(wn)
 
-    # Automatic history sync if evolution instance is configured
-    if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
-        from app.services.settings_service import settings_service
-        decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
-        whatsapp_sync_service.trigger_background_sync(
-            tenant_id=admin_user.tenant_id,
-            whatsapp_number_id=wn.id,
-            instance_name=wn.instancia_evolution_api,
-            custom_base_url=decrypted.get("evolution_api_url"),
-            custom_api_key=decrypted.get("evolution_api_key")
-        )
-
     return _to_response_schema(wn)
 
 @router.put("/{number_id}", response_model=WhatsAppNumberResponse)
@@ -181,18 +169,6 @@ async def update_whatsapp_number(
 
     await db.commit()
     await db.refresh(wn)
-
-    # Automatic history sync on modification if evolution instance is active
-    if wn.instancia_evolution_api and (wn.provider_type or "evolution") != "meta":
-        from app.services.settings_service import settings_service
-        decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
-        whatsapp_sync_service.trigger_background_sync(
-            tenant_id=admin_user.tenant_id,
-            whatsapp_number_id=wn.id,
-            instance_name=wn.instancia_evolution_api,
-            custom_base_url=decrypted.get("evolution_api_url"),
-            custom_api_key=decrypted.get("evolution_api_key")
-        )
 
     return _to_response_schema(wn)
 

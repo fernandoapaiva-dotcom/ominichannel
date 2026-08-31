@@ -151,24 +151,10 @@ async def receive_evolution_webhook(
             logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
             return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
 
-    # Handle CONNECTION_UPDATE event (trigger automatic sync when instance connects/opens)
+    # Handle CONNECTION_UPDATE event (log connection state without triggering socket-overloading history sync)
     if event_type in ["connection.update", "connection_update", "CONNECTION_UPDATE"]:
         conn_state = data.get("state") or data.get("status") or payload.get("state")
         logger.info(f"[CONNECTION_UPDATE] Instância '{instance_name}' estado: '{conn_state}'")
-        if str(conn_state).lower() in ["open", "connected"] and instance_name:
-            wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
-            wn_res = await db.execute(wn_stmt)
-            wn = wn_res.scalar_one_or_none()
-            if wn:
-                decrypted = await settings_service.get_tenant_decrypted_settings(db, wn.tenant_id)
-                whatsapp_sync_service.trigger_background_sync(
-                    tenant_id=wn.tenant_id,
-                    whatsapp_number_id=wn.id,
-                    instance_name=instance_name,
-                    custom_base_url=decrypted.get("evolution_api_url"),
-                    custom_api_key=decrypted.get("evolution_api_key")
-                )
-                logger.info(f"Triggered automatic background history sync for connected instance '{instance_name}'")
         return {"status": "success", "event": event_type, "state": conn_state}
 
     # Handle CONTACTS_UPDATE / CONTACTS_UPSERT (Phone address book synced or updated on mobile)
