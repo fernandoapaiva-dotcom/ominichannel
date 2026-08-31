@@ -81,7 +81,9 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, disab
       const file = new File([audioBlob], `voice_note_${Date.now()}.${ext}`, { type: mimeType });
 
       try {
-        const res = await apiUpload(file);
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await apiUpload('/conversations/upload', formData);
         if (res && res.url) {
           onSendAudio(res.url);
         }

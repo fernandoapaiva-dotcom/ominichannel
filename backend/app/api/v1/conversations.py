@@ -1681,6 +1681,22 @@ async def send_pix_in_conversation(
 
     return msg
 
+@router.post("/upload")
+async def upload_general_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    os.makedirs("uploads", exist_ok=True)
+    file_ext = os.path.splitext(file.filename)[1] or ".ogg"
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    file_path = os.path.join("uploads", unique_filename)
+
+    file_bytes = await file.read()
+    with open(file_path, "wb") as f:
+        f.write(file_bytes)
+
+    return {"url": f"/uploads/{unique_filename}", "filename": file.filename}
+
 @router.post("/{conversation_id}/media", response_model=MessageResponse)
 async def send_agent_media(
     conversation_id: int,

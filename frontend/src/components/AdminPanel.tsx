@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building, Zap, Sparkles } from 'lucide-react';
+import { Plus, Shield, Phone, Users, Database, Settings, Check, Key, Link2, Activity, Clock, FileText, Pencil, Trash2, X, QrCode, RefreshCw, CheckCircle2, MessageSquare, Bot, Camera, Cpu, Wrench, Building, Zap, Sparkles, ArrowLeft } from 'lucide-react';
 import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../types';
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
@@ -9,9 +9,10 @@ import { RagTrainingAssistantModal } from './RagTrainingAssistantModal';
 interface AdminPanelProps {
   initialNumbers?: WhatsAppNumber[];
   onRefreshNumbers?: () => void;
+  onBack?: () => void;
 }
 
-export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers }) => {
+export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers, onBack }) => {
   const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations'>('numbers');
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>(initialNumbers);
   const [users, setUsers] = useState<User[]>([]);
@@ -914,9 +915,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   return (
     <div className="admin-panel-container" style={{ flex: 1, height: '100%', padding: '32px', overflowY: 'auto', backgroundColor: 'var(--bg-primary)' }}>
       <div style={{ maxWidth: '1050px', margin: '0 auto' }}>
-        <h1 style={{ fontFamily: 'var(--font-heading)', fontSize: '26px', fontWeight: '700', marginBottom: '8px' }}>
-          Painel de Administração Multitenant
-        </h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              style={{
+                background: 'rgba(0, 230, 153, 0.15)',
+                border: '1px solid rgba(0, 230, 153, 0.35)',
+                color: '#00e699',
+                cursor: 'pointer',
+                padding: '6px 12px',
+                borderRadius: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '13px',
+                fontWeight: '700',
+                flexShrink: 0
+              }}
+              title="Voltar para a tela de atendimento"
+            >
+              <ArrowLeft size={18} />
+              <span>Voltar</span>
+            </button>
+          )}
+          <h1 style={{ fontFamily: 'var(--font-heading)', fontSize: '26px', fontWeight: '700', margin: 0 }}>
+            Painel de Administração Multitenant
+          </h1>
+        </div>
         <p style={{ color: 'var(--text-muted)', fontSize: '14px', marginBottom: '24px' }}>
           Gerencie departamentos, permissões N:N de atendentes, integrações criptografadas e auditoria.
         </p>
