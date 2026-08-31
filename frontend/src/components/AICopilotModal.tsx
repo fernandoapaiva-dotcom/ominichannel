@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bot, Send, X, Sparkles, Copy, Check, CornerDownLeft, RefreshCw, MessageSquare, Wrench, DollarSign, FileText, Trash2, MapPin, Clock } from 'lucide-react';
+import { Bot, Send, X, Sparkles, Copy, Check, CornerDownLeft, RefreshCw, MessageSquare, Wrench, DollarSign, FileText, Trash2, MapPin, Clock, ArrowLeft } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, User } from '../types';
 
@@ -271,54 +271,76 @@ export const AICopilotModal: React.FC<AICopilotModalProps> = ({
         {/* Header */}
         <div
           style={{
-            padding: '14px 18px',
+            padding: '12px 14px',
             backgroundColor: '#1e293b',
             borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: '12px',
-            flexShrink: 0
+            gap: '8px',
+            flexShrink: 0,
+            flexWrap: 'nowrap'
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0, flex: 1 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                background: 'rgba(0, 230, 153, 0.15)',
+                border: '1px solid rgba(0, 230, 153, 0.3)',
+                color: '#00e699',
+                cursor: 'pointer',
+                padding: '6px',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}
+              title="Voltar para a conversa"
+            >
+              <ArrowLeft size={18} />
+            </button>
             <div
               style={{
-                width: '38px',
-                height: '38px',
+                width: '34px',
+                height: '34px',
                 borderRadius: '10px',
                 background: 'linear-gradient(135deg, #00e699 0%, #059669 100%)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 color: '#051a12',
-                boxShadow: '0 4px 12px rgba(0, 230, 153, 0.3)'
+                boxShadow: '0 4px 12px rgba(0, 230, 153, 0.3)',
+                flexShrink: 0
               }}
             >
-              <Bot size={22} />
+              <Bot size={18} />
             </div>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '15px', fontWeight: '800', color: '#ffffff' }}>
-                  Copiloto IA Especialista
+            <div style={{ minWidth: 0, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden' }}>
+                <span style={{ fontSize: '14px', fontWeight: '800', color: '#ffffff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Copiloto IA
                 </span>
                 <span
                   style={{
-                    fontSize: '10px',
+                    fontSize: '9px',
                     fontWeight: '700',
                     textTransform: 'uppercase',
                     backgroundColor: 'rgba(0, 230, 153, 0.15)',
                     color: 'var(--accent-primary)',
-                    padding: '2px 8px',
-                    borderRadius: '12px',
-                    border: '1px solid rgba(0, 230, 153, 0.3)'
+                    padding: '2px 6px',
+                    borderRadius: '10px',
+                    border: '1px solid rgba(0, 230, 153, 0.3)',
+                    flexShrink: 0
                   }}
                 >
-                  Modo Consultor
+                  Consultor
                 </span>
               </div>
-              <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#94a3b8' }}>
-                Analisando chamado de: <strong style={{ color: '#e2e8f0' }}>{customerName}</strong> • Setor: <strong style={{ color: '#e2e8f0' }}>{deptName}</strong>
+              <p style={{ margin: '1px 0 0 0', fontSize: '10px', color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {customerName} • {deptName}
               </p>
             </div>
           </div>

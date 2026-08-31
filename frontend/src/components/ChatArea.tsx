@@ -2950,8 +2950,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
           {onBack && (
             <button
-              onClick={onBack}
-              title="Voltar para a lista de conversas"
+              onClick={() => {
+                if (showCopilotModal) {
+                  setShowCopilotModal(false);
+                  return;
+                }
+                if (showAttachmentMenu) {
+                  setShowAttachmentMenu(false);
+                  return;
+                }
+                if (showEmojiPicker) {
+                  setShowEmojiPicker(false);
+                  return;
+                }
+                if (isSelectionMode) {
+                  setIsSelectionMode(false);
+                  setSelectedMessagesForForward([]);
+                  return;
+                }
+                if (onBack) {
+                  onBack();
+                }
+              }}
+              title="Voltar"
               style={{
                 background: 'none',
                 border: 'none',

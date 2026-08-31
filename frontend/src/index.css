@@ -446,12 +446,15 @@ button {
 
   .chat-emoji-btn,
   .chat-attach-btn,
+  .chat-mic-btn,
   .chat-consultar-ia-btn,
   .chat-enviar-btn {
     order: 2 !important;
     height: 38px !important;
-    padding: 0 10px !important;
-    font-size: 12px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex-shrink: 0 !important;
   }
 
   .chat-btn-text {
@@ -466,6 +469,11 @@ button {
   /* ── Mobile Admin & Config Panel Responsive Rules ── */
   .admin-panel-container {
     padding: 14px !important;
+    padding-bottom: 100px !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
   }
 
   .admin-subtab-bar {
