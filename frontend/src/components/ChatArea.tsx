@@ -1972,7 +1972,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <WhatsAppAudioPlayer
             message={msg}
             conversation={conversation || undefined}
-            allMessages={messages}
+            allMessages={conversation?.messages || []}
             isCustomer={isCustomer}
           />
         );
