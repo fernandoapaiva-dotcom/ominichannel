@@ -997,6 +997,7 @@ async def send_agent_message(
             "status": "sent",
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
+        }
     )
 
     target_conv_id = conv.id
