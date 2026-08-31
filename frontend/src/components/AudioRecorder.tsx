@@ -222,27 +222,30 @@ export const AudioRecorder: React.FC<AudioRecorderProps> = ({ onSendAudio, disab
       type="button"
       onClick={startRecording}
       disabled={disabled}
+      className="chat-mic-btn"
       style={{
-        background: 'transparent',
-        border: 'none',
-        color: 'var(--text-muted)',
+        background: 'rgba(0, 230, 153, 0.12)',
+        border: '1px solid rgba(0, 230, 153, 0.3)',
+        color: '#00e699',
         cursor: disabled ? 'not-allowed' : 'pointer',
-        padding: '8px',
+        width: '42px',
+        height: '42px',
         borderRadius: '50%',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        transition: 'color 0.15s ease, transform 0.15s ease'
+        flexShrink: 0,
+        transition: 'all 0.15s ease'
       }}
       onMouseEnter={(e) => {
         if (!disabled) {
-          e.currentTarget.style.color = '#00a884';
-          e.currentTarget.style.transform = 'scale(1.1)';
+          e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.25)';
+          e.currentTarget.style.transform = 'scale(1.05)';
         }
       }}
       onMouseLeave={(e) => {
         if (!disabled) {
-          e.currentTarget.style.color = 'var(--text-muted)';
+          e.currentTarget.style.backgroundColor = 'rgba(0, 230, 153, 0.12)';
           e.currentTarget.style.transform = 'scale(1)';
         }
       }}

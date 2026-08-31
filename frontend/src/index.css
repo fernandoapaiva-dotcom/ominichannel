@@ -454,9 +454,37 @@ button {
     font-size: 12px !important;
   }
 
+  .chat-btn-text {
+    display: none !important;
+  }
+
   .chat-enviar-btn {
     margin-left: auto !important;
     padding: 0 14px !important;
+  }
+
+  /* ── Mobile Admin & Config Panel Responsive Rules ── */
+  .admin-panel-container {
+    padding: 14px !important;
+  }
+
+  .admin-subtab-bar {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: none !important;
+    white-space: nowrap !important;
+    padding-bottom: 8px !important;
+  }
+  .admin-subtab-bar::-webkit-scrollbar { display: none !important; }
+
+  .admin-subtab-btn {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+  }
+
+  .admin-grid-2col {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
   }
 
   /* ── Mobile Attachment Bottom Sheet (WhatsApp Style) ── */

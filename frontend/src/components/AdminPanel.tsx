@@ -912,7 +912,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   };
 
   return (
-    <div style={{ flex: 1, height: '100%', padding: '32px', overflowY: 'auto', backgroundColor: 'var(--bg-primary)' }}>
+    <div className="admin-panel-container" style={{ flex: 1, height: '100%', padding: '32px', overflowY: 'auto', backgroundColor: 'var(--bg-primary)' }}>
       <div style={{ maxWidth: '1050px', margin: '0 auto' }}>
         <h1 style={{ fontFamily: 'var(--font-heading)', fontSize: '26px', fontWeight: '700', marginBottom: '8px' }}>
           Painel de Administração Multitenant
@@ -922,52 +922,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
         </p>
 
         {/* Sub-tab Navigation Bar */}
-        <div style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', marginBottom: '24px', paddingBottom: '12px' }}>
+        <div className="admin-subtab-bar" style={{ display: 'flex', gap: '12px', borderBottom: '1px solid var(--border-color)', marginBottom: '24px', paddingBottom: '12px' }}>
           <button
             onClick={() => setActiveSubTab('numbers')}
-            className={activeSubTab === 'numbers' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'numbers' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Phone size={16} /> Números / Departamentos
           </button>
           <button
             onClick={() => setActiveSubTab('users')}
-            className={activeSubTab === 'users' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'users' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Users size={16} /> Atendentes & Permissões
           </button>
           <button
             onClick={() => { setActiveSubTab('rag'); loadRagDocuments(); loadData(); }}
-            className={activeSubTab === 'rag' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'rag' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Database size={16} /> Base RAG (IA Concierge)
           </button>
           <button
             onClick={() => setActiveSubTab('automations')}
-            className={activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Zap size={16} /> Automações & Gatilhos (OS)
           </button>
           <button
             onClick={() => { setActiveSubTab('technicians'); loadTechnicians(); }}
-            className={activeSubTab === 'technicians' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'technicians' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Users size={16} /> Funcionários & Equipe da Loja
           </button>
           <button
             onClick={() => { setActiveSubTab('integrations'); loadSettingsAndAudit(); }}
-            className={activeSubTab === 'integrations' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'integrations' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Key size={16} /> Integrações & Segurança (Fernet)
           </button>
           <button
             onClick={() => { setActiveSubTab('groups'); loadWhatsAppGroups(); }}
-            className={activeSubTab === 'groups' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'groups' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <MessageSquare size={16} /> Grupos do WhatsApp
           </button>
           <button
             onClick={() => { setActiveSubTab('pix'); loadPixKeys(); }}
-            className={activeSubTab === 'pix' ? 'btn-primary' : 'btn-secondary'}
+            className={`admin-subtab-btn ${activeSubTab === 'pix' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <QrCode size={16} /> Chaves Pix & QR Code
           </button>
@@ -976,7 +976,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
         {/* 1. Numbers / Departments Tab */}
         {activeSubTab === 'numbers' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px' }}>
@@ -1430,7 +1430,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
         {/* 2. Users & Permissions Tab */}
         {activeSubTab === 'users' && (
           <>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+            <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                 <h3 style={{ fontSize: '18px' }}>
@@ -2454,7 +2454,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
         {/* 6. Pix Keys Management Tab */}
         {activeSubTab === 'pix' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+          <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
             {/* Form */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
