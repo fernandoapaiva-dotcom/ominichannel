@@ -535,20 +535,40 @@ class EvolutionService:
         clean_number = self._format_target_number(number)
 
         audio_payload = audio_media
+        detected_mime = "audio/ogg"
+        fname_ext = "ogg"
+
         if audio_payload.startswith("/uploads/"):
             fname = os.path.basename(audio_payload)
+            l_lower = fname.lower()
+            if l_lower.endswith(".webm"):
+                detected_mime = "audio/webm"
+                fname_ext = "webm"
+            elif l_lower.endswith(".mp3"):
+                detected_mime = "audio/mp3"
+                fname_ext = "mp3"
+            elif l_lower.endswith(".mp4") or l_lower.endswith(".m4a"):
+                detected_mime = "audio/mp4"
+                fname_ext = "m4a"
+            elif l_lower.endswith(".wav"):
+                detected_mime = "audio/wav"
+                fname_ext = "wav"
+            else:
+                detected_mime = "audio/ogg"
+                fname_ext = "ogg"
+
             lpath = os.path.join("uploads", fname)
             if os.path.exists(lpath):
                 with open(lpath, "rb") as f:
                     raw_b64 = base64.b64encode(f.read()).decode("utf-8")
-                    audio_payload = f"data:audio/ogg;base64,{raw_b64}"
+                    audio_payload = f"data:{detected_mime};base64,{raw_b64}"
         elif not audio_payload.startswith("data:") and not audio_payload.startswith("http"):
-            audio_payload = f"data:audio/ogg;base64,{audio_payload}"
+            audio_payload = f"data:{detected_mime};base64,{audio_payload}"
 
         payload = {
             "number": clean_number,
             "audio": audio_payload,
-            "mimetype": "audio/ogg",
+            "mimetype": detected_mime,
             "delay": 1200,
             "encoding": True
         }
@@ -568,9 +588,9 @@ class EvolutionService:
                 "number": clean_number,
                 "mediatype": "audio",
                 "mediaType": "audio",
-                "mimetype": "audio/ogg",
+                "mimetype": detected_mime,
                 "media": raw_media,
-                "fileName": "audio.ogg"
+                "fileName": f"voice_note.{fname_ext}"
             }
             fb_res = await client.post(fallback_url, json=fallback_payload, headers=headers, timeout=20.0)
             fb_data = fb_res.json() if fb_res.content else {}
