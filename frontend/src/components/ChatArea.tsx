@@ -1940,7 +1940,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const mediaIndex = conversationMedia.findIndex(item => item.id === msg.id);
     const isCustomer = msg.remetente === 'cliente' || msg.remetente === 'contact';
 
-    switch (msg.tipo) {
+    let effectiveTipo = (msg.tipo || '').toLowerCase();
+    if ((!effectiveTipo || effectiveTipo === 'texto' || effectiveTipo === 'text') && raw) {
+      const c = raw.toLowerCase();
+      if (c.includes('/uploads/') || c.startsWith('http')) {
+        if (c.endsWith('.ogg') || c.endsWith('.webm') || c.endsWith('.mp3') || c.endsWith('.wav') || c.endsWith('.m4a') || c.includes('voice_note')) {
+          effectiveTipo = 'audio';
+        } else if (c.endsWith('.png') || c.endsWith('.jpg') || c.endsWith('.jpeg') || c.endsWith('.webp')) {
+          effectiveTipo = 'imagem';
+        } else if (c.endsWith('.mp4') || c.endsWith('.mov') || c.endsWith('.avi')) {
+          effectiveTipo = 'video';
+        } else if (c.endsWith('.pdf')) {
+          effectiveTipo = 'arquivo';
+        }
+      }
+    }
+
+    switch (effectiveTipo) {
       case 'imagem':
       case 'sticker':
       case 'figurinha':

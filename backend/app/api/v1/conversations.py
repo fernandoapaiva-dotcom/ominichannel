@@ -947,7 +947,7 @@ async def send_agent_message(
         not is_sticker and not is_gif and (
             str(msg_in.tipo).lower() in (MessageType.IMAGEM, MessageType.VIDEO, MessageType.AUDIO, MessageType.ARQUIVO, "imagem", "video", "audio", "arquivo", "document", "documento") or
             "/uploads/" in raw_content or
-            (raw_content.startswith("http") and any(raw_content.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".mp4", ".ogg", ".mp3", ".pdf"]))
+            (raw_content.startswith("http") and any(raw_content.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".mp4", ".ogg", ".mp3", ".webm", ".m4a", ".pdf"]))
         )
     )
 
@@ -981,6 +981,8 @@ async def send_agent_message(
     await db.commit()
     await db.refresh(message)
 
+    tipo_str = actual_tipo.value if hasattr(actual_tipo, "value") else str(actual_tipo)
+
     # 2. Instant Real-time WebSocket Broadcast
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
@@ -990,11 +992,11 @@ async def send_agent_message(
             "conversation_id": conv.id,
             "id": message.id,
             "remetente": MessageSender.ATENDENTE.value,
-            "conteudo": msg_in.conteudo,
+            "conteudo": clean_db_content,
+            "tipo": tipo_str,
             "status": "sent",
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
-        }
     )
 
     target_conv_id = conv.id
