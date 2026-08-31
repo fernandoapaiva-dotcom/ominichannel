@@ -1,10 +1,41 @@
 import asyncio
 import logging
+import os
+import base64
+import subprocess
+import tempfile
 from typing import Dict, Any, Optional, List
 import httpx
 from app.core.config import settings
 
 logger = logging.getLogger("evolution_service")
+
+def convert_to_ogg_opus(input_path: str) -> str:
+    """
+    Converts any input audio/video file (webm, mp4, wav, mp3) into a true WhatsApp-compliant
+    Ogg Opus voice note with exact duration headers using ffmpeg.
+    Returns path to converted .ogg file if successful, or original path if conversion fails.
+    """
+    try:
+        out_fd, out_path = tempfile.mkstemp(suffix=".ogg")
+        os.close(out_fd)
+
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-c:a", "libopus",
+            "-b:a", "32k",
+            "-ar", "48000",
+            "-ac", "1",
+            "-application", "voip",
+            out_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+        if res.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            return out_path
+    except Exception as e:
+        logger.error(f"ffmpeg conversion error: {e}")
+    return input_path
+
 
 class EvolutionService:
     def __init__(self):
@@ -539,11 +570,34 @@ class EvolutionService:
             fname = os.path.basename(audio_payload)
             lpath = os.path.join("uploads", fname)
             if os.path.exists(lpath):
-                with open(lpath, "rb") as f:
+                ogg_path = convert_to_ogg_opus(lpath)
+                read_path = ogg_path if (os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0) else lpath
+                with open(read_path, "rb") as f:
                     raw_b64 = base64.b64encode(f.read()).decode("utf-8")
-                    audio_payload = f"data:audio/ogg;base64,{raw_b64}"
+                audio_payload = f"data:audio/ogg;base64,{raw_b64}"
+                if ogg_path != lpath and os.path.exists(ogg_path):
+                    try:
+                        os.remove(ogg_path)
+                    except Exception:
+                        pass
         elif audio_payload.startswith("data:") and ";base64," in audio_payload:
             raw_b64 = audio_payload.split(";base64,")[1]
+            try:
+                raw_bytes = base64.b64decode(raw_b64)
+                in_fd, in_path = tempfile.mkstemp(suffix=".webm")
+                os.write(in_fd, raw_bytes)
+                os.close(in_fd)
+
+                ogg_path = convert_to_ogg_opus(in_path)
+                if os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0:
+                    with open(ogg_path, "rb") as f:
+                        raw_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    if ogg_path != in_path:
+                        os.remove(ogg_path)
+                if os.path.exists(in_path):
+                    os.remove(in_path)
+            except Exception as conv_err:
+                logger.error(f"Error converting base64 audio with ffmpeg: {conv_err}")
             audio_payload = f"data:audio/ogg;base64,{raw_b64}"
         elif not audio_payload.startswith("data:") and not audio_payload.startswith("http"):
             audio_payload = f"data:audio/ogg;base64,{audio_payload}"
