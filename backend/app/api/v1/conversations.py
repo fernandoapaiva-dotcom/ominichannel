@@ -1073,7 +1073,7 @@ async def send_agent_message(
                         elif f_lower.endswith(".mp4"):
                             mimetype = "video/mp4"
                             media_type = "video"
-                        elif f_lower.endswith((".ogg", ".mp3", ".wav")):
+                        elif f_lower.endswith((".ogg", ".mp3", ".wav", ".webm", ".m4a")):
                             mimetype = "audio/ogg"
                             media_type = "audio"
                         elif f_lower.endswith(".pdf"):

@@ -535,7 +535,13 @@ class EvolutionService:
         clean_number = self._format_target_number(number)
 
         audio_payload = audio_media
-        if audio_payload.startswith("data:") and ";base64," in audio_payload:
+        if audio_payload.startswith("/uploads/"):
+            fname = os.path.basename(audio_payload)
+            lpath = os.path.join("uploads", fname)
+            if os.path.exists(lpath):
+                with open(lpath, "rb") as f:
+                    audio_payload = base64.b64encode(f.read()).decode("utf-8")
+        elif audio_payload.startswith("data:") and ";base64," in audio_payload:
             audio_payload = audio_payload.split(";base64,")[1]
 
         payload = {

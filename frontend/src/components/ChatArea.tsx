@@ -1072,21 +1072,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const handleSendAudioMessage = async (audioUrl: string) => {
     if (!conversation) return;
     try {
-      const payload = {
-        tipo: 'audio',
-        conteudo: audioUrl
-      };
-      const newMsg: any = await apiFetch(`/conversations/${conversation.id}/messages`, {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
-      if (newMsg) {
-        setMessages(prev => [...prev, newMsg]);
-        scrollToBottom();
+      if (onSendMessage) {
+        await onSendMessage(audioUrl, 'audio');
+      } else {
+        const payload = {
+          tipo: 'audio',
+          conteudo: audioUrl
+        };
+        const newMsg: any = await apiFetch(`/conversations/${conversation.id}/messages`, {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        if (newMsg) {
+          setMessages(prev => [...prev, newMsg]);
+          scrollToBottom();
+        }
       }
     } catch (err) {
       console.error('Error sending audio message:', err);
-      setSendError('Erro ao enviar mensagem de áudio.');
     }
   };
 
