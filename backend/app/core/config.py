@@ -8,8 +8,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
-    # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./omini_channel.db"
+    # Database (Absolute path to ensure correct file loading)
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'omini_channel.db')}"
     
     # Evolution API (Self-Hosted)
     EVOLUTION_API_URL: str = "http://localhost:8080"

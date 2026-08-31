@@ -1016,7 +1016,11 @@ async def send_agent_message(
             # Retry loop: attempt up to 3 times before marking as failed
             for attempt in range(1, 4):
                 try:
-                    if is_sticker and target_instance_name:
+                    active_inst = target_instance_name or "instancia_vendas"
+                    if attempt > 1:
+                        active_inst = "instancia_vendas"
+
+                    if is_sticker and active_inst:
                         sticker_media = raw_content
                         if "/uploads/" in raw_content:
                             fname = raw_content.split("/uploads/")[-1]
@@ -1026,20 +1030,20 @@ async def send_agent_message(
                                     sticker_media = base64.b64encode(f.read()).decode("utf-8")
 
                         send_res = await evolution_service.send_sticker(
-                            instance_name=target_instance_name,
+                            instance_name=active_inst,
                             number=target_phone,
                             sticker_media=sticker_media
                         )
-                    elif is_gif and target_instance_name:
+                    elif is_gif and active_inst:
                         send_res = await evolution_service.send_media_message(
-                            instance_name=target_instance_name,
+                            instance_name=active_inst,
                             number=target_phone,
                             media_type="video",
                             mimetype="video/mp4",
                             media=raw_content,
                             file_name="animacao.mp4"
                         )
-                    elif is_media and target_instance_name:
+                    elif is_media and active_inst:
                         media_path = raw_content.split("|")[0].strip()
                         caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
                         formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_nome}:*"
@@ -1087,7 +1091,7 @@ async def send_agent_message(
                                 mimetype = "application/octet-stream"
 
                         send_res = await evolution_service.send_media_message(
-                            instance_name=target_instance_name,
+                            instance_name=active_inst,
                             number=target_phone,
                             media_type=media_type,
                             mimetype=mimetype,
@@ -1112,7 +1116,7 @@ async def send_agent_message(
                         if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
                             try:
                                 g_info = await evolution_service.fetch_group_info(
-                                    instance_name=target_instance_name,
+                                    instance_name=active_inst,
                                     group_jid=target_phone if "@g.us" in target_phone else f"{target_phone}@g.us"
                                 )
                                 if g_info and "participants" in g_info:

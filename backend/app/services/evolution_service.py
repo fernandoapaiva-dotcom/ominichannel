@@ -282,6 +282,16 @@ class EvolutionService:
                         retry_data["success"] = True
                         return retry_data
 
+            # Failover to default instance if current instance returned 404 Not Found
+            if response.status_code == 404 and instance_name != "instancia_vendas":
+                logger.warning(f"Instance '{instance_name}' returned 404 Not Found. Failing over to 'instancia_vendas'...")
+                fb_url = f"{base_url}/message/sendText/instancia_vendas"
+                fb_res = await client.post(fb_url, json=payload, headers=headers)
+                if fb_res.status_code < 400:
+                    fb_data = fb_res.json()
+                    fb_data["success"] = True
+                    return fb_data
+
             if response.status_code >= 400:
                 err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
                 if not err_msg and "connection closed" in str(res_data).lower():
@@ -565,6 +575,16 @@ class EvolutionService:
                         retry_data = retry_res.json()
                         retry_data["success"] = True
                         return retry_data
+
+            # Failover to default instance if current instance returned 404 Not Found
+            if response.status_code == 404 and instance_name != "instancia_vendas":
+                logger.warning(f"Instance '{instance_name}' returned 404 Not Found for media. Failing over to 'instancia_vendas'...")
+                fb_url = f"{base_url}/message/sendMedia/instancia_vendas"
+                fb_res = await client.post(fb_url, json=payload, headers=headers)
+                if fb_res.status_code < 400:
+                    fb_data = fb_res.json()
+                    fb_data["success"] = True
+                    return fb_data
 
             if response.status_code >= 400:
                 err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")

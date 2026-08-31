@@ -53,7 +53,7 @@ class LinkPreviewService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=6.0, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=2.5, follow_redirects=True, verify=False) as client:
                 resp = await client.get(clean_url, headers=headers)
                 if resp.status_code >= 400:
                     result = {
@@ -63,6 +63,7 @@ class LinkPreviewService:
                         "image": None,
                         "domain": domain
                     }
+                    _PREVIEW_CACHE[cache_key] = result
                     return result
 
                 raw_html = resp.text # Full HTML
@@ -152,6 +153,8 @@ class LinkPreviewService:
                 "image": None,
                 "domain": domain
             }
+            _PREVIEW_CACHE[cache_key] = result
+            _PREVIEW_CACHE[clean_url] = result
             return result
 
 link_preview_service = LinkPreviewService()
