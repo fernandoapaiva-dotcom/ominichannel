@@ -185,15 +185,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
             if (sending.length > 0) {
               const currentMsgs = c.messages || [];
-              const existingTexts = new Set(currentMsgs.map(m => m.conteudo?.trim()));
+              const existingTexts = new Set(currentMsgs.map(m => (m.conteudo || '').split('|')[0].trim()));
               const existingIds = new Set(currentMsgs.map(m => m.id));
 
-              // Deduplicate pending messages to keep
+              const now = Date.now();
               const uniqueToKeep: Message[] = [];
               const seenTempIds = new Set<number>();
 
               sending.forEach(m => {
-                if (!seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(m.conteudo?.trim())) {
+                const isStale = m.timestamp && (now - new Date(m.timestamp).getTime() > 15000);
+                const rawContent = (m.conteudo || '').split('|')[0].trim();
+                if (!isStale && !seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(rawContent)) {
                   seenTempIds.add(m.id);
                   uniqueToKeep.push(m);
                 }
@@ -408,9 +410,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                   }
                   let replaced = false;
                   const replacedSending = currentMsgs.map(m => {
-                    if (!replaced && (m.id < 0 || m.status === 'sending') && m.conteudo?.trim() === newMsg.conteudo?.trim() && m.remetente === newMsg.remetente) {
-                      replaced = true;
-                      return newMsg;
+                    if (!replaced && (m.id < 0 || m.status === 'sending') && m.remetente === newMsg.remetente) {
+                      const c1 = (m.conteudo || '').split('|')[0].trim();
+                      const c2 = (newMsg.conteudo || '').split('|')[0].trim();
+                      if (m.id < 0 || c1 === c2 || m.tipo === 'audio' || newMsg.tipo === 'audio') {
+                        replaced = true;
+                        return newMsg;
+                      }
                     }
                     return m;
                   });
