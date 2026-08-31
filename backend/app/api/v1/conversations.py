@@ -1766,7 +1766,8 @@ async def send_agent_media(
         caption=formatted_caption
     )
 
-    if not send_res.get("success", False):
+    is_success = send_res.get("success", False) or bool(send_res.get("key")) or bool(send_res.get("id")) or send_res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201]
+    if not is_success:
         error_detail = send_res.get("error", "Falha de conexão ao enviar mídia no WhatsApp")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

@@ -518,6 +518,56 @@ class EvolutionService:
                 logger.error(f"Error sending native location message to {number} via instance {instance_name}: {e}")
                 return {"success": False, "error": str(e)}
 
+    async def send_whatsapp_audio(
+        self,
+        instance_name: str,
+        number: str,
+        audio_media: str,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Sends a native WhatsApp Voice Note (PTT / Push-To-Talk audio) with waveform icon via Evolution API v2.
+        Endpoint: POST /message/sendWhatsAppAudio/{instance_name}
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/message/sendWhatsAppAudio/{instance_name}"
+        clean_number = self._format_target_number(number)
+
+        audio_payload = audio_media
+        if audio_payload.startswith("data:") and ";base64," in audio_payload:
+            audio_payload = audio_payload.split(";base64,")[1]
+
+        payload = {
+            "number": clean_number,
+            "audio": audio_payload,
+            "delay": 1200,
+            "encoding": True
+        }
+        client = self.get_client()
+        try:
+            response = await client.post(url, json=payload, headers=headers)
+            res_data = response.json() if response.content else {}
+
+            if response.status_code == 404 and instance_name != "instancia_vendas":
+                logger.warning(f"Instance '{instance_name}' returned 404 Not Found for WhatsApp audio. Failing over to 'instancia_vendas'...")
+                fb_url = f"{base_url}/message/sendWhatsAppAudio/instancia_vendas"
+                fb_res = await client.post(fb_url, json=payload, headers=headers)
+                if fb_res.status_code < 400:
+                    fb_data = fb_res.json() if fb_res.content else {}
+                    fb_data["success"] = True
+                    return fb_data
+
+            if response.status_code >= 400:
+                err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
+                return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
+
+            res_data["success"] = True
+            return res_data
+        except Exception as e:
+            logger.error(f"Error sending WhatsApp PTT audio to {number} via instance {instance_name}: {e}")
+            return {"success": False, "error": str(e)}
+
     async def send_media_message(
         self,
         instance_name: str,
@@ -530,6 +580,15 @@ class EvolutionService:
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
+        if media_type == "audio" or (mimetype and mimetype.startswith("audio/")):
+            return await self.send_whatsapp_audio(
+                instance_name=instance_name,
+                number=number,
+                audio_media=media,
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key
+            )
+
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendMedia/{instance_name}"
         clean_number = self._format_target_number(number)
