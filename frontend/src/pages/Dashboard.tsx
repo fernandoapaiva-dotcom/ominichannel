@@ -454,26 +454,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {
+                const isFailed = payload.status === 'failed';
                 return {
                   ...c,
-                  messages: (c.messages || []).map(m => {
-                    if (
-                      (payload.id && m.id === payload.id) ||
-                      (payload.whatsapp_msg_id && m.whatsapp_msg_id === payload.whatsapp_msg_id) ||
-                      (payload.status === 'read' && m.remetente === 'cliente')
-                    ) {
-                      return {
-                        ...m,
-                        status: payload.status,
-                        whatsapp_msg_id: payload.whatsapp_msg_id || m.whatsapp_msg_id
-                      };
-                    }
-                    return m;
-                  })
+                  messages: isFailed
+                    ? (c.messages || []).filter(m => m.id !== payload.id && (!payload.whatsapp_msg_id || m.whatsapp_msg_id !== payload.whatsapp_msg_id))
+                    : (c.messages || []).map(m => {
+                        if (
+                          (payload.id && m.id === payload.id) ||
+                          (payload.whatsapp_msg_id && m.whatsapp_msg_id === payload.whatsapp_msg_id) ||
+                          (payload.status === 'read' && m.remetente === 'cliente')
+                        ) {
+                          return {
+                            ...m,
+                            status: payload.status,
+                            whatsapp_msg_id: payload.whatsapp_msg_id || m.whatsapp_msg_id
+                          };
+                        }
+                        return m;
+                      })
                 };
               }
               return c;
             }));
+            if (payload.status === 'failed') {
+              setNotificationAlert('⚠️ A mensagem não pôde ser enviada. Verifique se o WhatsApp está conectado.');
+              setTimeout(() => setNotificationAlert(null), 4000);
+            }
           } else if (payload.type === 'MESSAGE_REACTION_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {
