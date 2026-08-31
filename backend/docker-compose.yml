@@ -45,6 +45,8 @@ services:
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://${POSTGRES_USER:-omini_user}:${POSTGRES_PASSWORD:-omini_password}@postgres:5432/${POSTGRES_DB:-omini_db}
       - DATABASE_CLIENT_NAME=evolution_v2
+      - DATABASE_CONNECTION_LIMIT=20
+
       # Cache Config (Redis)
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://omini_redis:6379/1

@@ -194,6 +194,71 @@ async def list_conversations(
 class MarkAllReadPayload(BaseModel):
     whatsapp_number_id: Optional[int] = None
 
+def resolve_remote_jid(conv: Conversation) -> str:
+    raw = None
+    if conv.contact and conv.contact.telefone:
+        raw = str(conv.contact.telefone).strip()
+    elif conv.dados_adicionais and "raw_phone" in conv.dados_adicionais:
+        raw = str(conv.dados_adicionais["raw_phone"]).strip()
+    
+    if not raw:
+        return ""
+    
+    if "@" in raw:
+        return raw
+    elif raw.startswith("120363") or "-" in raw or len(raw) > 15:
+        return f"{raw}@g.us"
+    else:
+        return f"{raw}@s.whatsapp.net"
+
+async def trigger_whatsapp_mark_read(db: AsyncSession, conv: Conversation, tenant_id: int):
+    try:
+        remote_jid = resolve_remote_jid(conv)
+        if not remote_jid:
+            return
+
+        from sqlalchemy import func
+        target_conv_ids = [conv.id]
+        if conv.contact_id:
+            c_stmt = select(Conversation.id).where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.contact_id == conv.contact_id
+            )
+            c_res = await db.execute(c_stmt)
+            target_conv_ids = [row[0] for row in c_res.all()]
+
+        last_msg_stmt = (
+            select(Message, WhatsAppNumber)
+            .join(Conversation, Conversation.id == Message.conversation_id)
+            .join(WhatsAppNumber, WhatsAppNumber.id == Conversation.whatsapp_number_id)
+            .where(
+                Message.conversation_id.in_(target_conv_ids),
+                func.lower(Message.remetente) == "cliente",
+                Message.whatsapp_msg_id.isnot(None)
+            )
+            .order_by(Message.id.desc())
+            .limit(1)
+        )
+        last_msg_res = await db.execute(last_msg_stmt)
+        last_msg_row = last_msg_res.first()
+
+        if last_msg_row:
+            last_msg, wn = last_msg_row
+            if wn and wn.instancia_evolution_api and last_msg.whatsapp_msg_id:
+                decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+                asyncio.create_task(
+                    evolution_service.mark_message_as_read(
+                        instance_name=wn.instancia_evolution_api,
+                        message_id=last_msg.whatsapp_msg_id,
+                        remote_jid=remote_jid,
+                        from_me=False,
+                        custom_base_url=decrypted.get("evolution_api_url"),
+                        custom_api_key=decrypted.get("evolution_api_key")
+                    )
+                )
+    except Exception as err:
+        logger.warning(f"Failed to trigger_whatsapp_mark_read for conv #{conv.id}: {err}")
+
 @router.post("/mark_all_read")
 async def mark_all_conversations_read(
     payload: Optional[MarkAllReadPayload] = None,
@@ -202,8 +267,9 @@ async def mark_all_conversations_read(
 ):
     """
     Marks all client messages as read and flags conversations as read across the tenant (or selected department).
+    Also sends read receipts to WhatsApp via Evolution API.
     """
-    conv_stmt = select(Conversation).where(Conversation.tenant_id == current_user.tenant_id)
+    conv_stmt = select(Conversation).options(selectinload(Conversation.contact)).where(Conversation.tenant_id == current_user.tenant_id)
     if payload and payload.whatsapp_number_id:
         conv_stmt = conv_stmt.where(Conversation.whatsapp_number_id == payload.whatsapp_number_id)
 
@@ -231,6 +297,10 @@ async def mark_all_conversations_read(
             flag_modified(c, "dados_adicionais")
 
         await db.commit()
+
+        # Trigger whatsapp mark read for each conversation in background
+        for c in convs:
+            await trigger_whatsapp_mark_read(db, c, current_user.tenant_id)
 
         # Broadcast WebSocket notification
         await ws_manager.broadcast_to_department(
@@ -300,44 +370,10 @@ async def mark_single_conversation_read(
     conv.dados_adicionais = extra
     flag_modified(conv, "dados_adicionais")
 
-    # Call Evolution API to mark messages as read on the WhatsApp device
-    last_msg_stmt = select(Message, WhatsAppNumber).join(
-        WhatsAppNumber, WhatsAppNumber.id == Conversation.whatsapp_number_id
-    ).join(
-        Conversation, Conversation.id == Message.conversation_id
-    ).where(
-        Message.conversation_id == conv.id,
-        func.lower(Message.remetente) == "cliente",
-        Message.whatsapp_msg_id.isnot(None)
-    ).order_by(Message.id.desc()).limit(1)
-    
-    last_msg_res = await db.execute(last_msg_stmt)
-    last_msg_row = last_msg_res.first()
-    if last_msg_row:
-        last_msg, wn = last_msg_row
-        if wn and wn.instancia_evolution_api and last_msg.whatsapp_msg_id:
-            # We need the remote_jid (which is the phone number with @s.whatsapp.net or @g.us)
-            remote_jid = conv.contact.telefone + "@s.whatsapp.net" if conv.contact and conv.contact.telefone else ""
-            if not remote_jid and conv.dados_adicionais and "raw_phone" in conv.dados_adicionais:
-                remote_jid = str(conv.dados_adicionais["raw_phone"])
-                if "@" not in remote_jid:
-                    remote_jid += "@s.whatsapp.net"
-            
-            if remote_jid:
-                # Need to use create_task to not block the response if it takes a second
-                decrypted = await settings_service.get_tenant_decrypted_settings(db, current_user.tenant_id)
-                asyncio.create_task(
-                    evolution_service.mark_message_as_read(
-                        instance_name=wn.instancia_evolution_api,
-                        message_id=last_msg.whatsapp_msg_id,
-                        remote_jid=remote_jid,
-                        from_me=False,
-                        custom_base_url=decrypted.get("evolution_api_url"),
-                        custom_api_key=decrypted.get("evolution_api_key")
-                    )
-                )
-
     await db.commit()
+
+    # Call Evolution API to mark messages as read on the WhatsApp device
+    await trigger_whatsapp_mark_read(db, conv, current_user.tenant_id)
 
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
@@ -1107,6 +1143,14 @@ async def send_agent_message(
                     db_msg.whatsapp_msg_id = wa_key_id
                     db_msg.status = final_status
                     await bg_db.commit()
+
+                # Mark customer's prior messages as read on WhatsApp since attendant is replying
+                bg_c_stmt = select(Conversation).options(selectinload(Conversation.contact)).where(Conversation.id == target_conv_id)
+                bg_c_res = await bg_db.execute(bg_c_stmt)
+                bg_conv = bg_c_res.scalar_one_or_none()
+                if bg_conv:
+                    await trigger_whatsapp_mark_read(bg_db, bg_conv, target_tenant_id)
+
 
             # Broadcast status update if key id obtained or failed
             await ws_manager.broadcast_to_department(
