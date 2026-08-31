@@ -4585,19 +4585,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
       </div>
 
-      {sendError && (
-        <div style={{ padding: '10px 16px', backgroundColor: 'rgba(239, 68, 68, 0.15)', borderTop: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <AlertCircle size={16} /> {sendError}
-          </div>
-          <button
-            onClick={() => setSendError(null)}
-            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', padding: '0 4px' }}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+
 
       {pendingFiles.length > 0 && (
         <div style={{

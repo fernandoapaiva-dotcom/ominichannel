@@ -477,10 +477,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
               return c;
             }));
-            if (payload.status === 'failed') {
-              setNotificationAlert('⚠️ A mensagem não pôde ser enviada. Verifique se o WhatsApp está conectado.');
-              setTimeout(() => setNotificationAlert(null), 4000);
-            }
+
           } else if (payload.type === 'MESSAGE_REACTION_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {
@@ -650,9 +647,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         );
       } catch (err: any) {
         console.error('Optimistic message send error:', err);
-        setNotificationAlert(err.message || 'Erro ao enviar mensagem no WhatsApp.');
-        setTimeout(() => setNotificationAlert(null), 4000);
-        // If message failed to send to server, remove optimistic message so it does not stay in chat
+        // If message failed to send to server, quietly remove optimistic message so it does not clutter the chat
         setConversations(prevConvs =>
           prevConvs.map(conv => {
             const cid = conv.contact_id || conv.contact?.id;
