@@ -540,36 +540,45 @@ class EvolutionService:
             lpath = os.path.join("uploads", fname)
             if os.path.exists(lpath):
                 with open(lpath, "rb") as f:
-                    audio_payload = base64.b64encode(f.read()).decode("utf-8")
-        elif audio_payload.startswith("data:") and ";base64," in audio_payload:
-            audio_payload = audio_payload.split(";base64,")[1]
+                    raw_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    audio_payload = f"data:audio/ogg;base64,{raw_b64}"
+        elif not audio_payload.startswith("data:") and not audio_payload.startswith("http"):
+            audio_payload = f"data:audio/ogg;base64,{audio_payload}"
 
         payload = {
             "number": clean_number,
             "audio": audio_payload,
+            "mimetype": "audio/ogg",
             "delay": 1200,
             "encoding": True
         }
         client = self.get_client()
         try:
-            response = await client.post(url, json=payload, headers=headers)
+            response = await client.post(url, json=payload, headers=headers, timeout=20.0)
             res_data = response.json() if response.content else {}
+            if response.status_code < 400 or res_data.get("key") or res_data.get("id"):
+                res_data["success"] = True
+                return res_data
 
-            if response.status_code == 404 and instance_name != "instancia_vendas":
-                logger.warning(f"Instance '{instance_name}' returned 404 Not Found for WhatsApp audio. Failing over to 'instancia_vendas'...")
-                fb_url = f"{base_url}/message/sendWhatsAppAudio/instancia_vendas"
-                fb_res = await client.post(fb_url, json=payload, headers=headers)
-                if fb_res.status_code < 400:
-                    fb_data = fb_res.json() if fb_res.content else {}
-                    fb_data["success"] = True
-                    return fb_data
+            # Failover to sendMedia audio if sendWhatsAppAudio endpoint rejected request
+            logger.warning(f"sendWhatsAppAudio returned {response.status_code}, falling back to sendMedia...")
+            fallback_url = f"{base_url}/message/sendMedia/{instance_name}"
+            raw_media = audio_payload.split(";base64,")[1] if ";base64," in audio_payload else audio_payload
+            fallback_payload = {
+                "number": clean_number,
+                "mediatype": "audio",
+                "mediaType": "audio",
+                "mimetype": "audio/ogg",
+                "media": raw_media,
+                "fileName": "audio.ogg"
+            }
+            fb_res = await client.post(fallback_url, json=fallback_payload, headers=headers, timeout=20.0)
+            fb_data = fb_res.json() if fb_res.content else {}
+            if fb_res.status_code < 400 or fb_data.get("key") or fb_data.get("id"):
+                fb_data["success"] = True
+                return fb_data
 
-            if response.status_code >= 400:
-                err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
-                return {"success": False, "error": err_msg or f"HTTP {response.status_code}"}
-
-            res_data["success"] = True
-            return res_data
+            return {"success": False, "error": fb_data.get("message") or f"HTTP {fb_res.status_code}"}
         except Exception as e:
             logger.error(f"Error sending WhatsApp PTT audio to {number} via instance {instance_name}: {e}")
             return {"success": False, "error": str(e)}
