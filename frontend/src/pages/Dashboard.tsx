@@ -644,8 +644,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       } catch (err: any) {
         console.error('Optimistic message send error:', err);
         setNotificationAlert(err.message || 'Erro ao enviar mensagem no WhatsApp.');
-        setTimeout(() => setNotificationAlert(null), 7000);
-        // Mark as failed if connection drops
+        setTimeout(() => setNotificationAlert(null), 4000);
+        // If message failed to send to server, remove optimistic message so it does not stay in chat
         setConversations(prevConvs =>
           prevConvs.map(conv => {
             const cid = conv.contact_id || conv.contact?.id;
@@ -660,7 +660,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
-                messages: currentMsgs.map(m => (m.id === tempId ? { ...m, status: 'failed' } : m))
+                messages: currentMsgs.filter(m => m.id !== tempId)
               };
             }
             return conv;

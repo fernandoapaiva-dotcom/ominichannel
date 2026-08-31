@@ -412,6 +412,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (sendError) {
+      const timer = setTimeout(() => setSendError(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [sendError]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
@@ -4579,8 +4586,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       </div>
 
       {sendError && (
-        <div style={{ padding: '10px 16px', backgroundColor: 'rgba(239, 68, 68, 0.15)', borderTop: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <AlertCircle size={16} /> {sendError}
+        <div style={{ padding: '10px 16px', backgroundColor: 'rgba(239, 68, 68, 0.15)', borderTop: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '13px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <AlertCircle size={16} /> {sendError}
+          </div>
+          <button
+            onClick={() => setSendError(null)}
+            style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', padding: '0 4px' }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
