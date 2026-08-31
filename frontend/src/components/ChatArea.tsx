@@ -994,6 +994,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } finally {
       setIsTogglingPin(false);
     }
+  };
+
   const handleRetryMessage = async (msgId: number) => {
     setActiveActionMenuMsgId(null);
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: 'sending' } : m));
@@ -4105,6 +4107,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
                         >
                           <Plus size={14} />
+                        </button>
                       </div>
 
                       {/* 0. Reenviar Mensagem (se falhou no envio) */}
@@ -4134,6 +4137,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           <span>Reenviar mensagem</span>
                         </button>
                       )}
+
+
                       {/* Menu Actions (Idêntico ao WhatsApp Web) */}
 
                       {/* 1. Responder (Imagem 1, 2, 3) */}
