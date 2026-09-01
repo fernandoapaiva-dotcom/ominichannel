@@ -151,22 +151,10 @@ async def receive_evolution_webhook(
             logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
             return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
 
-    # Handle CONNECTION_UPDATE event (trigger automatic background sync when instance connects)
+    # Handle CONNECTION_UPDATE event (log state without aggressive auto-sync to protect account from WhatsApp ban)
     if event_type in ["connection.update", "connection_update", "CONNECTION_UPDATE"]:
         conn_state = data.get("state") or data.get("status") or payload.get("state")
         logger.info(f"[CONNECTION_UPDATE] Instância '{instance_name}' estado: '{conn_state}'")
-        if str(conn_state).lower() in ["open", "connected"]:
-            wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
-            wn_res = await db.execute(wn_stmt)
-            wn_obj = wn_res.scalar_one_or_none()
-            if wn_obj:
-                logger.info(f"🚀 [AUTO-SYNC] Instância '{instance_name}' conectada com sucesso ('{conn_state}')! Disparando sincronização automática de histórico e grupos...")
-                from app.services.whatsapp_sync_service import whatsapp_sync_service
-                whatsapp_sync_service.trigger_background_sync(
-                    tenant_id=wn_obj.tenant_id,
-                    whatsapp_number_id=wn_obj.id,
-                    instance_name=instance_name
-                )
         return {"status": "success", "event": event_type, "state": conn_state}
 
     # Handle PRESENCE_UPDATE event (Customer typing or recording audio on WhatsApp)

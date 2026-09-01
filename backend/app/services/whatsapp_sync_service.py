@@ -177,7 +177,7 @@ class WhatsAppSyncService:
                 try:
                     stats["current_contact"] = "Sincronizando grupos do WhatsApp..."
                     await self._emit_progress(tenant_id, stats)
-                    g_res = await client.get(f"/group/fetchAllGroups/{instance_name}?getParticipants=true")
+                    g_res = await client.get(f"/group/fetchAllGroups/{instance_name}?getParticipants=false")
                     if g_res.status_code == 200:
                         raw_groups = g_res.json()
                         if isinstance(raw_groups, dict):

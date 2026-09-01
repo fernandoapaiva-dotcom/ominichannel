@@ -1255,7 +1255,7 @@ class EvolutionService:
         async with httpx.AsyncClient(timeout=10.0) as client:
             if instance_name:
                 try:
-                    res = await client.get(f"{base_url}/group/fetchAllGroups/{instance_name}?getParticipants=true", headers=headers)
+                    res = await client.get(f"{base_url}/group/fetchAllGroups/{instance_name}?getParticipants=false", headers=headers)
                     if res.status_code == 200 and isinstance(res.json(), list):
                         return res.json()
                 except Exception:
@@ -1337,7 +1337,7 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                         lid_map = {}
                         for inst in instances:
                             try:
-                                g_res = await client.get(f"{base_url}/group/fetchAllGroups/{inst}?getParticipants=true", headers=headers)
+                                g_res = await client.get(f"{base_url}/group/fetchAllGroups/{inst}?getParticipants=false", headers=headers)
                                 if g_res.status_code == 200 and isinstance(g_res.json(), list):
                                     for g in g_res.json():
                                         gid = (g.get("id") or g.get("jid") or "").split("@")[0]
