@@ -80,17 +80,7 @@ class WhatsAppWatchdogService:
                     if current_ts - last_try >= cooldown:
                         self.instance_last_reconnect[inst_name] = current_ts
                         self.instance_reconnect_attempts[inst_name] = attempts + 1
-                        logger.info(f"🔄 [Watchdog] Instância '{inst_name}' desconectada ('{live_status}'). Tentativa {attempts + 1}/6 (cooldown {cooldown}s)...")
-                        
-                        try:
-                            async with httpx.AsyncClient(timeout=10.0) as client:
-                                conn_res = await client.get(
-                                    f"{base_url}/instance/connect/{inst_name}",
-                                    headers=headers
-                                )
-                                logger.info(f"🔄 [Watchdog] Tentativa de reconexão de '{inst_name}' enviada (HTTP {conn_res.status_code}).")
-                        except Exception as rec_err:
-                            logger.error(f"Erro ao tentar reconectar '{inst_name}': {rec_err}")
+                        logger.info(f"🛡️ [Watchdog] Instância '{inst_name}' desconectada ('{live_status}'). Apenas monitorando status para evitar martelamento de socket.")
 
         except Exception as e:
             logger.error(f"Erro no ciclo do WhatsApp Watchdog: {e}")
