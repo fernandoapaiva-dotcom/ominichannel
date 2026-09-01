@@ -1529,7 +1529,7 @@ async def send_location_in_conversation(
 async def send_conversation_presence(
     conversation_id: int,
     presence_in: Dict[str, Any],
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     presence_state = presence_in.get("presence", "composing")
