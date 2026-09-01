@@ -61,6 +61,7 @@ interface ChatListProps {
   onToggleCollapse?: () => void;
   currentUserId?: number | null;
   drafts?: { [convId: number]: string };
+  userPresences?: { [convId: number]: { status: string; agentName?: string; expiresAt: number } };
   onSearch?: (term: string) => void;
 }
 
@@ -747,23 +748,33 @@ export const ChatList: React.FC<ChatListProps> = ({
                       </span>
                     </div>
 
-                    {/* Row 2: Message preview / Draft & Unread badge */}
+                    {/* Row 2: Message preview / Presence / Draft & Unread badge */}
                     {(() => {
                       const draftText = drafts ? (drafts[group.primaryConv.id] || group.allConversations.map(c => drafts[c.id]).find(Boolean)) : null;
+                      const activeP = userPresences ? (userPresences[group.primaryConv.id] || group.allConversations.map(c => userPresences[c.id]).find(Boolean)) : null;
+                      const isPresenceActive = activeP && activeP.expiresAt > Date.now();
 
                       return (
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px' }}>
                           <p style={{
                             fontSize: '11px',
-                            color: draftText ? 'var(--text-main)' : (group.hasUnread ? '#ffffff' : 'var(--text-dim)'),
-                            fontWeight: (group.hasUnread || draftText) ? '700' : 'normal',
+                            color: isPresenceActive ? '#00a884' : (draftText ? 'var(--text-main)' : (group.hasUnread ? '#ffffff' : 'var(--text-dim)')),
+                            fontWeight: (isPresenceActive || group.hasUnread || draftText) ? '700' : 'normal',
                             whiteSpace: 'nowrap',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             flex: 1,
                             margin: 0
                           }}>
-                            {draftText ? (
+                            {isPresenceActive ? (
+                              <span style={{ color: '#00a884', fontWeight: '700', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                {activeP.status === 'recording' ? '🎙️ gravando áudio...' :
+                                 activeP.status === 'ai_composing' ? '🤖 IA digitando...' :
+                                 activeP.status === 'ai_recording' ? '🤖 IA gravando áudio...' :
+                                 activeP.status.startsWith('attendant_') ? `👤 ${activeP.agentName || 'Atendente'} digitando...` :
+                                 'digitando...'}
+                              </span>
+                            ) : draftText ? (
                               <>
                                 <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
                                 <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>

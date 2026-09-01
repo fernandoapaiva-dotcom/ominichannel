@@ -1,7 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Mic, User } from 'lucide-react';
 import { Message, Conversation } from '../types';
 import { useAudio } from '../context/AudioContext';
+
+/** Resolve raw message content to a playable URL */
+function resolveAudioUrl(raw: string): string {
+  if (!raw) return '';
+  const clean = raw.split('|')[0].trim();
+  if (clean.startsWith('http')) return clean;
+  if (clean.startsWith('/uploads/')) return clean;
+  return `/uploads/${clean.replace(/^\//, '')}`;
+}
+
 
 interface WhatsAppAudioPlayerProps {
   message: Message;
@@ -22,10 +32,66 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
   const isThisActive = activeAudio?.msgId === message.id;
 
   const currentTime = isThisActive ? activeAudio.currentTime : 0;
-  const duration = isThisActive ? activeAudio.duration : 0;
+  const activeDuration = isThisActive ? activeAudio.duration : 0;
   const speed = isThisActive ? activeAudio.speed : 1;
 
+  // Pre-loaded duration (loaded on mount even before the user presses play)
+  const [preloadedDuration, setPreloadedDuration] = useState<number>(0);
+  const preloadRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const url = resolveAudioUrl(message.conteudo || '');
+    if (!url) return;
+
+    let isMounted = true;
+
+    // 1. Web Audio API decoding (100% reliable for .ogg Opus on Chrome Desktop)
+    fetch(url)
+      .then((res) => res.arrayBuffer())
+      .then((buffer) => {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) throw new Error('No AudioContext');
+        const ctx = new AudioCtx();
+        return ctx.decodeAudioData(buffer).then((decoded) => {
+          if (isMounted && decoded && decoded.duration && isFinite(decoded.duration) && decoded.duration > 0) {
+            setPreloadedDuration(decoded.duration);
+          }
+          ctx.close().catch(() => {});
+        });
+      })
+      .catch(() => {
+        // Fallback: HTML5 Audio
+        const audio = new Audio();
+        preloadRef.current = audio;
+        const onLoaded = () => {
+          if (isMounted && audio.duration && isFinite(audio.duration) && audio.duration > 0) {
+            setPreloadedDuration(audio.duration);
+          }
+        };
+        audio.addEventListener('loadedmetadata', onLoaded);
+        audio.addEventListener('durationchange', onLoaded);
+        audio.addEventListener('canplaythrough', onLoaded);
+        audio.preload = 'auto';
+        audio.src = url;
+      });
+
+    return () => {
+      isMounted = false;
+      if (preloadRef.current) {
+        preloadRef.current.src = '';
+        preloadRef.current = null;
+      }
+    };
+  }, [message.conteudo]);
+
+  // Extra duration from WhatsApp payload (dados_adicionais.seconds)
+  const extraSeconds = (message as any)?.dados_adicionais?.seconds || (message as any)?.dados_adicionais?.duration || 0;
+
+  // Use live duration when active, fall back to preloaded, fall back to extraSeconds from WhatsApp
+  const duration = activeDuration > 0 ? activeDuration : (preloadedDuration > 0 ? preloadedDuration : extraSeconds);
+
   const formatTime = (secs: number) => {
+
     if (!secs || isNaN(secs)) return '0:00';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
@@ -159,7 +225,8 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
 
         {/* Time display & Speed toggle */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
-          <span>{formatTime(currentTime)}</span>
+          {/* Left: currentTime when playing, total duration when idle */}
+          <span>{isThisActive ? formatTime(currentTime) : formatTime(duration)}</span>
 
           {isThisActive && (
             <button
@@ -181,7 +248,8 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
             </button>
           )}
 
-          <span>{duration > 0 ? formatTime(duration) : ''}</span>
+          {/* Right: total duration when playing */}
+          <span>{isThisActive && duration > 0 ? formatTime(duration) : ''}</span>
         </div>
       </div>
     </div>

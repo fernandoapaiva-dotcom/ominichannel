@@ -14,11 +14,12 @@ class WhatsAppWatchdogService:
     def __init__(self):
         self.is_running = False
         self.instance_last_reconnect: Dict[str, float] = {}
+        self.instance_reconnect_attempts: Dict[str, int] = {}
 
     async def check_and_auto_heal_instances(self):
         """
         Periodically inspects all registered WhatsApp instances and automatically
-        reconnects any disconnected or closed instances without requiring manual intervention.
+        reconnects any disconnected instances using smart exponential backoff.
         """
         try:
             async with AsyncSessionLocal() as session:
@@ -56,23 +57,40 @@ class WhatsAppWatchdogService:
 
                     live_status = live_instances.get(inst_name)
 
-                    # If not connected (close, connecting, or missing)
-                    if live_status != "open":
-                        last_try = self.instance_last_reconnect.get(inst_name, 0)
-                        # Throttle reconnection attempts to once every 45 seconds per instance
-                        if current_ts - last_try >= 45:
-                            self.instance_last_reconnect[inst_name] = current_ts
-                            logger.info(f"🔄 [Watchdog] Detectada instância '{inst_name}' com status '{live_status}'. Tentando reconexão automática...")
-                            
-                            try:
-                                async with httpx.AsyncClient(timeout=10.0) as client:
-                                    conn_res = await client.get(
-                                        f"{base_url}/instance/connect/{inst_name}",
-                                        headers=headers
-                                    )
-                                    logger.info(f"🔄 [Watchdog] Tentativa de reconexão de '{inst_name}' enviada (HTTP {conn_res.status_code}).")
-                            except Exception as rec_err:
-                                logger.error(f"Erro ao tentar reconectar '{inst_name}': {rec_err}")
+                    # Reset attempts count when connection is healthy and open
+                    if live_status == "open":
+                        self.instance_reconnect_attempts[inst_name] = 0
+                        continue
+
+                    # Do NOT interrupt if Baileys is actively connecting right now
+                    if live_status == "connecting":
+                        logger.debug(f"[Watchdog] Instância '{inst_name}' está em progresso de conexão ('connecting'). Aguardando...")
+                        continue
+
+                    # Safe reconnect only for closed or missing sessions
+                    attempts = self.instance_reconnect_attempts.get(inst_name, 0)
+                    if attempts >= 6:
+                        logger.warning(f"[Watchdog] Instância '{inst_name}' atingiu limite de {attempts} tentativas. Interrompendo para evitar bloqueio por martelamento de socket.")
+                        continue
+
+                    # Calculate exponential backoff interval (120s, 300s, 600s...)
+                    cooldown = min(600, 120 * (2 ** min(attempts, 3)))
+                    last_try = self.instance_last_reconnect.get(inst_name, 0)
+
+                    if current_ts - last_try >= cooldown:
+                        self.instance_last_reconnect[inst_name] = current_ts
+                        self.instance_reconnect_attempts[inst_name] = attempts + 1
+                        logger.info(f"🔄 [Watchdog] Instância '{inst_name}' desconectada ('{live_status}'). Tentativa {attempts + 1}/6 (cooldown {cooldown}s)...")
+                        
+                        try:
+                            async with httpx.AsyncClient(timeout=10.0) as client:
+                                conn_res = await client.get(
+                                    f"{base_url}/instance/connect/{inst_name}",
+                                    headers=headers
+                                )
+                                logger.info(f"🔄 [Watchdog] Tentativa de reconexão de '{inst_name}' enviada (HTTP {conn_res.status_code}).")
+                        except Exception as rec_err:
+                            logger.error(f"Erro ao tentar reconectar '{inst_name}': {rec_err}")
 
         except Exception as e:
             logger.error(f"Erro no ciclo do WhatsApp Watchdog: {e}")

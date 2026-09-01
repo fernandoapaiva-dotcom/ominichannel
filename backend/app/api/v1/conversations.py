@@ -1525,6 +1525,38 @@ async def send_location_in_conversation(
 
     return message
 
+@router.post("/{conversation_id}/presence")
+async def send_conversation_presence(
+    conversation_id: int,
+    presence_in: Dict[str, Any],
+    current_user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db)
+):
+    presence_state = presence_in.get("presence", "composing")
+    conv = await get_conversation_or_404(db, conversation_id, current_user.tenant_id)
+    contact = await db.get(Contact, conv.contact_id)
+    wn = await db.get(WhatsAppNumber, conv.whatsapp_number_id)
+    
+    if wn and wn.instancia_evolution_api and contact:
+        clean_phone = contact.telefone.split("@")[0].split(":")[0]
+        asyncio.create_task(
+            evolution_service.send_presence(
+                instance_name=wn.instancia_evolution_api,
+                number=clean_phone,
+                presence=presence_state
+            )
+        )
+        asyncio.create_task(
+            ws_manager.broadcast_to_tenant(current_user.tenant_id, {
+                "type": "USER_PRESENCE",
+                "conversation_id": conv.id,
+                "phone": clean_phone,
+                "presence": f"attendant_{presence_state}",
+                "agent_name": current_user.nome
+            })
+        )
+    return {"success": True, "presence": presence_state}
+
 def generate_bacen_pix_string(key: str, merchant_name: str, merchant_city: str, amount: Optional[float] = None) -> str:
     clean_key = key.replace('.', '').replace('/', '').replace('-', '').replace(' ', '') if '@' not in key else key
     field26 = f"0014br.gov.bcb.pix01{len(clean_key):02d}{clean_key}"
@@ -1703,13 +1735,40 @@ async def upload_general_file(
     with open(temp_path, "wb") as f:
         f.write(file_bytes)
 
-    # If file is audio (webm, ogg, wav, mp3, m4a), convert to standardized WhatsApp Ogg Opus with exact duration headers
-    if raw_ext in [".webm", ".ogg", ".wav", ".mp3", ".m4a", ".aac", ".flac"]:
+    # Determine if file is audio — check extension AND MIME type
+    # iOS/Safari records audio as .mp4 (audio-only MP4 with Opus codec)
+    # Also check content_type for audio/* MIME types regardless of extension
+    is_audio_ext = raw_ext in [".webm", ".ogg", ".wav", ".mp3", ".m4a", ".aac", ".flac", ".mp4", ".3gp", ".3gpp"]
+    is_audio_mime = (file.content_type or "").startswith("audio/")
+
+    # For .mp4 specifically, use ffprobe to check if it's audio-only (no video stream)
+    # This distinguishes audio recordings from actual video files
+    if raw_ext == ".mp4" and not is_audio_mime:
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_streams", "-of", "json", temp_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8
+            )
+            if probe.returncode == 0:
+                import json as _json
+                probe_data = _json.loads(probe.stdout.decode())
+                streams = probe_data.get("streams", [])
+                has_video = any(s.get("codec_type") == "video" for s in streams)
+                has_audio = any(s.get("codec_type") == "audio" for s in streams)
+                if has_audio and not has_video:
+                    is_audio_ext = True  # Audio-only mp4, treat as audio
+                elif has_video:
+                    is_audio_ext = False  # Real video file, do NOT convert
+        except Exception as probe_err:
+            logger.warning(f"ffprobe check failed for mp4: {probe_err}")
+
+    if is_audio_ext or is_audio_mime:
         final_filename = f"{unique_base}.ogg"
         final_path = os.path.join("uploads", final_filename)
         try:
             cmd = [
                 "ffmpeg", "-y", "-i", temp_path,
+                "-vn",          # Drop any video stream
                 "-c:a", "libopus",
                 "-b:a", "32k",
                 "-ar", "48000",
@@ -1717,13 +1776,16 @@ async def upload_general_file(
                 "-application", "voip",
                 final_path
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=12)
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             if res.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                logger.info(f"[UPLOAD] Audio converted: {temp_path} -> {final_path} ({os.path.getsize(final_path)} bytes)")
                 try:
                     os.remove(temp_path)
                 except Exception:
                     pass
                 return {"url": f"/uploads/{final_filename}", "filename": final_filename}
+            else:
+                logger.error(f"[UPLOAD] ffmpeg failed (rc={res.returncode}): {res.stderr.decode()[:300]}")
         except Exception as err:
             logger.error(f"Error converting audio upload with ffmpeg: {err}")
 

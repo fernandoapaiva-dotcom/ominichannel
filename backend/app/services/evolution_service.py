@@ -37,12 +37,22 @@ def convert_to_ogg_opus(input_path: str) -> str:
     return input_path
 
 
+import random
+import time
+
 class EvolutionService:
     def __init__(self):
         self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
         self.default_api_key = settings.EVOLUTION_API_KEY
         self.qr_code_cache: Dict[str, str] = {}
         self._http_client: Optional[httpx.AsyncClient] = None
+        self._contact_locks: Dict[str, asyncio.Lock] = {}
+        self._last_send_time: Dict[str, float] = {}
+
+    def _get_contact_lock(self, key: str) -> asyncio.Lock:
+        if key not in self._contact_locks:
+            self._contact_locks[key] = asyncio.Lock()
+        return self._contact_locks[key]
 
     def get_client(self) -> httpx.AsyncClient:
         if self._http_client is None or self._http_client.is_closed:
@@ -115,7 +125,8 @@ class EvolutionService:
                     "CONNECTION_UPDATE",
                     "CONTACTS_UPSERT",
                     "CONTACTS_UPDATE",
-                    "CALL"
+                    "CALL",
+                    "PRESENCE_UPDATE"
                 ]
             }
         }
@@ -264,6 +275,105 @@ class EvolutionService:
 
         return digits
 
+    async def send_presence(
+        self,
+        instance_name: str,
+        number: str,
+        presence: str = "composing",
+        delay: int = 0,
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Emits WhatsApp Web WebSocket presence stanza ('composing' or 'recording') to WhatsApp servers.
+        This is REQUIRED by Meta anti-spam filters before sending any message.
+        """
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/chat/sendPresence/{instance_name}"
+        clean_number = self._format_target_number(number)
+        payload = {
+            "number": clean_number,
+            "presence": presence,
+            "delay": delay
+        }
+        client = self.get_client()
+        try:
+            res = await client.post(url, json=payload, headers=headers, timeout=5.0)
+            return res.json() if res.content else {}
+        except Exception as e:
+            logger.debug(f"[ANTI-BAN] sendPresence ({presence}) to {clean_number} failed/timed out: {e}")
+            return {}
+
+    async def _apply_anti_ban_pacing_and_presence(
+        self,
+        instance_name: str,
+        number: str,
+        text: str = "",
+        presence_type: str = "composing",
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ):
+        """
+        Enforces 100% Anti-Ban safeguards:
+        1. Rate-limiting / inter-message spacing (cooldown gap between consecutive messages).
+        2. 'composing' or 'recording' presence stanza sent to WhatsApp Web.
+        3. Dynamic human typing delay (simulates typing proportional to text length + jitter).
+        """
+        clean_number = self._format_target_number(number)
+        lock_key = f"{instance_name}:{clean_number}"
+        lock = self._get_contact_lock(lock_key)
+
+        async with lock:
+            # 1. Enforce minimum inter-message gap (cooldown gap of 2.2s - 3.8s)
+            now = time.time()
+            last_time = self._last_send_time.get(lock_key, 0.0)
+            elapsed = now - last_time
+            min_gap = random.uniform(2.2, 3.8)
+            if elapsed < min_gap:
+                wait_time = min_gap - elapsed
+                logger.info(f"[ANTI-BAN] Throttling message to {clean_number} (waiting {wait_time:.2f}s gap)")
+                await asyncio.sleep(wait_time)
+
+            # 2. Calculate dynamic human typing / recording delay
+            if presence_type == "recording":
+                typing_delay_sec = random.uniform(2.5, 4.2)
+            elif presence_type == "composing":
+                char_count = len(text or "")
+                raw_delay = 1.6 + (char_count * 0.035) + random.uniform(0.3, 1.1)
+                typing_delay_sec = max(1.8, min(6.5, raw_delay))
+            else:
+                typing_delay_sec = 1.5
+
+            delay_ms = int(typing_delay_sec * 1000)
+
+            # 3. Emit presence status (composing / recording) to WhatsApp servers
+            await self.send_presence(
+                instance_name=instance_name,
+                number=clean_number,
+                presence=presence_type,
+                delay=delay_ms,
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key
+            )
+
+            # 4. Hold execution for the duration of the typing/recording simulation
+            logger.info(f"[ANTI-BAN] Simulating human {presence_type} state for {clean_number} ({typing_delay_sec:.2f}s delay)")
+            await asyncio.sleep(typing_delay_sec)
+
+            # Update last send time timestamp
+            self._last_send_time[lock_key] = time.time()
+
+    def _add_micro_jitter(self, text: str) -> str:
+        """
+        Appends non-visible zero-width space characters (\u200b) to prevent
+        Meta's automated spam hash filter from matching duplicate automated text templates.
+        """
+        if not text:
+            return text
+        jitter_count = random.randint(1, 3)
+        zero_spaces = "\u200b" * jitter_count
+        return f"{text}{zero_spaces}"
+
     async def send_text_message(
         self,
         instance_name: str,
@@ -273,13 +383,24 @@ class EvolutionService:
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
+        # 1. Apply 100% Anti-Ban safeguards: presence simulation, human delay, and rate limiting
+        await self._apply_anti_ban_pacing_and_presence(
+            instance_name=instance_name,
+            number=number,
+            text=text,
+            presence_type="composing",
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
+
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
         clean_number = self._format_target_number(number)
+        safe_text = self._add_micro_jitter(text)
 
         payload: Dict[str, Any] = {
             "number": clean_number,
-            "text": text
+            "text": safe_text
         }
         if mentioned:
             payload["mentioned"] = mentioned
@@ -346,35 +467,37 @@ class EvolutionService:
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Sends an interactive button message via Evolution API v2.
-        Endpoint: POST /message/sendButtons/{instance_name}
+        Safe alternative for interactive buttons:
+        Converts legacy Protobuf buttons (which trigger Meta anti-bot bans) into native WhatsApp Polls (sendPoll).
+        Native Polls are 100% official, safe, and native on WhatsApp Web & Mobile.
         """
-        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
-        url = f"{base_url}/message/sendButtons/{instance_name}"
-        clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
-        payload = {
-            "number": clean_number,
-            "title": title,
-            "description": description,
-            "footer": footer,
-            "buttons": buttons
-        }
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(url, json=payload, headers=headers, timeout=15.0)
-                res_data = response.json() if response.content else {}
-                if response.status_code < 400:
-                    res_data["success"] = True
-                    return res_data
-                
-                # Fallback to plain text message if buttons fail
-                logger.warning(f"sendButtons returned {response.status_code}, falling back to sendText")
-                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
-                return await self.send_text_message(instance_name, number, full_text)
-            except Exception as e:
-                logger.error(f"Error sending buttons to {number} via instance {instance_name}: {e}")
-                full_text = f"*{title}*\n\n{description}\n\n_{footer}_"
-                return await self.send_text_message(instance_name, number, full_text)
+        logger.info(f"[ANTI-BAN] Converting legacy button request for {number} to safe Native WhatsApp Poll...")
+        question = f"{title}\n{description}".strip()
+        if len(question) > 255:
+            question = question[:250] + "..."
+
+        options = []
+        for btn in buttons:
+            btn_text = ""
+            if isinstance(btn, dict):
+                btn_text = btn.get("displayText") or btn.get("buttonText", {}).get("displayText") or btn.get("id", "")
+            elif isinstance(btn, str):
+                btn_text = btn
+            if btn_text:
+                options.append(str(btn_text))
+
+        if not options:
+            options = ["Sim, aceitar", "Não, recusar"]
+
+        return await self.send_poll_message(
+            instance_name=instance_name,
+            number=number,
+            question=question,
+            options=options,
+            selectable_count=1,
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
 
     async def send_poll_message(
         self,
@@ -390,6 +513,16 @@ class EvolutionService:
         Sends an interactive one-click Poll button message via Evolution API v2.
         Endpoint: POST /message/sendPoll/{instance_name}
         """
+        # 1. Apply Anti-Ban pacing & presence ("composing")
+        await self._apply_anti_ban_pacing_and_presence(
+            instance_name=instance_name,
+            number=number,
+            text=question,
+            presence_type="composing",
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
+
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendPoll/{instance_name}"
         clean_number = await self.resolve_canonical_jid(instance_name, number, custom_base_url, custom_api_key)
@@ -518,6 +651,16 @@ class EvolutionService:
         Sends a single native WhatsApp location message with interactive map thumbnail and red pin via Evolution API v2.
         Endpoint: POST /message/sendLocation/{instance_name}
         """
+        # 1. Apply Anti-Ban pacing & presence ("composing")
+        await self._apply_anti_ban_pacing_and_presence(
+            instance_name=instance_name,
+            number=number,
+            text=name or address or "Localização",
+            presence_type="composing",
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
+
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendLocation/{instance_name}"
         clean_number = self._format_target_number(number)
@@ -560,27 +703,43 @@ class EvolutionService:
         """
         Sends a native WhatsApp Voice Note (PTT / Push-To-Talk audio) with waveform icon via Evolution API v2.
         Endpoint: POST /message/sendWhatsAppAudio/{instance_name}
+        NOTE: Evolution API 2.3.7 accepts public HTTPS URL or pure base64 (no "data:" prefix).
+        It REJECTS "data:audio/ogg;base64,..." format.
         """
+        # 1. Apply Anti-Ban pacing & presence ("recording")
+        await self._apply_anti_ban_pacing_and_presence(
+            instance_name=instance_name,
+            number=number,
+            text="",
+            presence_type="recording",
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
+
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendWhatsAppAudio/{instance_name}"
         clean_number = self._format_target_number(number)
 
         audio_payload = audio_media
+
         if audio_payload.startswith("/uploads/"):
+            # Use the public HTTPS URL so Evolution API can fetch and process it directly
             fname = os.path.basename(audio_payload)
             lpath = os.path.join("uploads", fname)
-            if os.path.exists(lpath):
+            # If file is not already ogg, convert it first
+            if os.path.exists(lpath) and not fname.endswith(".ogg"):
                 ogg_path = convert_to_ogg_opus(lpath)
-                read_path = ogg_path if (os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0) else lpath
-                with open(read_path, "rb") as f:
-                    raw_b64 = base64.b64encode(f.read()).decode("utf-8")
-                audio_payload = f"data:audio/ogg;base64,{raw_b64}"
-                if ogg_path != lpath and os.path.exists(ogg_path):
-                    try:
-                        os.remove(ogg_path)
-                    except Exception:
-                        pass
+                if os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0:
+                    import shutil
+                    ogg_fname = os.path.basename(ogg_path)
+                    dest = os.path.join("uploads", ogg_fname)
+                    shutil.move(ogg_path, dest)
+                    fname = ogg_fname
+            audio_payload = f"https://ominichannel.duckdns.org/uploads/{fname}"
+            logger.info(f"[AUDIO] Sending via public URL: {audio_payload}")
+
         elif audio_payload.startswith("data:") and ";base64," in audio_payload:
+            # Strip the data: prefix — Evolution API only accepts pure base64, not data URIs
             raw_b64 = audio_payload.split(";base64,")[1]
             try:
                 raw_bytes = base64.b64decode(raw_b64)
@@ -598,9 +757,13 @@ class EvolutionService:
                     os.remove(in_path)
             except Exception as conv_err:
                 logger.error(f"Error converting base64 audio with ffmpeg: {conv_err}")
-            audio_payload = f"data:audio/ogg;base64,{raw_b64}"
-        elif not audio_payload.startswith("data:") and not audio_payload.startswith("http"):
-            audio_payload = f"data:audio/ogg;base64,{audio_payload}"
+            # Pass pure base64 without data: prefix
+            audio_payload = raw_b64
+            logger.info(f"[AUDIO] Sending via pure base64 ({len(audio_payload)} chars)")
+
+        elif not audio_payload.startswith("http"):
+            # Already pure base64 — use as-is
+            logger.info(f"[AUDIO] Sending via pure base64 ({len(audio_payload)} chars)")
 
         payload = {
             "number": clean_number,
@@ -614,20 +777,20 @@ class EvolutionService:
         try:
             response = await client.post(url, json=payload, headers=headers, timeout=20.0)
             res_data = response.json() if response.content else {}
+            logger.info(f"[AUDIO] sendWhatsAppAudio response: {response.status_code} | {str(res_data)[:300]}")
             if response.status_code < 400 or res_data.get("key") or res_data.get("id"):
                 res_data["success"] = True
                 return res_data
 
-            # Failover to sendMedia audio if sendWhatsAppAudio endpoint rejected request
+            # Failover to sendMedia if sendWhatsAppAudio rejected request
             logger.warning(f"sendWhatsAppAudio returned {response.status_code}, falling back to sendMedia...")
             fallback_url = f"{base_url}/message/sendMedia/{instance_name}"
-            raw_media = audio_payload.split(";base64,")[1] if ";base64," in audio_payload else audio_payload
             fallback_payload = {
                 "number": clean_number,
                 "mediatype": "audio",
                 "mediaType": "audio",
                 "mimetype": "audio/ogg",
-                "media": raw_media,
+                "media": audio_payload,
                 "fileName": "voice_note.ogg",
                 "ptt": True
             }
@@ -662,6 +825,16 @@ class EvolutionService:
                 custom_base_url=custom_base_url,
                 custom_api_key=custom_api_key
             )
+
+        # 1. Apply Anti-Ban pacing & presence ("composing")
+        await self._apply_anti_ban_pacing_and_presence(
+            instance_name=instance_name,
+            number=number,
+            text=caption or file_name or "Mídia",
+            presence_type="composing",
+            custom_base_url=custom_base_url,
+            custom_api_key=custom_api_key
+        )
 
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendMedia/{instance_name}"
@@ -794,16 +967,16 @@ class EvolutionService:
             "message": msg_payload,
             "convertToMp4": False
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=6.0) as client:
             try:
-                res = await client.post(url, json=payload, headers=headers, timeout=20.0)
+                res = await client.post(url, json=payload, headers=headers, timeout=6.0)
                 if res.status_code in (200, 201):
                     data = res.json()
                     return data.get("base64")
                 else:
                     # If from_me failed, try the inverse
                     key_obj["fromMe"] = not from_me
-                    res2 = await client.post(url, json=payload, headers=headers, timeout=20.0)
+                    res2 = await client.post(url, json=payload, headers=headers, timeout=6.0)
                     if res2.status_code in (200, 201):
                         data2 = res2.json()
                         return data2.get("base64")

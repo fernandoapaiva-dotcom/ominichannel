@@ -36,6 +36,7 @@ interface ChatAreaProps {
   onToggleChatList?: () => void;
   whatsappNumbers?: WhatsAppNumber[];
   drafts?: { [convId: number]: string };
+  userPresences?: { [convId: number]: { status: string; agentName?: string; expiresAt: number } };
   onSaveDraft?: (convId: number, text: string) => void;
 }
 
@@ -895,6 +896,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     observer.observe(container);
     return () => observer.disconnect();
   }, [conversation?.id, isUserScrolledUp]);
+
+  // Send "composing" presence to WhatsApp & system when attendant types
+  const lastPresenceSentRef = useRef<number>(0);
+  useEffect(() => {
+    if (!conversation?.id || !inputText.trim()) return;
+    const now = Date.now();
+    if (now - lastPresenceSentRef.current > 3500) {
+      lastPresenceSentRef.current = now;
+      apiFetch(`/conversations/${conversation.id}/presence`, {
+        method: 'POST',
+        body: JSON.stringify({ presence: 'composing' })
+      }).catch(() => {});
+    }
+  }, [inputText, conversation?.id]);
 
   // Auto-mark conversation as read, load draft, and scroll to the absolute bottom on conversation change
   useEffect(() => {
@@ -3191,6 +3206,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
                   </span>
                 )}
+                {(() => {
+                  const activeP = userPresences ? userPresences[conversation.id] : null;
+                  const isActive = activeP && activeP.expiresAt > Date.now();
+                  if (!isActive) return null;
+                  return (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#00a884', fontWeight: '700' }} className="animate-pulse">
+                      {activeP.status === 'recording' ? '🎙️ gravando áudio...' :
+                       activeP.status === 'ai_composing' ? '🤖 IA digitando...' :
+                       activeP.status === 'ai_recording' ? '🤖 IA gravando áudio...' :
+                       activeP.status.startsWith('attendant_') ? `👤 ${activeP.agentName || 'Atendente'} digitando...` :
+                       'digitando...'}
+                    </span>
+                  );
+                })()}
               </div>
             )}
           </div>

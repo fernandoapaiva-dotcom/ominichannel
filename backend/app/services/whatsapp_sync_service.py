@@ -173,6 +173,68 @@ class WhatsAppSyncService:
             logger.info(f"=== INICIANDO SINCRONIZAÇÃO AUTOMÁTICA DE HISTÓRICO: {instance_name} (Tenant {tenant_id}) ===")
             async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=35.0) as client:
                 
+                # 0. Fetch and Sync all WhatsApp Groups (/group/fetchAllGroups/{instance_name})
+                try:
+                    stats["current_contact"] = "Sincronizando grupos do WhatsApp..."
+                    await self._emit_progress(tenant_id, stats)
+                    g_res = await client.get(f"/group/fetchAllGroups/{instance_name}?getParticipants=true")
+                    if g_res.status_code == 200:
+                        raw_groups = g_res.json()
+                        if isinstance(raw_groups, dict):
+                            raw_groups = raw_groups.get("groups") or raw_groups.get("records") or raw_groups.get("data") or []
+                        if isinstance(raw_groups, list):
+                            async with AsyncSessionLocal() as g_session:
+                                g_count = 0
+                                for g_item in raw_groups:
+                                    if not isinstance(g_item, dict):
+                                        continue
+                                    g_jid = g_item.get("id") or g_item.get("remoteJid") or g_item.get("jid") or ""
+                                    g_subject = g_item.get("subject") or g_item.get("name") or "Grupo do WhatsApp"
+                                    if not g_jid or "@g.us" not in str(g_jid):
+                                        continue
+
+                                    g_stmt = select(WhatsAppGroup).where(
+                                        WhatsAppGroup.tenant_id == tenant_id,
+                                        WhatsAppGroup.group_jid == g_jid
+                                    )
+                                    g_obj = (await g_session.execute(g_stmt)).scalars().first()
+                                    if not g_obj:
+                                        g_obj = WhatsAppGroup(
+                                            tenant_id=tenant_id,
+                                            group_jid=g_jid,
+                                            nome=g_subject,
+                                            owner_phone=str(g_item.get("owner") or ""),
+                                            participantes=g_item.get("participants") or [],
+                                            timestamp_criacao=datetime.utcnow()
+                                        )
+                                        g_session.add(g_obj)
+                                    else:
+                                        g_obj.nome = g_subject
+                                        if g_item.get("participants"):
+                                            g_obj.participantes = g_item.get("participants")
+
+                                    gc_stmt = select(Contact).where(
+                                        Contact.tenant_id == tenant_id,
+                                        Contact.telefone == g_jid
+                                    )
+                                    gc_obj = (await g_session.execute(gc_stmt)).scalars().first()
+                                    if not gc_obj:
+                                        gc_obj = Contact(
+                                            tenant_id=tenant_id,
+                                            telefone=g_jid,
+                                            nome=g_subject,
+                                            dados_adicionais={"is_group": True}
+                                        )
+                                        g_session.add(gc_obj)
+                                    else:
+                                        gc_obj.nome = g_subject
+
+                                    g_count += 1
+                                await g_session.commit()
+                                logger.info(f"[{instance_name}] Sincronizados {g_count} grupos do WhatsApp no banco de dados.")
+                except Exception as g_err:
+                    logger.warning(f"[{instance_name}] Erro ao buscar grupos: {g_err}")
+
                 # 1. First fetch Phone Address Book Contacts (/chat/findContacts)
                 address_book_map: Dict[str, Dict[str, Any]] = {}
                 try:
@@ -359,7 +421,7 @@ class WhatsAppSyncService:
                                                     (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
                                                 )
                                             )
-                                            official_gname = g_res_tbl.scalar_one_or_none()
+                                            official_gname = g_res_tbl.scalars().first()
                                             if official_gname:
                                                 initial_group_name = official_gname
 
@@ -385,7 +447,7 @@ class WhatsAppSyncService:
                                                     (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
                                                 )
                                             )
-                                            official_gname = g_res_tbl.scalar_one_or_none()
+                                            official_gname = g_res_tbl.scalars().first()
                                             if official_gname:
                                                 contact.nome = official_gname
                                             elif not contact.nome or contact.nome in ["Grupo WhatsApp", "Cliente"]:

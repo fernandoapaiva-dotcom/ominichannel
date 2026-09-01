@@ -285,7 +285,7 @@ export const ContactsPanel: React.FC = () => {
 
         {isAudio && (
           <div style={{ padding: '6px 0', minWidth: '220px' }}>
-            <audio controls src={resolveMediaUrl(text)} style={{ width: '100%', height: '36px' }} />
+            <audio controls preload="auto" src={resolveMediaUrl(text)} style={{ width: '100%', height: '36px' }} />
           </div>
         )}
 

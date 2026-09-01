@@ -338,6 +338,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   };
 
+  // User Presence State (digitando / gravando áudio)
+  const [userPresences, setUserPresences] = useState<Record<number, { status: string; agentName?: string; expiresAt: number }>>({});
+
   // 1. Polling Fallback Safety Net (Every 3s)
   useEffect(() => {
     const interval = setInterval(() => {
@@ -366,7 +369,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          if (payload.type === 'CONVERSATION_ESCALATED') {
+          if (payload.type === 'USER_PRESENCE') {
+            const convId = payload.conversation_id;
+            const presenceStatus = payload.presence;
+            const agentName = payload.agent_name;
+            if (presenceStatus === 'paused' || presenceStatus === 'unavailable') {
+              setUserPresences(prev => {
+                const next = { ...prev };
+                delete next[convId];
+                return next;
+              });
+            } else {
+              setUserPresences(prev => ({
+                ...prev,
+                [convId]: {
+                  status: presenceStatus,
+                  agentName,
+                  expiresAt: Date.now() + 8000
+                }
+              }));
+            }
+          } else if (payload.type === 'CONVERSATION_ESCALATED') {
             fetchConversations();
             playNotificationSound();
             setNotificationAlert(payload.message || "🚨 ATENÇÃO: Nova conversa transferida para atendimento humano!");
@@ -769,6 +792,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onStatusToggle={fetchConversations}
                 currentUserId={user?.id}
                 drafts={conversationDrafts}
+                userPresences={userPresences}
                 onSearch={fetchConversations}
               />
             </div>
@@ -778,6 +802,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 allConversations={conversations}
                 onSelectConversation={(conv) => handleSelectConversation(conv.id)}
                 currentUser={user}
+                userPresences={userPresences}
                 onSendMessage={handleSendMessage}
                 onOpenTransferModal={() => setIsTransferModalOpen(true)}
                 onOpenMediaGallery={() => setIsMediaGalleryOpen(true)}

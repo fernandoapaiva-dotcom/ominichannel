@@ -151,11 +151,77 @@ async def receive_evolution_webhook(
             logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
             return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
 
-    # Handle CONNECTION_UPDATE event (log connection state without triggering socket-overloading history sync)
+    # Handle CONNECTION_UPDATE event (trigger automatic background sync when instance connects)
     if event_type in ["connection.update", "connection_update", "CONNECTION_UPDATE"]:
         conn_state = data.get("state") or data.get("status") or payload.get("state")
         logger.info(f"[CONNECTION_UPDATE] Instância '{instance_name}' estado: '{conn_state}'")
+        if str(conn_state).lower() in ["open", "connected"]:
+            wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+            wn_res = await db.execute(wn_stmt)
+            wn_obj = wn_res.scalar_one_or_none()
+            if wn_obj:
+                logger.info(f"🚀 [AUTO-SYNC] Instância '{instance_name}' conectada com sucesso ('{conn_state}')! Disparando sincronização automática de histórico e grupos...")
+                from app.services.whatsapp_sync_service import whatsapp_sync_service
+                whatsapp_sync_service.trigger_background_sync(
+                    tenant_id=wn_obj.tenant_id,
+                    whatsapp_number_id=wn_obj.id,
+                    instance_name=instance_name
+                )
         return {"status": "success", "event": event_type, "state": conn_state}
+
+    # Handle PRESENCE_UPDATE event (Customer typing or recording audio on WhatsApp)
+    if event_type in ["presence.update", "presence_update", "PRESENCE_UPDATE"]:
+        p_data = data
+        if isinstance(p_data, list) and len(p_data) > 0:
+            p_data = p_data[0]
+        
+        if not isinstance(p_data, dict):
+            p_data = payload.get("data") or {}
+            if isinstance(p_data, list) and len(p_data) > 0:
+                p_data = p_data[0]
+                
+        presences = p_data.get("presences") if isinstance(p_data, dict) else {}
+        p_id = (p_data.get("id") or p_data.get("jid") or payload.get("id") or "") if isinstance(p_data, dict) else ""
+        
+        last_presence = None
+        target_jid = p_id
+        
+        if isinstance(presences, dict):
+            for k, v in presences.items():
+                if isinstance(v, dict):
+                    last_presence = v.get("lastKnownPresence") or v.get("presence")
+                    target_jid = k
+                    break
+        elif isinstance(p_data, dict):
+            last_presence = p_data.get("lastKnownPresence") or p_data.get("presence")
+
+        if target_jid and last_presence:
+            clean_phone = target_jid.split("@")[0].split(":")[0]
+            clean_digits = "".join(filter(str.isdigit, clean_phone))
+            
+            if clean_digits:
+                c_stmt = (
+                    select(Conversation.id, Conversation.tenant_id)
+                    .join(Contact, Conversation.contact_id == Contact.id)
+                    .where(
+                        (Contact.telefone == clean_digits) | (Contact.telefone == clean_phone) | (Contact.telefone.like(f"%{clean_digits[-8:]}%"))
+                    )
+                    .order_by(Conversation.id.desc())
+                    .limit(1)
+                )
+                c_res = await db.execute(c_stmt)
+                conv_row = c_res.first()
+                
+                if conv_row:
+                    conv_id, tenant_id = conv_row[0], conv_row[1]
+                    logger.info(f"📱 [PRESENCE_UPDATE] Cliente ({clean_phone}) na conversa #{conv_id}: status='{last_presence}'")
+                    await ws_manager.broadcast_to_tenant(tenant_id, {
+                        "type": "USER_PRESENCE",
+                        "conversation_id": conv_id,
+                        "phone": clean_phone,
+                        "presence": last_presence
+                    })
+        return {"status": "success", "event": event_type, "presence": last_presence}
 
     # Handle CONTACTS_UPDATE / CONTACTS_UPSERT (Phone address book synced or updated on mobile)
     if event_type in ["contacts.update", "contacts.upsert", "contacts_update", "contacts_upsert"]:
@@ -541,14 +607,20 @@ async def receive_evolution_webhook(
     sender_jid = data.get("sender", "") or data.get("senderPhone", "") or ""
     participant_jid = key.get("participant", "") or data.get("participant", "") or ""
 
+    raw_phone_candidate = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
+
     # Fix LID numbers: resolve to real WhatsApp phone number
-    if "@lid" in str(remote_jid).lower():
+    if "@lid" in str(remote_jid).lower() or (len(raw_phone_candidate) >= 14 and not raw_phone_candidate.startswith("55") and not raw_phone_candidate.startswith("120363") and "@g.us" not in str(remote_jid)):
         if "@s.whatsapp.net" in str(remote_jid_alt):
             remote_jid = remote_jid_alt
         elif "@s.whatsapp.net" in str(participant_jid):
             remote_jid = participant_jid
         elif "@s.whatsapp.net" in str(sender_jid):
             remote_jid = sender_jid
+        else:
+            resolved = await evolution_service.resolve_canonical_jid(instance_name, raw_phone_candidate)
+            if resolved and resolved.startswith("55"):
+                remote_jid = f"{resolved}@s.whatsapp.net"
 
     is_group = (
         "@g.us" in str(remote_jid).lower() or
@@ -968,6 +1040,10 @@ async def receive_evolution_webhook(
         elif aud_msg:
             msg_type = MessageType.AUDIO
             ext = ".ogg"
+            aud_seconds = aud_msg.get("seconds") or aud_msg.get("duration") or 0
+            if aud_seconds:
+                msg_extra["seconds"] = int(aud_seconds)
+                msg_extra["duration"] = int(aud_seconds)
             if media_bytes:
                 # Transcrição adiada: só vamos transcrever se a conversa for com a IA (COM_IA)
                 # para economizar tokens do Gemini, conforme estratégia do usuário.
@@ -1443,6 +1519,18 @@ async def receive_evolution_webhook(
     db.add(user_msg)
     await db.commit()
 
+    # Send Read Receipt to WhatsApp (blue ticks simulation)
+    if msg_id and instance_name:
+        try:
+            target_jid = str(remote_jid) if "@" in str(remote_jid) else f"{phone_number}@s.whatsapp.net"
+            await evolution_service.mark_message_as_read(
+                instance_name=instance_name,
+                message_id=msg_id,
+                remote_jid=target_jid
+            )
+        except Exception as read_err:
+            logger.debug(f"[ANTI-BAN] Failed to send read receipt: {read_err}")
+
     # Broadcast customer message via WebSockets to agents
     await ws_manager.broadcast_to_department(
         tenant_id=tenant_id,
@@ -1711,6 +1799,25 @@ async def receive_evolution_webhook(
         is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
         transfer_executed = False
         ai_output = None
+
+        # Trigger AI typing presence ("digitando...") for customer on WhatsApp & attendants in system UI
+        if instance_name and phone_number:
+            clean_phone_for_presence = phone_number.split("@")[0]
+            asyncio.create_task(
+                evolution_service.send_presence(
+                    instance_name=instance_name,
+                    number=clean_phone_for_presence,
+                    presence="composing"
+                )
+            )
+            asyncio.create_task(
+                ws_manager.broadcast_to_tenant(tenant_id, {
+                    "type": "USER_PRESENCE",
+                    "conversation_id": conversation.id,
+                    "phone": phone_number,
+                    "presence": "ai_composing"
+                })
+            )
 
         if is_tech:
             logger.info(f"[COPILOTO TECNICO] Atendimento direto ao técnico autorizado/admin {tech_name} ({phone_number}) no modo Master.")
