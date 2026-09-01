@@ -91,7 +91,8 @@ export const ChatList: React.FC<ChatListProps> = ({
   onToggleCollapse,
   currentUserId,
   drafts = {},
-  onSearch
+  onSearch,
+  userPresences = {}
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);

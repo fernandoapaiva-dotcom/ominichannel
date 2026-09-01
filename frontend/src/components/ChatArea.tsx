@@ -281,7 +281,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleChatList,
   whatsappNumbers,
   drafts = {},
-  onSaveDraft
+  onSaveDraft,
+  userPresences = {}
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
