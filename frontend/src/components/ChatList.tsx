@@ -48,28 +48,26 @@ const formatTime = (ts: string | Date | undefined) => {
 
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
   if (!phone) return '';
-  const str = String(phone);
-  const clean = str.replace(/\D/g, '');
-  if (str.includes('@g.us') || clean.startsWith('120363') || str.includes('-') || clean.length >= 18) {
+  const str = String(phone).trim();
+  if (str.includes('@g.us') || str.startsWith('120363') || str.includes('-group')) {
     return 'Grupo';
   }
-  // Mask WhatsApp LID privacy numbers (14+ digits not starting with 55)
-  if (clean.length >= 14 && !clean.startsWith('55') && !clean.startsWith('120363')) {
-    return 'Cliente WhatsApp';
+  const clean = str.replace(/\D/g, '');
+  if (!clean) return str;
+
+  if (clean.startsWith('55') && clean.length === 13) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
   }
   if (clean.startsWith('55') && clean.length === 12) {
     return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
   }
-  if (clean.startsWith('55') && clean.length === 13) {
-    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
+  if (clean.length === 11) {
+    return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
   }
   if (clean.length === 10) {
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
   }
-  if (clean.length === 11) {
-    return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
-  }
-  return str.replace('@lid', '').replace('@s.whatsapp.net', '');
+  return `+${clean}`;
 };
 
 export const isGenericName = (name: string | undefined | null): boolean => {
@@ -82,8 +80,7 @@ export const isGenericName = (name: string | undefined | null): boolean => {
     n === 'whatsapp' ||
     n === 'whatsapp business' ||
     n.startsWith('contato ') ||
-    n.startsWith('+55') ||
-    n.startsWith('55') ||
+    n.startsWith('+') ||
     !isNaN(Number(n.replace(/\D/g, '')))
   );
 };
@@ -100,10 +97,14 @@ export const getContactInitial = (name: string | undefined | null): string => {
 };
 
 export const getCleanDisplayName = (rawName: string | undefined | null, phone: string | undefined | null): string => {
-  if (!isGenericName(rawName)) return rawName!.trim();
-  const formatted = formatWhatsAppPhone(phone);
-  if (formatted && formatted !== 'Grupo') return formatted;
-  return phone ? `+${phone.replace(/\D/g, '')}` : 'Cliente WhatsApp';
+  const formattedPhone = formatWhatsAppPhone(phone);
+  if (!isGenericName(rawName)) {
+    return rawName!.trim();
+  }
+  if (formattedPhone && formattedPhone !== 'Grupo') {
+    return formattedPhone;
+  }
+  return rawName || 'Cliente';
 };
 
 const formatMessagePreview = (msg: any | undefined): string => {
