@@ -1,5 +1,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response, RedirectResponse
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, cast, String
 from sqlalchemy.orm import selectinload
@@ -197,3 +199,47 @@ async def sync_contact_avatar(
         "message": "Foto de perfil não encontrada ou restrita pelas configurações de privacidade do cliente no WhatsApp",
         "foto_perfil_url": contact.foto_perfil_url
     }
+
+@router.get("/{contact_id}/avatar_image")
+async def get_contact_avatar_image(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Returns proxy image or redirects to avatar URL, automatically fetching from WhatsApp if missing.
+    """
+    stmt = select(Contact).where(Contact.id == contact_id)
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado")
+
+    pic_url = contact.foto_perfil_url
+    if not pic_url and contact.telefone:
+        conv_stmt = select(Conversation).options(selectinload(Conversation.whatsapp_number)).where(
+            Conversation.contact_id == contact.id
+        ).order_by(Conversation.ultima_interacao_em.desc())
+        conv_res = await db.execute(conv_stmt)
+        conv = conv_res.scalars().first()
+        instance_name = conv.whatsapp_number.instancia_evolution_api if (conv and conv.whatsapp_number) else None
+
+        from app.services.evolution_service import evolution_service
+        pic_url = await evolution_service.fetch_profile_picture_url(instance_name=instance_name, number=contact.telefone)
+        if pic_url:
+            contact.foto_perfil_url = pic_url
+            await db.commit()
+
+    if pic_url:
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as client:
+                resp = await client.get(pic_url)
+                if resp.status_code == 200:
+                    return Response(
+                        content=resp.content,
+                        media_type=resp.headers.get("content-type", "image/jpeg"),
+                        headers={"Cache-Control": "public, max-age=86400"}
+                    )
+        except Exception:
+            return RedirectResponse(url=pic_url)
+
+    raise HTTPException(status_code=404, detail="Sem avatar")

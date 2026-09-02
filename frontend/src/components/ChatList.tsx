@@ -731,18 +731,17 @@ export const ChatList: React.FC<ChatListProps> = ({
                 >
                   {/* WhatsApp Profile Avatar with Click-to-Zoom */}
                   <div style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-                    {primaryConv.contact?.foto_perfil_url && (
-                      <img
-                        src={primaryConv.contact.foto_perfil_url}
-                        alt={group.contactName}
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          const parent = e.currentTarget.parentElement;
-                          if (parent) {
-                            const fallback = parent.querySelector('.avatar-fallback') as HTMLElement;
-                            if (fallback) fallback.style.display = 'flex';
-                          }
-                        }}
+                    <img
+                      src={primaryConv.contact?.foto_perfil_url || (group.contactId ? `/api/v1/contacts/${group.contactId}/avatar_image` : '')}
+                      alt={group.contactName}
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        const parent = e.currentTarget.parentElement;
+                        if (parent) {
+                          const fallback = parent.querySelector('.avatar-fallback') as HTMLElement;
+                          if (fallback) fallback.style.display = 'flex';
+                        }
+                      }}
                         onClick={(e) => {
                           e.stopPropagation();
                           setAvatarModalData({
@@ -766,7 +765,6 @@ export const ChatList: React.FC<ChatListProps> = ({
                         onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
                         onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                       />
-                    )}
                     <div
                       className="avatar-fallback"
                       onClick={(e) => {
@@ -780,7 +778,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                       }}
                       title="Clique para expandir a foto de perfil"
                       style={{
-                        display: primaryConv.contact?.foto_perfil_url ? 'none' : 'flex',
+                        display: 'none',
                         width: '38px',
                         height: '38px',
                         borderRadius: '50%',
