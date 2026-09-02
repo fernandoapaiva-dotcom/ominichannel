@@ -52,6 +52,38 @@ export const isLidPhone = (phone: string | undefined | null): boolean => {
   return clean.length >= 14 && !clean.startsWith('55') && !clean.startsWith('120363');
 };
 
+export const isGenericName = (name: string | undefined | null): boolean => {
+  if (!name) return true;
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+  const n = trimmed.toLowerCase();
+  if (
+    n === 'cliente' ||
+    n === 'cliente whatsapp' ||
+    n === 'cliente whatsapp business' ||
+    n === 'whatsapp' ||
+    n === 'whatsapp business' ||
+    n.startsWith('contato ')
+  ) {
+    return true;
+  }
+  // Se tem letras reais (incluindo acentos), é o nome salvo do contato ou empresa na agenda
+  const hasLetters = /[a-zA-ZÀ-ÿ]/.test(trimmed);
+  if (!hasLetters) {
+    // Apenas números, sinais ou código (ex: "556298294949", "+55 61 8180-1690") -> tratar como número
+    return true;
+  }
+  return false;
+};
+
+export const getContactInitial = (name: string | undefined | null): string => {
+  if (!name) return '';
+  const clean = name.trim();
+  const letterMatch = clean.match(/[a-zA-ZÀ-ÿ]/);
+  if (letterMatch) return letterMatch[0].toUpperCase();
+  return '';
+};
+
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
   if (!phone) return '';
   const str = String(phone).trim();
@@ -61,15 +93,14 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   const clean = str.replace(/\D/g, '');
   if (!clean) return str;
 
-  if (isLidPhone(str)) {
-    return 'Cliente WhatsApp';
-  }
-
   if (clean.startsWith('55') && clean.length === 13) {
     return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
   }
   if (clean.startsWith('55') && clean.length === 12) {
     return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
+  }
+  if (clean.startsWith('55') && clean.length >= 10) {
+    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4)}`;
   }
   if (clean.length === 11) {
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
@@ -77,44 +108,28 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   if (clean.length === 10) {
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
   }
+
+  // Se não tem formato padrão brasileiro, exibe como telefone com prefixo +
   return `+${clean}`;
 };
 
-export const isGenericName = (name: string | undefined | null): boolean => {
-  if (!name) return true;
-  const n = name.trim().toLowerCase();
-  return (
-    n === 'cliente' ||
-    n === 'cliente whatsapp' ||
-    n === 'cliente whatsapp business' ||
-    n === 'whatsapp' ||
-    n === 'whatsapp business' ||
-    n.startsWith('contato ') ||
-    n.startsWith('+') ||
-    !isNaN(Number(n.replace(/\D/g, '')))
-  );
-};
-
-export const getContactInitial = (name: string | undefined | null): string => {
-  if (!name) return 'C';
-  const clean = name.trim();
-  if (clean.startsWith('+') || !isNaN(Number(clean.replace(/\D/g, '')))) {
-    const letter = clean.match(/[a-zA-Z]/);
-    if (letter) return letter[0].toUpperCase();
-    return 'C';
-  }
-  return clean.charAt(0).toUpperCase();
-};
-
 export const getCleanDisplayName = (rawName: string | undefined | null, phone: string | undefined | null): string => {
+  // 1. Se tem nome na agenda, mantém e exibe SEMPRE o mesmo nome
   if (!isGenericName(rawName)) {
     return rawName!.trim();
   }
+
+  // 2. Se não tem nome na agenda, exibe o número de telefone formatado (padrão oficial do WhatsApp)
   const formattedPhone = formatWhatsAppPhone(phone);
-  if (formattedPhone && formattedPhone !== 'Grupo' && formattedPhone !== 'Cliente WhatsApp') {
+  if (formattedPhone && formattedPhone !== 'Grupo') {
     return formattedPhone;
   }
-  return 'Cliente WhatsApp';
+
+  if (rawName && rawName.trim()) {
+    return rawName.trim();
+  }
+
+  return formattedPhone || 'WhatsApp';
 };
 
 const formatMessagePreview = (msg: any | undefined): string => {
@@ -172,6 +187,7 @@ interface ContactGroup {
   contactId: number;
   contactName: string;
   contactPhone: string;
+  avatarUrl?: string | null;
   primaryConv: Conversation;
   allConversations: Conversation[];
   hasUnread: boolean;
@@ -390,8 +406,10 @@ export const ChatList: React.FC<ChatListProps> = ({
       
       let bestName = '';
       let bestPhone = '';
+      let bestAvatar: string | null = null;
       matchingConvs.forEach(c => {
         if (!bestPhone && c.contact?.telefone) bestPhone = c.contact.telefone;
+        if (!bestAvatar && c.contact?.foto_perfil_url) bestAvatar = c.contact.foto_perfil_url;
         const n = c.contact?.nome;
         if (!isGenericName(n)) {
           bestName = n!;
@@ -434,6 +452,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         contactId: primary.contact_id || primary.contact?.id || 0,
         contactName: finalName,
         contactPhone: bestPhone || primary.contact?.telefone || '',
+        avatarUrl: bestAvatar || primary.contact?.foto_perfil_url,
         primaryConv: primary,
         allConversations: matchingConvs,
         hasUnread,
@@ -731,9 +750,9 @@ export const ChatList: React.FC<ChatListProps> = ({
                 >
                   {/* WhatsApp Profile Avatar with Click-to-Zoom */}
                   <div style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-                    {primaryConv.contact?.foto_perfil_url ? (
+                    {(group.avatarUrl || primaryConv.contact?.foto_perfil_url) ? (
                       <img
-                        src={primaryConv.contact.foto_perfil_url}
+                        src={(group.avatarUrl || primaryConv.contact?.foto_perfil_url)!}
                         alt={group.contactName}
                         referrerPolicy="no-referrer"
                         onError={(e) => {
@@ -749,7 +768,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                           setAvatarModalData({
                             name: group.contactName,
                             phone: group.contactPhone,
-                            avatarUrl: primaryConv.contact?.foto_perfil_url,
+                            avatarUrl: group.avatarUrl || primaryConv.contact?.foto_perfil_url,
                             contactId: group.contactId
                           });
                         }}
@@ -781,7 +800,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                       }}
                       title="Clique para expandir a foto de perfil"
                       style={{
-                        display: primaryConv.contact?.foto_perfil_url ? 'none' : 'flex',
+                        display: (group.avatarUrl || primaryConv.contact?.foto_perfil_url) ? 'none' : 'flex',
                         width: '38px',
                         height: '38px',
                         borderRadius: '50%',
@@ -796,7 +815,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         cursor: 'pointer'
                       }}
                     >
-                      {getContactInitial(group.contactName)}
+                      {getContactInitial(group.contactName) || <UserIcon size={18} />}
                     </div>
                   </div>
 
