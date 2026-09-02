@@ -393,10 +393,8 @@ export const ChatList: React.FC<ChatListProps> = ({
       matchingConvs.forEach(c => {
         if (!bestPhone && c.contact?.telefone) bestPhone = c.contact.telefone;
         const n = c.contact?.nome;
-        if (n && n !== 'WhatsApp' && !n.replace(/\D/g, '')) {
-          bestName = n;
-        } else if (!bestName && n) {
-          bestName = n;
+        if (!isGenericName(n)) {
+          bestName = n!;
         }
       });
 
