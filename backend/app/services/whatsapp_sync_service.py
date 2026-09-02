@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus, WhatsAppGroup
 from app.api.websockets import manager as ws_manager
+from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
 
 logger = logging.getLogger("whatsapp_sync_service")
 
@@ -249,14 +250,23 @@ class WhatsAppSyncService:
                         if isinstance(raw_contacts, list):
                             for c in raw_contacts:
                                 jid = c.get("remoteJid", "")
-                                if "@s.whatsapp.net" in jid:
-                                    p = self._clean_phone_from_jid(jid)
-                                    name = c.get("pushName") or c.get("name") or c.get("verifiedName")
-                                    if p and name and name != p:
-                                        address_book_map[p] = {
-                                            "name": name,
-                                            "profile_pic": c.get("profilePicUrl")
-                                        }
+                                p = self._clean_phone_from_jid(jid)
+                                name = c.get("pushName") or c.get("name") or c.get("verifiedName")
+                                pic = c.get("profilePicUrl")
+                                if "@lid" in jid or (len(p) >= 14 and not p.startswith("55") and not p.startswith("120363")):
+                                    lid_res = await resolve_lid_info(p)
+                                    if lid_res.get("real_phone"):
+                                        p = lid_res["real_phone"]
+                                    if lid_res.get("name") and (not name or name in [p, "Cliente WhatsApp"]):
+                                        name = lid_res["name"]
+                                    if lid_res.get("profile_pic") and not pic:
+                                        pic = lid_res["profile_pic"]
+
+                                if p and name and name != p and "@g.us" not in jid:
+                                    address_book_map[p] = {
+                                        "name": name,
+                                        "profile_pic": pic
+                                    }
                             logger.info(f"[{instance_name}] {len(address_book_map)} contatos com nome recuperados da agenda do WhatsApp.")
                 except Exception as ab_err:
                     logger.warning(f"Erro ao buscar agenda de contatos: {ab_err}")
@@ -308,12 +318,18 @@ class WhatsAppSyncService:
                                 foto_perfil_url=ab_info["profile_pic"]
                             )
                             session.add(c_obj)
+                            await session.flush()
                             stats["contacts_synced"] += 1
                         else:
                             if c_obj.nome != ab_info["name"]:
                                 c_obj.nome = ab_info["name"]
                             if ab_info["profile_pic"] and not c_obj.foto_perfil_url:
                                 c_obj.foto_perfil_url = ab_info["profile_pic"]
+
+                        if ab_info.get("profile_pic") and not (c_obj.foto_perfil_url or "").startswith("/uploads/avatars/"):
+                            cached_pic = await download_and_cache_avatar_locally(c_obj.id, ab_info["profile_pic"])
+                            if cached_pic:
+                                c_obj.foto_perfil_url = cached_pic
                     await session.commit()
 
                     # Process chats batch by batch
@@ -387,78 +403,15 @@ class WhatsAppSyncService:
                         for attempt in range(5):
                             try:
                                 async with AsyncSessionLocal() as session:
-                                    # 2. Get or create Contact (differentiating groups from individual contacts)
-                                    is_chat_group = (
-                                        "@g.us" in str(jid).lower() or
-                                        str(phone).startswith("120363") or
-                                        ("-" in str(phone) and len(str(phone)) > 15) or
-                                        (len(str(phone)) >= 16 and not str(phone).startswith("55"))
+                                    # 2. Get or create clean definitive Contact with LID resolution and permanent local avatar cache
+                                    contact = await resolve_and_bind_contact(
+                                        session=session,
+                                        tenant_id=tenant_id,
+                                        raw_jid=jid,
+                                        push_name=name,
+                                        profile_pic_url=profile_pic
                                     )
-
-                                    if is_chat_group:
-                                        contact_stmt = select(Contact).where(
-                                            Contact.tenant_id == tenant_id,
-                                            (Contact.telefone == phone) | (Contact.telefone == jid) | (Contact.telefone == f"{phone}@g.us")
-                                        )
-                                    else:
-                                        contact_stmt = select(Contact).where(
-                                            Contact.tenant_id == tenant_id,
-                                            Contact.telefone.notlike("%@g.us%"),
-                                            Contact.telefone.notlike("%-%"),
-                                            Contact.telefone.notlike("120363%"),
-                                            (Contact.telefone == phone) | (Contact.telefone.like(f"%{phone[-8:]}%") if len(phone) >= 8 else False)
-                                        )
-                                    c_res = await session.execute(contact_stmt)
-                                    contact = c_res.scalars().first()
-
-                                    if not contact:
-                                        initial_group_name = name
-                                        if is_chat_group:
-                                            g_raw = phone.split("@")[0]
-                                            g_res_tbl = await session.execute(
-                                                select(WhatsAppGroup.nome).where(
-                                                    WhatsAppGroup.tenant_id == tenant_id,
-                                                    (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
-                                                )
-                                            )
-                                            official_gname = g_res_tbl.scalars().first()
-                                            if official_gname:
-                                                initial_group_name = official_gname
-
-                                        contact = Contact(
-                                            tenant_id=tenant_id,
-                                            telefone=phone,
-                                            nome=initial_group_name,
-                                            foto_perfil_url=profile_pic,
-                                            dados_adicionais={"is_group": True} if is_chat_group else {}
-                                        )
-                                        session.add(contact)
-                                        await session.flush()
-                                        stats["contacts_synced"] += 1
-                                    else:
-                                        if is_chat_group:
-                                            extra_g = dict(contact.dados_adicionais or {})
-                                            extra_g["is_group"] = True
-                                            contact.dados_adicionais = extra_g
-                                            g_raw = phone.split("@")[0]
-                                            g_res_tbl = await session.execute(
-                                                select(WhatsAppGroup.nome).where(
-                                                    WhatsAppGroup.tenant_id == tenant_id,
-                                                    (WhatsAppGroup.group_jid == jid) | (WhatsAppGroup.group_jid.like(f"%{g_raw}%"))
-                                                )
-                                            )
-                                            official_gname = g_res_tbl.scalars().first()
-                                            if official_gname:
-                                                contact.nome = official_gname
-                                            elif not contact.nome or contact.nome in ["Grupo WhatsApp", "Cliente"]:
-                                                contact.nome = name
-                                        else:
-                                            if (not contact.nome or contact.nome == phone or contact.nome == "Cliente") and name != phone:
-                                                contact.nome = name
-                                            elif ab_entry and contact.nome != ab_entry["name"]:
-                                                contact.nome = ab_entry["name"]
-                                        if not contact.foto_perfil_url and profile_pic:
-                                            contact.foto_perfil_url = profile_pic
+                                    stats["contacts_synced"] += 1
 
                                     # Get or create Conversation
                                     conv_stmt = select(Conversation).where(

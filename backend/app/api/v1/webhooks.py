@@ -29,6 +29,7 @@ from app.services.distribution_service import distribution_service
 from app.services.business_hours_service import business_hours_service
 from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
+from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
 
 logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
@@ -606,9 +607,13 @@ async def receive_evolution_webhook(
         elif "@s.whatsapp.net" in str(sender_jid):
             remote_jid = sender_jid
         else:
-            resolved = await evolution_service.resolve_canonical_jid(instance_name, raw_phone_candidate)
-            if resolved and resolved.startswith("55"):
-                remote_jid = f"{resolved}@s.whatsapp.net"
+            lid_info = await resolve_lid_info(raw_phone_candidate)
+            if lid_info.get("real_phone"):
+                remote_jid = f"{lid_info['real_phone']}@s.whatsapp.net"
+            if lid_info.get("name") and push_name in ["Cliente", "Cliente WhatsApp", raw_phone_candidate]:
+                push_name = lid_info["name"]
+            if lid_info.get("profile_pic"):
+                data["profilePicUrl"] = lid_info["profile_pic"]
 
     is_group = (
         "@g.us" in str(remote_jid).lower() or
@@ -1232,8 +1237,12 @@ async def receive_evolution_webhook(
             if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and is_generic:
                 contact.nome = clean_push_name
 
-        if profile_pic_url and isinstance(profile_pic_url, str) and profile_pic_url.startswith("http") and contact.foto_perfil_url != profile_pic_url:
-            contact.foto_perfil_url = profile_pic_url
+        if profile_pic_url and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
+            cached_avatar = await download_and_cache_avatar_locally(contact.id, profile_pic_url)
+            if cached_avatar:
+                contact.foto_perfil_url = cached_avatar
+            elif contact.foto_perfil_url != profile_pic_url:
+                contact.foto_perfil_url = profile_pic_url
 
     # 3. Get or Create Conversation (Always reuse single active conversation for this contact across tenant)
     conv_stmt = (

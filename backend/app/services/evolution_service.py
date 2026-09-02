@@ -7,6 +7,7 @@ import tempfile
 from typing import Dict, Any, Optional, List
 import httpx
 from app.core.config import settings
+from app.services.lid_resolver_service import download_and_cache_avatar_locally, resolve_lid_info
 
 logger = logging.getLogger("evolution_service")
 
@@ -1404,10 +1405,32 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                         updates.append({"id": c_id, "nome": target_name, "foto_perfil_url": target_pic})
                                 continue
 
-                            # C. Fetch Profile Picture if missing (max 3 per cycle to keep server ultra fast)
-                            if not c_pic and pic_fetches < 3:
+                            # C. Check if Contact is an unresolved raw LID
+                            if len(clean_num) >= 14 and not clean_num.startswith("55") and not clean_num.startswith("120363"):
+                                lid_res = await resolve_lid_info(clean_num)
+                                if lid_res.get("real_phone") or lid_res.get("name") or lid_res.get("profile_pic"):
+                                    cached_p = None
+                                    if lid_res.get("profile_pic"):
+                                        cached_p = await download_and_cache_avatar_locally(c_id, lid_res["profile_pic"])
+                                    updates.append({
+                                        "id": c_id,
+                                        "telefone": lid_res.get("real_phone") or c_tel,
+                                        "nome": lid_res.get("name") or c_nome,
+                                        "foto_perfil_url": cached_p or lid_res.get("profile_pic") or c_pic
+                                    })
+                                    continue
+
+                            # D. If contact has remote/expiring avatar URL (pps.whatsapp.net), cache it locally
+                            if c_pic and c_pic.startswith("http") and not c_pic.startswith("/uploads/avatars/"):
+                                cached = await download_and_cache_avatar_locally(c_id, c_pic)
+                                if cached:
+                                    updates.append({"id": c_id, "telefone": c_tel, "nome": c_nome, "foto_perfil_url": cached})
+                                    continue
+
+                            # E. Fetch Profile Picture if missing (max 5 per cycle to keep server ultra fast)
+                            if not c_pic and pic_fetches < 5:
                                 pic_fetches += 1
-                                for inst in instances[:2]:
+                                for inst in instances:
                                     try:
                                         res = await client.post(
                                             f"{base_url}/chat/fetchProfilePictureUrl/{inst}",
@@ -1418,7 +1441,8 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                         if res.status_code in [200, 201]:
                                             pic = res.json().get("profilePictureUrl")
                                             if pic:
-                                                updates.append({"id": c_id, "nome": c_nome, "foto_perfil_url": pic})
+                                                cached = await download_and_cache_avatar_locally(c_id, pic)
+                                                updates.append({"id": c_id, "telefone": c_tel, "nome": c_nome, "foto_perfil_url": cached or pic})
                                                 break
                                     except Exception:
                                         continue
@@ -1428,8 +1452,12 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                 for u in updates:
                                     c_obj = await db.get(Contact, u["id"])
                                     if c_obj:
-                                        c_obj.nome = u["nome"]
-                                        c_obj.foto_perfil_url = u["foto_perfil_url"]
+                                        if u.get("telefone") and u["telefone"] != c_obj.telefone:
+                                            c_obj.telefone = u["telefone"]
+                                        if u.get("nome") and u["nome"] != c_obj.nome:
+                                            c_obj.nome = u["nome"]
+                                        if u.get("foto_perfil_url") and u["foto_perfil_url"] != c_obj.foto_perfil_url:
+                                            c_obj.foto_perfil_url = u["foto_perfil_url"]
                                 await db.commit()
         except Exception as e:
             logger.debug(f"Profile picture and group sync loop error: {e}")
