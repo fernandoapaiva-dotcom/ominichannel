@@ -36,10 +36,10 @@ async def send_whatsapp_to_employee(
         if not clean_phone.startswith("55") and len(clean_phone) in [10, 11]:
             clean_phone = f"55{clean_phone}"
 
-        # If specific instance(s) provided, strictly use them without falling back to other unselected departments
         candidates = [inst for inst in instances if inst]
         if not candidates:
-            candidates = ["instancia_locacao", "instancia_tecnica", "instancia_vendas"]
+            logger.warning(f"Nenhuma instância válida fornecida para envio ao funcionário ({employee_phone}).")
+            return False
 
         for inst_name in candidates:
             try:

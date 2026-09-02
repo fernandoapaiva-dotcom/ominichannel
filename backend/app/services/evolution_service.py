@@ -409,19 +409,7 @@ class EvolutionService:
             response = await client.post(url, json=payload, headers=headers)
             res_data = response.json() if response.content else {}
 
-            # Auto-retry on Connection Closed (stale socket)
-            if response.status_code >= 500 or "connection closed" in str(res_data).lower():
-                logger.warning(f"Instance {instance_name} socket stale/closed. Attempting auto-restart and retry...")
-                try:
-                    await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers)
-                    await asyncio.sleep(1.0)
-                    retry_sock_res = await client.post(url, json=payload, headers=headers)
-                    if retry_sock_res.status_code < 400:
-                        retry_sock_data = retry_sock_res.json()
-                        retry_sock_data["success"] = True
-                        return retry_sock_data
-                except Exception as rest_err:
-                    logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
+            # (Auto-restart automático de socket desativado para prevenir martelamento de conexão na Meta)
 
             # Retry with canonical JID (8 vs 9 digits) if WhatsApp rejected the initial number (400)
             if response.status_code == 400 and "@g.us" not in str(clean_number) and "@lid" not in str(clean_number):
@@ -434,15 +422,7 @@ class EvolutionService:
                         retry_data["success"] = True
                         return retry_data
 
-            # Failover to default instance if current instance returned 404 Not Found
-            if response.status_code == 404 and instance_name != "instancia_vendas":
-                logger.warning(f"Instance '{instance_name}' returned 404 Not Found. Failing over to 'instancia_vendas'...")
-                fb_url = f"{base_url}/message/sendText/instancia_vendas"
-                fb_res = await client.post(fb_url, json=payload, headers=headers)
-                if fb_res.status_code < 400:
-                    fb_data = fb_res.json()
-                    fb_data["success"] = True
-                    return fb_data
+            # (Failover a instâncias cruzadas removido para prevenir envio não autorizado e proteger linhas contra banimento)
 
             if response.status_code >= 400:
                 err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")
@@ -858,19 +838,7 @@ class EvolutionService:
             response = await client.post(url, json=payload, headers=headers)
             res_data = response.json() if response.content else {}
 
-            # Auto-retry on Connection Closed (stale socket)
-            if response.status_code >= 500 or "connection closed" in str(res_data).lower():
-                logger.warning(f"Instance {instance_name} socket stale/closed for media. Attempting auto-restart and retry...")
-                try:
-                    await client.post(f"{base_url}/instance/restart/{instance_name}", headers=headers)
-                    await asyncio.sleep(1.0)
-                    retry_sock_res = await client.post(url, json=payload, headers=headers)
-                    if retry_sock_res.status_code < 400:
-                        retry_sock_data = retry_sock_res.json()
-                        retry_sock_data["success"] = True
-                        return retry_sock_data
-                except Exception as rest_err:
-                    logger.warning(f"Error during auto-restart for {instance_name}: {rest_err}")
+            # (Auto-restart automático de socket desativado para prevenir martelamento de conexão na Meta)
 
             if response.status_code == 400 and "@g.us" not in str(clean_number) and "@lid" not in str(clean_number):
                 alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
@@ -882,15 +850,7 @@ class EvolutionService:
                         retry_data["success"] = True
                         return retry_data
 
-            # Failover to default instance if current instance returned 404 Not Found
-            if response.status_code == 404 and instance_name != "instancia_vendas":
-                logger.warning(f"Instance '{instance_name}' returned 404 Not Found for media. Failing over to 'instancia_vendas'...")
-                fb_url = f"{base_url}/message/sendMedia/instancia_vendas"
-                fb_res = await client.post(fb_url, json=payload, headers=headers)
-                if fb_res.status_code < 400:
-                    fb_data = fb_res.json()
-                    fb_data["success"] = True
-                    return fb_data
+            # (Failover a instâncias cruzadas removido para prevenir envio não autorizado e proteger linhas contra banimento)
 
             if response.status_code >= 400:
                 err_msg = res_data.get("message") or res_data.get("response", {}).get("message") if isinstance(res_data.get("response"), dict) else res_data.get("message")

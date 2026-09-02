@@ -510,12 +510,13 @@ async def start_new_conversation(
 
     # 5. Automatically fetch and sync historical WhatsApp messages from Evolution API
     try:
-        inst_name = wn.instancia_evolution_api or "instancia_locacao"
-        history_msgs = await evolution_service.fetch_chat_history(
-            instance_name=inst_name,
-            phone=clean_phone,
-            limit=100
-        )
+        inst_name = wn.instancia_evolution_api if wn else None
+        if inst_name:
+            history_msgs = await evolution_service.fetch_chat_history(
+                instance_name=inst_name,
+                phone=clean_phone,
+                limit=100
+            )
         if history_msgs:
             existing_stmt = select(Message.conteudo, Message.timestamp).where(Message.conversation_id == conv.id)
             existing_res = await db.execute(existing_stmt)
@@ -580,9 +581,12 @@ async def sync_conversation_whatsapp_history(
     if not conv.contact or not conv.contact.telefone:
         return {"message": "Contato sem número de telefone para busca", "imported": 0}
 
-    inst_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else "instancia_locacao"
+    inst_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None
+    if not inst_name:
+        return {"message": "Instância do WhatsApp não configurada nesta conversa", "imported": 0}
+
     history_msgs = await evolution_service.fetch_chat_history(
-        instance_name=inst_name or "instancia_locacao",
+        instance_name=inst_name,
         phone=conv.contact.telefone,
         limit=100
     )
@@ -840,8 +844,7 @@ async def get_message_media_stream(
 
         from_me = (msg.remetente == MessageSender.ATENDENTE.value or msg.remetente == "atendente" or msg.remetente == "ia")
 
-        instances_to_try = [inst_name, "instancia_financeiro", "instancia_tecnica", "instancia_vendas", "instancia_locacao"]
-        instances_to_try = list(dict.fromkeys(instances_to_try))
+        instances_to_try = [inst_name] if inst_name else []
 
         b64_data = None
         for inst in instances_to_try:
@@ -1020,9 +1023,7 @@ async def send_agent_message(
             # Retry loop: attempt up to 3 times before marking as failed
             for attempt in range(1, 4):
                 try:
-                    active_inst = target_instance_name or "instancia_vendas"
-                    if attempt > 1:
-                        active_inst = "instancia_vendas"
+                    active_inst = target_instance_name
 
                     if is_sticker and active_inst:
                         sticker_media = raw_content
