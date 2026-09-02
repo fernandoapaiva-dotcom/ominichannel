@@ -126,7 +126,6 @@ async def list_conversations(
     else:
         stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
 
-    db.expire_all()
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 

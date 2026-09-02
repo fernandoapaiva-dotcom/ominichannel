@@ -143,6 +143,17 @@ async def download_and_cache_avatar_locally(contact_id: int, photo_url: Optional
                     f.write(resp.content)
                 local_url = f"/uploads/avatars/{target_filename}"
                 logger.info(f"Avatar for contact #{contact_id} cached permanently: {local_url}")
+
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    async with AsyncSessionLocal() as db:
+                        c_obj = await db.get(Contact, contact_id)
+                        if c_obj:
+                            c_obj.foto_perfil_url = local_url
+                            await db.commit()
+                except Exception:
+                    pass
+
                 return local_url
     except Exception as e:
         logger.debug(f"Failed to cache avatar locally for contact #{contact_id}: {e}")
@@ -160,7 +171,7 @@ async def resolve_and_bind_contact(
     Given an incoming or synced JID (LID, group, or standard phone JID):
     1. Resolves LIDs into real phone numbers, names, and avatars.
     2. Searches existing contacts to prevent duplicates.
-    3. Caches the avatar locally as a permanent .jpg.
+    3. Caches the avatar locally as a permanent .jpg in the background without blocking.
     4. Returns the clean, definitive Contact model instance.
     """
     clean_digits = "".join(filter(str.isdigit, raw_jid.split("@")[0]))
@@ -218,14 +229,9 @@ async def resolve_and_bind_contact(
         if contact.telefone != real_phone and real_phone.startswith("55") and not contact.telefone.startswith("55"):
             contact.telefone = real_phone
 
-    # Permanently cache profile picture locally if remote URL
-    if resolved_pic and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
-        cached_url = await download_and_cache_avatar_locally(contact.id, resolved_pic)
-        if cached_url:
-            contact.foto_perfil_url = cached_url
-    elif not contact.foto_perfil_url and profile_pic_url:
-        cached_url = await download_and_cache_avatar_locally(contact.id, profile_pic_url)
-        if cached_url:
-            contact.foto_perfil_url = cached_url
+    # Non-blocking background avatar caching so DB transactions complete instantly
+    target_pic = resolved_pic or profile_pic_url
+    if target_pic and target_pic.startswith("http") and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
+        asyncio.create_task(download_and_cache_avatar_locally(contact.id, target_pic))
 
     return contact
