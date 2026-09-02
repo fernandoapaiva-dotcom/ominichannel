@@ -20,6 +20,68 @@ EVENT_TYPE_LABELS = {
     "geral": "📅 Tarefa / Compromisso Geral"
 }
 
+async def get_candidate_instances_for_event(ev: CalendarEvent, wns: List[WhatsAppNumber]) -> List[str]:
+    """
+    Returns an ordered list of candidate instances to send WhatsApp notification.
+    The preferred instance is tried first, followed by ALL other active instances of the company as failovers.
+    Instances that are currently connected ('open') are prioritized to prevent timeouts on offline lines.
+    """
+    all_instances = [w.instancia_evolution_api for w in wns if w.instancia_evolution_api]
+    
+    preferred: List[str] = []
+    if ev.whatsapp_instance:
+        preferred = [ev.whatsapp_instance]
+    elif ev.whatsapp_number_id:
+        for w in wns:
+            if w.id == ev.whatsapp_number_id and w.instancia_evolution_api:
+                preferred = [w.instancia_evolution_api]
+                break
+
+    if not preferred:
+        type_keywords = {
+            "visita_tecnica": ["tecnica", "assistencia", "suporte", "servico"],
+            "manutencao": ["tecnica", "manutencao", "assistencia", "oficina"],
+            "entrega_gas": ["locacao", "gas", "entrega", "logistica"],
+            "vendas": ["vendas", "comercial", "loja", "atendimento"],
+            "atendimento": ["atendimento", "vendas", "recepcao"],
+            "financeiro": ["financeiro", "cobranca", "contas"]
+        }
+        keywords = type_keywords.get(ev.event_type, [])
+        for w in wns:
+            inst = w.instancia_evolution_api
+            if not inst:
+                continue
+            dept_name_lower = (w.nome_departamento or "").lower()
+            inst_lower = inst.lower()
+            if any(kw in dept_name_lower or kw in inst_lower for kw in keywords):
+                if inst not in preferred:
+                    preferred.append(inst)
+
+    candidates = []
+    for inst in preferred:
+        if inst not in candidates:
+            candidates.append(inst)
+    for inst in all_instances:
+        if inst not in candidates:
+            candidates.append(inst)
+
+    # Prioritize online/connected instances ('open')
+    try:
+        health = await evolution_service.check_server_health()
+        if health.get("success") and isinstance(health.get("data"), list):
+            open_instances = set()
+            for item in health["data"]:
+                name = item.get("name") or item.get("instance", {}).get("instanceName")
+                status = item.get("connectionStatus") or item.get("instance", {}).get("status")
+                if status == "open" and name:
+                    open_instances.add(name)
+            
+            candidates = sorted(candidates, key=lambda x: 0 if x in open_instances else 1)
+    except Exception as err:
+        logger.debug(f"Could not sort instances by health: {err}")
+
+    return candidates
+
 async def send_whatsapp_to_employee(
     instances: List[str],
     employee_phone: str,
@@ -53,8 +115,11 @@ async def send_whatsapp_to_employee(
                 if res_txt and not res_txt.get("error"):
                     logger.info(f"Mensagem de tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
                     return True
+                else:
+                    err_detail = res_txt.get("error") if res_txt else "None"
+                    logger.warning(f"Tentativa via '{inst_name}' para {clean_phone} falhou: {err_detail}. Tentando failover para próxima instância...")
             except Exception as inst_err:
-                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}.")
+                logger.warning(f"Tentativa via '{inst_name}' falhou: {inst_err}. Tentando próxima...")
 
         return False
     except Exception as e:
@@ -81,45 +146,8 @@ async def send_immediate_creation_notification(event_id: int):
             res_w = await session.execute(stmt_w)
             wns = res_w.scalars().all()
 
-            # 1. Strictly resolve selected department instance on event
-            ordered_inst_names = []
-            if ev.whatsapp_instance:
-                ordered_inst_names = [ev.whatsapp_instance]
-            elif ev.whatsapp_number_id:
-                for w in wns:
-                    if w.id == ev.whatsapp_number_id and w.instancia_evolution_api:
-                        ordered_inst_names = [w.instancia_evolution_api]
-                        break
-
-            # 2. If no department was explicitly chosen, use smart fallback based on event type keywords
-            if not ordered_inst_names:
-                type_keywords = {
-                    "visita_tecnica": ["tecnica", "assistencia", "suporte", "servico"],
-                    "manutencao": ["tecnica", "manutencao", "assistencia", "oficina"],
-                    "entrega_gas": ["locacao", "gas", "entrega", "logistica"],
-                    "vendas": ["vendas", "comercial", "loja", "atendimento"],
-                    "atendimento": ["atendimento", "vendas", "recepcao"],
-                    "financeiro": ["financeiro", "cobranca", "contas"]
-                }
-                keywords = type_keywords.get(ev.event_type, [])
-
-                preferred_instances = []
-                other_instances = []
-                for w in wns:
-                    inst = w.instancia_evolution_api
-                    if not inst:
-                        continue
-                    dept_name_lower = (w.nome_departamento or "").lower()
-                    inst_lower = inst.lower()
-
-                    if any(kw in dept_name_lower or kw in inst_lower for kw in keywords):
-                        if inst not in preferred_instances:
-                            preferred_instances.append(inst)
-                    else:
-                        if inst not in other_instances and inst not in preferred_instances:
-                            other_instances.append(inst)
-
-                ordered_inst_names = preferred_instances or other_instances
+            # Resolve ordered candidate instances with automatic failover
+            ordered_inst_names = await get_candidate_instances_for_event(ev, wns)
 
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
@@ -198,14 +226,8 @@ async def check_and_send_calendar_reminders():
                 tenant_instance_map[wn.tenant_id].append(wn.instancia_evolution_api)
 
         for ev in events:
-            # Strictly select instance if chosen on event
-            inst_list = []
-            if ev.whatsapp_instance:
-                inst_list = [ev.whatsapp_instance]
-            elif ev.whatsapp_number_id and ev.whatsapp_number_id in wn_id_map:
-                inst_list = [wn_id_map[ev.whatsapp_number_id]]
-            else:
-                inst_list = tenant_instance_map.get(ev.tenant_id, [])
+            # Resolve candidate instances with automatic failover and health prioritization
+            inst_list = await get_candidate_instances_for_event(ev, whatsapp_numbers)
 
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
