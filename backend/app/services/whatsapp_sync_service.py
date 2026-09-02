@@ -172,7 +172,7 @@ class WhatsAppSyncService:
 
         try:
             logger.info(f"=== INICIANDO SINCRONIZAÇÃO AUTOMÁTICA DE HISTÓRICO: {instance_name} (Tenant {tenant_id}) ===")
-            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=35.0) as client:
+            async with httpx.AsyncClient(base_url=base_url, headers=headers, timeout=120.0) as client:
                 
                 # 0. Fetch and Sync all WhatsApp Groups (/group/fetchAllGroups/{instance_name})
                 try:
@@ -253,16 +253,7 @@ class WhatsAppSyncService:
                                 p = self._clean_phone_from_jid(jid)
                                 name = c.get("pushName") or c.get("name") or c.get("verifiedName")
                                 pic = c.get("profilePicUrl")
-                                if "@lid" in jid or (len(p) >= 14 and not p.startswith("55") and not p.startswith("120363")):
-                                    lid_res = await resolve_lid_info(p)
-                                    if lid_res.get("real_phone"):
-                                        p = lid_res["real_phone"]
-                                    if lid_res.get("name") and (not name or name in [p, "Cliente WhatsApp"]):
-                                        name = lid_res["name"]
-                                    if lid_res.get("profile_pic") and not pic:
-                                        pic = lid_res["profile_pic"]
-
-                                if p and name and name != p and "@g.us" not in jid:
+                                if p and name and name != p and "@g.us" not in jid and "@lid" not in jid and not (len(p) >= 14 and not p.startswith("55")):
                                     address_book_map[p] = {
                                         "name": name,
                                         "profile_pic": pic
@@ -302,7 +293,7 @@ class WhatsAppSyncService:
                     return {"success": True, "stats": stats}
 
                 async with AsyncSessionLocal() as session:
-                    # Pre-sync all address book contacts into DB
+                    # Pre-sync address book names into DB quickly
                     for phone, ab_info in address_book_map.items():
                         c_stmt = select(Contact).where(
                             Contact.tenant_id == tenant_id,
@@ -315,21 +306,15 @@ class WhatsAppSyncService:
                                 tenant_id=tenant_id,
                                 telefone=phone,
                                 nome=ab_info["name"],
-                                foto_perfil_url=ab_info["profile_pic"]
+                                foto_perfil_url=ab_info.get("profile_pic")
                             )
                             session.add(c_obj)
-                            await session.flush()
                             stats["contacts_synced"] += 1
                         else:
                             if c_obj.nome != ab_info["name"]:
                                 c_obj.nome = ab_info["name"]
-                            if ab_info["profile_pic"] and not c_obj.foto_perfil_url:
+                            if ab_info.get("profile_pic") and not c_obj.foto_perfil_url:
                                 c_obj.foto_perfil_url = ab_info["profile_pic"]
-
-                        if ab_info.get("profile_pic") and not (c_obj.foto_perfil_url or "").startswith("/uploads/avatars/"):
-                            cached_pic = await download_and_cache_avatar_locally(c_obj.id, ab_info["profile_pic"])
-                            if cached_pic:
-                                c_obj.foto_perfil_url = cached_pic
                     await session.commit()
 
                     # Process chats batch by batch

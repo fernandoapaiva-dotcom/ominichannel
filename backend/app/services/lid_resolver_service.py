@@ -14,12 +14,18 @@ logger = logging.getLogger("lid_resolver_service")
 
 PG_CONN_STR = "postgresql://omini_user:omini_password@172.18.0.2:5432/omini_db"
 
-async def get_pg_connection():
-    try:
-        return await asyncpg.connect(PG_CONN_STR, timeout=3.0)
-    except Exception as e:
-        logger.debug(f"Could not connect directly to omini_postgres at 172.18.0.2: {e}")
-        return None
+_LID_CACHE: Dict[str, Dict[str, Any]] = {}
+_PG_POOL: Optional[asyncpg.Pool] = None
+
+async def get_pg_pool() -> Optional[asyncpg.Pool]:
+    global _PG_POOL
+    if _PG_POOL is None or _PG_POOL._closed:
+        try:
+            _PG_POOL = await asyncpg.create_pool(PG_CONN_STR, min_size=1, max_size=5, timeout=3.0)
+        except Exception as e:
+            logger.debug(f"Could not connect directly to omini_postgres at 172.18.0.2: {e}")
+            _PG_POOL = None
+    return _PG_POOL
 
 async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
     """
@@ -30,17 +36,24 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
       - profile_pic: e.g. 'https://pps.whatsapp.net/...'
     """
     clean_lid = str(lid_str).split("@")[0].strip()
+    if not clean_lid:
+        return {"lid": "", "real_phone": None, "name": None, "profile_pic": None}
+
+    if clean_lid in _LID_CACHE:
+        return _LID_CACHE[clean_lid]
+
     lid_jid = f"{clean_lid}@lid"
 
     real_phone = None
     name = None
     profile_pic = None
 
-    conn = await get_pg_connection()
-    if conn:
+    pool = await get_pg_pool()
+    if pool:
         try:
-            # 1. Check Contact table
-            c_row = await conn.fetchrow('SELECT "pushName", "profilePicUrl" FROM "Contact" WHERE "remoteJid" = $1', lid_jid)
+            async with pool.acquire() as conn:
+                # 1. Check Contact table
+                c_row = await conn.fetchrow('SELECT "pushName", "profilePicUrl" FROM "Contact" WHERE "remoteJid" = $1', lid_jid)
             if c_row:
                 if c_row["pushName"] and c_row["pushName"].strip() and c_row["pushName"] != clean_lid:
                     name = c_row["pushName"].strip()
@@ -70,8 +83,6 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
 
         except Exception as err:
             logger.debug(f"Error querying Postgres for LID {clean_lid}: {err}")
-        finally:
-            await conn.close()
 
     # Fallback to docker exec if asyncpg couldn't connect
     if not real_phone:
@@ -97,12 +108,14 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
         except Exception:
             pass
 
-    return {
+    info_res = {
         "lid": clean_lid,
         "real_phone": real_phone,
         "name": name,
         "profile_pic": profile_pic
     }
+    _LID_CACHE[clean_lid] = info_res
+    return info_res
 
 async def download_and_cache_avatar_locally(contact_id: int, photo_url: Optional[str]) -> Optional[str]:
     """
