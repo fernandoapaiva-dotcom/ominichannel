@@ -293,14 +293,13 @@ class WhatsAppSyncService:
                     return {"success": True, "stats": stats}
 
                 async with AsyncSessionLocal() as session:
+                    # Fetch all existing contacts once in a single bulk query (0.02s instead of 30s)
+                    c_all_res = await session.execute(select(Contact).where(Contact.tenant_id == tenant_id))
+                    existing_by_phone = {c.telefone: c for c in c_all_res.scalars().all()}
+
                     # Pre-sync address book names into DB quickly
                     for phone, ab_info in address_book_map.items():
-                        c_stmt = select(Contact).where(
-                            Contact.tenant_id == tenant_id,
-                            Contact.telefone == phone
-                        )
-                        c_res = await session.execute(c_stmt)
-                        c_obj = c_res.scalars().first()
+                        c_obj = existing_by_phone.get(phone)
                         if not c_obj:
                             c_obj = Contact(
                                 tenant_id=tenant_id,
@@ -309,6 +308,7 @@ class WhatsAppSyncService:
                                 foto_perfil_url=ab_info.get("profile_pic")
                             )
                             session.add(c_obj)
+                            existing_by_phone[phone] = c_obj
                             stats["contacts_synced"] += 1
                         else:
                             if c_obj.nome != ab_info["name"]:
