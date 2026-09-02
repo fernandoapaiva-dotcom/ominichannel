@@ -150,6 +150,17 @@ async def list_conversations(
                     )
                 except Exception:
                     pass
+            if len(c.contact.telefone or "") >= 14 and not str(c.contact.telefone).startswith("55") and "@g.us" not in str(c.contact.telefone) and c.whatsapp_number and c.whatsapp_number.instancia_evolution_api:
+                try:
+                    asyncio.create_task(
+                        evolution_service.resolve_and_update_contact_phone(
+                            contact_id=c.contact.id,
+                            instance_name=c.whatsapp_number.instancia_evolution_api,
+                            lid_phone=c.contact.telefone
+                        )
+                    )
+                except Exception:
+                    pass
 
             contact_dict = {
                 "id": c.contact.id,

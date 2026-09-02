@@ -53,6 +53,10 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   if (str.includes('@g.us') || clean.startsWith('120363') || str.includes('-') || clean.length >= 18) {
     return 'Grupo';
   }
+  // Mask WhatsApp LID privacy numbers (14+ digits not starting with 55)
+  if (clean.length >= 14 && !clean.startsWith('55') && !clean.startsWith('120363')) {
+    return 'Cliente WhatsApp';
+  }
   if (clean.startsWith('55') && clean.length === 12) {
     return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
   }
@@ -707,12 +711,17 @@ export const ChatList: React.FC<ChatListProps> = ({
                 >
                   {/* WhatsApp Profile Avatar with Click-to-Zoom */}
                   <div style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-                    {primaryConv.contact?.foto_perfil_url ? (
+                    {primaryConv.contact?.foto_perfil_url && (
                       <img
                         src={primaryConv.contact.foto_perfil_url}
                         alt={group.contactName}
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
+                          const parent = e.currentTarget.parentElement;
+                          if (parent) {
+                            const fallback = parent.querySelector('.avatar-fallback') as HTMLElement;
+                            if (fallback) fallback.style.display = 'flex';
+                          }
                         }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -736,36 +745,36 @@ export const ChatList: React.FC<ChatListProps> = ({
                         onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
                         onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
                       />
-                    ) : (
-                      <div
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAvatarModalData({
-                            name: group.contactName,
-                            phone: group.contactPhone,
-                            avatarUrl: null
-                          });
-                        }}
-                        title="Clique para expandir a foto de perfil"
-                        style={{
-                          width: '38px',
-                          height: '38px',
-                          borderRadius: '50%',
-                          background: isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
-                          color: '#051a12',
-                          fontWeight: '700',
-                          fontSize: '15px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0,
-                          boxShadow: isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)',
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {group.contactName.charAt(0).toUpperCase()}
-                      </div>
                     )}
+                    <div
+                      className="avatar-fallback"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAvatarModalData({
+                          name: group.contactName,
+                          phone: group.contactPhone,
+                          avatarUrl: null
+                        });
+                      }}
+                      title="Clique para expandir a foto de perfil"
+                      style={{
+                        display: primaryConv.contact?.foto_perfil_url ? 'none' : 'flex',
+                        width: '38px',
+                        height: '38px',
+                        borderRadius: '50%',
+                        background: isGroupPinned ? 'linear-gradient(135deg, #eab308 0%, #ca8a04 100%)' : 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
+                        color: '#051a12',
+                        fontWeight: '700',
+                        fontSize: '15px',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        boxShadow: isGroupPinned ? '0 2px 6px rgba(234, 179, 8, 0.3)' : '0 2px 6px rgba(0, 230, 153, 0.25)',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {(group.contactName || 'U').charAt(0).toUpperCase()}
+                    </div>
                   </div>
 
                   <div style={{ flex: 1, minWidth: 0 }}>

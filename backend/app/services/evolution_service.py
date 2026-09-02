@@ -1187,6 +1187,31 @@ class EvolutionService:
         except Exception as e:
             logger.debug(f"Error updating contact avatar for contact {contact_id}: {e}")
 
+    async def resolve_and_update_contact_phone(
+        self,
+        contact_id: int,
+        instance_name: str,
+        lid_phone: str
+    ):
+        """
+        Resolves a 15-digit LID privacy number to the real 55xx phone number and updates DB.
+        """
+        if not lid_phone or not instance_name:
+            return
+        try:
+            real_phone = await self.resolve_canonical_jid(instance_name=instance_name, number=lid_phone)
+            if real_phone and real_phone.startswith("55") and len(real_phone) in [12, 13]:
+                from app.core.database import AsyncSessionLocal
+                from app.models.models import Contact
+                async with AsyncSessionLocal() as session:
+                    c_obj = await session.get(Contact, contact_id)
+                    if c_obj and c_obj.telefone != real_phone:
+                        logger.info(f"LID RESOLUTION: Resolvido contato #{contact_id} de LID '{lid_phone}' para telefone real '{real_phone}'")
+                        c_obj.telefone = real_phone
+                        await session.commit()
+        except Exception as e:
+            logger.debug(f"Error resolving LID for contact {contact_id}: {e}")
+
     async def fetch_group_info(
         self,
         instance_name: Optional[str],
