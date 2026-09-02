@@ -46,6 +46,12 @@ const formatTime = (ts: string | Date | undefined) => {
   }
 };
 
+export const isLidPhone = (phone: string | undefined | null): boolean => {
+  if (!phone) return false;
+  const clean = String(phone).replace(/\D/g, '');
+  return clean.length >= 14 && !clean.startsWith('55') && !clean.startsWith('120363');
+};
+
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
   if (!phone) return '';
   const str = String(phone).trim();
@@ -54,6 +60,10 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   }
   const clean = str.replace(/\D/g, '');
   if (!clean) return str;
+
+  if (isLidPhone(str)) {
+    return 'Cliente WhatsApp';
+  }
 
   if (clean.startsWith('55') && clean.length === 13) {
     return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
@@ -97,14 +107,14 @@ export const getContactInitial = (name: string | undefined | null): string => {
 };
 
 export const getCleanDisplayName = (rawName: string | undefined | null, phone: string | undefined | null): string => {
-  const formattedPhone = formatWhatsAppPhone(phone);
   if (!isGenericName(rawName)) {
     return rawName!.trim();
   }
-  if (formattedPhone && formattedPhone !== 'Grupo') {
+  const formattedPhone = formatWhatsAppPhone(phone);
+  if (formattedPhone && formattedPhone !== 'Grupo' && formattedPhone !== 'Cliente WhatsApp') {
     return formattedPhone;
   }
-  return rawName || 'Cliente';
+  return 'Cliente WhatsApp';
 };
 
 const formatMessagePreview = (msg: any | undefined): string => {
