@@ -68,6 +68,61 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
   return str.replace('@lid', '').replace('@s.whatsapp.net', '');
 };
 
+export const isGenericName = (name: string | undefined | null): boolean => {
+  if (!name) return true;
+  const n = name.trim().toLowerCase();
+  return (
+    n === 'cliente' ||
+    n === 'cliente whatsapp' ||
+    n === 'cliente whatsapp business' ||
+    n === 'whatsapp' ||
+    n === 'whatsapp business' ||
+    n.startsWith('contato ') ||
+    n.startsWith('+55') ||
+    n.startsWith('55') ||
+    !isNaN(Number(n.replace(/\D/g, '')))
+  );
+};
+
+export const getCleanDisplayName = (rawName: string | undefined | null, phone: string | undefined | null): string => {
+  if (!isGenericName(rawName)) return rawName!.trim();
+  const formatted = formatWhatsAppPhone(phone);
+  if (formatted && formatted !== 'Grupo') return formatted;
+  return phone ? `+${phone.replace(/\D/g, '')}` : 'Cliente WhatsApp';
+};
+
+const formatMessagePreview = (msg: any | undefined): string => {
+  if (!msg || !msg.conteudo) return 'Conversa iniciada';
+  const c = String(msg.conteudo || '').trim();
+  const t = String(msg.tipo || '').toLowerCase();
+
+  if (t === 'imagem' || c.endsWith('.png') || c.endsWith('.jpg') || c.endsWith('.jpeg')) {
+    if (c.includes('Comprovante') || c.includes('PIX') || c.includes('Pix')) return '💸 Comprovante Pix';
+    return '📷 Foto';
+  }
+  if (t === 'audio' || t === 'voice' || c.endsWith('.ogg') || c.endsWith('.mp3')) {
+    return '🎙️ Áudio';
+  }
+  if (t === 'video' || c.endsWith('.mp4')) {
+    return '🎥 Vídeo';
+  }
+  if (t === 'documento' || t === 'document' || c.endsWith('.pdf')) {
+    return '📄 Documento';
+  }
+  if (t === 'sticker' || t === 'figurinha') {
+    return '💟 Figurinha';
+  }
+  if (c.startsWith('/uploads/')) {
+    const pipeParts = c.split('|');
+    if (pipeParts.length > 1 && pipeParts[1].trim()) {
+      return pipeParts[1].trim();
+    }
+    if (c.endsWith('.pdf')) return '📄 Documento PDF';
+    return '📎 Mídia';
+  }
+  return c;
+};
+
 interface ChatListProps {
   conversations: Conversation[];
   activeConversation: Conversation | null;
@@ -346,9 +401,14 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       const hasUnread = groupUnreadCount > 0;
 
+      const finalName = getCleanDisplayName(
+        bestName || primary.contact?.nome,
+        bestPhone || primary.contact?.telefone
+      );
+
       groups.push({
         contactId: primary.contact_id || primary.contact?.id || 0,
-        contactName: bestName || primary.contact?.nome || primary.contact?.telefone || 'Cliente sem nome',
+        contactName: finalName,
         contactPhone: bestPhone || primary.contact?.telefone || '',
         primaryConv: primary,
         allConversations: matchingConvs,
@@ -651,6 +711,9 @@ export const ChatList: React.FC<ChatListProps> = ({
                       <img
                         src={primaryConv.contact.foto_perfil_url}
                         alt={group.contactName}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
                         onClick={(e) => {
                           e.stopPropagation();
                           setAvatarModalData({
@@ -804,7 +867,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                                 <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>
                               </>
                             ) : (
-                              lastMessage ? lastMessage.conteudo : 'Conversa iniciada'
+                              formatMessagePreview(lastMessage)
                             )}
                           </p>
 

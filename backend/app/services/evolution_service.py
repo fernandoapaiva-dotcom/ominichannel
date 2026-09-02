@@ -1115,46 +1115,52 @@ class EvolutionService:
         Falls back automatically to any open connected instance if the specified instance fails.
         """
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
-        clean_num = number.replace("+", "").replace("-", "").replace(" ", "").strip()
-        payload = {"number": clean_num}
+        clean_num = number.split("@")[0].replace("+", "").replace("-", "").replace(" ", "").strip()
+        nums_to_try = [clean_num]
+        if len(clean_num) == 12 and clean_num.startswith("55"):
+            nums_to_try.append(f"{clean_num[:4]}9{clean_num[4:]}")
+        elif len(clean_num) == 13 and clean_num.startswith("55"):
+            nums_to_try.append(f"{clean_num[:4]}{clean_num[5:]}")
 
         async with httpx.AsyncClient(timeout=6.0) as client:
-            # 1. Try provided instance first
-            if instance_name:
-                url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
-                try:
-                    response = await client.post(url, headers=headers, json=payload)
-                    if response.status_code in [200, 201]:
-                        data = response.json()
-                        pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
-                        if pic:
-                            return pic
-                except Exception as e:
-                    logger.debug(f"Failed to fetch profile picture on {instance_name} for {number}: {e}")
+            for num_variant in nums_to_try:
+                payload = {"number": num_variant}
+                # 1. Try provided instance first
+                if instance_name:
+                    url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
+                    try:
+                        response = await client.post(url, headers=headers, json=payload)
+                        if response.status_code in [200, 201]:
+                            data = response.json()
+                            pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                            if pic and isinstance(pic, str) and pic.startswith("http"):
+                                return pic
+                    except Exception as e:
+                        logger.debug(f"Failed to fetch profile picture on {instance_name} for {num_variant}: {e}")
 
-            # 2. Fallback: Query all open connected instances
-            try:
-                inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
-                if inst_res.status_code == 200:
-                    instances = [
-                        i.get("name") for i in inst_res.json()
-                        if isinstance(i, dict) and i.get("connectionStatus") == "open" and i.get("name") != instance_name
-                    ]
-                    for inst in instances:
-                        if not inst:
-                            continue
-                        fallback_url = f"{base_url}/chat/fetchProfilePictureUrl/{inst}"
-                        try:
-                            res = await client.post(fallback_url, headers=headers, json=payload)
-                            if res.status_code in [200, 201]:
-                                data = res.json()
-                                pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
-                                if pic:
-                                    return pic
-                        except Exception:
-                            continue
-            except Exception as e:
-                logger.warning(f"Error checking connected instances for profile pic: {e}")
+                # 2. Fallback: Query all open connected instances
+                try:
+                    inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
+                    if inst_res.status_code == 200:
+                        instances = [
+                            i.get("name") for i in inst_res.json()
+                            if isinstance(i, dict) and i.get("connectionStatus") == "open" and i.get("name") != instance_name
+                        ]
+                        for inst in instances:
+                            if not inst:
+                                continue
+                            fallback_url = f"{base_url}/chat/fetchProfilePictureUrl/{inst}"
+                            try:
+                                res = await client.post(fallback_url, headers=headers, json=payload)
+                                if res.status_code in [200, 201]:
+                                    data = res.json()
+                                    pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                                    if pic and isinstance(pic, str) and pic.startswith("http"):
+                                        return pic
+                            except Exception:
+                                continue
+                except Exception as e:
+                    logger.warning(f"Error checking connected instances for profile pic: {e}")
         return None
 
     async def fetch_and_update_contact_avatar(

@@ -1205,11 +1205,21 @@ async def receive_evolution_webhook(
             # Upgrade phone if contact had a LID and we now have a real number
             if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
                 contact.telefone = phone_number
-            # For individual contacts: never overwrite existing saved/custom names! Only set if empty or 'Cliente'
-            if clean_push_name and clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] and (not contact.nome or contact.nome == "Cliente"):
+            # For individual contacts: update pushName if name is generic, empty, or phone number
+            GENERIC_NAMES = {"cliente", "cliente whatsapp", "cliente whatsapp business", "whatsapp", "whatsapp business"}
+            cur_n = str(contact.nome or "").strip().lower()
+            is_generic = (
+                not cur_n or
+                cur_n in GENERIC_NAMES or
+                cur_n.startswith("contato ") or
+                cur_n.startswith("+55") or
+                cur_n.startswith("55") or
+                cur_n.replace("+", "").replace("-", "").replace(" ", "").isdigit()
+            )
+            if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and is_generic:
                 contact.nome = clean_push_name
 
-        if profile_pic_url and contact.foto_perfil_url != profile_pic_url:
+        if profile_pic_url and isinstance(profile_pic_url, str) and profile_pic_url.startswith("http") and contact.foto_perfil_url != profile_pic_url:
             contact.foto_perfil_url = profile_pic_url
 
     # 3. Get or Create Conversation (Always reuse single active conversation for this contact across tenant)

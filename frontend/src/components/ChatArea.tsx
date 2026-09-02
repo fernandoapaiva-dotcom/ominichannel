@@ -19,7 +19,8 @@ import { AICopilotModal } from './AICopilotModal';
 import { WhatsAppAudioPlayer } from './WhatsAppAudioPlayer';
 import { AudioRecorder } from './AudioRecorder';
 import { StickyAudioPlayer } from './StickyAudioPlayer';
-import { Conversation, User, Message, CalendarEvent } from '../types';
+import { getCleanDisplayName } from './ChatList';
+import { Conversation, User, Message, CalendarEvent, WhatsAppNumber } from '../types';
 
 interface ChatAreaProps {
   conversation: Conversation | null;
@@ -3077,6 +3078,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <img
               src={conversation.contact.foto_perfil_url}
               alt={conversation.contact.nome || 'Cliente'}
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
               onClick={() => setShowAvatarZoom(true)}
               title="Clique para expandir a foto de perfil"
               style={{ width: '38px', height: '38px', borderRadius: '50%', objectFit: 'cover', border: '2px solid var(--accent-primary)', flexShrink: 0, cursor: 'pointer', transition: 'transform 0.15s ease' }}
@@ -3148,7 +3152,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               ) : (
                 <>
                   <h3 style={{ fontSize: '14px', fontWeight: '700', color: 'var(--text-main)', margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {conversation.contact?.nome || 'Cliente'}
+                    {getCleanDisplayName(conversation.contact?.nome, conversation.contact?.telefone)}
                   </h3>
                   <button
                     onClick={() => {
