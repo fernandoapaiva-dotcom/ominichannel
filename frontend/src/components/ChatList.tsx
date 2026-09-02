@@ -21,7 +21,29 @@ export const parseIsoDate = (ts: string | Date | undefined): Date => {
 const formatTime = (ts: string | Date | undefined) => {
   if (!ts) return '';
   const d = parseIsoDate(ts);
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (isNaN(d.getTime())) return '';
+
+  const now = new Date();
+  const isToday = d.getDate() === now.getDate() && 
+                  d.getMonth() === now.getMonth() && 
+                  d.getFullYear() === now.getFullYear();
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.getDate() === yesterday.getDate() && 
+                      d.getMonth() === yesterday.getMonth() && 
+                      d.getFullYear() === yesterday.getFullYear();
+
+  if (isToday) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } else if (isYesterday) {
+    return 'Ontem';
+  } else if (now.getTime() - d.getTime() < 7 * 86400000) {
+    const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    return days[d.getDay()];
+  } else {
+    return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
 };
 
 export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
@@ -215,13 +237,14 @@ export const ChatList: React.FC<ChatListProps> = ({
                       rawName.includes('GRUPO') ||
                       rawName.includes('Servweld/Servsolda');
       
+      const deptId = conv.whatsapp_number_id || 0;
       let groupKey = '';
       if (isGroup) {
-        groupKey = `group_${cleanDigits || rawPhone}`;
+        groupKey = `wn_${deptId}_group_${cleanDigits || rawPhone}`;
       } else if (cleanDigits.length >= 8 && !cleanDigits.startsWith('120363')) {
-        groupKey = `client_${cleanDigits.slice(-8)}`;
+        groupKey = `wn_${deptId}_client_${cleanDigits.slice(-8)}`;
       } else {
-        groupKey = `contact_${conv.contact_id || conv.contact?.id || 0}`;
+        groupKey = `wn_${deptId}_contact_${conv.contact_id || conv.contact?.id || 0}`;
       }
 
       if (!map.has(groupKey)) {

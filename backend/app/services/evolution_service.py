@@ -1155,6 +1155,31 @@ class EvolutionService:
                             continue
             except Exception as e:
                 logger.warning(f"Error checking connected instances for profile pic: {e}")
+        return None
+
+    async def fetch_and_update_contact_avatar(
+        self,
+        contact_id: int,
+        instance_name: str,
+        phone: str
+    ):
+        """
+        Fetches official WhatsApp avatar URL for contact and saves it to DB.
+        """
+        if not phone or not instance_name:
+            return
+        try:
+            pic_url = await self.fetch_profile_picture_url(instance_name=instance_name, number=phone)
+            if pic_url:
+                from app.core.database import AsyncSessionLocal
+                from app.models.models import Contact
+                async with AsyncSessionLocal() as session:
+                    c_obj = await session.get(Contact, contact_id)
+                    if c_obj and c_obj.foto_perfil_url != pic_url:
+                        c_obj.foto_perfil_url = pic_url
+                        await session.commit()
+        except Exception as e:
+            logger.debug(f"Error updating contact avatar for contact {contact_id}: {e}")
 
     async def fetch_group_info(
         self,

@@ -139,6 +139,18 @@ async def list_conversations(
     for c in conversations:
         contact_dict = None
         if c.contact:
+            if not c.contact.foto_perfil_url and c.whatsapp_number and c.whatsapp_number.instancia_evolution_api:
+                try:
+                    asyncio.create_task(
+                        evolution_service.fetch_and_update_contact_avatar(
+                            contact_id=c.contact.id,
+                            instance_name=c.whatsapp_number.instancia_evolution_api,
+                            phone=c.contact.telefone
+                        )
+                    )
+                except Exception:
+                    pass
+
             contact_dict = {
                 "id": c.contact.id,
                 "tenant_id": c.contact.tenant_id,
