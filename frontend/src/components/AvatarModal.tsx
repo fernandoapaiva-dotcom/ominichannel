@@ -1,5 +1,6 @@
-import React from 'react';
-import { X, ExternalLink } from 'lucide-react';
+import React, { useState } from 'react';
+import { X, ExternalLink, RefreshCw } from 'lucide-react';
+import { apiFetch } from '../services/api';
 
 interface AvatarModalProps {
   isOpen: boolean;
@@ -7,6 +8,8 @@ interface AvatarModalProps {
   name: string;
   phone?: string;
   avatarUrl?: string | null;
+  contactId?: number;
+  onAvatarUpdated?: (newUrl: string) => void;
 }
 
 export const AvatarModal: React.FC<AvatarModalProps> = ({
@@ -14,9 +17,40 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
   onClose,
   name,
   phone,
-  avatarUrl
+  avatarUrl,
+  contactId,
+  onAvatarUpdated
 }) => {
+  const [currentUrl, setCurrentUrl] = useState<string | null | undefined>(avatarUrl);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    setCurrentUrl(avatarUrl);
+    setSyncStatusMsg(null);
+  }, [avatarUrl, isOpen]);
+
   if (!isOpen) return null;
+
+  const handleSyncAvatar = async () => {
+    if (!contactId) return;
+    setIsSyncing(true);
+    setSyncStatusMsg(null);
+    try {
+      const res = await apiFetch(`/contacts/${contactId}/sync_avatar`, { method: 'POST' });
+      if (res.status === 'success' && res.foto_perfil_url) {
+        setCurrentUrl(res.foto_perfil_url);
+        setSyncStatusMsg('✅ Foto de perfil importada com sucesso!');
+        if (onAvatarUpdated) onAvatarUpdated(res.foto_perfil_url);
+      } else {
+        setSyncStatusMsg(res.message || '⚠️ Foto restrita pela privacidade do WhatsApp do cliente.');
+      }
+    } catch (err: any) {
+      setSyncStatusMsg('❌ Erro ao buscar foto no WhatsApp.');
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   return (
     <div
@@ -73,9 +107,32 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {avatarUrl && (
+            {contactId && (
+              <button
+                onClick={handleSyncAvatar}
+                disabled={isSyncing}
+                style={{
+                  background: 'rgba(0, 230, 153, 0.12)',
+                  border: '1px solid rgba(0, 230, 153, 0.3)',
+                  color: 'var(--accent-primary)',
+                  padding: '6px 12px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12px',
+                  fontWeight: '600',
+                  cursor: isSyncing ? 'not-allowed' : 'pointer'
+                }}
+                title="Importar foto oficial do perfil do WhatsApp"
+              >
+                <RefreshCw size={14} className={isSyncing ? 'animate-spin' : ''} />
+                {isSyncing ? 'Buscando...' : 'Buscar Foto'}
+              </button>
+            )}
+            {currentUrl && (
               <a
-                href={avatarUrl}
+                href={currentUrl}
                 target="_blank"
                 rel="noreferrer"
                 style={{
@@ -113,6 +170,21 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
           </div>
         </div>
 
+        {/* Sync Status Banner */}
+        {syncStatusMsg && (
+          <div style={{
+            padding: '8px 16px',
+            backgroundColor: syncStatusMsg.startsWith('✅') ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+            borderBottom: '1px solid rgba(255,255,255,0.05)',
+            color: syncStatusMsg.startsWith('✅') ? '#4ade80' : '#facc15',
+            fontSize: '12px',
+            textAlign: 'center',
+            fontWeight: '600'
+          }}>
+            {syncStatusMsg}
+          </div>
+        )}
+
         {/* Image Content */}
         <div style={{
           padding: '24px',
@@ -123,9 +195,9 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
           minWidth: '280px',
           minHeight: '280px'
         }}>
-          {avatarUrl ? (
+          {currentUrl ? (
             <img
-              src={avatarUrl}
+              src={currentUrl}
               alt={name}
               style={{
                 maxWidth: '80vw',
@@ -149,7 +221,7 @@ export const AvatarModal: React.FC<AvatarModalProps> = ({
               justifyContent: 'center',
               boxShadow: '0 10px 30px rgba(0, 230, 153, 0.3)'
             }}>
-              {(name || '').replace(/[\[\]]/g, '').trim().charAt(0).toUpperCase() || 'U'}
+              {(name || '').replace(/[\[\]]/g, '').trim().charAt(0).toUpperCase() || 'C'}
             </div>
           )}
         </div>

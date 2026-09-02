@@ -153,3 +153,47 @@ async def update_contact(
         "nome": contact.nome,
         "telefone": contact.telefone
     }
+
+@router.post("/{contact_id}/sync_avatar")
+async def sync_contact_avatar(
+    contact_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Syncs and updates official WhatsApp profile picture for contact.
+    """
+    stmt = select(Contact).where(
+        Contact.id == contact_id,
+        Contact.tenant_id == current_user.tenant_id
+    )
+    res = await db.execute(stmt)
+    contact = res.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado")
+
+    conv_stmt = select(Conversation).options(selectinload(Conversation.whatsapp_number)).where(
+        Conversation.contact_id == contact.id,
+        Conversation.tenant_id == current_user.tenant_id
+    ).order_by(Conversation.ultima_interacao_em.desc())
+    conv_res = await db.execute(conv_stmt)
+    conv = conv_res.scalars().first()
+    instance_name = conv.whatsapp_number.instancia_evolution_api if (conv and conv.whatsapp_number) else None
+
+    from app.services.evolution_service import evolution_service
+    pic_url = await evolution_service.fetch_profile_picture_url(instance_name=instance_name, number=contact.telefone)
+    if pic_url:
+        contact.foto_perfil_url = pic_url
+        await db.commit()
+        await db.refresh(contact)
+        return {
+            "status": "success",
+            "message": "Foto de perfil atualizada com sucesso",
+            "foto_perfil_url": contact.foto_perfil_url
+        }
+
+    return {
+        "status": "not_found",
+        "message": "Foto de perfil não encontrada ou restrita pelas configurações de privacidade do cliente no WhatsApp",
+        "foto_perfil_url": contact.foto_perfil_url
+    }

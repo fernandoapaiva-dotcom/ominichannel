@@ -88,6 +88,17 @@ export const isGenericName = (name: string | undefined | null): boolean => {
   );
 };
 
+export const getContactInitial = (name: string | undefined | null): string => {
+  if (!name) return 'C';
+  const clean = name.trim();
+  if (clean.startsWith('+') || !isNaN(Number(clean.replace(/\D/g, '')))) {
+    const letter = clean.match(/[a-zA-Z]/);
+    if (letter) return letter[0].toUpperCase();
+    return 'C';
+  }
+  return clean.charAt(0).toUpperCase();
+};
+
 export const getCleanDisplayName = (rawName: string | undefined | null, phone: string | undefined | null): string => {
   if (!isGenericName(rawName)) return rawName!.trim();
   const formatted = formatWhatsAppPhone(phone);
@@ -177,7 +188,7 @@ export const ChatList: React.FC<ChatListProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
-  const [avatarModalData, setAvatarModalData] = useState<{ name: string; phone?: string; avatarUrl?: string | null } | null>(null);
+  const [avatarModalData, setAvatarModalData] = useState<{ name: string; phone?: string; avatarUrl?: string | null; contactId?: number } | null>(null);
 
   // Debounced search to trigger global backend search across all contacts & conversations
   React.useEffect(() => {
@@ -728,7 +739,8 @@ export const ChatList: React.FC<ChatListProps> = ({
                           setAvatarModalData({
                             name: group.contactName,
                             phone: group.contactPhone,
-                            avatarUrl: primaryConv.contact?.foto_perfil_url
+                            avatarUrl: primaryConv.contact?.foto_perfil_url,
+                            contactId: group.contactId
                           });
                         }}
                         title="Clique para expandir a foto de perfil"
@@ -753,7 +765,8 @@ export const ChatList: React.FC<ChatListProps> = ({
                         setAvatarModalData({
                           name: group.contactName,
                           phone: group.contactPhone,
-                          avatarUrl: null
+                          avatarUrl: null,
+                          contactId: group.contactId
                         });
                       }}
                       title="Clique para expandir a foto de perfil"
@@ -773,7 +786,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                         cursor: 'pointer'
                       }}
                     >
-                      {(group.contactName || 'U').charAt(0).toUpperCase()}
+                      {getContactInitial(group.contactName)}
                     </div>
                   </div>
 
@@ -1117,6 +1130,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         name={avatarModalData?.name || ''}
         phone={avatarModalData?.phone}
         avatarUrl={avatarModalData?.avatarUrl}
+        contactId={avatarModalData?.contactId}
       />
     </div>
   );

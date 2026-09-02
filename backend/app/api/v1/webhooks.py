@@ -1117,7 +1117,20 @@ async def receive_evolution_webhook(
     contact_res = await db.execute(contact_stmt)
     contact = contact_res.scalars().first()
 
-    profile_pic_url = data.get("profilePicUrl") or (data.get("sender") or {}).get("profilePicUrl") or (data.get("contact") or {}).get("profilePicUrl")
+    sender_obj = data.get("sender") if isinstance(data.get("sender"), dict) else {}
+    contact_obj = data.get("contact") if isinstance(data.get("contact"), dict) else {}
+    profile_pic_url = (
+        data.get("profilePicUrl") or
+        data.get("pictureUrl") or
+        data.get("profilePictureUrl") or
+        data.get("picture") or
+        sender_obj.get("profilePicUrl") or
+        sender_obj.get("profilePictureUrl") or
+        sender_obj.get("pictureUrl") or
+        contact_obj.get("profilePicUrl") or
+        contact_obj.get("profilePictureUrl") or
+        contact_obj.get("pictureUrl")
+    )
 
     # If message is from a WhatsApp Group, fetch official group subject / title
     group_subject = None
@@ -1160,7 +1173,7 @@ async def receive_evolution_webhook(
         try:
             profile_pic_url = await asyncio.wait_for(
                 evolution_service.fetch_profile_picture_url(whatsapp_number.instancia_evolution_api, phone_number),
-                timeout=2.0
+                timeout=5.0
             )
         except Exception:
             profile_pic_url = None
