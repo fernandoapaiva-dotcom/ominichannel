@@ -67,7 +67,7 @@ async def get_candidate_instances_for_event(ev: CalendarEvent, wns: List[WhatsAp
 
     # Prioritize online/connected instances ('open')
     try:
-        health = await evolution_service.check_server_health()
+        health = await evolution_service.ping_server()
         if health.get("success") and isinstance(health.get("data"), list):
             open_instances = set()
             for item in health["data"]:
