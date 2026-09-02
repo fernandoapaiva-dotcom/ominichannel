@@ -117,7 +117,8 @@ async def create_whatsapp_number(
         meta_phone_number_id=wn_in.meta_phone_number_id if wn_in.provider_type == "meta" else None,
         meta_waba_id=wn_in.meta_waba_id if wn_in.provider_type == "meta" else None,
         meta_access_token_encrypted=encrypted_token if wn_in.provider_type == "meta" else None,
-        status=wn_in.status
+        status=wn_in.status,
+        criado_em=datetime.utcnow()
     )
     db.add(wn)
     await db.commit()

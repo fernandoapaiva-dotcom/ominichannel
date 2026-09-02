@@ -69,6 +69,7 @@ class WhatsAppNumber(Base):
     meta_waba_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     meta_access_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[bool] = mapped_column(Boolean, default=True)
+    criado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, default=datetime.utcnow, nullable=True)
     
     tenant: Mapped["Tenant"] = relationship("Tenant", back_populates="whatsapp_numbers")
     users: Mapped[List["User"]] = relationship("User", secondary=user_number_access, back_populates="whatsapp_numbers")

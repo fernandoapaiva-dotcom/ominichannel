@@ -101,8 +101,14 @@ class BusinessHoursService:
         - Realiza backup e emite broadcast WebSockets.
         - No dia seguinte NÃO reabre sozinho para não ficar abrindo e fechando continuamente.
         """
+        from datetime import timezone
         now_br = self.get_brasilia_now()
-        logger.info(f"[JOB 18:00] Iniciando finalização e encerramento de expediente comercial ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
+        hoje_data_br = now_br.date()
+        logger.info(f"[JOB 18:00] Iniciando verificação de encerramento de expediente comercial ({now_br.strftime('%Y-%m-%d %H:%M:%S %Z')})...")
+
+        # Início do expediente de hoje (08:00 Brasília em UTC)
+        inicio_expediente_br = datetime.combine(hoje_data_br, time(8, 0, 0), tzinfo=BRASILIA_TZ)
+        inicio_expediente_utc = inicio_expediente_br.astimezone(timezone.utc).replace(tzinfo=None)
 
         closed_count = 0
         async with AsyncSessionLocal() as db:
@@ -126,30 +132,68 @@ class BusinessHoursService:
                 active_convs = res.scalars().all()
 
                 for conv in active_convs:
-                    # Skip WhatsApp groups
+                    # 1. Ignorar grupos do WhatsApp
                     if conv.contact and ("@g.us" in str(conv.contact.telefone) or len(str(conv.contact.telefone)) > 15):
                         continue
 
-                    # Ensure the conversation had interaction TODAY (within the last 14 hours) or has active protocol
-                    if not conv.ultima_interacao_em or (datetime.utcnow() - conv.ultima_interacao_em).total_seconds() > 14 * 3600:
+                    # 2. REGRA MANDATÓRIA: Só processar a partir do dia SEGUINTE à inserção da instância no sistema
+                    wn = conv.whatsapp_number
+                    if not wn:
                         continue
 
-                    proto = conv.protocol_number or "S/N"
+                    if wn.criado_em:
+                        wn_dt = wn.criado_em
+                        if wn_dt.tzinfo is None:
+                            wn_dt = wn_dt.replace(tzinfo=timezone.utc)
+                        wn_date_br = wn_dt.astimezone(BRASILIA_TZ).date()
+
+                        if wn_date_br >= hoje_data_br:
+                            # Instância foi inserida hoje! Não encerra nenhuma conversa dela hoje para não gerar bloqueio
+                            logger.debug(f"[JOB 18:00] Pulando conversa #{conv.id}: Instância '{wn.instancia_evolution_api}' foi inserida hoje ({wn_date_br}).")
+                            continue
+
+                    # 3. REGRA MANDATÓRIA: Não finalizar conversas migradas/importadas sem chamado aberto
+                    extra = dict(conv.dados_adicionais or {})
+                    proto = conv.protocol_number
+                    if not proto or proto in ["S/N", "None", "", None]:
+                        # Sem protocolo ativo aberto -> não envia encerramento em massa
+                        continue
+
+                    # 4. REGRA MANDATÓRIA: Só o que aconteceu DENTRO DO DIA (mensagens trocadas hoje entre 08h e 18h)
+                    # Verifica na tabela Message se houve interação real do cliente ou atendente hoje durante o expediente
+                    msg_check_stmt = select(Message.id).where(
+                        Message.conversation_id == conv.id,
+                        Message.timestamp >= inicio_expediente_utc,
+                        Message.remetente.in_([MessageSender.CLIENTE, MessageSender.ATENDENTE, MessageSender.IA])
+                    ).limit(1)
+                    has_real_msg_today = (await db.execute(msg_check_stmt)).scalars().first() is not None
+
+                    if not has_real_msg_today:
+                        # Zero mensagens trocadas hoje -> conversa antiga/adormecida -> NÃO envia mensagem, NÃO encerra
+                        continue
+
+                    # 5. Proteção anti-ban WhatsApp: Limite de envios por ciclo das 18h
+                    if closed_count >= 30:
+                        logger.warning("[JOB 18:00] Limite de segurança de 30 mensagens de encerramento atingido para proteção contra ban do WhatsApp.")
+                        break
+
                     cust_name = conv.contact.nome if conv.contact else "Cliente"
                     closing_text = self.get_shift_closing_message(cust_name, proto)
 
-                    # 1. Send WhatsApp message to customer
-                    if conv.contact and conv.whatsapp_number and conv.whatsapp_number.instancia_evolution_api:
+                    # 6. Enviar mensagem de encerramento via WhatsApp com delay para proteção anti-bloqueio
+                    if conv.contact and wn.instancia_evolution_api:
                         try:
                             await evolution_service.send_text_message(
-                                instance_name=conv.whatsapp_number.instancia_evolution_api,
+                                instance_name=wn.instancia_evolution_api,
                                 number=conv.contact.telefone,
                                 text=closing_text
                             )
+                            # Delay de 2.5s entre mensagens para não ser classificado como spam pelo WhatsApp
+                            await asyncio.sleep(2.5)
                         except Exception as send_err:
-                            logger.warning(f"Error sending 18h closing message to conversation #{conv.id}: {send_err}")
+                            logger.warning(f"Erro ao enviar encerramento das 18h na conversa #{conv.id}: {send_err}")
 
-                    # 2. Add System Message in timeline
+                    # 7. Registrar mensagem de auditoria do sistema
                     sys_msg = Message(
                         conversation_id=conv.id,
                         remetente="sistema",
@@ -159,7 +203,7 @@ class BusinessHoursService:
                     )
                     db.add(sys_msg)
 
-                    # 3. Update Conversation Status and Finalize Protocol
+                    # 8. Atualizar status e finalizar protocolo
                     conv.status = ConversationStatus.ENCERRADA_FORA_EXPEDIENTE
                     conv.protocol_number = None
                     conv.ultima_interacao_em = datetime.utcnow()
