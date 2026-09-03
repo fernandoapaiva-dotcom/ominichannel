@@ -80,6 +80,8 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
                     pname = m.get("pushName")
                     if pname and not name and pname not in ["Você", clean_lid, "Cliente"]:
                         name = pname
+        except Exception as err:
+            logger.debug(f"Error querying Postgres for LID {clean_lid}: {err}")
 
     # Fallback to docker exec if asyncpg couldn't connect
     if not real_phone:
