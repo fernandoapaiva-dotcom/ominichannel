@@ -59,7 +59,7 @@ async def list_conversations(
     default_wn_id = accessible_wn_ids[0]
 
     # If search term is provided, auto-create placeholder conversations for contacts matching search that have no conversation yet
-    if search and search.strip():
+    if search and isinstance(search, str) and search.strip():
         term = f"%{search.strip()}%"
         existing_contact_ids_stmt = select(Conversation.contact_id).where(
             Conversation.tenant_id == current_user.tenant_id,
@@ -112,7 +112,7 @@ async def list_conversations(
             raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
         stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
 
-    if search and search.strip():
+    if search and isinstance(search, str) and search.strip():
         term = f"%{search.strip()}%"
         stmt = stmt.join(Conversation.contact).where(
             or_(
