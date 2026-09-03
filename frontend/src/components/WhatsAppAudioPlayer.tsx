@@ -31,8 +31,8 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
 }) => {
   const { activeAudio, toggleAudio, seekAudio, setSpeed } = useAudio();
 
-  const isThisPlaying = activeAudio?.msgId === message.id && activeAudio.isPlaying;
-  const isThisActive = activeAudio?.msgId === message.id;
+  const isThisPlaying = Number(activeAudio?.msgId) === Number(message.id) && activeAudio?.isPlaying;
+  const isThisActive = Number(activeAudio?.msgId) === Number(message.id);
 
   const currentTime = isThisActive ? activeAudio.currentTime : 0;
   const activeDuration = isThisActive ? activeAudio.duration : 0;

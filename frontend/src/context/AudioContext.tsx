@@ -69,12 +69,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     const handleEnded = () => {
-      const msgs = currentMessagesRef.current;
       const current = activeAudioRef.current;
-      if (current && msgs.length > 0) {
-        const currentIndex = msgs.findIndex(m => m.id === current.msgId);
+      const rawMsgs = currentMessagesRef.current;
+      if (current && rawMsgs && rawMsgs.length > 0) {
+        // Guarantee chronological sorting (oldest to newest)
+        const sortedMsgs = [...rawMsgs].sort((a, b) => {
+          const tA = new Date(a.timestamp || 0).getTime();
+          const tB = new Date(b.timestamp || 0).getTime();
+          if (tA !== tB) return tA - tB;
+          return Number(a.id || 0) - Number(b.id || 0);
+        });
+
+        const currentIndex = sortedMsgs.findIndex(m => Number(m.id) === Number(current.msgId));
         if (currentIndex !== -1) {
-          const nextAudioMsg = msgs.slice(currentIndex + 1).find(m => {
+          const nextAudioMsg = sortedMsgs.slice(currentIndex + 1).find(m => {
             const t = String(m.tipo || '').toLowerCase();
             const c = String(m.conteudo || '').toLowerCase();
             return (
@@ -86,8 +94,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               c.includes('mmg.whatsapp.net')
             );
           });
+
           if (nextAudioMsg && playAudioRef.current) {
-            playAudioRef.current(nextAudioMsg, currentConvRef.current, msgs);
+            // Natural 150ms buffer gap mimicking WhatsApp's seamless next voice note transition
+            setTimeout(() => {
+              if (playAudioRef.current) {
+                playAudioRef.current(nextAudioMsg, currentConvRef.current, sortedMsgs);
+              }
+            }, 150);
             return;
           }
         }
@@ -140,25 +154,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const currentSpeed = activeAudioRef.current?.speed || 1;
 
-    audioRef.current.src = url;
-    audioRef.current.playbackRate = currentSpeed;
-    audioRef.current.play().then(() => {
-      const state: ActiveAudioState = {
-        msgId: msg.id,
-        url,
-        senderName,
-        senderAvatar,
-        conversationId: msg.conversation_id || conversation?.id || 0,
-        duration: audioRef.current?.duration || 0,
-        currentTime: 0,
-        isPlaying: true,
-        speed: currentSpeed
-      };
-      activeAudioRef.current = state;
-      setActiveAudio(state);
-    }).catch(err => {
-      console.error('Error playing audio:', err);
-    });
+    try {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current.src = url;
+      audioRef.current.playbackRate = currentSpeed;
+      audioRef.current.load();
+      audioRef.current.play().then(() => {
+        const state: ActiveAudioState = {
+          msgId: Number(msg.id),
+          url,
+          senderName,
+          senderAvatar,
+          conversationId: msg.conversation_id || conversation?.id || 0,
+          duration: audioRef.current?.duration || 0,
+          currentTime: 0,
+          isPlaying: true,
+          speed: currentSpeed
+        };
+        activeAudioRef.current = state;
+        setActiveAudio(state);
+      }).catch(err => {
+        console.error('Error playing audio:', err);
+      });
+    } catch (e) {
+      console.error('Audio play exception:', e);
+    }
   };
 
   playAudioRef.current = playAudio;
@@ -179,7 +200,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const toggleAudio = (msg: Message, conversation?: Conversation, allMessages: Message[] = []) => {
-    if (activeAudio && activeAudio.msgId === msg.id) {
+    if (activeAudio && Number(activeAudio.msgId) === Number(msg.id)) {
       if (activeAudio.isPlaying) {
         pauseAudio();
       } else {
