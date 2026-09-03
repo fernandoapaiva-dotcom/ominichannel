@@ -5,6 +5,7 @@ export interface AudioQueueItem {
   senderAvatar?: string;
   conversationId?: number;
   message?: any;
+  audioElement?: HTMLAudioElement;
 }
 
 /**
@@ -130,7 +131,8 @@ export class AudioQueue {
     const item = this.queue.shift()!;
     this.currentItem = item;
 
-    const audio = new Audio(item.url);
+    // usa o elemento já "destravado" no clique, se existir
+    const audio = item.audioElement ?? new Audio(item.url);
     this.currentAudio = audio;
     audio.playbackRate = this.speed;
 
@@ -146,13 +148,11 @@ export class AudioQueue {
       this._advance(item);
     };
 
-    // evita travar a fila se um áudio falhar ao carregar/tocar
     audio.onerror = (e) => {
       console.warn("Falha ao tocar áudio, pulando:", item, e);
       this._advance(item);
     };
 
-    // Monitor ativo de polling (fallback para bug de ended do Chrome com Opus Ogg)
     this.pollInterval = setInterval(() => {
       if (audio && !audio.paused && audio.duration > 0 && isFinite(audio.duration)) {
         if (audio.currentTime >= audio.duration - 0.12) {
@@ -162,11 +162,7 @@ export class AudioQueue {
     }, 60);
 
     audio.play().catch((err) => {
-      console.warn("play() bloqueado ou aguardando canplay:", err);
-      audio.addEventListener('canplay', () => {
-        audio.playbackRate = this.speed;
-        audio.play().catch(() => this._advance(item));
-      }, { once: true });
+      console.warn("play() bloqueado mesmo pré-criado:", err, item.id);
     });
   }
 }

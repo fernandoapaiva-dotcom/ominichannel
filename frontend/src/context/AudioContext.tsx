@@ -120,23 +120,33 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playAudio = useCallback((msg: Message, conversation?: Conversation, allMessages?: Message[]) => {
     const msgs = (allMessages && allMessages.length > 0) ? allMessages : (conversation?.messages || []);
     const currentIndex = msgs.findIndex(m => Number(m.id) === Number(msg.id));
-    
-    // Find all sequential audios from this message onwards
+
     const remainingMsgs = currentIndex !== -1 ? msgs.slice(currentIndex) : [msg];
     const audiosToQueue: AudioQueueItem[] = remainingMsgs
       .filter(m => isAudioMsg(m))
-      .map(m => ({
-        id: Number(m.id),
-        url: getAudioUrl(m.conteudo || '', m.id),
-        senderName: m.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : (m.agent_name || 'Atendente'),
-        senderAvatar: m.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined,
-        conversationId: m.conversation_id || conversation?.id || 0,
-        message: m
-      }))
+      .map(m => {
+        const url = getAudioUrl(m.conteudo || '', m.id);
+        // pré-cria o elemento AQUI, ainda dentro do gesto de clique,
+        // e faz um play()+pause() imediato pra "destravar" o autoplay
+        // desse elemento específico antes de ele entrar na fila.
+        const el = new Audio(url);
+        el.play().then(() => el.pause()).catch(() => {
+          // se nem o destravamento inicial funcionar, fica só com o
+          // fallback de criar novo Audio() depois (comportamento antigo)
+        });
+        return {
+          id: Number(m.id),
+          url,
+          senderName: m.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : (m.agent_name || 'Atendente'),
+          senderAvatar: m.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined,
+          conversationId: m.conversation_id || conversation?.id || 0,
+          message: m,
+          audioElement: el,
+        };
+      })
       .filter(item => Boolean(item.url));
 
-    console.log('[AudioQueue] Queuing audios starting from', msg.id, 'Total in queue:', audiosToQueue.length);
-    queue.add(audiosToQueue, true); // true = clears previous queue and starts playing this sequence immediately
+    queue.add(audiosToQueue, true);
   }, [queue]);
 
   const addToQueue = useCallback((item: AudioQueueItem) => {
