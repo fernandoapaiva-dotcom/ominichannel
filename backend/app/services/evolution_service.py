@@ -1176,7 +1176,7 @@ class EvolutionService:
         phone: str
     ):
         """
-        Fetches official WhatsApp avatar URL for contact and saves it to DB.
+        Fetches official WhatsApp avatar URL for contact, downloads locally, and saves to DB.
         """
         if not phone or not instance_name:
             return
@@ -1185,11 +1185,28 @@ class EvolutionService:
             if pic_url:
                 from app.core.database import AsyncSessionLocal
                 from app.models.models import Contact
+                from app.services.lid_resolver_service import download_and_cache_avatar_locally
+                from app.core.websocket import manager
+
+                local_avatar = await download_and_cache_avatar_locally(contact_id, pic_url)
+                final_pic = local_avatar or pic_url
+
                 async with AsyncSessionLocal() as session:
                     c_obj = await session.get(Contact, contact_id)
-                    if c_obj and c_obj.foto_perfil_url != pic_url:
-                        c_obj.foto_perfil_url = pic_url
+                    if c_obj and c_obj.foto_perfil_url != final_pic:
+                        c_obj.foto_perfil_url = final_pic
+                        tenant_id = c_obj.tenant_id
                         await session.commit()
+                        logger.info(f"AVATAR: Foto salva com sucesso para o contato #{contact_id}: {final_pic}")
+                        # Broadcast update to clients
+                        try:
+                            await manager.broadcast_to_tenant(tenant_id, {
+                                "type": "CONTACT_UPDATED",
+                                "contact_id": contact_id,
+                                "foto_perfil_url": final_pic
+                            })
+                        except Exception:
+                            pass
         except Exception as e:
             logger.debug(f"Error updating contact avatar for contact {contact_id}: {e}")
 

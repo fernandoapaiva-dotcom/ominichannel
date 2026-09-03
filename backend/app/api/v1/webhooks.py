@@ -1228,26 +1228,33 @@ async def receive_evolution_webhook(
             # Upgrade phone if contact had a LID and we now have a real number
             if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
                 contact.telefone = phone_number
-            # For individual contacts: update pushName if name is generic, empty, or phone number
-            GENERIC_NAMES = {"cliente", "cliente whatsapp", "cliente whatsapp business", "whatsapp", "whatsapp business"}
-            cur_n = str(contact.nome or "").strip().lower()
-            is_generic = (
-                not cur_n or
-                cur_n in GENERIC_NAMES or
-                cur_n.startswith("contato ") or
-                cur_n.startswith("+55") or
-                cur_n.startswith("55") or
-                cur_n.replace("+", "").replace("-", "").replace(" ", "").isdigit()
-            )
-            if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and is_generic:
-                contact.nome = clean_push_name
+        # For individual contacts: update pushName if name is generic, empty, or phone number
+        GENERIC_NAMES = {"cliente", "cliente whatsapp", "cliente whatsapp business", "whatsapp", "whatsapp business"}
+        cur_n = str(contact.nome or "").strip().lower()
+        is_generic = (
+            not cur_n or
+            cur_n in GENERIC_NAMES or
+            cur_n.startswith("contato ") or
+            cur_n.startswith("+55") or
+            cur_n.startswith("55") or
+            cur_n.replace("+", "").replace("-", "").replace(" ", "").isdigit()
+        )
+        if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and is_generic:
+            contact.nome = clean_push_name
 
-        if profile_pic_url and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
-            cached_avatar = await download_and_cache_avatar_locally(contact.id, profile_pic_url)
-            if cached_avatar:
-                contact.foto_perfil_url = cached_avatar
-            elif contact.foto_perfil_url != profile_pic_url:
-                contact.foto_perfil_url = profile_pic_url
+    # Avatar handling for both new and existing contacts
+    if profile_pic_url and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
+        cached_avatar = await download_and_cache_avatar_locally(contact.id, profile_pic_url)
+        if cached_avatar:
+            contact.foto_perfil_url = cached_avatar
+        elif contact.foto_perfil_url != profile_pic_url:
+            contact.foto_perfil_url = profile_pic_url
+    elif not contact.foto_perfil_url and phone_number and not is_group and whatsapp_number.instancia_evolution_api:
+        asyncio.create_task(
+            evolution_service.fetch_and_update_contact_avatar(
+                contact.id, whatsapp_number.instancia_evolution_api, phone_number
+            )
+        )
 
     # 3. Get or Create Conversation (strictly isolated per instance/department to prevent mixing)
     conv_stmt = (

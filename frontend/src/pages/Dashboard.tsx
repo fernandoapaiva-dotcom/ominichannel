@@ -389,6 +389,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 }
               }));
             }
+          } else if (payload.type === 'CONTACT_UPDATED') {
+            if (payload.contact_id && payload.foto_perfil_url) {
+              setConversations(prev => prev.map(c => {
+                if (c.contact_id === payload.contact_id || c.contact?.id === payload.contact_id) {
+                  return {
+                    ...c,
+                    contact: {
+                      ...c.contact,
+                      foto_perfil_url: payload.foto_perfil_url
+                    }
+                  };
+                }
+                return c;
+              }));
+            }
           } else if (payload.type === 'CONVERSATION_ESCALATED') {
             fetchConversations();
             playNotificationSound();

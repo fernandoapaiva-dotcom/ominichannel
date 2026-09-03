@@ -5,7 +5,7 @@ import asyncio
 from typing import Optional, Dict, Any
 import httpx
 import asyncpg
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Contact
@@ -54,35 +54,32 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
             async with pool.acquire() as conn:
                 # 1. Check Contact table
                 c_row = await conn.fetchrow('SELECT "pushName", "profilePicUrl" FROM "Contact" WHERE "remoteJid" = $1', lid_jid)
-            if c_row:
-                if c_row["pushName"] and c_row["pushName"].strip() and c_row["pushName"] != clean_lid:
-                    name = c_row["pushName"].strip()
-                if c_row["profilePicUrl"] and c_row["profilePicUrl"].strip():
-                    profile_pic = c_row["profilePicUrl"].strip()
+                if c_row:
+                    if c_row["pushName"] and c_row["pushName"].strip() and c_row["pushName"] != clean_lid:
+                        name = c_row["pushName"].strip()
+                    if c_row["profilePicUrl"] and c_row["profilePicUrl"].strip():
+                        profile_pic = c_row["profilePicUrl"].strip()
 
-            # 2. Check Message table for remoteJidAlt
-            msg_rows = await conn.fetch(
-                'SELECT "key", "pushName" FROM "Message" WHERE "key"::text LIKE $1 ORDER BY "id" DESC LIMIT 15',
-                f"%{clean_lid}%"
-            )
-            for m in msg_rows:
-                k = m["key"]
-                if isinstance(k, str):
-                    try:
-                        k = json.loads(k)
-                    except Exception:
-                        pass
-                if isinstance(k, dict):
-                    alt = k.get("remoteJidAlt", "")
-                    if "@s.whatsapp.net" in alt:
-                        real_phone = alt.split("@")[0]
-                        break
-                pname = m.get("pushName")
-                if pname and not name and pname not in ["Você", clean_lid, "Cliente"]:
-                    name = pname
-
-        except Exception as err:
-            logger.debug(f"Error querying Postgres for LID {clean_lid}: {err}")
+                # 2. Check Message table for remoteJidAlt
+                msg_rows = await conn.fetch(
+                    'SELECT "key", "pushName" FROM "Message" WHERE "key"::text LIKE $1 ORDER BY "id" DESC LIMIT 15',
+                    f"%{clean_lid}%"
+                )
+                for m in msg_rows:
+                    k = m["key"]
+                    if isinstance(k, str):
+                        try:
+                            k = json.loads(k)
+                        except Exception:
+                            pass
+                    if isinstance(k, dict):
+                        alt = k.get("remoteJidAlt", "")
+                        if "@s.whatsapp.net" in alt:
+                            real_phone = alt.split("@")[0]
+                            break
+                    pname = m.get("pushName")
+                    if pname and not name and pname not in ["Você", clean_lid, "Cliente"]:
+                        name = pname
 
     # Fallback to docker exec if asyncpg couldn't connect
     if not real_phone:
@@ -165,7 +162,8 @@ async def resolve_and_bind_contact(
     tenant_id: int,
     raw_jid: str,
     push_name: Optional[str] = None,
-    profile_pic_url: Optional[str] = None
+    profile_pic_url: Optional[str] = None,
+    remote_jid_alt: Optional[str] = None
 ) -> Contact:
     """
     Given an incoming or synced JID (LID, group, or standard phone JID):
@@ -182,7 +180,13 @@ async def resolve_and_bind_contact(
     resolved_name = push_name
     resolved_pic = profile_pic_url
 
-    if is_lid:
+    # Check remote_jid_alt first if provided
+    if remote_jid_alt and "@s.whatsapp.net" in str(remote_jid_alt):
+        alt_digits = "".join(filter(str.isdigit, str(remote_jid_alt).split("@")[0]))
+        if alt_digits.startswith("55") and len(alt_digits) in [12, 13]:
+            real_phone = alt_digits
+
+    if is_lid and not real_phone.startswith("55"):
         lid_res = await resolve_lid_info(clean_digits)
         if lid_res.get("real_phone"):
             real_phone = lid_res["real_phone"]
@@ -200,24 +204,41 @@ async def resolve_and_bind_contact(
         )
         contact = (await session.execute(stmt)).scalars().first()
     else:
-        # Match by exact phone or last 8 digits of real phone
+        # Match by exact phone or last 8 digits of real phone, OR match by LID stored in dados_adicionais
+        conditions = []
+        if real_phone and real_phone.startswith("55"):
+            conditions.append(Contact.telefone == real_phone)
+            if len(real_phone) >= 8:
+                conditions.append(Contact.telefone.like(f"%{real_phone[-8:]}%"))
+        else:
+            conditions.append(Contact.telefone == real_phone)
+
+        if is_lid and clean_digits:
+            conditions.append(Contact.dados_adicionais.like(f'%"{clean_digits}"%'))
+
         stmt = select(Contact).where(
             Contact.tenant_id == tenant_id,
             Contact.telefone.notlike("%@g.us%"),
             Contact.telefone.notlike("%-%"),
             Contact.telefone.notlike("120363%"),
-            (Contact.telefone == real_phone) | (Contact.telefone.like(f"%{real_phone[-8:]}%") if len(real_phone) >= 8 else False)
+            or_(*conditions)
         )
         contact = (await session.execute(stmt)).scalars().first()
 
     if not contact:
         clean_initial_name = resolved_name or (real_phone if real_phone.startswith("55") else "Cliente")
+        extra_data = {}
+        if is_group:
+            extra_data["is_group"] = True
+        if is_lid:
+            extra_data["lid"] = clean_digits
+
         contact = Contact(
             tenant_id=tenant_id,
             telefone=real_phone,
             nome=clean_initial_name,
             foto_perfil_url=resolved_pic,
-            dados_adicionais={"is_group": True} if is_group else {}
+            dados_adicionais=extra_data
         )
         session.add(contact)
         await session.flush()
@@ -228,10 +249,22 @@ async def resolve_and_bind_contact(
                 contact.nome = resolved_name
         if contact.telefone != real_phone and real_phone.startswith("55") and not contact.telefone.startswith("55"):
             contact.telefone = real_phone
+        if is_lid:
+            c_extra = contact.dados_adicionais or {}
+            if not isinstance(c_extra, dict):
+                try:
+                    c_extra = json.loads(c_extra) if isinstance(c_extra, str) else {}
+                except Exception:
+                    c_extra = {}
+            if c_extra.get("lid") != clean_digits:
+                c_extra["lid"] = clean_digits
+                contact.dados_adicionais = c_extra
+        if resolved_pic and not contact.foto_perfil_url:
+            contact.foto_perfil_url = resolved_pic
 
     # Non-blocking background avatar caching so DB transactions complete instantly
-    target_pic = resolved_pic or profile_pic_url
-    if target_pic and target_pic.startswith("http") and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
+    target_pic = resolved_pic or profile_pic_url or contact.foto_perfil_url
+    if target_pic and not target_pic.startswith("/uploads/avatars/"):
         asyncio.create_task(download_and_cache_avatar_locally(contact.id, target_pic))
 
     return contact

@@ -70,6 +70,10 @@ class WhatsAppReconciliationService:
             if not remote_jid or "status@broadcast" in remote_jid:
                 continue
 
+            remote_jid_alt = k.get("remoteJidAlt") or m.get("remoteJidAlt") or ""
+            if "@s.whatsapp.net" in str(remote_jid_alt):
+                remote_jid = remote_jid_alt
+
             try:
                 async with AsyncSessionLocal() as db:
                     # 1. Fast check if message already exists
@@ -87,8 +91,14 @@ class WhatsAppReconciliationService:
                         session=db,
                         tenant_id=tenant_id,
                         raw_jid=remote_jid,
-                        push_name=push_name
+                        push_name=push_name,
+                        remote_jid_alt=remote_jid_alt
                     )
+
+                    # Auto fetch avatar if missing
+                    if not contact.foto_perfil_url and contact.telefone and contact.telefone.startswith("55"):
+                        from app.services.evolution_service import evolution_service
+                        asyncio.create_task(evolution_service.fetch_and_update_contact_avatar(contact.id, instance_name, contact.telefone))
 
                     # 4. Strict instance isolation: find or create conversation for THIS whatsapp_number_id
                     c_stmt = (
