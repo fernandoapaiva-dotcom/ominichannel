@@ -87,9 +87,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  const getAudioUrl = (rawContent: string): string => {
+  const getAudioUrl = (rawContent: string, msgId?: number): string => {
     if (!rawContent) return '';
     const cleanUrl = rawContent.split('|')[0].trim();
+    if (cleanUrl.includes('mmg.whatsapp.net') || cleanUrl.includes('.enc')) {
+      return msgId ? `/api/v1/conversations/messages/${msgId}/media` : cleanUrl;
+    }
     if (cleanUrl.startsWith('http')) return cleanUrl;
     if (cleanUrl.startsWith('/uploads/')) return cleanUrl;
     return `/uploads/${cleanUrl.replace(/^\//, '')}`;
@@ -97,7 +100,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const playAudio = (msg: Message, conversation?: Conversation, allMessages: Message[] = []) => {
     if (!audioRef.current) return;
-    const url = getAudioUrl(msg.conteudo || '');
+    const url = getAudioUrl(msg.conteudo || '', msg.id);
     if (!url) return;
 
     if (allMessages.length > 0) {

@@ -1,5 +1,8 @@
 import asyncio
 import logging
+import os
+import uuid
+import base64
 from datetime import datetime
 from typing import Dict, Any, List
 import httpx
@@ -116,6 +119,35 @@ class WhatsAppReconciliationService:
                     text_content, msg_type = whatsapp_sync_service._parse_message_content(m)
                     if not text_content:
                         continue
+
+                    # Proactive media decryption and local storage
+                    if "mmg.whatsapp.net" in text_content and msg_id:
+                        try:
+                            from app.services.evolution_service import evolution_service
+                            b64 = await evolution_service.get_media_base64(
+                                instance_name=instance_name,
+                                message_id=msg_id,
+                                from_me=from_me,
+                                remote_jid=remote_jid
+                            )
+                            if b64:
+                                ext = ".ogg" if (msg_type == MessageType.AUDIO or msg_type == "audio") else (
+                                    ".png" if (msg_type == MessageType.IMAGEM or msg_type == "imagem") else (
+                                        ".mp4" if (msg_type == MessageType.VIDEO or msg_type == "video") else ".pdf"
+                                    )
+                                )
+                                if "," in b64:
+                                    b64 = b64.split(",")[1]
+                                raw_bytes = base64.b64decode(b64)
+                                fname = f"{uuid.uuid4().hex}{ext}"
+                                fpath = os.path.join("uploads", fname)
+                                os.makedirs("uploads", exist_ok=True)
+                                with open(fpath, "wb") as f:
+                                    f.write(raw_bytes)
+                                caption = text_content.split("|", 1)[1] if "|" in text_content else ""
+                                text_content = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
+                        except Exception as dl_err:
+                            logger.error(f"[RECONCILE] Error proactively caching media: {dl_err}")
 
                     # 6. Parse timestamp
                     ts_raw = m.get("messageTimestamp")

@@ -4,9 +4,12 @@ import { Message, Conversation } from '../types';
 import { useAudio } from '../context/AudioContext';
 
 /** Resolve raw message content to a playable URL */
-function resolveAudioUrl(raw: string): string {
+function resolveAudioUrl(raw: string, msgId?: number): string {
   if (!raw) return '';
   const clean = raw.split('|')[0].trim();
+  if (clean.includes('mmg.whatsapp.net') || clean.includes('.enc')) {
+    return msgId ? `/api/v1/conversations/messages/${msgId}/media` : clean;
+  }
   if (clean.startsWith('http')) return clean;
   if (clean.startsWith('/uploads/')) return clean;
   return `/uploads/${clean.replace(/^\//, '')}`;
@@ -40,7 +43,7 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
   const preloadRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    const url = resolveAudioUrl(message.conteudo || '');
+    const url = resolveAudioUrl(message.conteudo || '', message.id);
     if (!url) return;
 
     let isMounted = true;
