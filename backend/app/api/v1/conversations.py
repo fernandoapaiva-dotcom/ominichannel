@@ -2546,15 +2546,23 @@ async def edit_message_endpoint(
     if msg.whatsapp_msg_id and conv.whatsapp_number and conv.contact:
         inst = conv.whatsapp_number.instancia_evolution_api
         phone = conv.contact.telefone
+
+        # Determine WhatsApp text: if sent by attendant, keep attendant header
+        whatsapp_new_text = payload.new_text
+        if msg.remetente in ["atendente", MessageSender.ATENDENTE.value]:
+            agent_nome = current_user.nome if current_user and current_user.nome else "Atendente"
+            whatsapp_new_text = f"*👤 {agent_nome}:*\n\n{payload.new_text}"
+
         try:
-            await evolution_service.edit_message(
+            edit_res = await evolution_service.edit_message(
                 instance_name=inst,
                 number=phone,
                 message_id=msg.whatsapp_msg_id,
-                new_text=payload.new_text
+                new_text=whatsapp_new_text
             )
+            logger.info(f"Evolution API message edit result for msg {msg.id}: {edit_res}")
         except Exception as err:
-            logger.warning(f"Could not edit message on WhatsApp instance: {err}")
+            logger.error(f"Could not edit message on WhatsApp instance: {err}")
 
     # Update local DB
     msg.conteudo = payload.new_text

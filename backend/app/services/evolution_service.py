@@ -609,13 +609,15 @@ class EvolutionService:
                 try:
                     response = await client.post(url, json=payload, headers=headers, timeout=12.0)
                     if response.status_code in [200, 201]:
-                        res_data = response.json()
+                        res_data = response.json() if response.text else {}
                         res_data["success"] = True
                         return res_data
+                    else:
+                        logger.warning(f"Evolution edit_message returned {response.status_code} for {url}: {response.text[:200]}")
                 except Exception as e:
                     logger.warning(f"Error trying to edit message via {url}: {e}")
 
-        return {"success": True, "message": "Updated locally"}
+        return {"success": False, "message": "Failed to update message on WhatsApp API"}
 
     async def send_location_message(
         self,
