@@ -1020,6 +1020,7 @@ async def receive_evolution_webhook(
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
+    msg_extra: Dict[str, Any] = {}
     if img_msg or vid_msg or aud_msg or doc_msg or stk_msg:
         caption = ""
         ext = ""
@@ -1535,7 +1536,7 @@ async def receive_evolution_webhook(
     extra_conv["inactivity_warning_5m_sent"] = False
     conversation.dados_adicionais = extra_conv
 
-    msg_extra = {}
+    msg_extra = dict(msg_extra or {})
     quote_data = parse_quoted_context(data, from_me=False, contact_name=contact.nome)
     if quote_data:
         if quote_data.get("stanza_id"):
