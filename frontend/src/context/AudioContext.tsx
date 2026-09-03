@@ -70,10 +70,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setSpeed(speeds[nextIdx]);
   }, [setSpeed]);
 
+  const getAudioUrl = (rawContent: string, msgId?: number): string => {
+    if (!rawContent) return '';
+    const cleanUrl = rawContent.split('|')[0].trim();
+    if (cleanUrl.includes('mmg.whatsapp.net') || cleanUrl.includes('.enc')) {
+      return msgId ? `/api/v1/conversations/messages/${msgId}/media` : cleanUrl;
+    }
+    if (cleanUrl.startsWith('http')) return cleanUrl;
+    if (cleanUrl.startsWith('/uploads/')) return cleanUrl;
+    return `/uploads/${cleanUrl.replace(/^\//, '')}`;
+  };
+
   const triggerNextAudio = useCallback(() => {
     const current = activeAudioRef.current;
     const rawMsgs = currentMessagesRef.current;
-    console.log('[AudioContext] Track ended. Current msgId:', current?.msgId, 'Total msgs in queue:', rawMsgs?.length);
+    console.log('[AudioContext] triggerNextAudio called. Current:', current?.msgId, 'Msgs count:', rawMsgs?.length);
 
     if (!current || !rawMsgs || rawMsgs.length === 0) {
       setActiveAudio(null);
@@ -81,20 +92,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    // Sort strictly chronological (oldest to newest)
-    const sortedMsgs = [...rawMsgs].sort((a, b) => {
-      const tA = new Date(a.timestamp || 0).getTime();
-      const tB = new Date(b.timestamp || 0).getTime();
-      if (tA !== tB) return tA - tB;
-      return Number(a.id || 0) - Number(b.id || 0);
-    });
-
-    const currentIndex = sortedMsgs.findIndex(m => Number(m.id) === Number(current.msgId));
-    console.log('[AudioContext] Current message index:', currentIndex);
+    const currentIndex = rawMsgs.findIndex(m => Number(m.id) === Number(current.msgId));
+    console.log('[AudioContext] currentIndex:', currentIndex);
 
     let nextAudioMsg: Message | undefined = undefined;
     if (currentIndex !== -1) {
-      nextAudioMsg = sortedMsgs.slice(currentIndex + 1).find(m => {
+      nextAudioMsg = rawMsgs.slice(currentIndex + 1).find(m => {
         const t = String(m.tipo || '').toLowerCase();
         const c = String(m.conteudo || '').toLowerCase();
         return (
@@ -108,74 +111,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     }
 
-    console.log('[AudioContext] Next audio candidate:', nextAudioMsg?.id);
+    console.log('[AudioContext] Next audio found:', nextAudioMsg?.id);
 
     if (nextAudioMsg && playAudioRef.current) {
-      console.log('[AudioContext] Seamlessly transitioning to audio msgId:', nextAudioMsg.id);
-      playAudioRef.current(nextAudioMsg, currentConvRef.current, sortedMsgs);
+      playAudioRef.current(nextAudioMsg, currentConvRef.current, rawMsgs);
       return;
     }
 
-    // No subsequent audio
+    // Finished sequential audios
     setActiveAudio(null);
     activeAudioRef.current = null;
   }, []);
 
-  useEffect(() => {
-    const audio = new Audio();
-    audioRef.current = audio;
-
-    audio.ontimeupdate = () => {
-      setActiveAudio(prev => {
-        if (!prev) return null;
-        const updated = {
-          ...prev,
-          currentTime: audio.currentTime,
-          duration: audio.duration || prev.duration || 0
-        };
-        activeAudioRef.current = updated;
-        return updated;
-      });
-    };
-
-    audio.onloadedmetadata = () => {
-      setActiveAudio(prev => {
-        if (!prev) return null;
-        const updated = {
-          ...prev,
-          duration: audio.duration || prev.duration || 0
-        };
-        activeAudioRef.current = updated;
-        return updated;
-      });
-    };
-
-    audio.onended = () => {
-      console.log('[AudioContext] Native onended event fired!');
-      triggerNextAudio();
-    };
-
-    return () => {
-      audio.ontimeupdate = null;
-      audio.onloadedmetadata = null;
-      audio.onended = null;
-      audio.pause();
-      audio.src = '';
-    };
-  }, [triggerNextAudio]);
-
-  const getAudioUrl = (rawContent: string, msgId?: number): string => {
-    if (!rawContent) return '';
-    const cleanUrl = rawContent.split('|')[0].trim();
-    if (cleanUrl.includes('mmg.whatsapp.net') || cleanUrl.includes('.enc')) {
-      return msgId ? `/api/v1/conversations/messages/${msgId}/media` : cleanUrl;
-    }
-    if (cleanUrl.startsWith('http')) return cleanUrl;
-    if (cleanUrl.startsWith('/uploads/')) return cleanUrl;
-    return `/uploads/${cleanUrl.replace(/^\//, '')}`;
-  };
-
-  const playAudio = (msg: Message, conversation?: Conversation, allMessages: Message[] = []) => {
+  const playAudioTrack = useCallback((msg: Message, conversation?: Conversation, allMessages?: Message[]) => {
     if (!audioRef.current) return;
     const url = getAudioUrl(msg.conteudo || '', msg.id);
     if (!url) return;
@@ -187,14 +135,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       currentConvRef.current = conversation;
     }
 
+    const audio = audioRef.current;
+
+    // 1. Detach onended temporarily so changing source doesn't fire spurious ended events
+    audio.onended = null;
+    audio.pause();
+    try {
+      audio.currentTime = 0;
+    } catch {}
+
     const senderName = msg.remetente === 'cliente'
       ? (conversation?.contact?.nome || 'Cliente')
       : (msg.agent_name || 'Atendente');
     const senderAvatar = msg.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined;
-
     const currentSpeed = speedRef.current || 1;
-    const audio = audioRef.current;
 
+    // 2. Set new audio source and playback speed
     audio.src = url;
     audio.playbackRate = currentSpeed;
 
@@ -204,7 +160,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       senderName,
       senderAvatar,
       conversationId: msg.conversation_id || conversation?.id || 0,
-      duration: audio.duration || 0,
+      duration: 0,
       currentTime: 0,
       isPlaying: true,
       speed: currentSpeed
@@ -212,20 +168,70 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activeAudioRef.current = startState;
     setActiveAudio(startState);
 
+    // 3. Attach onended handler strictly when audio actually starts playing
+    const attachEndedHandler = () => {
+      audio.onended = () => {
+        console.log('[AudioContext] Track ended naturally for msgId:', msg.id);
+        triggerNextAudio();
+      };
+    };
+
+    audio.onplaying = () => {
+      attachEndedHandler();
+    };
+
+    // 4. Play audio immediately with fallback
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.warn('[AudioContext] play() interrupted or waiting for canplay:', err);
+        console.warn('[AudioContext] Play interrupted, playing on canplay:', err);
         const onCanPlay = () => {
           audio.playbackRate = speedRef.current || 1;
-          audio.play().catch(e => console.error('[AudioContext] play() failed after canplay:', e));
+          audio.play()
+            .then(attachEndedHandler)
+            .catch(e => console.error('[AudioContext] play() failed after canplay:', e));
         };
         audio.addEventListener('canplay', onCanPlay, { once: true });
       });
     }
-  };
+  }, [triggerNextAudio]);
 
-  playAudioRef.current = playAudio;
+  playAudioRef.current = playAudioTrack;
+
+  useEffect(() => {
+    const audio = new Audio();
+    audioRef.current = audio;
+
+    audio.ontimeupdate = () => {
+      setActiveAudio(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          currentTime: audio.currentTime,
+          duration: audio.duration || prev.duration || 0
+        };
+      });
+    };
+
+    audio.onloadedmetadata = () => {
+      setActiveAudio(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          duration: audio.duration || prev.duration || 0
+        };
+      });
+    };
+
+    return () => {
+      audio.ontimeupdate = null;
+      audio.onloadedmetadata = null;
+      audio.onplaying = null;
+      audio.onended = null;
+      audio.pause();
+      audio.src = '';
+    };
+  }, []);
 
   const pauseAudio = () => {
     if (audioRef.current) {
@@ -251,7 +257,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         resumeAudio();
       }
     } else {
-      playAudio(msg, conversation, allMessages);
+      playAudioTrack(msg, conversation, allMessages);
     }
   };
 
@@ -275,7 +281,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     <AudioContext.Provider value={{
       activeAudio,
       speed,
-      playAudio,
+      playAudio: playAudioTrack,
       pauseAudio,
       resumeAudio,
       toggleAudio,
