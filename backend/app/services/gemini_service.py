@@ -1395,5 +1395,80 @@ class GeminiService:
             f"• ⚡ **Próximo Passo**: Analise as mensagens anteriores."
         )
 
+    async def classify_store_info_intent(
+        self,
+        user_message: str,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Classifies whether the user is asking for:
+        1. STORE_LOCATION: Specifically asking where the company/store is located, store address, or location to visit.
+           CRITICAL: If the customer is talking about their OWN location ("minha localização", "estou em Sobradinho",
+           "vou mandar minha localização", "entregam no meu endereço"), this is NOT STORE_LOCATION -> return NONE.
+        2. STORE_HOURS: Asking for the store opening/closing hours or days of operation.
+        3. NONE: Any other question, product inquiry, technical issue, greetings, or customer talking about themselves.
+        """
+        if not user_message or not isinstance(user_message, str):
+            return "NONE"
+
+        clean_text = user_message.strip()
+        if len(clean_text) < 3:
+            return "NONE"
+
+        clean_lower = clean_text.lower()
+
+        # Fast heuristic: if user explicitly states it's their own location, rule out STORE_LOCATION immediately
+        is_client_own_location = any(k in clean_lower for k in [
+            "minha localiza", "minha rua", "meu bairro", "minha cidade", "minha casa",
+            "meu endereço", "meu endereco", "estou em ", "estou no ", "estou na ",
+            "sou de ", "moro em ", "aqui em ", "aqui no ", "aqui na ",
+            "vou mandar minha", "vou te mandar minha", "vou enviar minha",
+            "entregam na", "entregam no", "entregam em"
+        ])
+        if is_client_own_location and not any(k in clean_lower for k in ["onde fica a loja", "qual o endereço de vocês", "endereço da servweld"]):
+            return "NONE"
+
+        prompt = (
+            "Você é um classificador de intenções extremamente preciso para uma empresa de equipamentos e assistência técnica.\n"
+            "Analise a mensagem do cliente abaixo e determine se ele está pedindo uma informação institucional da EMPRESA.\n\n"
+            f"MENSAGEM DO CLIENTE: \"{clean_text}\"\n\n"
+            "CATEGORIAS POSSÍVEIS:\n"
+            "- STORE_LOCATION: O cliente está pedindo o ENDEREÇO ou LOCALIZAÇÃO DA LOJA/EMPRESA (ex: 'Onde vocês ficam?', 'Qual o endereço da loja?', 'Me passa a localização de vocês?', 'Onde levo minha máquina?').\n"
+            "  *ATENÇÃO MÁXIMA*: Se o cliente estiver falando da PRÓPRIA localização dele (ex: 'Moro em Sobradinho', 'Minha localização é tal', 'Estou no Guará', 'Vocês entregam aqui na minha cidade?'), NUNCA classifique como STORE_LOCATION! Nesses casos responda NONE.\n"
+            "- STORE_HOURS: O cliente está perguntando o HORÁRIO DE FUNCIONAMENTO ou atendimento da loja (ex: 'Qual o horário de funcionamento?', 'Até que horas vocês atendem?', 'Que horas abre?', 'Abrem no sábado?').\n"
+            "- NONE: O cliente está falando de outro assunto (produtos, máquinas, preços, defeitos, saudações, ou falando de si mesmo).\n\n"
+            "Responda APENAS com uma das três palavras: STORE_LOCATION, STORE_HOURS ou NONE."
+        )
+
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=model_name,
+                contents=prompt
+            )
+            raw_res = (response.text or "").strip().upper()
+            if "STORE_LOCATION" in raw_res:
+                return "STORE_LOCATION"
+            elif "STORE_HOURS" in raw_res:
+                return "STORE_HOURS"
+            return "NONE"
+        except Exception as e:
+            logger.warning(f"Error classifying intent with Gemini: {e}")
+            if not is_client_own_location and any(k in clean_lower for k in [
+                "onde fica", "onde vocês ficam", "qual o endereço", "qual o endereco",
+                "localização da loja", "localizacao da loja", "localização de vocês", "localizacao de vocês"
+            ]):
+                return "STORE_LOCATION"
+            if any(k in clean_lower for k in [
+                "horário de funcionamento", "horario de funcionamento", "horário de atendimento",
+                "horario de atendimento", "que horas abre", "até que horas", "ate que horas"
+            ]):
+                return "STORE_HOURS"
+            return "NONE"
+
 
 gemini_service = GeminiService()

@@ -15,7 +15,11 @@ from app.schemas.schemas import (
     CalendarEventUpdate,
     CalendarEventResponse
 )
-from app.services.calendar_reminder_service import send_immediate_creation_notification
+from app.services.calendar_reminder_service import (
+    send_immediate_creation_notification,
+    send_event_update_notification,
+    send_event_deletion_notification
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,9 +306,9 @@ async def update_calendar_event(
     await db.commit()
     await db.refresh(event)
 
-    # Trigger immediate WhatsApp notification to the employee if enabled
+    # Trigger WhatsApp notification to employee informing about the event modification
     if event.notify_whatsapp and event.employee_phone:
-        asyncio.create_task(send_immediate_creation_notification(event.id))
+        asyncio.create_task(send_event_update_notification(event.id))
 
     return _format_event_response(event)
 
@@ -489,6 +493,7 @@ async def delete_calendar_event(
 ):
     stmt = (
         select(CalendarEvent)
+        .options(selectinload(CalendarEvent.contact))
         .where(
             CalendarEvent.id == event_id,
             CalendarEvent.tenant_id == current_user.tenant_id,
@@ -500,6 +505,27 @@ async def delete_calendar_event(
     if not event:
         raise HTTPException(status_code=404, detail="Evento não encontrado")
 
+    # Snapshot event data before deletion to notify employee
+    event_snapshot = {
+        "id": event.id,
+        "title": event.title,
+        "event_type": event.event_type,
+        "start_time": event.start_time,
+        "employee_name": event.employee_name,
+        "employee_phone": event.employee_phone,
+        "notify_whatsapp": event.notify_whatsapp,
+        "contact_name": event.contact.nome if event.contact else getattr(event, 'contact_name', None),
+        "contact_phone": event.contact.telefone if event.contact else getattr(event, 'contact_phone', None),
+        "whatsapp_number_id": event.whatsapp_number_id,
+        "whatsapp_instance": event.whatsapp_instance,
+        "tenant_id": event.tenant_id
+    }
+
     await db.delete(event)
     await db.commit()
+
+    # Trigger WhatsApp notification informing employee about the cancellation/deletion
+    if event_snapshot["notify_whatsapp"] and event_snapshot["employee_phone"]:
+        asyncio.create_task(send_event_deletion_notification(event_snapshot))
+
     return {"status": "success", "message": "Evento excluído com sucesso"}

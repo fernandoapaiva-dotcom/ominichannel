@@ -213,6 +213,131 @@ async def send_immediate_creation_notification(event_id: int):
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 
+async def send_event_update_notification(event_id: int):
+    """
+    Envia notificação no WhatsApp do colaborador avisando que a atividade agendada foi alterada.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = select(CalendarEvent).options(selectinload(CalendarEvent.contact)).where(CalendarEvent.id == event_id)
+            res = await session.execute(stmt)
+            ev = res.scalar_one_or_none()
+            if not ev or not ev.notify_whatsapp or not ev.employee_phone:
+                return
+
+            stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.tenant_id == ev.tenant_id, WhatsAppNumber.status == True)
+            res_w = await session.execute(stmt_w)
+            whatsapp_numbers = res_w.scalars().all()
+            if not whatsapp_numbers:
+                return
+
+            ordered_inst_names = await get_candidate_instances_for_event(ev, whatsapp_numbers)
+            type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
+
+            client_info = "Não informado"
+            if ev.contact:
+                client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
+            elif ev.contact_name:
+                client_info = f"{ev.contact_name} ({ev.contact_phone or ''})".strip()
+
+            now_brt = datetime.utcnow() - timedelta(hours=3)
+            event_time_brt = ev.start_time if ev.start_time else now_brt
+            time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
+
+            phone_list = [p.strip() for p in (ev.employee_phone or "").replace(';', ',').replace('/', ',').split(',') if p.strip()]
+            name_list = [n.strip() for n in (ev.employee_name or "").replace(';', ',').replace('/', ',').split(',') if n.strip()]
+
+            dept_label = "Servweld"
+            if ev.whatsapp_instance:
+                for w in whatsapp_numbers:
+                    if w.instancia_evolution_api == ev.whatsapp_instance:
+                        dept_label = w.nome_departamento
+                        break
+            elif ev.whatsapp_number_id:
+                for w in whatsapp_numbers:
+                    if w.id == ev.whatsapp_number_id:
+                        dept_label = w.nome_departamento
+                        break
+
+            footer = f"{dept_label} • Gestão de Tarefas"
+
+            for idx, raw_phone in enumerate(phone_list):
+                emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                title = "📝 ATENÇÃO: ATIVIDADE / COMPROMISSO ALTERADO"
+                description = (
+                    f"Olá, *{emp_name}*! Informamos que um compromisso agendado para você foi *atualizado*:\n\n"
+                    f"📌 *Tipo:* {type_label}\n"
+                    f"🏷️ *Atividade:* {ev.title}\n"
+                    f"⏰ *Nova Data e Hora:* {time_str}\n"
+                    f"👤 *Cliente:* {client_info}\n"
+                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
+                    f"👉 Por favor, confira os novos detalhes na sua agenda."
+                )
+                await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id)
+                logger.info(f"Notificação de atividade alterada enviada para {emp_name} ({raw_phone}) - Evento #{ev.id}")
+    except Exception as e:
+        logger.error(f"Erro ao enviar notificação de alteração do evento #{event_id}: {e}")
+
+async def send_event_deletion_notification(event_data: dict):
+    """
+    Envia notificação no WhatsApp do colaborador avisando que a atividade agendada foi excluída/cancelada.
+    """
+    try:
+        employee_phone = event_data.get("employee_phone")
+        notify_whatsapp = event_data.get("notify_whatsapp", True)
+        if not employee_phone or not notify_whatsapp:
+            return
+
+        tenant_id = event_data.get("tenant_id")
+        async with AsyncSessionLocal() as session:
+            stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.tenant_id == tenant_id, WhatsAppNumber.status == True)
+            res_w = await session.execute(stmt_w)
+            whatsapp_numbers = res_w.scalars().all()
+            if not whatsapp_numbers:
+                return
+
+        inst_list = [w.instancia_evolution_api for w in whatsapp_numbers if w.instancia_evolution_api]
+        preferred_inst = event_data.get("whatsapp_instance")
+        if preferred_inst and preferred_inst in inst_list:
+            inst_list = [preferred_inst] + [i for i in inst_list if i != preferred_inst]
+
+        type_label = EVENT_TYPE_LABELS.get(event_data.get("event_type"), "📅 Atividade")
+        title_ev = event_data.get("title", "Compromisso")
+
+        start_time = event_data.get("start_time")
+        if isinstance(start_time, datetime):
+            time_str = start_time.strftime("%d/%m/%Y às %H:%M")
+        elif isinstance(start_time, str):
+            time_str = start_time
+        else:
+            time_str = "Data/hora programada"
+
+        client_info = event_data.get("contact_name") or "Não informado"
+        if event_data.get("contact_phone"):
+            client_info += f" ({event_data.get('contact_phone')})"
+
+        phone_list = [p.strip() for p in employee_phone.replace(';', ',').replace('/', ',').split(',') if p.strip()]
+        emp_names_raw = event_data.get("employee_name") or ""
+        name_list = [n.strip() for n in emp_names_raw.replace(';', ',').replace('/', ',').split(',') if n.strip()]
+
+        footer = "Servweld • Gestão de Tarefas"
+
+        for idx, raw_phone in enumerate(phone_list):
+            emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+            title = "❌ ATIVIDADE CANCELADA / EXCLUÍDA"
+            description = (
+                f"Olá, *{emp_name}*! Informamos que a atividade abaixo foi *cancelada/excluída* da sua agenda:\n\n"
+                f"📌 *Tipo:* {type_label}\n"
+                f"🏷️ *Atividade:* {title_ev}\n"
+                f"⏰ *Data e Hora agendada:* {time_str}\n"
+                f"👤 *Cliente:* {client_info}\n\n"
+                f"⚠️ Não é mais necessário comparecer ou executar este compromisso."
+            )
+            await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer)
+            logger.info(f"Notificação de atividade cancelada enviada para {emp_name} ({raw_phone})")
+    except Exception as e:
+        logger.error(f"Erro ao enviar notificação de cancelamento do evento: {e}")
+
 async def check_and_send_calendar_reminders():
     async with AsyncSessionLocal() as session:
         now_utc = datetime.utcnow()
@@ -238,23 +363,15 @@ async def check_and_send_calendar_reminders():
         res_w = await session.execute(stmt_w)
         whatsapp_numbers = res_w.scalars().all()
 
-        wn_id_map = {wn.id: wn.instancia_evolution_api for wn in whatsapp_numbers if wn.instancia_evolution_api}
-        tenant_instance_map = {}
-        for wn in whatsapp_numbers:
-            if wn.tenant_id not in tenant_instance_map:
-                tenant_instance_map[wn.tenant_id] = []
-            if wn.instancia_evolution_api:
-                tenant_instance_map[wn.tenant_id].append(wn.instancia_evolution_api)
-
         for ev in events:
-            # Resolve candidate instances with automatic failover and health prioritization
             inst_list = await get_candidate_instances_for_event(ev, whatsapp_numbers)
-
             type_label = EVENT_TYPE_LABELS.get(ev.event_type, "📅 Atividade")
 
             client_info = "Não informado"
             if ev.contact:
                 client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
+            elif ev.contact_name:
+                client_info = f"{ev.contact_name} ({ev.contact_phone or ''})".strip()
 
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
@@ -314,29 +431,6 @@ async def check_and_send_calendar_reminders():
                         sent_any = True
                 if sent_any:
                     ev.notified_day_of = True
-
-            # 3. Hours before reminder (ex: 2h before)
-            hours_before = ev.custom_reminder_hours or 2
-            diff_seconds = (ev.start_time - now_utc).total_seconds()
-            diff_hours = diff_seconds / 3600.0
-
-            if 0 < diff_hours <= hours_before and not ev.notified_hours_before:
-                sent_any = False
-                for idx, raw_phone in enumerate(phone_list):
-                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
-                    title = f"⏰ ATENÇÃO: COMPROMISSO EM BREVE (~{max(1, int(round(diff_hours)))}h)"
-                    description = (
-                        f"Olá, *{emp_name}*! Faltam poucas horas para o seu compromisso:\n\n"
-                        f"📌 *Compromisso:* {ev.title}\n"
-                        f"⏰ *Horário:* {time_str}\n"
-                        f"👤 *Cliente:* {client_info}\n\n"
-                        f"Por favor, prepare-se para o atendimento/entrega!"
-                    )
-                    footer = "Servsolda • Sistema de Tarefas"
-                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
-                        sent_any = True
-                if sent_any:
-                    ev.notified_hours_before = True
 
         await session.commit()
 

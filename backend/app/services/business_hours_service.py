@@ -152,11 +152,17 @@ class BusinessHoursService:
                             logger.debug(f"[JOB 18:00] Pulando conversa #{conv.id}: Instância '{wn.instancia_evolution_api}' foi inserida hoje ({wn_date_br}).")
                             continue
 
-                    # 3. REGRA MANDATÓRIA: Não finalizar conversas migradas/importadas sem chamado aberto
+                    # 3. REGRA MANDATÓRIA: Fechar no final do dia apenas os protocolos que foram ABERTOS NO DIA
                     extra = dict(conv.dados_adicionais or {})
                     proto = conv.protocol_number
                     if not proto or proto in ["S/N", "None", "", None]:
-                        # Sem protocolo ativo aberto -> não envia encerramento em massa
+                        # Sem protocolo ativo aberto -> não envia encerramento
+                        continue
+
+                    hoje_prefix = hoje_data_br.strftime("%Y%m%d")
+                    proto_clean = str(proto).replace("#", "").strip()
+                    if not proto_clean.startswith(hoje_prefix):
+                        # Protocolo aberto em dia anterior -> NÃO encerra hoje
                         continue
 
                     # 4. REGRA MANDATÓRIA: Só o que aconteceu DENTRO DO DIA (mensagens trocadas hoje entre 08h e 18h)

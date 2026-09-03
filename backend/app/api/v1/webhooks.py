@@ -1598,38 +1598,32 @@ async def receive_evolution_webhook(
         return {"status": "success", "action": "group_or_bot_silenced"}
 
     # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
+    # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
     if conversation.status == ConversationStatus.COM_HUMANO:
-        text_lower = text_content.strip().lower()
+        dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+        store_intent = await gemini_service.classify_store_info_intent(
+            user_message=text_content,
+            tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
+            tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+        )
 
-        # Check for basic institutional questions (Location, Business hours)
-        is_asking_location = bool(re.search(
-            r'\b(onde\s+(voc[eê]s?\s+)?fic(am?|a)|qual\s+(o\s+)?endere[cç]o|como\s+(fa[cç]o\s+pra\s+)?cheg(ar?|o)|localiza[cç][aã]o|passa\s+(a\s+)?localiza[cç][aã]o|manda\s+(a\s+)?localiza[cç][aã]o|link\s+do\s+maps|onde\s+fica\s+a\s+loja|onde\s+[eé]\s+a\s+loja|qual\s+[eé]\s+o\s+endere[cç]o|ponto\s+de\s+refer[eê]ncia)\b',
-            text_lower
-        ))
-
-        is_asking_hours = bool(re.search(
-            r'\b(hor[aá]rio\s+de\s+(atendimento|funcionamento)|que\s+horas\s+(voc[eê]s?\s+)?(abrem?|fecham?|come[cç]am?)|at[eé]\s+que\s+horas|abre\s+(hoje|s[aá]bado|domingo)|funciona\s+(hoje|s[aá]bado|domingo)|est[aã]o\s+abertos?|qual\s+(o\s+)?hor[aá]rio|expediente)\b',
-            text_lower
-        ))
-
-        if is_asking_location:
+        if store_intent == "STORE_LOCATION":
             auto_loc_text = (
-                "📍 *Olá! Aqui está a localização da Servweld:*\n\n"
+                "📍 *Aqui está a localização da Servweld:*\n\n"
                 "*Servweld Equipamentos & Assistência Técnica*\n"
                 "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF\n"
                 "CEP: 71215-226\n\n"
                 "🗺️ *Como Chegar (Google Maps / GPS):*\n"
                 "https://maps.google.com/?q=-15.820418,-47.956467\n\n"
-                "Você também pode clicar no mapa interativo abaixo para abrir direto no seu GPS (Google Maps / Waze)!"
+                "Você também pode clicar no mapa interativo abaixo para navegar direto no seu GPS (Google Maps / Waze)!"
             )
             if whatsapp_number and whatsapp_number.instancia_evolution_api:
                 try:
                     await evolution_service.send_text_message(
                         instance_name=whatsapp_number.instancia_evolution_api,
                         number=phone_number,
-                        text=auto_loc_text
+                        text=f"*🤖 IA Concierge:*\n\n{auto_loc_text}"
                     )
-                    # Disparar também o card interativo nativo do WhatsApp com o mapa e o pin vermelho
                     await evolution_service.send_location_message(
                         instance_name=whatsapp_number.instancia_evolution_api,
                         number=phone_number,
@@ -1643,7 +1637,7 @@ async def receive_evolution_webhook(
 
             loc_msg = Message(
                 conversation_id=conversation.id,
-                remetente=MessageSender.ATENDENTE,
+                remetente=MessageSender.IA,
                 conteudo=auto_loc_text,
                 tipo=MessageType.TEXTO,
                 status="delivered",
@@ -1660,33 +1654,33 @@ async def receive_evolution_webhook(
                     "type": "NEW_MESSAGE",
                     "conversation_id": conversation.id,
                     "id": loc_msg.id,
-                    "remetente": "atendente",
+                    "remetente": "ia",
                     "tipo": "texto",
                     "conteudo": auto_loc_text,
                     "timestamp": loc_msg.timestamp.isoformat() + "Z"
                 }
             )
 
-        elif is_asking_hours:
+        elif store_intent == "STORE_HOURS":
             auto_hours_text = (
                 "⏰ *Horário de Atendimento Servweld:*\n\n"
                 "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
                 "• *Sábados, Domingos e Feriados:* Fechado\n\n"
-                "Nosso laboratório e loja estão à disposição durante todo o horário comercial!"
+                "Nosso laboratório e loja estão à sua disposição durante todo o horário comercial!"
             )
             if whatsapp_number and whatsapp_number.instancia_evolution_api:
                 try:
                     await evolution_service.send_text_message(
                         instance_name=whatsapp_number.instancia_evolution_api,
                         number=phone_number,
-                        text=auto_hours_text
+                        text=f"*🤖 IA Concierge:*\n\n{auto_hours_text}"
                     )
                 except Exception as e:
                     logger.warning(f"Error sending auto hours reply: {e}")
 
             hours_msg = Message(
                 conversation_id=conversation.id,
-                remetente=MessageSender.ATENDENTE,
+                remetente=MessageSender.IA,
                 conteudo=auto_hours_text,
                 tipo=MessageType.TEXTO,
                 status="delivered",
@@ -1703,7 +1697,7 @@ async def receive_evolution_webhook(
                     "type": "NEW_MESSAGE",
                     "conversation_id": conversation.id,
                     "id": hours_msg.id,
-                    "remetente": "atendente",
+                    "remetente": "ia",
                     "tipo": "texto",
                     "conteudo": auto_hours_text,
                     "timestamp": hours_msg.timestamp.isoformat() + "Z"
