@@ -1695,26 +1695,34 @@ async def send_pix_in_conversation(
     with open(up_path, "wb") as f:
         f.write(file_bytes)
 
+    wa_pix_id = res_media.get("key", {}).get("id") if isinstance(res_media.get("key"), dict) else res_media.get("id")
     msg = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
         conteudo=f"/uploads/{unique_fn}|{caption_text}",
         tipo=MessageType.IMAGEM,
+        status="sent",
+        whatsapp_msg_id=wa_pix_id,
         timestamp=datetime.utcnow()
     )
     db.add(msg)
     await db.commit()
     await db.refresh(msg)
 
+    iso_ts = msg.timestamp.isoformat() + "Z" if hasattr(msg.timestamp, "isoformat") else str(msg.timestamp)
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
         whatsapp_number_id=conv.whatsapp_number_id,
         message_data={
             "type": "NEW_MESSAGE",
             "conversation_id": conv.id,
+            "id": msg.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": msg.conteudo,
-            "timestamp": str(msg.timestamp),
+            "tipo": MessageType.IMAGEM.value,
+            "status": "sent",
+            "whatsapp_msg_id": wa_pix_id,
+            "timestamp": iso_ts,
             "agent_name": current_user.nome
         }
     )
@@ -1881,12 +1889,15 @@ async def send_agent_media(
     conv.ultima_interacao_em = datetime.utcnow()
 
     db_content = f"{file_url}|{caption}" if caption else file_url
+    wa_msg_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
 
     message = Message(
         conversation_id=conv.id,
         remetente=MessageSender.ATENDENTE,
         conteudo=db_content,
         tipo=msg_type,
+        status="sent",
+        whatsapp_msg_id=wa_msg_id,
         timestamp=datetime.utcnow()
     )
     db.add(message)
@@ -1894,16 +1905,20 @@ async def send_agent_media(
     await db.refresh(message)
 
     # 5. Broadcast real-time update
+    iso_ts = message.timestamp.isoformat() + "Z" if hasattr(message.timestamp, "isoformat") else str(message.timestamp)
     await ws_manager.broadcast_to_department(
         tenant_id=current_user.tenant_id,
         whatsapp_number_id=conv.whatsapp_number_id,
         message_data={
             "type": "NEW_MESSAGE",
             "conversation_id": conv.id,
+            "id": message.id,
             "remetente": MessageSender.ATENDENTE.value,
             "conteudo": db_content,
             "tipo": msg_type.value,
-            "timestamp": str(message.timestamp),
+            "status": "sent",
+            "whatsapp_msg_id": wa_msg_id,
+            "timestamp": iso_ts,
             "agent_name": current_user.nome
         }
     )

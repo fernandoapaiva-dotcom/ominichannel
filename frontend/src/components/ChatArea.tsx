@@ -1634,7 +1634,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           return apiUpload(`/conversations/${conversation?.id}/media`, formData);
         });
 
-        await Promise.all(uploadPromises);
+        const uploadedMsgs: any[] = await Promise.all(uploadPromises);
+
+        // Atualizar imediatamente as mensagens na tela para feedback instantâneo ao atendente
+        if (conversation && uploadedMsgs && uploadedMsgs.length > 0) {
+          if (!conversation.messages) conversation.messages = [];
+          uploadedMsgs.forEach((newMsg: any) => {
+            if (newMsg && newMsg.id) {
+              const exists = conversation.messages!.some(m => m.id === newMsg.id);
+              if (!exists) {
+                conversation.messages!.push({
+                  ...newMsg,
+                  status: newMsg.status || 'sent'
+                });
+              }
+            }
+          });
+        }
+
         setIsSending(false);
         if (onStatusToggle) onStatusToggle();
         scrollToBottom('smooth');
