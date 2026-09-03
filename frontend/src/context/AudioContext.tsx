@@ -66,14 +66,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     queue.onStart = (item: AudioQueueItem) => {
-      console.log('[AudioQueue] onStart:', item.id);
+      console.log('[AudioQueue] onStart:', item.id, 'duration:', item.duration);
       setActiveAudio({
         msgId: item.id,
         url: item.url,
         senderName: item.senderName || 'Áudio',
         senderAvatar: item.senderAvatar,
         conversationId: item.conversationId || 0,
-        duration: 0,
+        duration: item.duration || 0,
         currentTime: 0,
         isPlaying: true,
         speed: queue.speed
@@ -83,10 +83,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     queue.onTimeUpdate = (item: AudioQueueItem, currentTime: number, duration: number) => {
       setActiveAudio(prev => {
         if (!prev || prev.msgId !== item.id) return prev;
+        const validDuration = (duration && isFinite(duration) && duration > 0) ? duration : prev.duration;
         return {
           ...prev,
           currentTime,
-          duration: duration || prev.duration || 0
+          duration: validDuration
         };
       });
     };
@@ -126,22 +127,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .filter(m => isAudioMsg(m))
       .map(m => {
         const url = getAudioUrl(m.conteudo || '', m.id);
-        // pré-cria o elemento AQUI, ainda dentro do gesto de clique,
-        // e faz um play()+pause() imediato pra "destravar" o autoplay
-        // desse elemento específico antes de ele entrar na fila.
-        const el = new Audio(url);
-        el.play().then(() => el.pause()).catch(() => {
-          // se nem o destravamento inicial funcionar, fica só com o
-          // fallback de criar novo Audio() depois (comportamento antigo)
-        });
+        const durationSecs = Number((m as any)?.dados_adicionais?.seconds || (m as any)?.dados_adicionais?.duration || 0);
         return {
           id: Number(m.id),
           url,
           senderName: m.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : (m.agent_name || 'Atendente'),
           senderAvatar: m.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined,
           conversationId: m.conversation_id || conversation?.id || 0,
+          duration: durationSecs > 0 ? durationSecs : undefined,
           message: m,
-          audioElement: el,
         };
       })
       .filter(item => Boolean(item.url));

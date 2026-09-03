@@ -4,6 +4,7 @@ export interface AudioQueueItem {
   senderName?: string;
   senderAvatar?: string;
   conversationId?: number;
+  duration?: number;
   message?: any;
   audioElement?: HTMLAudioElement;
 }
@@ -11,8 +12,7 @@ export interface AudioQueueItem {
 /**
  * AudioQueue
  * Reproduz áudios em sequência (FIFO): o próximo só começa
- * quando o atual termina. Áudios que chegam durante a
- * reprodução entram no fim da fila, sem interromper o atual.
+ * quando o atual termina. Pré-carrega a faixa seguinte em segundo plano.
  */
 export class AudioQueue {
   public queue: AudioQueueItem[] = [];
@@ -48,7 +48,7 @@ export class AudioQueue {
     }
   }
 
-  /** Adiciona um áudio (ou lista) à fila. Só inicia a reprodução se nada estiver tocando. */
+  /** Adiciona um áudio (ou lista) à fila. */
   add(item: AudioQueueItem | AudioQueueItem[], clearPrevious: boolean = false) {
     if (clearPrevious) {
       this.clear();
@@ -92,6 +92,7 @@ export class AudioQueue {
       this.currentAudio.onended = null;
       this.currentAudio.ontimeupdate = null;
       this.currentAudio.onerror = null;
+      this.currentAudio.onloadedmetadata = null;
       this.currentAudio = null;
     }
     this.currentItem = null;
@@ -131,16 +132,30 @@ export class AudioQueue {
     const item = this.queue.shift()!;
     this.currentItem = item;
 
-    // usa o elemento já "destravado" no clique, se existir
+    // Usa o elemento pré-carregado se existir, senão cria um novo
     const audio = item.audioElement ?? new Audio(item.url);
     this.currentAudio = audio;
     audio.playbackRate = this.speed;
 
+    const initialDuration = (item.duration && isFinite(item.duration) && item.duration > 0) ? item.duration : 0;
     if (this.onStart) this.onStart(item);
+
+    const getSafeDuration = (): number => {
+      if (audio.duration && isFinite(audio.duration) && audio.duration > 0) {
+        return audio.duration;
+      }
+      return initialDuration;
+    };
 
     audio.ontimeupdate = () => {
       if (this.onTimeUpdate) {
-        this.onTimeUpdate(item, audio.currentTime, audio.duration || 0);
+        this.onTimeUpdate(item, audio.currentTime, getSafeDuration());
+      }
+    };
+
+    audio.onloadedmetadata = () => {
+      if (this.onTimeUpdate) {
+        this.onTimeUpdate(item, audio.currentTime, getSafeDuration());
       }
     };
 
@@ -153,16 +168,30 @@ export class AudioQueue {
       this._advance(item);
     };
 
+    // Monitor ativo de polling (fallback para Chrome Opus Ogg)
     this.pollInterval = setInterval(() => {
-      if (audio && !audio.paused && audio.duration > 0 && isFinite(audio.duration)) {
-        if (audio.currentTime >= audio.duration - 0.12) {
-          this._advance(item);
-        }
+      const dur = getSafeDuration();
+      if (audio && !audio.paused && dur > 0 && audio.currentTime >= dur - 0.12) {
+        this._advance(item);
       }
     }, 60);
 
+    // Pré-carrega o PRÓXIMO áudio da fila imediatamente em segundo plano
+    if (this.queue.length > 0) {
+      const nextItem = this.queue[0];
+      if (!nextItem.audioElement) {
+        const nextAudio = new Audio(nextItem.url);
+        nextAudio.preload = 'auto';
+        nextItem.audioElement = nextAudio;
+      }
+    }
+
     audio.play().catch((err) => {
-      console.warn("play() bloqueado mesmo pré-criado:", err, item.id);
+      console.warn("play() aguardando canplay:", err, item.id);
+      audio.addEventListener('canplay', () => {
+        audio.playbackRate = this.speed;
+        audio.play().catch(() => this._advance(item));
+      }, { once: true });
     });
   }
 }

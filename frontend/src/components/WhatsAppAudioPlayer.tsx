@@ -81,18 +81,21 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
   // Extra duration from WhatsApp payload (dados_adicionais.seconds)
   const extraSeconds = (message as any)?.dados_adicionais?.seconds || (message as any)?.dados_adicionais?.duration || 0;
 
+  const validActiveDuration = (activeDuration > 0 && isFinite(activeDuration)) ? activeDuration : 0;
+  const validPreloadedDuration = (preloadedDuration > 0 && isFinite(preloadedDuration)) ? preloadedDuration : 0;
+  const validExtraSeconds = (extraSeconds > 0 && isFinite(extraSeconds)) ? Number(extraSeconds) : 0;
+
   // Use live duration when active, fall back to preloaded, fall back to extraSeconds from WhatsApp
-  const duration = activeDuration > 0 ? activeDuration : (preloadedDuration > 0 ? preloadedDuration : extraSeconds);
+  const duration = validActiveDuration || validPreloadedDuration || validExtraSeconds || 1;
 
   const formatTime = (secs: number) => {
-
-    if (!secs || isNaN(secs)) return '0:00';
+    if (!secs || isNaN(secs) || !isFinite(secs)) return '0:00';
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const progressPercent = Math.min(100, Math.max(0, (currentTime / duration) * 100));
 
   // Sender Avatar
   const senderAvatar = isCustomer
