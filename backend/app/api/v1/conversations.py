@@ -848,11 +848,15 @@ async def get_message_media_stream(
     raw = msg.conteudo or ""
     media_path = raw.split("|")[0].strip() if "|" in raw else raw.strip()
 
+    upload_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads"))
+    os.makedirs(upload_dir, exist_ok=True)
+
     # If already a valid local file
     if media_path.startswith("/uploads/"):
-        lpath = media_path.lstrip("/")
-        if os.path.exists(lpath):
-            return FileResponse(lpath)
+        fname = os.path.basename(media_path)
+        abs_file = os.path.join(upload_dir, fname)
+        if os.path.exists(abs_file):
+            return FileResponse(abs_file)
 
     # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API
     if msg.whatsapp_msg_id and msg.conversation and msg.conversation.whatsapp_number:
@@ -892,14 +896,13 @@ async def get_message_media_stream(
                 ext = ".jpeg"
 
             try:
-                os.makedirs("uploads", exist_ok=True)
                 if "," in b64_data:
                     raw_bytes = base64.b64decode(b64_data.split(",")[1])
                 else:
                     raw_bytes = base64.b64decode(b64_data)
 
                 fname = f"{uuid.uuid4().hex}{ext}"
-                fpath = os.path.join("uploads", fname)
+                fpath = os.path.join(upload_dir, fname)
                 with open(fpath, "wb") as f:
                     f.write(raw_bytes)
 
