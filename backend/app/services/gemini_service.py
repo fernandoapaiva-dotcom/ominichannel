@@ -491,7 +491,7 @@ class GeminiService:
             "# DIRETRIZES FUNDAMENTAIS DE ATENDIMENTO:\n\n"
             "1. RECEPÇÃO E PROTOCOLO:\n"
             "   - Cumprimente o cliente com simpatia e profissionalismo.\n"
-            "   - No primeiro contato do dia ou abertura de chamado, informe sempre o número do protocolo do atendimento (ex: '📋 Seu Protocolo de Atendimento é: #{protocolo_atual}').\n\n"
+            f"   - {'Atenção: Este é o primeiro contato. O sistema já anexa o número do protocolo automaticamente no topo, portanto NÃO repita o número do protocolo no corpo da mensagem.' if should_announce_protocol else 'O protocolo já foi aberto anteriormente nesta conversa. NUNCA mencione número de protocolo nem reinicie saudações de boas-vindas.'}\n\n"
             "2. LOCALIZAÇÃO E ENDEREÇO:\n"
             "   - Se o cliente perguntar sobre onde fica a loja, endereço, localização, como chegar, rota, mapa ou GPS, responda acolhedoramente com o endereço completo e avise que o mapa interativo para abrir no GPS (Google Maps / Waze) está logo abaixo:\n"
             "     📍 Endereço: SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, CEP: 71215-226\n"
@@ -566,10 +566,15 @@ class GeminiService:
                 "enviar_localizacao": False
             }
 
+        if had_empty_history:
+            fallback_text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+        else:
+            fallback_text = "Olá! Já recebi suas informações e estou encaminhando para nossa equipe especialista dar continuidade ao seu atendimento. Um momento, por favor!"
+
         default_res = {
-            "resposta": f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?",
+            "resposta": fallback_text,
             "temperatura": "baixa",
-            "escalar_humano": False,
+            "escalar_humano": not had_empty_history,
             "atendente_preferencial": None,
             "transferir_setor": None,
             "nova_memoria": memory_summary or "",

@@ -3,8 +3,9 @@ import base64
 import uuid
 import os
 import re
+import time
 import httpx
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Request, HTTPException
 
@@ -35,6 +36,7 @@ logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
 
 SEEN_WEBHOOK_KEYS = {}
+_conversation_ai_timestamps: Dict[int, float] = {}
 
 def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
     if not text:
@@ -1726,6 +1728,14 @@ async def receive_evolution_webhook(
     # 5. Process AI Concierge response if conversation is with AI
     current_status_str = getattr(conversation.status, 'value', str(conversation.status))
     if current_status_str == ConversationStatus.COM_IA.value or conversation.status == ConversationStatus.COM_IA:
+        # Anti-Spam / Burst Debounce: se a IA respondeu nesta conversa há menos de 3.5 segundos,
+        # grava a mensagem no banco e transmite via WebSocket, mas silencia o disparo duplicado da IA para acumular contexto
+        now_ts = time.time()
+        last_ai_ts = _conversation_ai_timestamps.get(conversation.id, 0.0)
+        if (now_ts - last_ai_ts) < 3.5:
+            logger.info(f"[DEBOUNCE AI] Conversa {conversation.id} recebeu mensagem em rajada ({(now_ts - last_ai_ts):.1f}s desde última resposta da IA). Mensagem gravada no banco; silenciando disparo duplicado.")
+            await db.commit()
+            return {"status": "success", "action": "message_saved_ai_debounced"}
 
 
         # Check if message comes from a WhatsApp group and whether AI is explicitly allowed
@@ -2058,14 +2068,35 @@ async def receive_evolution_webhook(
         escalar_humano = ai_output.get("escalar_humano", False) if not is_tech else False
         nova_memoria = ai_output.get("nova_memoria", "")
 
-        # Guarantee Protocol Number is ALWAYS explicitly present in customer response (only for standard customers)
+        # Guarantee Protocol Number is sent ONLY AND EXCLUSIVELY ONCE per conversation/protocol!
+        extra = dict(conversation.dados_adicionais or {})
+        protocol_already_announced = bool(extra.get("protocol_announced"))
+        proto_str = str(conversation.protocol_number).strip() if conversation.protocol_number else ""
+
+        if not protocol_already_announced and proto_str:
+            # Check conversation history in DB: did any prior message already announce this protocol?
+            for h in (history or []):
+                h_content = str(h.get("conteudo", ""))
+                if proto_str in h_content or "📋 *Protocolo:*" in h_content or "Protocolo de Atendimento" in h_content or "*Protocolo:*" in h_content:
+                    protocol_already_announced = True
+                    extra["protocol_announced"] = True
+                    conversation.dados_adicionais = extra
+                    break
+
         if not is_tech and conversation.protocol_number:
-            proto_str = str(conversation.protocol_number).strip()
-            if proto_str not in ai_reply:
-                ai_reply = f"📋 *Protocolo:* #{proto_str}\n\n{ai_reply}"
-                extra = dict(conversation.dados_adicionais or {})
+            if not protocol_already_announced:
+                # FIRST TIME ONLY: Attach protocol header
+                if proto_str not in ai_reply:
+                    ai_reply = f"📋 *Protocolo:* #{proto_str}\n\n{ai_reply}"
                 extra["protocol_announced"] = True
                 conversation.dados_adicionais = extra
+            else:
+                # PROTOCOL ALREADY ANNOUNCED: NEVER send protocol banner again!
+                # If AI text repeated the protocol number/header, strip it clean!
+                if proto_str in ai_reply or "📋 *Protocolo:*" in ai_reply or "*Protocolo:*" in ai_reply:
+                    ai_reply = re.sub(r'📋\s*\*?Protocolo:\*?\s*#?' + re.escape(proto_str) + r'\s*', '', ai_reply, flags=re.IGNORECASE).strip()
+                    ai_reply = re.sub(r'^\s*📋\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
+                    ai_reply = re.sub(r'^\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
 
         # Enforce Pix Payload Appending if AI or customer requested Pix data and details are present
         msg_lower = text_content.lower()
@@ -2392,6 +2423,7 @@ async def receive_evolution_webhook(
             number=target_dest,
             text=formatted_ai_text
         )
+        _conversation_ai_timestamps[conversation.id] = time.time()
 
         # Broadcast AI message to WebSocket clients with ISO Z timestamp
         ts_str = ai_msg.timestamp.isoformat() + "Z" if hasattr(ai_msg.timestamp, "isoformat") else str(ai_msg.timestamp)
