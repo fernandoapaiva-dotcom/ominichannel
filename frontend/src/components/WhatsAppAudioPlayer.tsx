@@ -29,14 +29,13 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
   allMessages = [],
   isCustomer
 }) => {
-  const { activeAudio, toggleAudio, seekAudio, setSpeed } = useAudio();
+  const { activeAudio, toggleAudio, seekAudio, speed, cycleSpeed } = useAudio();
 
   const isThisPlaying = Number(activeAudio?.msgId) === Number(message.id) && activeAudio?.isPlaying;
   const isThisActive = Number(activeAudio?.msgId) === Number(message.id);
 
   const currentTime = isThisActive ? activeAudio.currentTime : 0;
   const activeDuration = isThisActive ? activeAudio.duration : 0;
-  const speed = isThisActive ? activeAudio.speed : 1;
 
   // Pre-loaded duration (loaded on mount even before the user presses play)
   const [preloadedDuration, setPreloadedDuration] = useState<number>(0);
@@ -99,13 +98,6 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const handleSpeedToggle = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const speeds = [1, 1.5, 2];
-    const nextIdx = (speeds.indexOf(speed) + 1) % speeds.length;
-    setSpeed(speeds[nextIdx]);
   };
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -229,30 +221,37 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
         {/* Time display & Speed toggle */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>
           {/* Left: currentTime when playing, total duration when idle */}
-          <span>{isThisActive ? formatTime(currentTime) : formatTime(duration)}</span>
+          <span style={{ fontFamily: 'monospace', fontWeight: '600' }}>
+            {isThisActive ? formatTime(currentTime) : formatTime(duration)}
+          </span>
 
-          {isThisActive && (
-            <button
-              type="button"
-              onClick={handleSpeedToggle}
-              style={{
-                background: 'rgba(0, 168, 132, 0.15)',
-                border: 'none',
-                borderRadius: '8px',
-                padding: '1px 6px',
-                color: '#00a884',
-                fontSize: '10px',
-                fontWeight: 'bold',
-                cursor: 'pointer'
-              }}
-              title="Velocidade de reprodução"
-            >
-              {speed}x
-            </button>
-          )}
+          {/* Speed button (Always visible like WhatsApp) */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              cycleSpeed();
+            }}
+            style={{
+              background: isThisActive ? 'rgba(0, 168, 132, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+              border: isThisActive ? '1px solid #00a884' : '1px solid var(--border-color)',
+              borderRadius: '12px',
+              padding: '1px 7px',
+              color: isThisActive ? '#00e699' : 'var(--text-muted)',
+              fontSize: '10px',
+              fontWeight: '700',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+            title="Alternar velocidade: 1x, 1.5x, 2x"
+          >
+            {speed}x
+          </button>
 
           {/* Right: total duration when playing */}
-          <span>{isThisActive && duration > 0 ? formatTime(duration) : ''}</span>
+          <span style={{ fontFamily: 'monospace', fontWeight: '600' }}>
+            {isThisActive && duration > 0 ? formatTime(duration) : ''}
+          </span>
         </div>
       </div>
     </div>
