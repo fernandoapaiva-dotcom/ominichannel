@@ -28,9 +28,16 @@ const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeAudio, setActiveAudio] = useState<ActiveAudioState | null>(null);
+  const activeAudioRef = useRef<ActiveAudioState | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const currentMessagesRef = useRef<Message[]>([]);
   const currentConvRef = useRef<Conversation | undefined>(undefined);
+  const playAudioRef = useRef<any>(null);
+
+  // Keep activeAudioRef in sync with state
+  useEffect(() => {
+    activeAudioRef.current = activeAudio;
+  }, [activeAudio]);
 
   useEffect(() => {
     const audio = new Audio();
@@ -39,33 +46,48 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const handleTimeUpdate = () => {
       setActiveAudio(prev => {
         if (!prev) return null;
-        return {
+        const updated = {
           ...prev,
           currentTime: audio.currentTime,
           duration: audio.duration || prev.duration || 0
         };
+        activeAudioRef.current = updated;
+        return updated;
       });
     };
 
     const handleLoadedMetadata = () => {
       setActiveAudio(prev => {
         if (!prev) return null;
-        return {
+        const updated = {
           ...prev,
-          duration: audio.duration || 0
+          duration: audio.duration || prev.duration || 0
         };
+        activeAudioRef.current = updated;
+        return updated;
       });
     };
 
     const handleEnded = () => {
       const msgs = currentMessagesRef.current;
-      const current = activeAudio;
+      const current = activeAudioRef.current;
       if (current && msgs.length > 0) {
         const currentIndex = msgs.findIndex(m => m.id === current.msgId);
         if (currentIndex !== -1) {
-          const nextAudioMsg = msgs.slice(currentIndex + 1).find(m => m.tipo === 'audio' || (m.conteudo && (m.conteudo.endsWith('.ogg') || m.conteudo.endsWith('.mp3') || m.conteudo.endsWith('.wav') || m.conteudo.includes('/uploads/'))));
-          if (nextAudioMsg) {
-            playAudio(nextAudioMsg, currentConvRef.current, msgs);
+          const nextAudioMsg = msgs.slice(currentIndex + 1).find(m => {
+            const t = String(m.tipo || '').toLowerCase();
+            const c = String(m.conteudo || '').toLowerCase();
+            return (
+              t === 'audio' ||
+              c.endsWith('.ogg') ||
+              c.endsWith('.mp3') ||
+              c.endsWith('.wav') ||
+              (c.includes('/uploads/') && (c.includes('.ogg') || c.includes('.mp3'))) ||
+              c.includes('mmg.whatsapp.net')
+            );
+          });
+          if (nextAudioMsg && playAudioRef.current) {
+            playAudioRef.current(nextAudioMsg, currentConvRef.current, msgs);
             return;
           }
         }
@@ -73,6 +95,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       // Audio finished and no sequential audio to play -> automatically dismiss sticky player header bar!
       setActiveAudio(null);
+      activeAudioRef.current = null;
     };
 
     audio.addEventListener('timeupdate', handleTimeUpdate);
@@ -115,12 +138,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       : (msg.agent_name || 'Atendente');
     const senderAvatar = msg.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined;
 
-    const currentSpeed = activeAudio?.speed || 1;
+    const currentSpeed = activeAudioRef.current?.speed || 1;
 
     audioRef.current.src = url;
     audioRef.current.playbackRate = currentSpeed;
     audioRef.current.play().then(() => {
-      setActiveAudio({
+      const state: ActiveAudioState = {
         msgId: msg.id,
         url,
         senderName,
@@ -130,11 +153,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         currentTime: 0,
         isPlaying: true,
         speed: currentSpeed
-      });
+      };
+      activeAudioRef.current = state;
+      setActiveAudio(state);
     }).catch(err => {
       console.error('Error playing audio:', err);
     });
   };
+
+  playAudioRef.current = playAudio;
 
   const pauseAudio = () => {
     if (audioRef.current) {
