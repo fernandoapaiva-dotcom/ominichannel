@@ -22,8 +22,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["Calendar & Tasks"])
 
 def _format_event_response(event: CalendarEvent) -> CalendarEventResponse:
-    c_name = event.contact.nome if event.contact else getattr(event, 'contact_name', None)
-    c_phone = event.contact.telefone if event.contact else getattr(event, 'contact_phone', None)
+    c_name = None
+    c_phone = None
+    try:
+        if event.contact:
+            c_name = event.contact.nome
+            c_phone = event.contact.telefone
+    except Exception:
+        pass
+    if not c_name:
+        c_name = getattr(event, 'contact_name', None)
+    if not c_phone:
+        c_phone = getattr(event, 'contact_phone', None)
     return CalendarEventResponse(
         id=event.id,
         tenant_id=event.tenant_id,

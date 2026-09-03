@@ -454,9 +454,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         setEvents(prev => [...prev, created]);
       }
       setIsFormOpen(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving calendar event:', err);
-      alert('Erro ao salvar evento. Verifique os dados e tente novamente.');
+      alert(err?.message || 'Erro ao salvar evento. Verifique os dados e tente novamente.');
     } finally {
       setIsSaving(false);
     }

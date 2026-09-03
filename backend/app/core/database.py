@@ -20,6 +20,10 @@ if is_sqlite:
         "timeout": 60.0,
         "check_same_thread": False,
     }
+    engine_kwargs["pool_size"] = 25
+    engine_kwargs["max_overflow"] = 35
+    engine_kwargs["pool_timeout"] = 60.0
+    engine_kwargs["pool_recycle"] = 300
 else:
     engine_kwargs["pool_size"] = 20
     engine_kwargs["max_overflow"] = 30
@@ -35,12 +39,9 @@ if is_sqlite:
     def set_sqlite_pragma(dbapi_connection, connection_record):
         try:
             cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
             cursor.execute("PRAGMA foreign_keys=ON;")
             cursor.execute("PRAGMA busy_timeout=60000;")
-            cursor.execute("PRAGMA wal_autocheckpoint=1000;")
-            cursor.execute("PRAGMA temp_store=MEMORY;")
             cursor.close()
         except Exception as e:
             logger.debug(f"SQLite PRAGMA error: {e}")
