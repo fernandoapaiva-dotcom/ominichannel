@@ -423,6 +423,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [sendError]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const dragCounterRef = useRef(0);
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
@@ -1417,27 +1418,78 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setPendingFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current += 1;
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+      setIsDraggingOver(true);
+    }
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDraggingOver(true);
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    if (!isDraggingOver) {
+      setIsDraggingOver(true);
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDraggingOver(false);
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingOver(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    dragCounterRef.current = 0;
     setIsDraggingOver(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const droppedFiles = Array.from(e.dataTransfer.files);
       setPendingFiles(prev => [...prev, ...droppedFiles]);
     }
   };
+
+  // Captura global na janela quando a conversa está aberta para evitar que o navegador abra o arquivo
+  useEffect(() => {
+    if (!conversation) return;
+
+    const onGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'copy';
+      }
+    };
+
+    const onGlobalDrop = (e: DragEvent) => {
+      // Se soltar em qualquer parte da tela do chat
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        e.preventDefault();
+        dragCounterRef.current = 0;
+        setIsDraggingOver(false);
+        const droppedFiles = Array.from(e.dataTransfer.files);
+        setPendingFiles(prev => [...prev, ...droppedFiles]);
+      }
+    };
+
+    window.addEventListener('dragover', onGlobalDragOver);
+    window.addEventListener('drop', onGlobalDrop);
+
+    return () => {
+      window.removeEventListener('dragover', onGlobalDragOver);
+      window.removeEventListener('drop', onGlobalDrop);
+    };
+  }, [conversation?.id]);
 
   const handlePaste = (e: React.ClipboardEvent<any>) => {
     const clipboardData = e.clipboardData;
@@ -2514,6 +2566,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   return (
     <div
+      onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -2535,19 +2588,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div style={{
           position: 'absolute',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(5, 26, 18, 0.9)',
+          backgroundColor: 'rgba(5, 26, 18, 0.88)',
           border: '3px dashed var(--accent-primary)',
-          zIndex: 100,
+          zIndex: 9999,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'center',
           alignItems: 'center',
           gap: '16px',
-          color: 'var(--accent-primary)'
+          color: 'var(--accent-primary)',
+          pointerEvents: 'none',
+          backdropFilter: 'blur(2px)',
+          transition: 'all 0.15s ease'
         }}>
-          <UploadCloud size={64} className="animate-bounce" />
-          <h3 style={{ fontSize: '20px', fontWeight: '700' }}>Solte seus arquivos aqui para anexar</h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Imagens, vídeos, áudios e documentos</p>
+          <UploadCloud size={64} className="animate-bounce" style={{ pointerEvents: 'none' }} />
+          <h3 style={{ fontSize: '20px', fontWeight: '700', pointerEvents: 'none' }}>Solte seus arquivos aqui para anexar</h3>
+          <p style={{ fontSize: '13px', color: 'var(--text-muted)', pointerEvents: 'none' }}>PDFs, imagens, vídeos, áudios e documentos</p>
         </div>
       )}
 
