@@ -58,9 +58,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, []);
 
   const displayedConversations = React.useMemo(() => {
+    const INTERNAL_SUFFIXES = ['32346622', '992136622', '32421100', '30421044', '98334833', '99883344'];
     return conversations.filter(c => {
       const phone = c.contact?.telefone || '';
       const name = c.contact?.nome || '';
+      const cleanPhone = phone.replace(/\D/g, '');
+
+      // Do not list internal company numbers or Fernando Aragão admin test numbers as client cards
+      if (INTERNAL_SUFFIXES.some(s => cleanPhone.endsWith(s))) {
+        return false;
+      }
+
       const isGroup = Boolean(
         phone.includes('@g.us') ||
         phone.startsWith('120363') ||
@@ -73,11 +81,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         name.includes('Servweld/Servsolda')
       );
 
+      // In WhatsApp, the main chats view shows BOTH individual chats and groups!
+      // Only when explicitly navigating to the "groups" tab, filter strictly to groups.
       if (activeTab === 'groups') {
         return isGroup;
-      }
-      if (activeTab === 'chats') {
-        return !isGroup;
       }
       return true;
     });
