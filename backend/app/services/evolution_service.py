@@ -1128,14 +1128,14 @@ class EvolutionService:
         elif len(clean_num) == 13 and clean_num.startswith("55"):
             nums_to_try.append(f"{clean_num[:4]}{clean_num[5:]}")
 
-        async with httpx.AsyncClient(timeout=6.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
             for num_variant in nums_to_try:
                 payload = {"number": num_variant}
                 # 1. Try provided instance first
                 if instance_name:
                     url = f"{base_url}/chat/fetchProfilePictureUrl/{instance_name}"
                     try:
-                        response = await client.post(url, headers=headers, json=payload)
+                        response = await client.post(url, headers=headers, json=payload, timeout=3.0)
                         if response.status_code in [200, 201]:
                             data = response.json()
                             pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
@@ -1144,27 +1144,32 @@ class EvolutionService:
                     except Exception as e:
                         logger.debug(f"Failed to fetch profile picture on {instance_name} for {num_variant}: {e}")
 
-                # 2. Fallback: Query all open connected instances
+                # 2. Fallback: Query all other open connected instances in parallel
                 try:
-                    inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers)
+                    inst_res = await client.get(f"{base_url}/instance/fetchInstances", headers=headers, timeout=3.0)
                     if inst_res.status_code == 200:
                         instances = [
                             i.get("name") for i in inst_res.json()
                             if isinstance(i, dict) and i.get("connectionStatus") == "open" and i.get("name") != instance_name
                         ]
-                        for inst in instances:
-                            if not inst:
-                                continue
-                            fallback_url = f"{base_url}/chat/fetchProfilePictureUrl/{inst}"
+
+                        async def _check_inst(inst_name: str) -> Optional[str]:
                             try:
-                                res = await client.post(fallback_url, headers=headers, json=payload)
+                                fallback_url = f"{base_url}/chat/fetchProfilePictureUrl/{inst_name}"
+                                res = await client.post(fallback_url, headers=headers, json=payload, timeout=3.5)
                                 if res.status_code in [200, 201]:
-                                    data = res.json()
-                                    pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
-                                    if pic and isinstance(pic, str) and pic.startswith("http"):
-                                        return pic
+                                    d = res.json()
+                                    p = d.get("profilePictureUrl") or d.get("picture") or d.get("url")
+                                    if p and isinstance(p, str) and p.startswith("http"):
+                                        return p
                             except Exception:
-                                continue
+                                pass
+                            return None
+
+                        results = await asyncio.gather(*[_check_inst(inst) for inst in instances if inst], return_exceptions=True)
+                        for r in results:
+                            if isinstance(r, str) and r.startswith("http"):
+                                return r
                 except Exception as e:
                     logger.warning(f"Error checking connected instances for profile pic: {e}")
         return None

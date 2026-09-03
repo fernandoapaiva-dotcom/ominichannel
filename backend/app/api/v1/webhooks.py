@@ -633,8 +633,18 @@ async def receive_evolution_webhook(
     else:
         phone_number = "".join(filter(str.isdigit, raw_phone))
 
-    participant_name = data.get("pushName") or data.get("senderName") or "Participante"
-    push_name = data.get("pushName") or "Cliente"
+    if from_me:
+        participant_name = "Você"
+        push_name = None
+    else:
+        raw_pn = data.get("pushName") or data.get("senderName") or ""
+        BUSINESS_NAMES = {"servweld", "servsolda", "assistência técnica", "assistencia tecnica", "vendas", "locação", "locacao", "financeiro", "atendente", "você", "voce", "admin"}
+        if raw_pn and not any(b in raw_pn.lower() for b in BUSINESS_NAMES):
+            participant_name = raw_pn
+            push_name = raw_pn
+        else:
+            participant_name = "Cliente"
+            push_name = None
 
 
     message_obj = data.get("message", {})
@@ -1207,8 +1217,24 @@ async def receive_evolution_webhook(
                 if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
                     contact.telefone = phone_number
 
+    def _format_contact_display(p: str) -> str:
+        clean = "".join(filter(str.isdigit, p))
+        if len(clean) == 13 and clean.startswith("55"):
+            return f"+{clean[:2]} {clean[2:4]} {clean[4:9]}-{clean[9:]}"
+        elif len(clean) == 12 and clean.startswith("55"):
+            return f"+{clean[:2]} {clean[2:4]} {clean[4:8]}-{clean[8:]}"
+        elif len(clean) in [10, 11]:
+            return f"+55 {clean[:2]} {clean[2:7]}-{clean[7:]}" if len(clean) == 11 else f"+55 {clean[:2]} {clean[2:6]}-{clean[6:]}"
+        return f"+{clean}" if clean.startswith("55") else clean
+
+    BUSINESS_NAMES = {"servweld", "servsolda", "assistência técnica", "assistencia tecnica", "vendas", "locação", "locacao", "financeiro", "atendente", "você", "voce", "admin"}
+    formatted_phone_display = _format_contact_display(phone_number)
+
     if not contact:
-        initial_name = group_subject if is_group else (clean_push_name if clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] else f"Contato {phone_number}")
+        initial_name = group_subject if is_group else (
+            clean_push_name if clean_push_name and clean_push_name not in ["Cliente", "WhatsApp", "WhatsApp Business"] and not any(b in clean_push_name.lower() for b in BUSINESS_NAMES)
+            else formatted_phone_display
+        )
         if is_group and not initial_name:
             initial_name = "Grupo WhatsApp"
         extra_c = {"is_group": True} if is_group else {}
@@ -1222,25 +1248,29 @@ async def receive_evolution_webhook(
             contact.dados_adicionais = extra_c
             contact.telefone = phone_number
             # CRITICAL RULE: NEVER overwrite group name with participant name or message!
-            if group_subject and group_subject.lower() not in ["grupo whatsapp", "none", "null", "undefined", "cliente", clean_push_name.lower()]:
+            if group_subject and group_subject.lower() not in ["grupo whatsapp", "none", "null", "undefined", "cliente", (clean_push_name or "").lower()]:
                 contact.nome = group_subject
         else:
             # Upgrade phone if contact had a LID and we now have a real number
             if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
                 contact.telefone = phone_number
-        # For individual contacts: update pushName if name is generic, empty, or phone number
+        # For individual contacts: update pushName if name is generic, empty, or phone number, OR contains business name
         GENERIC_NAMES = {"cliente", "cliente whatsapp", "cliente whatsapp business", "whatsapp", "whatsapp business"}
         cur_n = str(contact.nome or "").strip().lower()
+        is_business_name = any(b in cur_n for b in BUSINESS_NAMES)
         is_generic = (
             not cur_n or
             cur_n in GENERIC_NAMES or
+            is_business_name or
             cur_n.startswith("contato ") or
             cur_n.startswith("+55") or
             cur_n.startswith("55") or
             cur_n.replace("+", "").replace("-", "").replace(" ", "").isdigit()
         )
-        if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and is_generic:
+        if clean_push_name and clean_push_name.lower() not in GENERIC_NAMES and not any(b in clean_push_name.lower() for b in BUSINESS_NAMES) and is_generic:
             contact.nome = clean_push_name
+        elif is_business_name:
+            contact.nome = formatted_phone_display
 
     # Avatar handling for both new and existing contacts
     if profile_pic_url and not (contact.foto_perfil_url or "").startswith("/uploads/avatars/"):
