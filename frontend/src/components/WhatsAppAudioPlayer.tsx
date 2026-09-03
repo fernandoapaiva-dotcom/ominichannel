@@ -49,8 +49,12 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
 
     // 1. Web Audio API decoding (100% reliable for .ogg Opus on Chrome Desktop)
     fetch(url)
-      .then((res) => res.arrayBuffer())
+      .then((res) => {
+        if (!res.ok) return null;
+        return res.arrayBuffer();
+      })
       .then((buffer) => {
+        if (!buffer) return;
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
         if (!AudioCtx) throw new Error('No AudioContext');
         const ctx = new AudioCtx();
@@ -62,19 +66,7 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
         });
       })
       .catch(() => {
-        // Fallback: HTML5 Audio
-        const audio = new Audio();
-        preloadRef.current = audio;
-        const onLoaded = () => {
-          if (isMounted && audio.duration && isFinite(audio.duration) && audio.duration > 0) {
-            setPreloadedDuration(audio.duration);
-          }
-        };
-        audio.addEventListener('loadedmetadata', onLoaded);
-        audio.addEventListener('durationchange', onLoaded);
-        audio.addEventListener('canplaythrough', onLoaded);
-        audio.preload = 'auto';
-        audio.src = url;
+        // Silently skip corrupted or missing old audio files
       });
 
     return () => {
