@@ -586,12 +586,14 @@ async def receive_evolution_webhook(
 
         return {"status": "success", "event": "messages.update", "updated": updated_any}
 
-    # Filter non-message events (send.message, chats.upsert, etc.)
-    if norm_event not in ["messages.upsert", "messages_upsert"]:
-        return {"status": "ignored", "reason": f"Event '{event_type}' is not a new incoming message"}
+    # Filter non-message events (chats.upsert, connection.update, etc.)
+    if norm_event not in ["messages.upsert", "messages_upsert", "send.message", "send_message"]:
+        return {"status": "ignored", "reason": f"Event '{event_type}' is not a new message event"}
 
     key = data.get("key", {}) if isinstance(data, dict) else {}
     from_me = key.get("fromMe", False) if isinstance(key, dict) else False
+    if norm_event in ["send.message", "send_message"]:
+        from_me = True
 
     remote_jid = key.get("remoteJid", "") if isinstance(key, dict) else ""
     remote_jid_alt = key.get("remoteJidAlt") or data.get("remoteJidAlt") or ""
@@ -1246,13 +1248,14 @@ async def receive_evolution_webhook(
             elif contact.foto_perfil_url != profile_pic_url:
                 contact.foto_perfil_url = profile_pic_url
 
-    # 3. Get or Create Conversation (Always reuse single active conversation for this contact across tenant)
+    # 3. Get or Create Conversation (strictly isolated per instance/department to prevent mixing)
     conv_stmt = (
         select(Conversation)
         .options(selectinload(Conversation.messages))
         .where(
             Conversation.tenant_id == tenant_id,
             Conversation.contact_id == contact.id,
+            Conversation.whatsapp_number_id == whatsapp_number.id,
             Conversation.status.in_([ConversationStatus.COM_IA, ConversationStatus.COM_HUMANO])
         )
         .order_by(Conversation.ultima_interacao_em.desc())
@@ -1260,19 +1263,15 @@ async def receive_evolution_webhook(
     conv_res = await db.execute(conv_stmt)
     conversation = conv_res.scalars().first()
 
-    if conversation:
-        # Crucial: If message was received on a specific instance/department, bind conversation to this whatsapp_number_id!
-        if conversation.whatsapp_number_id != whatsapp_number.id:
-            logger.info(f"[ROUTING INSTANCE] Setting conversation #{conversation.id} whatsapp_number_id from {conversation.whatsapp_number_id} to current receiving instance {whatsapp_number.id} ({whatsapp_number.nome_departamento})")
-            conversation.whatsapp_number_id = whatsapp_number.id
-    else:
-        # Also check if there is ANY conversation for this contact in tenant to reopen instead of duplicating
+    if not conversation:
+        # Also check if there is an existing conversation for this contact on THIS specific instance to reopen
         any_conv_stmt = (
             select(Conversation)
             .options(selectinload(Conversation.messages))
             .where(
                 Conversation.tenant_id == tenant_id,
-                Conversation.contact_id == contact.id
+                Conversation.contact_id == contact.id,
+                Conversation.whatsapp_number_id == whatsapp_number.id
             )
             .order_by(Conversation.ultima_interacao_em.desc())
         )
