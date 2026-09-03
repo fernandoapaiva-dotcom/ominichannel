@@ -1062,13 +1062,14 @@ async def receive_evolution_webhook(
             doc_filename = doc_msg.get("fileName") or "documento.pdf"
             ext = os.path.splitext(doc_filename)[1] or ".bin"
 
-        # If base64 is present, ALWAYS save file to disk
+        # If base64 is present, ALWAYS save file to disk using absolute path
         saved_media_url = None
         if media_bytes:
             try:
-                os.makedirs("uploads", exist_ok=True)
+                upload_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads"))
+                os.makedirs(upload_dir, exist_ok=True)
                 unique_name = f"{uuid.uuid4().hex}{ext}"
-                media_path = os.path.join("uploads", unique_name)
+                media_path = os.path.join(upload_dir, unique_name)
                 with open(media_path, "wb") as f:
                     f.write(media_bytes)
 

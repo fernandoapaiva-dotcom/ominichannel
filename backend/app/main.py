@@ -117,9 +117,10 @@ async def add_process_time_header(request: Request, call_next):
         logger.info(f"⚡ [TIMING] {request.method} {request.url.path} processed in {process_time:.2f}ms")
     return response
 
-# Ensure uploads directory exists and mount static files
-os.makedirs("uploads", exist_ok=True)
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Ensure uploads directory exists and mount static files using absolute path
+UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "uploads"))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 # Include Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
