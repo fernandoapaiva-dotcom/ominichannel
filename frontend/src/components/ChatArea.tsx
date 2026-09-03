@@ -27,7 +27,7 @@ interface ChatAreaProps {
   allConversations?: Conversation[];
   onSelectConversation?: (conv: Conversation) => void;
   currentUser: User;
-  onSendMessage: (text: string, tipo?: string) => Promise<void>;
+  onSendMessage: (text: string, tipo?: string, quotedMsg?: Message | null) => Promise<void>;
   onOpenTransferModal: () => void;
   onOpenMediaGallery?: () => void;
   onOpenScheduleTask?: (prefill: Partial<CalendarEvent>) => void;
@@ -1307,25 +1307,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (text.startsWith('> ')) {
       const splitIdx = text.indexOf('\n\n');
       if (splitIdx !== -1) {
-        const quotePart = text.substring(2, splitIdx).trim();
         const bodyPart = text.substring(splitIdx + 2).trim();
-
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{
-              padding: '6px 10px',
-              borderLeft: '3px solid var(--accent-primary)',
-              backgroundColor: 'rgba(0, 0, 0, 0.2)',
-              borderRadius: '0 6px 6px 0',
-              fontSize: '12px',
-              color: 'rgba(255, 255, 255, 0.85)',
-              marginBottom: '2px'
-            }}>
-              {quotePart.replace(/^\*|\*$/g, '')}
-            </div>
-            <div>{renderFormattedMessageText(bodyPart)}</div>
-          </div>
-        );
+        return <div>{renderFormattedMessageText(bodyPart)}</div>;
       }
     }
 
@@ -1580,26 +1563,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     let textToSend = inputText.trim();
+    const quoteTarget = replyingToMessage;
     if (replyingToMessage) {
-      const quoteSender = replyingToMessage.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : 'Atendente';
-      let quoteSnippet = '';
-      if (replyingToMessage.tipo === 'imagem') {
-        const { caption } = extractMediaAndCaption(replyingToMessage.conteudo);
-        quoteSnippet = caption ? `📷 Foto: ${caption}` : '📷 Foto';
-      } else if (replyingToMessage.tipo === 'video') {
-        const { caption } = extractMediaAndCaption(replyingToMessage.conteudo);
-        quoteSnippet = caption ? `🎥 Vídeo: ${caption}` : '🎥 Vídeo';
-      } else if (replyingToMessage.tipo === 'audio') {
-        quoteSnippet = '🎵 Áudio';
-      } else if (replyingToMessage.tipo === 'arquivo') {
-        const { caption, mediaPath } = extractMediaAndCaption(replyingToMessage.conteudo);
-        const fileName = mediaPath.split('/').pop() || 'Documento';
-        quoteSnippet = `📄 ${caption || fileName}`;
-      } else {
-        quoteSnippet = (replyingToMessage.conteudo || '').trim();
-      }
-      if (quoteSnippet.length > 60) quoteSnippet = quoteSnippet.slice(0, 60) + '...';
-      textToSend = `> *${quoteSender}:* ${quoteSnippet}\n\n` + textToSend;
       setReplyingToMessage(null);
     }
 
@@ -1665,7 +1630,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         scrollToBottom('smooth');
         setTimeout(() => scrollToBottom('smooth'), 50);
         setTimeout(() => scrollToBottom('smooth'), 200);
-        await onSendMessage(textCopy);
+        await onSendMessage(textCopy, 'texto', quoteTarget);
         setIsUserScrolledUp(false);
         scrollToBottom('smooth');
         setTimeout(() => scrollToBottom('smooth'), 100);
@@ -4136,6 +4101,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
               {/* Main Message Bubble */}
               <div
+                id={msg.id ? `msg_${msg.id}` : undefined}
+                data-wamid={msg.whatsapp_msg_id || undefined}
                 onClick={() => {
                   if (isSelectionMode) {
                     toggleMessageSelection(msg);
@@ -4221,6 +4188,92 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* WhatsApp-Style Quoted Message Card */}
+                {(() => {
+                  const quoted = msg.dados_adicionais?.quoted_message;
+                  let qSender = quoted?.sender_name;
+                  let qText = quoted?.text;
+                  let qId = quoted?.message_id;
+                  let qStanza = quoted?.stanza_id;
+
+                  // Backward-compatibility: also parse "> *Sender:* Snippet\n\n" if not in dados_adicionais
+                  if (!quoted && typeof msg.conteudo === 'string' && msg.conteudo.startsWith('> *')) {
+                    const splitIdx = msg.conteudo.indexOf('\n\n');
+                    if (splitIdx !== -1) {
+                      const line = msg.conteudo.substring(3, splitIdx).trim();
+                      const colonIdx = line.indexOf(':*');
+                      if (colonIdx !== -1) {
+                        qSender = line.substring(0, colonIdx).trim();
+                        qText = line.substring(colonIdx + 2).trim();
+                      }
+                    }
+                  }
+
+                  if (!qSender && !qText) return null;
+
+                  const isQuotedFromAttendant = qSender === 'Você' || qSender === 'Atendente';
+                  const accentColor = isQuotedFromAttendant ? 'var(--accent-primary)' : '#e91e63';
+
+                  return (
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        let targetEl: HTMLElement | null = null;
+                        if (qId) targetEl = document.getElementById(`msg_${qId}`);
+                        if (!targetEl && qStanza) targetEl = document.querySelector(`[data-wamid="${qStanza}"]`);
+                        if (targetEl) {
+                          targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          const origBg = targetEl.style.backgroundColor;
+                          targetEl.style.transition = 'background-color 0.3s ease, transform 0.2s ease';
+                          targetEl.style.backgroundColor = 'rgba(0, 230, 153, 0.28)';
+                          targetEl.style.transform = 'scale(1.02)';
+                          setTimeout(() => {
+                            targetEl.style.backgroundColor = origBg;
+                            targetEl.style.transform = 'scale(1)';
+                          }, 1400);
+                        }
+                      }}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: '6px',
+                        backgroundColor: isCustomer ? 'rgba(0, 0, 0, 0.28)' : 'rgba(0, 0, 0, 0.22)',
+                        borderLeft: `4px solid ${accentColor}`,
+                        cursor: (qId || qStanza) ? 'pointer' : 'default',
+                        marginBottom: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
+                        fontSize: '12px',
+                        lineHeight: '1.35',
+                        maxWidth: '100%',
+                        overflow: 'hidden',
+                        transition: 'opacity 0.15s ease'
+                      }}
+                      title="Mensagem respondida (clique para localizar no histórico)"
+                    >
+                      <span style={{
+                        fontWeight: '700',
+                        color: accentColor,
+                        fontSize: '11px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {qSender || 'Mensagem'}
+                      </span>
+                      <span style={{
+                        color: 'rgba(255, 255, 255, 0.88)',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontSize: '12.5px'
+                      }}>
+                        {qText}
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {group.type === 'image_album' ? renderImageAlbum(group.messages) : renderMediaContent(msg)}
 

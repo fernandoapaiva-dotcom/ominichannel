@@ -561,7 +561,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     };
   }, [fetchConversations]);
 
-  const handleSendMessage = async (text: string, tipo: string = 'texto') => {
+  const handleSendMessage = async (text: string, tipo: string = 'texto', quotedMsg?: Message | null) => {
     if (!activeConversation) return;
 
     let targetConv = activeConversation;
@@ -581,7 +581,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       conteudo: text,
       tipo: actualTipo as any,
       timestamp: new Date().toISOString(),
-      status: 'sending'
+      status: 'sending',
+      dados_adicionais: quotedMsg ? {
+        quoted_message: {
+          message_id: quotedMsg.id,
+          stanza_id: quotedMsg.whatsapp_msg_id,
+          sender_name: quotedMsg.remetente === 'cliente' ? (targetConv.contact?.nome || 'Cliente') : 'Você',
+          text: quotedMsg.conteudo?.slice(0, 120),
+          tipo: quotedMsg.tipo
+        }
+      } : undefined
     };
 
     const targetCid = targetConv.contact_id || targetConv.contact?.id;
@@ -648,7 +657,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             conversation_id: finalConvId,
             remetente: 'atendente',
             conteudo: text,
-            tipo: actualTipo
+            tipo: actualTipo,
+            quoted_message_id: quotedMsg?.id || undefined
           })
         });
 

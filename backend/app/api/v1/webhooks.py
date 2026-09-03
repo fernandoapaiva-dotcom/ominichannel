@@ -31,6 +31,7 @@ from app.services.business_hours_service import business_hours_service
 from app.api.v1.conversations import generate_bacen_pix_string
 from app.api.websockets import manager as ws_manager
 from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
+from app.services.whatsapp_sync_service import parse_quoted_context
 
 logger = logging.getLogger("webhooks")
 router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
@@ -1417,6 +1418,22 @@ async def receive_evolution_webhook(
 
     # 4. If message was sent from mobile cellphone by attendant/staff (fromMe: True)
     if from_me:
+        quote_data = parse_quoted_context(data, from_me=True, contact_name=contact.nome)
+        attendant_msg_extra = {}
+        if quote_data:
+            if quote_data.get("stanza_id"):
+                p_stmt = select(Message).where(Message.whatsapp_msg_id == quote_data["stanza_id"])
+                p_msg = (await db.execute(p_stmt)).scalars().first()
+                if p_msg:
+                    quote_data["message_id"] = p_msg.id
+                    if p_msg.remetente in [MessageSender.ATENDENTE, "atendente"]:
+                        quote_data["sender_name"] = "Você"
+                    else:
+                        quote_data["sender_name"] = contact.nome or "Cliente"
+                    if not quote_data.get("text") and p_msg.conteudo:
+                        quote_data["text"] = p_msg.conteudo[:120]
+            attendant_msg_extra["quoted_message"] = quote_data
+
         attendant_msg = Message(
             conversation_id=conversation.id,
             remetente=MessageSender.ATENDENTE,
@@ -1424,6 +1441,7 @@ async def receive_evolution_webhook(
             tipo=msg_type,
             status="read",
             whatsapp_msg_id=msg_id if msg_id else None,
+            dados_adicionais=attendant_msg_extra if attendant_msg_extra else None,
             timestamp=datetime.utcnow()
         )
         db.add(attendant_msg)
@@ -1444,6 +1462,7 @@ async def receive_evolution_webhook(
                 "conversation_id": conversation.id,
                 "remetente": MessageSender.ATENDENTE.value,
                 "conteudo": text_content,
+                "dados_adicionais": attendant_msg.dados_adicionais,
                 "timestamp": attendant_msg.timestamp.isoformat() + "Z" if hasattr(attendant_msg.timestamp, "isoformat") else str(attendant_msg.timestamp),
                 "contact_name": contact.nome,
                 "contact_phone": contact.telefone,
@@ -1479,6 +1498,21 @@ async def receive_evolution_webhook(
     conversation.dados_adicionais = extra_conv
 
     msg_extra = {}
+    quote_data = parse_quoted_context(data, from_me=False, contact_name=contact.nome)
+    if quote_data:
+        if quote_data.get("stanza_id"):
+            p_stmt = select(Message).where(Message.whatsapp_msg_id == quote_data["stanza_id"])
+            p_msg = (await db.execute(p_stmt)).scalars().first()
+            if p_msg:
+                quote_data["message_id"] = p_msg.id
+                if p_msg.remetente in [MessageSender.ATENDENTE, "atendente"]:
+                    quote_data["sender_name"] = "Você"
+                else:
+                    quote_data["sender_name"] = contact.nome or "Cliente"
+                if not quote_data.get("text") and p_msg.conteudo:
+                    quote_data["text"] = p_msg.conteudo[:120]
+        msg_extra["quoted_message"] = quote_data
+
     if is_group:
         msg_extra["participant_name"] = participant_name
         msg_extra["participant_phone"] = "".join(filter(str.isdigit, str(participant_jid or sender_jid)))
@@ -1559,13 +1593,15 @@ async def receive_evolution_webhook(
         message_data={
             "type": "NEW_MESSAGE",
             "conversation_id": conversation.id,
+            "id": user_msg.id,
             "remetente": MessageSender.CLIENTE.value,
             "conteudo": text_content,
-            "timestamp": user_msg.timestamp.isoformat() + "Z" if hasattr(user_msg.timestamp, "isoformat") else str(user_msg.timestamp),
+            "dados_adicionais": user_msg.dados_adicionais,
+            "tipo": user_msg.tipo.value if hasattr(user_msg.tipo, "value") else str(user_msg.tipo),
+            "timestamp": user_msg.timestamp.isoformat() + "Z",
             "contact_name": contact.nome,
             "contact_phone": contact.telefone,
-            "department": whatsapp_number.nome_departamento,
-            "dados_adicionais": user_msg.dados_adicionais
+            "department": whatsapp_number.nome_departamento
         }
     )
 

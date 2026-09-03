@@ -130,6 +130,8 @@ class MessageBase(BaseModel):
 class MessageCreate(MessageBase):
     conversation_id: Optional[int] = None
     remetente: Optional[str] = "atendente"
+    dados_adicionais: Optional[Dict[str, Any]] = None
+    quoted_message_id: Optional[int] = None
 
 class MessageResponse(MessageBase):
     id: int

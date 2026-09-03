@@ -12,7 +12,7 @@ from app.models.models import (
     MessageSender, MessageType, ConversationStatus
 )
 from app.services.lid_resolver_service import resolve_and_bind_contact
-from app.services.whatsapp_sync_service import whatsapp_sync_service
+from app.services.whatsapp_sync_service import whatsapp_sync_service, parse_quoted_context
 from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("whatsapp_reconciliation")
@@ -133,8 +133,24 @@ class WhatsAppReconciliationService:
                         db.add(conv)
                         await db.flush()
 
-                    # 7. Add message
+                    # 7. Add message with quote support
                     remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
+                    quote_data = parse_quoted_context(m, from_me=from_me, contact_name=contact.nome)
+                    reconcile_extra = {}
+                    if quote_data:
+                        if quote_data.get("stanza_id"):
+                            p_stmt = select(Message).where(Message.whatsapp_msg_id == quote_data["stanza_id"])
+                            p_msg = (await db.execute(p_stmt)).scalars().first()
+                            if p_msg:
+                                quote_data["message_id"] = p_msg.id
+                                if p_msg.remetente in [MessageSender.ATENDENTE, "atendente"]:
+                                    quote_data["sender_name"] = "Você"
+                                else:
+                                    quote_data["sender_name"] = contact.nome or "Cliente"
+                                if not quote_data.get("text") and p_msg.conteudo:
+                                    quote_data["text"] = p_msg.conteudo[:120]
+                        reconcile_extra["quoted_message"] = quote_data
+
                     new_msg = Message(
                         conversation_id=conv.id,
                         remetente=remetente,
@@ -142,6 +158,7 @@ class WhatsAppReconciliationService:
                         tipo=msg_type,
                         status="read",
                         whatsapp_msg_id=msg_id,
+                        dados_adicionais=reconcile_extra if reconcile_extra else None,
                         timestamp=msg_dt
                     )
                     db.add(new_msg)
@@ -161,8 +178,11 @@ class WhatsAppReconciliationService:
                             message_data={
                                 "type": "NEW_MESSAGE",
                                 "conversation_id": conv.id,
+                                "id": new_msg.id,
                                 "remetente": remetente.value,
                                 "conteudo": text_content,
+                                "dados_adicionais": new_msg.dados_adicionais,
+                                "tipo": new_msg.tipo.value if hasattr(new_msg.tipo, "value") else str(new_msg.tipo),
                                 "timestamp": msg_dt.isoformat() + "Z",
                                 "contact_name": contact.nome,
                                 "contact_phone": contact.telefone,

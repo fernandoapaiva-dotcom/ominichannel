@@ -381,6 +381,7 @@ class EvolutionService:
         number: str,
         text: str,
         mentioned: Optional[List[str]] = None,
+        quoted: Optional[Dict[str, Any]] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -405,6 +406,8 @@ class EvolutionService:
         }
         if mentioned:
             payload["mentioned"] = mentioned
+        if quoted:
+            payload["quoted"] = quoted
         client = self.get_client()
         try:
             response = await client.post(url, json=payload, headers=headers)

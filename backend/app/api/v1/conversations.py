@@ -960,6 +960,24 @@ async def send_agent_message(
     if "/uploads/" in raw_content:
         clean_db_content = "/uploads/" + raw_content.split("/uploads/")[-1]
 
+    # Extract quoted message if present
+    quoted_stanza_id = None
+    msg_extra_dict = dict(msg_in.dados_adicionais or {})
+    if msg_in.quoted_message_id:
+        q_parent = await db.get(Message, msg_in.quoted_message_id)
+        if q_parent:
+            quoted_stanza_id = q_parent.whatsapp_msg_id
+            q_sender = "Você" if q_parent.remetente in [MessageSender.ATENDENTE, "atendente"] else (conv.contact.nome if conv.contact else "Cliente")
+            msg_extra_dict["quoted_message"] = {
+                "message_id": q_parent.id,
+                "stanza_id": q_parent.whatsapp_msg_id,
+                "sender_name": q_sender,
+                "text": q_parent.conteudo[:120],
+                "tipo": getattr(q_parent.tipo, 'value', str(q_parent.tipo))
+            }
+    elif msg_extra_dict.get("quoted_message"):
+        quoted_stanza_id = msg_extra_dict["quoted_message"].get("stanza_id")
+
     # 1. Immediate ACID DB commit (<15ms) so the message is never lost or delayed
     message = Message(
         conversation_id=conv.id,
@@ -967,6 +985,7 @@ async def send_agent_message(
         conteudo=clean_db_content,
         tipo=actual_tipo,
         status="sent",
+        dados_adicionais=msg_extra_dict if msg_extra_dict else None,
         timestamp=datetime.utcnow()
     )
     db.add(message)
@@ -999,6 +1018,7 @@ async def send_agent_message(
             "conteudo": clean_db_content,
             "tipo": tipo_str,
             "status": "sent",
+            "dados_adicionais": message.dados_adicionais,
             "timestamp": str(message.timestamp),
             "agent_name": current_user.nome
         }
@@ -1141,7 +1161,8 @@ async def send_agent_message(
                         send_res = await provider.send_text_message(
                             number=target_phone,
                             text=formatted_whatsapp_text,
-                            mentioned=mentioned_list if mentioned_list else None
+                            mentioned=mentioned_list if mentioned_list else None,
+                            quoted={"key": {"id": quoted_stanza_id}} if quoted_stanza_id else None
                         )
 
                     wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")

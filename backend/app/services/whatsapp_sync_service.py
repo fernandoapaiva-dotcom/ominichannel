@@ -517,3 +517,74 @@ class WhatsAppSyncService:
         )
 
 whatsapp_sync_service = WhatsAppSyncService()
+
+
+def parse_quoted_context(msg_obj: Dict[str, Any], from_me: bool = False, contact_name: str = "") -> Optional[Dict[str, Any]]:
+    """
+    Extracts WhatsApp quoted/reply message metadata (contextInfo) from Evolution API payloads.
+    Returns structured dictionary with stanza_id, sender_name, text, and tipo.
+    """
+    if not isinstance(msg_obj, dict):
+        return None
+
+    context_info = msg_obj.get("contextInfo")
+    if not context_info:
+        msg_payload = msg_obj.get("message") or {}
+        if isinstance(msg_payload, dict):
+            context_info = msg_payload.get("contextInfo")
+            if not context_info:
+                for sub_key in ["extendedTextMessage", "imageMessage", "videoMessage", "audioMessage", "documentMessage", "documentWithCaptionMessage"]:
+                    sub = msg_payload.get(sub_key)
+                    if isinstance(sub, dict) and sub.get("contextInfo"):
+                        context_info = sub["contextInfo"]
+                        break
+
+    if not context_info or not isinstance(context_info, dict):
+        return None
+
+    stanza_id = context_info.get("stanzaId")
+    quoted_msg = context_info.get("quotedMessage")
+    if not stanza_id and not quoted_msg:
+        return None
+
+    participant = str(context_info.get("participant") or "")
+
+    quoted_text = ""
+    quoted_type = "texto"
+    if isinstance(quoted_msg, dict):
+        if quoted_msg.get("conversation"):
+            quoted_text = str(quoted_msg["conversation"]).strip()
+        elif quoted_msg.get("extendedTextMessage"):
+            quoted_text = str(quoted_msg["extendedTextMessage"].get("text", "")).strip()
+        elif quoted_msg.get("imageMessage"):
+            caption = quoted_msg["imageMessage"].get("caption", "")
+            quoted_text = f"📷 {caption}" if caption else "📷 Foto"
+            quoted_type = "imagem"
+        elif quoted_msg.get("videoMessage"):
+            caption = quoted_msg["videoMessage"].get("caption", "")
+            quoted_text = f"🎥 {caption}" if caption else "🎥 Vídeo"
+            quoted_type = "video"
+        elif quoted_msg.get("audioMessage"):
+            quoted_text = "🎵 Áudio"
+            quoted_type = "audio"
+        elif quoted_msg.get("documentMessage"):
+            caption = quoted_msg["documentMessage"].get("caption") or quoted_msg["documentMessage"].get("fileName") or "Documento"
+            quoted_text = f"📄 {caption}"
+            quoted_type = "arquivo"
+        elif quoted_msg.get("locationMessage"):
+            quoted_text = "📍 Localização"
+            quoted_type = "localizacao"
+        elif quoted_msg.get("contactMessage"):
+            quoted_text = "👤 Contato"
+            quoted_type = "contato"
+
+    default_sender = (contact_name or "Cliente") if from_me else "Você"
+
+    return {
+        "stanza_id": stanza_id,
+        "participant": participant,
+        "text": quoted_text,
+        "tipo": quoted_type,
+        "sender_name": default_sender
+    }
+
