@@ -35,6 +35,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const currentMessagesRef = useRef<Message[]>([]);
   const currentConvRef = useRef<Conversation | undefined>(undefined);
   const playAudioRef = useRef<any>(null);
+  const hasTriggeredEndRef = useRef<boolean>(false);
+  const checkEndedIntervalRef = useRef<any>(null);
 
   // Global playback speed: 1, 1.5, or 2
   const [speed, setSpeedState] = useState<number>(() => {
@@ -83,12 +85,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const triggerNextAudio = useCallback(() => {
     const current = activeAudioRef.current;
-    const rawMsgs = currentMessagesRef.current;
-    console.log('[AudioContext] triggerNextAudio called. Current:', current?.msgId, 'Msgs count:', rawMsgs?.length);
+    const rawMsgs = currentMessagesRef.current?.length > 0 
+      ? currentMessagesRef.current 
+      : (currentConvRef.current?.messages || []);
+
+    console.log('[AudioContext] Advancing to next track. Current:', current?.msgId, 'Msgs count:', rawMsgs?.length);
 
     if (!current || !rawMsgs || rawMsgs.length === 0) {
       setActiveAudio(null);
       activeAudioRef.current = null;
+      if (checkEndedIntervalRef.current) clearInterval(checkEndedIntervalRef.current);
       return;
     }
 
@@ -102,10 +108,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const c = String(m.conteudo || '').toLowerCase();
         return (
           t === 'audio' ||
+          t.includes('audio') ||
           c.endsWith('.ogg') ||
           c.endsWith('.mp3') ||
           c.endsWith('.wav') ||
-          (c.includes('/uploads/') && (c.includes('.ogg') || c.includes('.mp3'))) ||
+          c.endsWith('.m4a') ||
+          (c.includes('/uploads/') && (c.includes('.ogg') || c.includes('.mp3') || c.includes('.wav') || c.includes('.m4a'))) ||
           c.includes('mmg.whatsapp.net')
         );
       });
@@ -118,9 +126,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    // Finished sequential audios
+    // No next audio
     setActiveAudio(null);
     activeAudioRef.current = null;
+    if (checkEndedIntervalRef.current) clearInterval(checkEndedIntervalRef.current);
   }, []);
 
   const playAudioTrack = useCallback((msg: Message, conversation?: Conversation, allMessages?: Message[]) => {
@@ -136,9 +145,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const audio = audioRef.current;
+    hasTriggeredEndRef.current = false;
 
-    // 1. Detach onended temporarily so changing source doesn't fire spurious ended events
-    audio.onended = null;
+    // Reset current interval
+    if (checkEndedIntervalRef.current) {
+      clearInterval(checkEndedIntervalRef.current);
+      checkEndedIntervalRef.current = null;
+    }
+
     audio.pause();
     try {
       audio.currentTime = 0;
@@ -150,7 +164,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const senderAvatar = msg.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined;
     const currentSpeed = speedRef.current || 1;
 
-    // 2. Set new audio source and playback speed
     audio.src = url;
     audio.playbackRate = currentSpeed;
 
@@ -168,28 +181,28 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     activeAudioRef.current = startState;
     setActiveAudio(startState);
 
-    // 3. Attach onended handler strictly when audio actually starts playing
-    const attachEndedHandler = () => {
-      audio.onended = () => {
-        console.log('[AudioContext] Track ended naturally for msgId:', msg.id);
-        triggerNextAudio();
-      };
-    };
+    // Continuous polling check (100% reliable workaround for Chrome's Opus Ogg ended event failure)
+    checkEndedIntervalRef.current = setInterval(() => {
+      const a = audioRef.current;
+      if (!a) return;
+      if (!a.paused && a.duration > 0 && isFinite(a.duration) && a.currentTime >= a.duration - 0.12) {
+        if (!hasTriggeredEndRef.current) {
+          hasTriggeredEndRef.current = true;
+          clearInterval(checkEndedIntervalRef.current);
+          checkEndedIntervalRef.current = null;
+          console.log('[AudioContext] Polling detected audio completion! Switching to next audio...');
+          triggerNextAudio();
+        }
+      }
+    }, 80);
 
-    audio.onplaying = () => {
-      attachEndedHandler();
-    };
-
-    // 4. Play audio immediately with fallback
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise.catch(err => {
-        console.warn('[AudioContext] Play interrupted, playing on canplay:', err);
+        console.warn('[AudioContext] Initial play() rejected, playing on canplay:', err);
         const onCanPlay = () => {
           audio.playbackRate = speedRef.current || 1;
-          audio.play()
-            .then(attachEndedHandler)
-            .catch(e => console.error('[AudioContext] play() failed after canplay:', e));
+          audio.play().catch(e => console.error('[AudioContext] play() failed after canplay:', e));
         };
         audio.addEventListener('canplay', onCanPlay, { once: true });
       });
@@ -223,19 +236,36 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     };
 
+    // Native fallback in case Chrome DOES fire ended
+    audio.onended = () => {
+      if (!hasTriggeredEndRef.current) {
+        hasTriggeredEndRef.current = true;
+        if (checkEndedIntervalRef.current) {
+          clearInterval(checkEndedIntervalRef.current);
+          checkEndedIntervalRef.current = null;
+        }
+        console.log('[AudioContext] Native ended event fired!');
+        triggerNextAudio();
+      }
+    };
+
     return () => {
+      if (checkEndedIntervalRef.current) clearInterval(checkEndedIntervalRef.current);
       audio.ontimeupdate = null;
       audio.onloadedmetadata = null;
-      audio.onplaying = null;
       audio.onended = null;
       audio.pause();
       audio.src = '';
     };
-  }, []);
+  }, [triggerNextAudio]);
 
   const pauseAudio = () => {
     if (audioRef.current) {
       audioRef.current.pause();
+      if (checkEndedIntervalRef.current) {
+        clearInterval(checkEndedIntervalRef.current);
+        checkEndedIntervalRef.current = null;
+      }
       setActiveAudio(prev => prev ? { ...prev, isPlaying: false } : null);
     }
   };
@@ -245,6 +275,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audioRef.current.playbackRate = speedRef.current || 1;
       audioRef.current.play().then(() => {
         setActiveAudio(prev => prev ? { ...prev, isPlaying: true } : null);
+        // Restart polling
+        if (checkEndedIntervalRef.current) clearInterval(checkEndedIntervalRef.current);
+        checkEndedIntervalRef.current = setInterval(() => {
+          const a = audioRef.current;
+          if (!a) return;
+          if (!a.paused && a.duration > 0 && isFinite(a.duration) && a.currentTime >= a.duration - 0.12) {
+            if (!hasTriggeredEndRef.current) {
+              hasTriggeredEndRef.current = true;
+              clearInterval(checkEndedIntervalRef.current);
+              checkEndedIntervalRef.current = null;
+              triggerNextAudio();
+            }
+          }
+        }, 80);
       }).catch(err => console.error('Error resuming audio:', err));
     }
   };
@@ -269,6 +313,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const stopAudio = () => {
+    if (checkEndedIntervalRef.current) {
+      clearInterval(checkEndedIntervalRef.current);
+      checkEndedIntervalRef.current = null;
+    }
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
