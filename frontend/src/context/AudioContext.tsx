@@ -35,7 +35,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const currentMessagesRef = useRef<Message[]>([]);
   const currentConvRef = useRef<Conversation | undefined>(undefined);
   const playAudioRef = useRef<any>(null);
-  const isTransitioningRef = useRef<boolean>(false);
 
   // Global playback speed: 1, 1.5, or 2
   const [speed, setSpeedState] = useState<number>(() => {
@@ -72,18 +71,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [setSpeed]);
 
   const triggerNextAudio = useCallback(() => {
-    if (isTransitioningRef.current) return;
     const current = activeAudioRef.current;
     const rawMsgs = currentMessagesRef.current;
+    console.log('[AudioContext] Track ended. Current msgId:', current?.msgId, 'Total msgs in queue:', rawMsgs?.length);
+
     if (!current || !rawMsgs || rawMsgs.length === 0) {
       setActiveAudio(null);
       activeAudioRef.current = null;
       return;
     }
 
-    isTransitioningRef.current = true;
-
-    // Guarantee chronological ordering
+    // Sort strictly chronological (oldest to newest)
     const sortedMsgs = [...rawMsgs].sort((a, b) => {
       const tA = new Date(a.timestamp || 0).getTime();
       const tB = new Date(b.timestamp || 0).getTime();
@@ -92,8 +90,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
 
     const currentIndex = sortedMsgs.findIndex(m => Number(m.id) === Number(current.msgId));
-    let nextAudioMsg: Message | undefined = undefined;
+    console.log('[AudioContext] Current message index:', currentIndex);
 
+    let nextAudioMsg: Message | undefined = undefined;
     if (currentIndex !== -1) {
       nextAudioMsg = sortedMsgs.slice(currentIndex + 1).find(m => {
         const t = String(m.tipo || '').toLowerCase();
@@ -109,27 +108,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     }
 
+    console.log('[AudioContext] Next audio candidate:', nextAudioMsg?.id);
+
     if (nextAudioMsg && playAudioRef.current) {
-      // Synchronously switch to next audio - preserving autoplay permission in the browser
+      console.log('[AudioContext] Seamlessly transitioning to audio msgId:', nextAudioMsg.id);
       playAudioRef.current(nextAudioMsg, currentConvRef.current, sortedMsgs);
-      setTimeout(() => {
-        isTransitioningRef.current = false;
-      }, 400);
       return;
     }
 
     // No subsequent audio
     setActiveAudio(null);
     activeAudioRef.current = null;
-    isTransitioningRef.current = false;
   }, []);
 
   useEffect(() => {
     const audio = new Audio();
     audioRef.current = audio;
 
-    const handleTimeUpdate = () => {
-      if (!audio) return;
+    audio.ontimeupdate = () => {
       setActiveAudio(prev => {
         if (!prev) return null;
         const updated = {
@@ -140,15 +136,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         activeAudioRef.current = updated;
         return updated;
       });
-
-      // Guard for .ogg audio where browser might end slightly before firing 'ended'
-      if (audio.duration > 0 && audio.currentTime >= audio.duration - 0.08 && !isTransitioningRef.current) {
-        triggerNextAudio();
-      }
     };
 
-    const handleLoadedMetadata = () => {
-      if (!audio) return;
+    audio.onloadedmetadata = () => {
       setActiveAudio(prev => {
         if (!prev) return null;
         const updated = {
@@ -160,19 +150,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     };
 
-    const handleEnded = () => {
+    audio.onended = () => {
+      console.log('[AudioContext] Native onended event fired!');
       triggerNextAudio();
     };
 
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('ended', handleEnded);
-
     return () => {
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('ended', handleEnded);
+      audio.ontimeupdate = null;
+      audio.onloadedmetadata = null;
+      audio.onended = null;
       audio.pause();
+      audio.src = '';
     };
   }, [triggerNextAudio]);
 
@@ -192,7 +180,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const url = getAudioUrl(msg.conteudo || '', msg.id);
     if (!url) return;
 
-    if (allMessages.length > 0) {
+    if (allMessages && allMessages.length > 0) {
       currentMessagesRef.current = allMessages;
     }
     if (conversation) {
@@ -205,32 +193,35 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const senderAvatar = msg.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined;
 
     const currentSpeed = speedRef.current || 1;
+    const audio = audioRef.current;
 
-    try {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.src = url;
-      audioRef.current.playbackRate = currentSpeed;
-      audioRef.current.load();
-      audioRef.current.play().then(() => {
-        const state: ActiveAudioState = {
-          msgId: Number(msg.id),
-          url,
-          senderName,
-          senderAvatar,
-          conversationId: msg.conversation_id || conversation?.id || 0,
-          duration: audioRef.current?.duration || 0,
-          currentTime: 0,
-          isPlaying: true,
-          speed: currentSpeed
+    audio.src = url;
+    audio.playbackRate = currentSpeed;
+
+    const startState: ActiveAudioState = {
+      msgId: Number(msg.id),
+      url,
+      senderName,
+      senderAvatar,
+      conversationId: msg.conversation_id || conversation?.id || 0,
+      duration: audio.duration || 0,
+      currentTime: 0,
+      isPlaying: true,
+      speed: currentSpeed
+    };
+    activeAudioRef.current = startState;
+    setActiveAudio(startState);
+
+    const playPromise = audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(err => {
+        console.warn('[AudioContext] play() interrupted or waiting for canplay:', err);
+        const onCanPlay = () => {
+          audio.playbackRate = speedRef.current || 1;
+          audio.play().catch(e => console.error('[AudioContext] play() failed after canplay:', e));
         };
-        activeAudioRef.current = state;
-        setActiveAudio(state);
-      }).catch(err => {
-        console.error('Error playing audio:', err);
+        audio.addEventListener('canplay', onCanPlay, { once: true });
       });
-    } catch (e) {
-      console.error('Audio play exception:', e);
     }
   };
 
