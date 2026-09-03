@@ -97,8 +97,7 @@ async def list_conversations(
         select(Conversation)
         .options(
             selectinload(Conversation.contact),
-            selectinload(Conversation.whatsapp_number),
-            selectinload(Conversation.messages)
+            selectinload(Conversation.whatsapp_number)
         )
         .where(
             Conversation.tenant_id == current_user.tenant_id,
@@ -128,6 +127,20 @@ async def list_conversations(
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()
+
+    conv_ids = [c.id for c in conversations]
+    msgs_by_conv: Dict[int, List[Message]] = {}
+    if conv_ids:
+        m_stmt = (
+            select(Message)
+            .where(Message.conversation_id.in_(conv_ids))
+            .order_by(Message.id.asc())
+        )
+        m_res = await db.execute(m_stmt)
+        for m in m_res.scalars().all():
+            if m.conversation_id not in msgs_by_conv:
+                msgs_by_conv[m.conversation_id] = []
+            msgs_by_conv[m.conversation_id].append(m)
 
     user_ids = {c.assigned_user_id for c in conversations if c.assigned_user_id}
     user_map = {}
@@ -159,7 +172,7 @@ async def list_conversations(
                 "status": c.whatsapp_number.status
             }
         msgs = []
-        sorted_msgs = sorted((c.messages or []), key=lambda x: x.id)
+        sorted_msgs = msgs_by_conv.get(c.id, [])
         for m in sorted_msgs[-50:]:
             msgs.append({
                 "id": m.id,

@@ -181,6 +181,7 @@ interface ChatListProps {
   drafts?: { [convId: number]: string };
   userPresences?: { [convId: number]: { status: string; agentName?: string; expiresAt: number } };
   onSearch?: (term: string) => void;
+  activeTab?: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin';
 }
 
 interface ContactGroup {
@@ -211,7 +212,8 @@ export const ChatList: React.FC<ChatListProps> = ({
   currentUserId,
   drafts = {},
   onSearch,
-  userPresences = {}
+  userPresences = {},
+  activeTab = 'chats'
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
@@ -549,7 +551,13 @@ export const ChatList: React.FC<ChatListProps> = ({
       <div className="chatlist-header" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
-            Clientes & Chats
+            {activeTab === 'groups' ? (
+              <>
+                <Users size={18} color="var(--accent-primary)" /> Grupos do WhatsApp
+              </>
+            ) : (
+              'Clientes & Chats'
+            )}
           </h2>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -649,7 +657,7 @@ export const ChatList: React.FC<ChatListProps> = ({
           <Search size={15} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
             type="text"
-            placeholder="Buscar por cliente ou telefone..."
+            placeholder={activeTab === 'groups' ? "Buscar grupo por nome..." : "Buscar por cliente ou telefone..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -691,7 +699,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             fontWeight: '600'
           }}
         >
-          <option value="all" style={{ background: '#131b2e' }}>Todos ({contactGroups.length} clientes)</option>
+          <option value="all" style={{ background: '#131b2e' }}>Todos ({contactGroups.length} {activeTab === 'groups' ? 'grupos' : 'clientes'})</option>
           <option value="nao_lidas" style={{ background: '#131b2e', color: '#f87171', fontWeight: '700' }}>📩 Não Lidas ({totalUnread})</option>
           <option value="com_ia" style={{ background: '#131b2e' }}>Com IA Concierge</option>
           <option value="com_humano" style={{ background: '#131b2e' }}>Com Atendente Humano</option>
@@ -704,7 +712,7 @@ export const ChatList: React.FC<ChatListProps> = ({
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {contactGroups.length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-            Nenhum cliente encontrado.
+            {activeTab === 'groups' ? 'Nenhum grupo encontrado.' : 'Nenhum cliente encontrado.'}
           </div>
         ) : (
           contactGroups.map(group => {

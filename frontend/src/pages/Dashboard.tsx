@@ -819,6 +819,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 drafts={conversationDrafts}
                 userPresences={userPresences}
                 onSearch={fetchConversations}
+                activeTab={activeTab}
               />
             </div>
             <div className={`chat-area-column ${!activeConversationId ? 'mobile-hidden' : ''}`} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
