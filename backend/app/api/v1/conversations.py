@@ -138,22 +138,29 @@ async def list_conversations(
     conv_ids = [c.id for c in conversations]
     msgs_by_conv: Dict[int, List[Message]] = {}
     if conv_ids:
-        m_stmt = (
-            select(Message)
-            .where(Message.conversation_id.in_(conv_ids))
-            .order_by(Message.id.asc())
-        )
-        m_res = await db.execute(m_stmt)
-        for m in m_res.scalars().all():
-            if m.conversation_id not in msgs_by_conv:
-                msgs_by_conv[m.conversation_id] = []
-            msgs_by_conv[m.conversation_id].append(m)
+        # Batch conv_ids in chunks of 400 to avoid SQLite's 999 variable limit
+        chunk_size = 400
+        for i in range(0, len(conv_ids), chunk_size):
+            chunk = conv_ids[i:i + chunk_size]
+            m_stmt = (
+                select(Message)
+                .where(Message.conversation_id.in_(chunk))
+                .order_by(Message.id.asc())
+            )
+            m_res = await db.execute(m_stmt)
+            for m in m_res.scalars().all():
+                if m.conversation_id not in msgs_by_conv:
+                    msgs_by_conv[m.conversation_id] = []
+                msgs_by_conv[m.conversation_id].append(m)
 
-    user_ids = {c.assigned_user_id for c in conversations if c.assigned_user_id}
+    user_ids = [uid for uid in {c.assigned_user_id for c in conversations} if uid]
     user_map = {}
     if user_ids:
-        u_res = await db.execute(select(User).where(User.id.in_(user_ids)))
-        user_map = {u.id: u.nome for u in u_res.scalars().all()}
+        for i in range(0, len(user_ids), 400):
+            chunk = user_ids[i:i + 400]
+            u_res = await db.execute(select(User).where(User.id.in_(chunk)))
+            for u in u_res.scalars().all():
+                user_map[u.id] = u.nome
 
     response_list = []
     for c in conversations:
