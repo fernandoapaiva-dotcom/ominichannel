@@ -121,15 +121,15 @@ async def list_conversations(
                 Conversation.protocol_number.ilike(term),
                 Conversation.assunto_atual.ilike(term)
             )
-        ).order_by(Conversation.ultima_interacao_em.desc()).limit(100)
+        ).order_by(Conversation.ultima_interacao_em.desc()).limit(500)
     else:
-        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
+        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(2500)
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
     # Filter out internal store numbers (keep admin test numbers visible for testing)
-    internal_suffixes = ('32346622', '992136622', '32421100', '30421044')
+    internal_suffixes = ('32346622', '92136622', '992136622', '32421100', '30421044')
     conversations = [
         c for c in conversations
         if not (c.contact and c.contact.telefone and any(c.contact.telefone.endswith(s) for s in internal_suffixes))

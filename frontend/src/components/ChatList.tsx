@@ -436,7 +436,7 @@ export const ChatList: React.FC<ChatListProps> = ({
         let convUnread = 0;
         for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
           const r = String(msgs[i].remetente || '').toLowerCase();
-          if (r === 'cliente' && msgs[i].status !== 'read') {
+          if (r === 'cliente') {
             convUnread++;
           }
         }
@@ -507,7 +507,7 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente' && msgs[i].status !== 'read') {
+        if (r === 'cliente') {
           return true;
         }
       }
@@ -707,6 +707,49 @@ export const ChatList: React.FC<ChatListProps> = ({
           <option value="expirada_por_inatividade" style={{ background: '#131b2e' }}>Expiradas (Inatividade)</option>
         </select>
       </div>
+
+      {/* Active Department Filter Banner */}
+      {selectedDepartmentId !== 'all' && (
+        <div style={{
+          padding: '6px 14px',
+          backgroundColor: 'rgba(0, 230, 153, 0.10)',
+          borderBottom: '1px solid rgba(0, 230, 153, 0.25)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '12px',
+          color: '#a7f3d0'
+        }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Filtrando:</span>
+            <strong style={{ color: 'var(--accent-primary)' }}>
+              {whatsappNumbers.find(w => String(w.id) === String(selectedDepartmentId))?.nome_departamento || 'Departamento'}
+            </strong>
+            <span style={{ fontSize: '11px', opacity: 0.8 }}>({contactGroups.length} chats)</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedDepartmentId('all')}
+            style={{
+              background: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              color: '#fff',
+              borderRadius: '12px',
+              padding: '2px 8px',
+              fontSize: '11px',
+              fontWeight: '600',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              flexShrink: 0
+            }}
+            title="Remover filtro e ver todos os departamentos"
+          >
+            <X size={12} /> Ver Todos
+          </button>
+        </div>
+      )}
 
       {/* List items (Grouped by Contact) */}
       <div style={{ flex: 1, overflowY: 'auto' }}>

@@ -206,7 +206,7 @@ async def create_calendar_event(
         custom_reminder_hours=payload.custom_reminder_hours or 2,
         whatsapp_number_id=payload.whatsapp_number_id,
         whatsapp_instance=payload.whatsapp_instance.strip() if payload.whatsapp_instance else None,
-        notified_creation=False,
+        notified_creation=True,
         notified_day_of=False,
         notified_hours_before=False,
         confirmed_by_employee=False,

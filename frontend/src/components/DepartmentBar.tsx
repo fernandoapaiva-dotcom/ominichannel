@@ -4,6 +4,7 @@ import {
   Building, Headphones, Truck, HelpCircle, Calendar
 } from 'lucide-react';
 import { WhatsAppNumber, Conversation } from '../types';
+import { updateAppBadgesAndIcon, triggerSystemNotification } from '../utils/badgeHelper';
 
 interface DepartmentBarProps {
   whatsappNumbers: WhatsAppNumber[];
@@ -58,7 +59,7 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
 
       for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
         const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente' && msgs[i].status !== 'read') {
+        if (r === 'cliente') {
           return true;
         }
       }
@@ -135,22 +136,46 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       {/* Mobile-only app icon with red (chat) / yellow (group) alert badge */}
       <div
         className="mobile-only-app-badge"
+        onClick={async () => {
+          if (typeof window !== 'undefined' && 'Notification' in window) {
+            if (Notification.permission !== 'granted') {
+              const res = await Notification.requestPermission();
+              if (res === 'granted') {
+                alert('✅ Notificações e alertas no celular ativados com sucesso!');
+              } else {
+                alert('⚠️ Permissão de notificações não concedida. Ative nas configurações do Chrome/Samsung Internet do aparelho.');
+              }
+            } else {
+              if (confirm('🧪 Deseja enviar um alerta de teste para verificar no ícone do celular?')) {
+                updateAppBadgesAndIcon(1, 1);
+                triggerSystemNotification(
+                  '🔴 Teste de Alerta OminiChannel',
+                  'Alerta de chat e grupo ativados com sucesso no seu celular!',
+                  false,
+                  'test-alert'
+                );
+              }
+            }
+          }
+        }}
         style={{
           position: 'relative',
           display: 'none',
           alignItems: 'center',
           justifyContent: 'center',
           flexShrink: 0,
-          marginRight: '2px'
+          marginRight: '2px',
+          cursor: 'pointer'
         }}
-        title={pendingBadgeCount > 0 ? `${pendingBadgeCount} conversa(s) de chat pendente(s)` : groupPendingBadgeCount > 0 ? `${groupPendingBadgeCount} grupo(s) com novas mensagens` : 'OminiChannel'}
+        title={pendingBadgeCount > 0 ? `${pendingBadgeCount} chat(s) pendente(s)` : groupPendingBadgeCount > 0 ? `${groupPendingBadgeCount} grupo(s) com novas mensagens` : 'Toque para testar alertas'}
       >
         <img
           src="/favicon.svg"
           alt="OminiChannel"
           style={{ width: '28px', height: '28px', borderRadius: '8px' }}
         />
-        {(pendingBadgeCount > 0 || groupPendingBadgeCount > 0) && (
+        {/* Red dot for chat on top right */}
+        {pendingBadgeCount > 0 && (
           <span
             style={{
               position: 'absolute',
@@ -159,9 +184,27 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
               width: '12px',
               height: '12px',
               borderRadius: '50%',
-              backgroundColor: pendingBadgeCount > 0 ? '#ef4444' : '#f59e0b',
+              backgroundColor: '#ef4444',
               border: '2px solid var(--bg-primary)',
-              boxShadow: `0 0 6px ${pendingBadgeCount > 0 ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)'}`
+              boxShadow: '0 0 8px rgba(239, 68, 68, 0.9)',
+              zIndex: 5
+            }}
+          />
+        )}
+        {/* Yellow dot for group on top left */}
+        {groupPendingBadgeCount > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              top: '-3px',
+              left: '-4px',
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              backgroundColor: '#f59e0b',
+              border: '2px solid var(--bg-primary)',
+              boxShadow: '0 0 8px rgba(245, 158, 11, 0.9)',
+              zIndex: 5
             }}
           />
         )}

@@ -56,3 +56,18 @@ self.addEventListener('notificationclick', (event) => {
     })
   );
 });
+
+// Listener para mensagens diretas vindas da aplicação (setAppBadge / notifications)
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+  if (event.data.type === 'SET_BADGE') {
+    const count = Number(event.data.count || 0);
+    if (self.navigator && 'setAppBadge' in self.navigator) {
+      if (count > 0) {
+        self.navigator.setAppBadge(count).catch(() => {});
+      } else {
+        self.navigator.clearAppBadge().catch(() => {});
+      }
+    }
+  }
+});

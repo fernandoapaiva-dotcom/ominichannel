@@ -46,13 +46,16 @@ export const isConversationPendingForAttendant = (conv: Conversation, user?: Use
 
   if (lastClientIndex === -1) return false;
 
-  const lastClientMsg = msgs[lastClientIndex];
-  if (lastClientMsg && lastClientMsg.status === 'read') return false;
+  // If attendant or system answered after the last client message, not pending
+  if (lastAttendantIndex !== -1 && lastClientIndex <= lastAttendantIndex) {
+    return false;
+  }
 
   const extra = conv.dados_adicionais || {};
   if (extra.pending_dismissed) return false;
-  if (extra.marked_as_read && lastClientMsg.status === 'read') return false;
+  if (extra.marked_as_read) return false;
 
+  const lastClientMsg = msgs[lastClientIndex];
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
     if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000 && !conv.protocol_number) {
@@ -60,8 +63,7 @@ export const isConversationPendingForAttendant = (conv: Conversation, user?: Use
     }
   }
 
-  if (lastAttendantIndex === -1) return true;
-  return lastClientIndex > lastAttendantIndex;
+  return true;
 };
 
 export const isGroupPending = (conv: Conversation): boolean => {
@@ -71,6 +73,7 @@ export const isGroupPending = (conv: Conversation): boolean => {
 
   const extra = conv.dados_adicionais || {};
   if (extra.pending_dismissed) return false;
+  if (extra.marked_as_read) return false;
 
   const msgs = conv.messages || [];
   if (msgs.length === 0) return false;
@@ -89,10 +92,11 @@ export const isGroupPending = (conv: Conversation): boolean => {
 
   if (lastClientIndex === -1) return false;
 
-  const lastClientMsg = msgs[lastClientIndex];
-  if (lastClientMsg && lastClientMsg.status === 'read') return false;
-  if (extra.marked_as_read && lastClientMsg.status === 'read') return false;
+  if (lastAttendantIndex !== -1 && lastClientIndex <= lastAttendantIndex) {
+    return false;
+  }
 
+  const lastClientMsg = msgs[lastClientIndex];
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
     if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000) {
@@ -100,8 +104,7 @@ export const isGroupPending = (conv: Conversation): boolean => {
     }
   }
 
-  if (lastAttendantIndex === -1) return true;
-  return lastClientIndex > lastAttendantIndex;
+  return true;
 };
 
 /**
@@ -183,6 +186,13 @@ export const updateAppBadgesAndIcon = (chatCount: number, groupCount: number) =>
       (navigator as any).clearAppBadge().catch(() => {});
       clearSystemNotifications().catch(() => {});
     }
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({
+      type: 'SET_BADGE',
+      count: totalCount
+    });
   }
 
   // 2. Título da página com emoji identificador

@@ -826,19 +826,46 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setPreviewMediaIndex(prev => (prev! < conversationMedia.length - 1 ? prev! + 1 : 0));
   };
 
+  const closeMediaLightbox = useCallback(() => {
+    setPreviewMediaIndex(null);
+    try {
+      if (window.history.state?.lightboxOpen) {
+        window.history.back();
+      }
+    } catch {}
+  }, []);
+
+  // Android System Back Button & History management for Media Lightbox
+  useEffect(() => {
+    if (previewMediaIndex !== null) {
+      try {
+        window.history.pushState({ page: 'chat', sublayerOpen: true, lightboxOpen: true }, '');
+      } catch {}
+
+      const handlePopState = () => {
+        setPreviewMediaIndex(null);
+      };
+
+      window.addEventListener('popstate', handlePopState);
+      return () => {
+        window.removeEventListener('popstate', handlePopState);
+      };
+    }
+  }, [previewMediaIndex]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (previewMediaIndex === null) return;
       if (e.key === 'ArrowLeft' && zoomScale <= 1) handlePrevMedia();
       if (e.key === 'ArrowRight' && zoomScale <= 1) handleNextMedia();
-      if (e.key === 'Escape') setPreviewMediaIndex(null);
+      if (e.key === 'Escape') closeMediaLightbox();
       if (e.key === '+' || e.key === '=') handleZoomIn();
       if (e.key === '-' || e.key === '_') handleZoomOut();
       if (e.key === '0') handleResetZoom();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [previewMediaIndex, conversationMedia.length, zoomScale]);
+  }, [previewMediaIndex, conversationMedia.length, zoomScale, closeMediaLightbox]);
 
   const scrollToBottom = (behavior: 'smooth' | 'auto' = 'auto') => {
     if (scrollContainerRef.current) {
@@ -2593,212 +2620,279 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.93)',
-          zIndex: 1000,
+          backgroundColor: 'rgba(0, 0, 0, 0.96)',
+          zIndex: 100050,
           display: 'flex',
           flexDirection: 'column',
           justifyContent: 'space-between',
           alignItems: 'center',
-          padding: '20px'
+          padding: '8px 8px 14px 8px',
+          boxSizing: 'border-box'
         }}>
+          {/* Top Header Bar - Clean and Responsive for Mobile & Desktop */}
           <div style={{
             width: '100%',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: '0 20px',
+            padding: '4px 6px',
             color: '#fff',
-            zIndex: 10
+            zIndex: 40,
+            gap: '8px'
           }}>
-            <div style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Voltar button - prominent on mobile and desktop */}
+            <button
+              type="button"
+              onClick={closeMediaLightbox}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                background: 'rgba(255, 255, 255, 0.12)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                color: '#fff',
+                padding: '6px 14px',
+                borderRadius: '20px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                fontWeight: '600',
+                flexShrink: 0,
+                transition: 'background 0.2s'
+              }}
+              title="Voltar para o chat (< ou Esc)"
+            >
+              <ArrowLeft size={16} />
+              <span>Voltar</span>
+            </button>
+
+            {/* Title / Media Counter */}
+            <div style={{
+              fontSize: '13px',
+              fontWeight: '600',
+              color: 'var(--text-muted)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}>
               <span style={{ textTransform: 'capitalize', color: 'var(--accent-primary)', fontWeight: 'bold' }}>
                 {currentMedia.tipo}
               </span>
               <span>•</span>
-              <span>Mídia {previewMediaIndex + 1} de {conversationMedia.length}</span>
+              <span style={{ color: '#fff' }}>{previewMediaIndex + 1} de {conversationMedia.length}</span>
             </div>
 
-            {/* Floating Zoom & Action Toolbar for Images */}
-            {currentMedia.tipo === 'imagem' && (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                backgroundColor: 'rgba(20, 20, 20, 0.85)',
-                padding: '6px 14px',
-                borderRadius: '30px',
-                border: '1px solid rgba(255, 255, 255, 0.15)',
-                boxShadow: '0 4px 20px rgba(0,0,0,0.5)'
-              }}>
-                <button
-                  type="button"
-                  onClick={handleZoomOut}
-                  disabled={zoomScale <= 1}
-                  title="Diminuir Zoom (-)"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: zoomScale <= 1 ? 'rgba(255,255,255,0.3)' : '#fff',
-                    cursor: zoomScale <= 1 ? 'not-allowed' : 'pointer',
-                    padding: '6px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'all 0.15s'
-                  }}
-                >
-                  <ZoomOut size={18} />
-                </button>
+            {/* Action buttons (Download & Close) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+              <a
+                href={currentMedia.url}
+                download
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Baixar Arquivo"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '7px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textDecoration: 'none'
+                }}
+              >
+                <Download size={18} />
+              </a>
 
-                <button
-                  type="button"
-                  onClick={handleResetZoom}
-                  title="Redefinir Zoom (100% ou Tecla 0)"
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.1)',
-                    border: 'none',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    padding: '4px 10px',
-                    borderRadius: '12px',
-                    fontSize: '12px',
-                    fontWeight: 'bold',
-                    minWidth: '52px',
-                    textAlign: 'center'
-                  }}
-                >
-                  {Math.round(zoomScale * 100)}%
-                </button>
+              <a
+                href={currentMedia.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Abrir em Nova Aba"
+                className="hide-on-mobile"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.15)',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '7px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textDecoration: 'none'
+                }}
+              >
+                <ExternalLink size={18} />
+              </a>
 
-                <button
-                  type="button"
-                  onClick={handleZoomIn}
-                  disabled={zoomScale >= 5}
-                  title="Aumentar Zoom (+)"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: zoomScale >= 5 ? 'rgba(255,255,255,0.3)' : '#fff',
-                    cursor: zoomScale >= 5 ? 'not-allowed' : 'pointer',
-                    padding: '6px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'all 0.15s'
-                  }}
-                >
-                  <ZoomIn size={18} />
-                </button>
-
-                <div style={{ width: '1px', height: '18px', backgroundColor: 'rgba(255,255,255,0.2)', margin: '0 4px' }} />
-
-                <button
-                  type="button"
-                  onClick={handleRotateImage}
-                  title="Girar Imagem 90°"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    padding: '6px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center'
-                  }}
-                >
-                  <RotateCw size={18} />
-                </button>
-
-                <a
-                  href={currentMedia.url}
-                  download
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Baixar Imagem"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    padding: '6px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textDecoration: 'none'
-                  }}
-                >
-                  <Download size={18} />
-                </a>
-
-                <a
-                  href={currentMedia.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title="Abrir em Nova Aba"
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#fff',
-                    cursor: 'pointer',
-                    padding: '6px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textDecoration: 'none'
-                  }}
-                >
-                  <ExternalLink size={18} />
-                </a>
-              </div>
-            )}
-
-            <button
-              onClick={() => setPreviewMediaIndex(null)}
-              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', padding: '8px' }}
-              title="Fechar (Esc)"
-            >
-              <X size={28} />
-            </button>
+              <button
+                type="button"
+                onClick={closeMediaLightbox}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.9)',
+                  border: 'none',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '7px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 2px 8px rgba(239, 68, 68, 0.4)'
+                }}
+                title="Fechar Visualizador (Esc)"
+              >
+                <X size={18} />
+              </button>
+            </div>
           </div>
+
+          {/* Floating Zoom & Rotate Toolbar for Images - Clean overlay */}
+          {currentMedia.tipo === 'imagem' && (
+            <div style={{
+              position: 'absolute',
+              bottom: conversationMedia.length > 1 ? '96px' : '28px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: 'rgba(20, 20, 20, 0.88)',
+              backdropFilter: 'blur(8px)',
+              padding: '5px 12px',
+              borderRadius: '25px',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.6)',
+              zIndex: 35
+            }}>
+              <button
+                type="button"
+                onClick={handleZoomOut}
+                disabled={zoomScale <= 1}
+                title="Diminuir Zoom (-)"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: zoomScale <= 1 ? 'rgba(255,255,255,0.3)' : '#fff',
+                  cursor: zoomScale <= 1 ? 'not-allowed' : 'pointer',
+                  padding: '5px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <ZoomOut size={16} />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetZoom}
+                title="Redefinir Zoom (100%)"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: 'none',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '3px 8px',
+                  borderRadius: '10px',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  minWidth: '45px',
+                  textAlign: 'center'
+                }}
+              >
+                {Math.round(zoomScale * 100)}%
+              </button>
+
+              <button
+                type="button"
+                onClick={handleZoomIn}
+                disabled={zoomScale >= 5}
+                title="Aumentar Zoom (+)"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: zoomScale >= 5 ? 'rgba(255,255,255,0.3)' : '#fff',
+                  cursor: zoomScale >= 5 ? 'not-allowed' : 'pointer',
+                  padding: '5px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <ZoomIn size={16} />
+              </button>
+
+              <div style={{ width: '1px', height: '14px', backgroundColor: 'rgba(255,255,255,0.2)', margin: '0 2px' }} />
+
+              <button
+                type="button"
+                onClick={handleRotateImage}
+                title="Girar Imagem 90°"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  padding: '5px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <RotateCw size={16} />
+              </button>
+            </div>
+          )}
 
           <div style={{
             flex: 1,
             width: '100%',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: 'center',
             position: 'relative',
-            padding: '10px 0'
+            padding: '4px 0',
+            overflow: 'hidden'
           }}>
-            {conversationMedia.length > 1 ? (
+            {conversationMedia.length > 1 && (
               <button
                 onClick={handlePrevMedia}
                 title="Mídia anterior (Seta para a esquerda)"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.12)',
-                  border: 'none',
+                  position: 'absolute',
+                  left: '8px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  backdropFilter: 'blur(4px)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
                   color: '#fff',
                   borderRadius: '50%',
-                  width: '48px',
-                  height: '48px',
+                  width: '42px',
+                  height: '42px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
-                  margin: '0 16px',
-                  zIndex: 10,
-                  transition: 'background 0.2s'
+                  zIndex: 25,
+                  transition: 'all 0.2s'
                 }}
               >
-                <ChevronLeft size={32} />
+                <ChevronLeft size={28} />
               </button>
-            ) : <div style={{ width: '48px' }} />}
+            )}
 
             <div
               style={{
@@ -2806,8 +2900,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                height: '75vh',
-                width: '85vw',
+                height: 'calc(100vh - 170px)',
+                width: '100%',
+                maxWidth: '100vw',
                 overflow: 'hidden',
                 position: 'relative'
               }}
@@ -2980,28 +3075,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
             </div>
 
-            {conversationMedia.length > 1 ? (
+            {conversationMedia.length > 1 && (
               <button
                 onClick={handleNextMedia}
                 title="Próxima mídia (Seta para a direita)"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.12)',
-                  border: 'none',
+                  position: 'absolute',
+                  right: '8px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'rgba(0, 0, 0, 0.55)',
+                  backdropFilter: 'blur(4px)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
                   color: '#fff',
                   borderRadius: '50%',
-                  width: '48px',
-                  height: '48px',
+                  width: '42px',
+                  height: '42px',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
-                  margin: '0 16px',
-                  transition: 'background 0.2s'
+                  zIndex: 25,
+                  transition: 'all 0.2s'
                 }}
               >
-                <ChevronRight size={32} />
+                <ChevronRight size={28} />
               </button>
-            ) : <div style={{ width: '48px' }} />}
+            )}
           </div>
 
           {conversationMedia.length > 1 && (

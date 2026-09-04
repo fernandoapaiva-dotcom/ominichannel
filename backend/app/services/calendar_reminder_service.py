@@ -162,7 +162,8 @@ async def send_immediate_creation_notification(event_id: int):
 
             client_info = "Não informado"
             if ev.contact:
-                client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
+                contact_name = ev.contact.nome or "Cliente"
+                client_info = f"{contact_name} ({ev.contact.telefone})" if ev.contact.telefone else contact_name
             elif ev.contact_name or ev.contact_phone:
                 client_info = f"{ev.contact_name or 'Cliente'}"
                 if ev.contact_phone:
@@ -369,9 +370,12 @@ async def check_and_send_calendar_reminders():
 
             client_info = "Não informado"
             if ev.contact:
-                client_info = f"{ev.contact.nome or 'Cliente'} ({ev.contact.telefone or ''})".strip()
-            elif ev.contact_name:
-                client_info = f"{ev.contact_name} ({ev.contact_phone or ''})".strip()
+                contact_name = ev.contact.nome or "Cliente"
+                client_info = f"{contact_name} ({ev.contact.telefone})" if ev.contact.telefone else contact_name
+            elif ev.contact_name or ev.contact_phone:
+                client_info = f"{ev.contact_name or 'Cliente'}"
+                if ev.contact_phone:
+                    client_info += f" ({ev.contact_phone})"
 
             event_time_brt = ev.start_time if ev.start_time else now_brt
             time_str = event_time_brt.strftime("%d/%m/%Y às %H:%M")
@@ -392,25 +396,6 @@ async def check_and_send_calendar_reminders():
                         break
 
             footer = f"{dept_label} • Sistema de Tarefas"
-
-            # 1. Immediate creation notification fallback
-            if not ev.notified_creation:
-                sent_any = False
-                for idx, raw_phone in enumerate(phone_list):
-                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
-                    title = "🔔 NOVA ATIVIDADE AGENDADA"
-                    description = (
-                        f"Olá, *{emp_name}*! Uma nova atividade foi atribuída a você na agenda:\n\n"
-                        f"📌 *Tipo:* {type_label}\n"
-                        f"🏷️ *Atividade:* {ev.title}\n"
-                        f"⏰ *Data e Hora:* {time_str}\n"
-                        f"👤 *Cliente:* {client_info}\n"
-                        f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
-                    )
-                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
-                        sent_any = True
-                if sent_any:
-                    ev.notified_creation = True
 
             # 2. Morning reminder on the day of the event
             is_same_day = (event_time_brt.date() == now_brt.date())
