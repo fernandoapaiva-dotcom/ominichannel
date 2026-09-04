@@ -48,7 +48,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   onSelectConversation
 }) => {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>('week');
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth <= 768 : false);
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day' | 'agenda'>(() => typeof window !== 'undefined' && window.innerWidth <= 768 ? 'day' : 'week');
+  const [showMobileSearch, setShowMobileSearch] = useState<boolean>(false);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [employees, setEmployees] = useState<AuthorizedTechnician[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -157,7 +159,19 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     return () => window.removeEventListener('click', handleCloseCtx);
   }, [contextMenu.isOpen]);
 
-  const [showSidebar, setShowSidebar] = useState<boolean>(true);
+  const [showSidebar, setShowSidebar] = useState<boolean>(() => typeof window !== 'undefined' ? window.innerWidth > 768 : true);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth <= 768;
+      setIsMobile(mobile);
+      if (mobile) {
+        setShowSidebar(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [miniCalDate, setMiniCalDate] = useState<Date>(new Date());
   const [selectedAgendas, setSelectedAgendas] = useState<Record<string, boolean>>({
     entrega_gas: true,
@@ -699,258 +713,571 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
       inset: 0,
       backgroundColor: 'rgba(0, 0, 0, 0.85)',
       backdropFilter: 'blur(6px)',
-      zIndex: 999,
+      zIndex: 100000,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      padding: '16px'
+      padding: isMobile ? 0 : '16px'
     }}>
       <div style={{
         backgroundColor: 'var(--bg-secondary)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '16px',
-        width: '95vw',
-        maxWidth: '1350px',
-        height: '92vh',
+        border: isMobile ? 'none' : '1px solid var(--border-color)',
+        borderRadius: isMobile ? 0 : '16px',
+        width: isMobile ? '100vw' : '95vw',
+        maxWidth: isMobile ? '100vw' : '1350px',
+        height: isMobile ? '100dvh' : '92vh',
         display: 'flex',
         flexDirection: 'column',
         boxShadow: '0 24px 60px rgba(0,0,0,0.8)',
-        overflow: 'hidden'
+        overflow: 'hidden',
+        position: 'relative'
       }}>
         {/* Top Header / Google Calendar Navigation */}
-        <div style={{
-          padding: '12px 20px',
-          borderBottom: '1px solid var(--border-color)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: '12px',
-          backgroundColor: '#181d2c'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-            <button
-              type="button"
-              onClick={() => setShowSidebar(prev => !prev)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-muted)',
-                cursor: 'pointer',
-                padding: '6px',
-                borderRadius: '50%',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-              title="Menu lateral"
-            >
-              <Menu size={20} />
-            </button>
-
-            {/* Google-like Logo Badge */}
+        {isMobile ? (
+          <div style={{
+            backgroundColor: '#181d2c',
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex',
+            flexDirection: 'column',
+            flexShrink: 0
+          }}>
+            {/* Row 1: Menu | Logo + Month | Search, + Criar, Close */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '8px',
-              color: '#fff',
-              fontWeight: 'bold',
-              fontSize: '18px'
+              justifyContent: 'space-between',
+              padding: '10px 14px',
+              gap: '8px'
             }}>
-              <div style={{
-                backgroundColor: '#1a73e8',
-                color: '#fff',
-                width: '28px',
-                height: '28px',
-                borderRadius: '6px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: '14px',
-                fontWeight: '800'
-              }}>
-                {new Date().getDate()}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowSidebar(prev => !prev)}
+                  style={{
+                    background: showSidebar ? '#1a73e8' : 'rgba(255,255,255,0.08)',
+                    border: '1px solid var(--border-color)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '7px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Menu da Agenda"
+                >
+                  <Menu size={18} />
+                </button>
+
+                <div style={{
+                  backgroundColor: '#1a73e8',
+                  color: '#fff',
+                  width: '26px',
+                  height: '26px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '12px',
+                  fontWeight: '800'
+                }}>
+                  {new Date().getDate()}
+                </div>
+
+                <span style={{ fontSize: '15px', fontWeight: 'bold', color: '#fff' }}>
+                  {MONTH_NAMES[currentDate.getMonth()].substring(0, 3)} {currentDate.getFullYear()}
+                </span>
               </div>
-              <span>Agenda</span>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowMobileSearch(prev => !prev)}
+                  style={{
+                    background: showMobileSearch ? '#1a73e8' : 'rgba(255,255,255,0.08)',
+                    border: '1px solid var(--border-color)',
+                    color: '#fff',
+                    borderRadius: '8px',
+                    padding: '7px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Buscar"
+                >
+                  <Search size={16} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openNewEventModal()}
+                  style={{
+                    backgroundColor: '#1a73e8',
+                    border: 'none',
+                    color: '#fff',
+                    padding: '7px 11px',
+                    borderRadius: '8px',
+                    fontWeight: '700',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px'
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>Criar</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.18)',
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    color: '#f87171',
+                    borderRadius: '8px',
+                    padding: '7px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                  title="Fechar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
-            {/* Navigation Controls */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '12px' }}>
-              <button
-                type="button"
-                onClick={handleToday}
-                style={{
-                  padding: '6px 16px',
+            {/* Mobile Search Expandable */}
+            {showMobileSearch && (
+              <div style={{
+                padding: '4px 14px 10px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                borderBottom: '1px solid rgba(255,255,255,0.06)'
+              }}>
+                <div style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
                   borderRadius: '20px',
-                  border: '1px solid var(--border-color)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-main)',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  fontWeight: '600'
-                }}
-              >
-                Hoje
-              </button>
+                  padding: '6px 12px'
+                }}>
+                  <Search size={14} color="var(--text-muted)" />
+                  <input
+                    type="text"
+                    placeholder="Buscar tarefas..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      outline: 'none',
+                      color: '#fff',
+                      fontSize: '13px',
+                      width: '100%'
+                    }}
+                    autoFocus
+                  />
+                  {searchTerm && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchTerm('')}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
-              <button
-                type="button"
-                onClick={handlePrev}
-                style={{
-                  padding: '6px',
-                  borderRadius: '50%',
-                  border: '1px solid var(--border-color)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-main)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <ChevronLeft size={18} />
-              </button>
-
-              <button
-                type="button"
-                onClick={handleNext}
-                style={{
-                  padding: '6px',
-                  borderRadius: '50%',
-                  border: '1px solid var(--border-color)',
-                  backgroundColor: 'var(--bg-secondary)',
-                  color: 'var(--text-main)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <ChevronRight size={18} />
-              </button>
-            </div>
-
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#fff', margin: '0 0 0 10px' }}>
-              {MONTH_NAMES[currentDate.getMonth()]} de {currentDate.getFullYear()}
-            </h2>
-          </div>
-
-          {/* Right Controls: Search, View Mode, Status Filter, Close */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            {/* Search Input */}
+            {/* Row 2: Navigation | View Switcher | Status Filter */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
-              backgroundColor: 'var(--bg-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: '20px',
-              padding: '6px 12px',
-              width: '180px'
+              justifyContent: 'space-between',
+              padding: '4px 14px 10px 14px',
+              gap: '6px'
             }}>
-              <Search size={14} color="var(--text-muted)" />
-              <input
-                type="text"
-                placeholder="Buscar tarefas..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
+              {/* Hoje + Arrows */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                <button
+                  type="button"
+                  onClick={handleToday}
+                  style={{
+                    padding: '5px 9px',
+                    borderRadius: '12px',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                    fontWeight: '600'
+                  }}
+                >
+                  Hoje
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  style={{
+                    padding: '5px',
+                    borderRadius: '50%',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <ChevronLeft size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  style={{
+                    padding: '5px',
+                    borderRadius: '50%',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+
+              {/* View Switcher: Mês | Sem | Dia | Lista */}
+              <div style={{
+                display: 'flex',
+                backgroundColor: 'var(--bg-primary)',
+                borderRadius: '16px',
+                border: '1px solid var(--border-color)',
+                padding: '2px'
+              }}>
+                {(['month', 'week', 'day', 'agenda'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setViewMode(mode)}
+                    style={{
+                      padding: '4px 7px',
+                      borderRadius: '14px',
+                      border: 'none',
+                      backgroundColor: viewMode === mode ? '#1a73e8' : 'transparent',
+                      color: viewMode === mode ? '#fff' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      fontWeight: viewMode === mode ? 'bold' : 'normal',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {mode === 'month' ? 'Mês' : mode === 'week' ? 'Sem' : mode === 'day' ? 'Dia' : 'Lista'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Status Filter */}
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as any)}
+                style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-main)',
+                  padding: '5px 6px',
+                  borderRadius: '8px',
+                  fontSize: '11px',
+                  outline: 'none',
+                  maxWidth: '75px'
+                }}
+              >
+                <option value="all">Todos</option>
+                <option value="pendente">⏳ Pend.</option>
+                <option value="concluido">✅ Concl.</option>
+              </select>
+            </div>
+          </div>
+        ) : (
+          <div style={{
+            padding: '12px 20px',
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '12px',
+            backgroundColor: '#181d2c'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <button
+                type="button"
+                onClick={() => setShowSidebar(prev => !prev)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  outline: 'none',
-                  color: '#fff',
-                  fontSize: '12px',
-                  width: '100%'
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '6px',
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
                 }}
-              />
-              {searchTerm && (
-                <button
-                  type="button"
-                  onClick={() => setSearchTerm('')}
-                  style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
+                title="Menu lateral"
+              >
+                <Menu size={20} />
+              </button>
 
-            {/* View Mode Switcher */}
-            <div style={{
-              display: 'flex',
-              backgroundColor: 'var(--bg-primary)',
-              borderRadius: '20px',
-              border: '1px solid var(--border-color)',
-              padding: '2px'
-            }}>
-              {(['month', 'week', 'day', 'agenda'] as const).map(mode => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setViewMode(mode)}
-                  style={{
-                    padding: '5px 12px',
-                    borderRadius: '16px',
-                    border: 'none',
-                    backgroundColor: viewMode === mode ? '#1a73e8' : 'transparent',
-                    color: viewMode === mode ? '#fff' : 'var(--text-muted)',
-                    cursor: 'pointer',
-                    fontSize: '12px',
-                    fontWeight: viewMode === mode ? 'bold' : 'normal',
-                    textTransform: 'capitalize',
-                    transition: 'all 0.15s'
-                  }}
-                >
-                  {mode === 'month' ? 'Mês' : mode === 'week' ? 'Semana' : mode === 'day' ? 'Dia' : 'Lista'}
-                </button>
-              ))}
-            </div>
-
-            {/* Status Filter */}
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value as any)}
-              style={{
-                backgroundColor: 'var(--bg-primary)',
-                border: '1px solid var(--border-color)',
-                color: 'var(--text-main)',
-                padding: '6px 10px',
-                borderRadius: '8px',
-                fontSize: '12px',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="all">Todas as Tarefas</option>
-              <option value="pendente">⏳ Pendentes</option>
-              <option value="concluido">✅ Concluídas</option>
-            </select>
-
-            {/* Close Button */}
-            <button
-              type="button"
-              onClick={onClose}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-muted)',
-                cursor: 'pointer',
-                padding: '6px',
+              {/* Google-like Logo Badge */}
+              <div style={{
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center'
-              }}
-              title="Fechar (Esc)"
-            >
-              <X size={22} />
-            </button>
+                gap: '8px',
+                color: '#fff',
+                fontWeight: 'bold',
+                fontSize: '18px'
+              }}>
+                <div style={{
+                  backgroundColor: '#1a73e8',
+                  color: '#fff',
+                  width: '28px',
+                  height: '28px',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '14px',
+                  fontWeight: '800'
+                }}>
+                  {new Date().getDate()}
+                </div>
+                <span>Agenda</span>
+              </div>
+
+              {/* Navigation Controls */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: '12px' }}>
+                <button
+                  type="button"
+                  onClick={handleToday}
+                  style={{
+                    padding: '6px 16px',
+                    borderRadius: '20px',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    fontSize: '13px',
+                    fontWeight: '600'
+                  }}
+                >
+                  Hoje
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  style={{
+                    padding: '6px',
+                    borderRadius: '50%',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <ChevronLeft size={18} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  style={{
+                    padding: '6px',
+                    borderRadius: '50%',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    color: 'var(--text-main)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  <ChevronRight size={18} />
+                </button>
+              </div>
+
+              <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#fff', margin: '0 0 0 10px' }}>
+                {MONTH_NAMES[currentDate.getMonth()]} de {currentDate.getFullYear()}
+              </h2>
+            </div>
+
+            {/* Right Controls: Search, View Mode, Status Filter, Close */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              {/* Search Input */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '20px',
+                padding: '6px 12px',
+                width: '180px'
+              }}>
+                <Search size={14} color="var(--text-muted)" />
+                <input
+                  type="text"
+                  placeholder="Buscar tarefas..."
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    outline: 'none',
+                    color: '#fff',
+                    fontSize: '12px',
+                    width: '100%'
+                  }}
+                />
+                {searchTerm && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchTerm('')}
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* View Mode Switcher */}
+              <div style={{
+                display: 'flex',
+                backgroundColor: 'var(--bg-primary)',
+                borderRadius: '20px',
+                border: '1px solid var(--border-color)',
+                padding: '2px'
+              }}>
+                {(['month', 'week', 'day', 'agenda'] as const).map(mode => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setViewMode(mode)}
+                    style={{
+                      padding: '5px 12px',
+                      borderRadius: '16px',
+                      border: 'none',
+                      backgroundColor: viewMode === mode ? '#1a73e8' : 'transparent',
+                      color: viewMode === mode ? '#fff' : 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      fontWeight: viewMode === mode ? 'bold' : 'normal',
+                      textTransform: 'capitalize',
+                      transition: 'all 0.15s'
+                    }}
+                  >
+                    {mode === 'month' ? 'Mês' : mode === 'week' ? 'Semana' : mode === 'day' ? 'Dia' : 'Lista'}
+                  </button>
+                ))}
+              </div>
+
+              {/* Status Filter */}
+              <select
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as any)}
+                style={{
+                  backgroundColor: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-main)',
+                  padding: '6px 10px',
+                  borderRadius: '8px',
+                  fontSize: '12px',
+                  outline: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="all">Todas as Tarefas</option>
+                <option value="pendente">⏳ Pendentes</option>
+                <option value="concluido">✅ Concluídas</option>
+              </select>
+
+              {/* Close Button */}
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                title="Fechar (Esc)"
+              >
+                <X size={22} />
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Main Body (Split into Left Sidebar + Main Calendar View) */}
-        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', backgroundColor: '#0d1117' }}>
-          {/* LEFT SIDEBAR (Google Calendar Style) */}
+        <div style={{ flex: 1, display: 'flex', overflow: 'hidden', backgroundColor: '#0d1117', position: 'relative' }}>
+          {/* Mobile Sidebar Backdrop */}
+          {isMobile && showSidebar && (
+            <div
+              onClick={() => setShowSidebar(false)}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                backdropFilter: 'blur(2px)',
+                zIndex: 90,
+                transition: 'opacity 0.2s ease'
+              }}
+            />
+          )}
+
+          {/* LEFT SIDEBAR (Desktop side-by-side OR Mobile Drawer) */}
           {showSidebar && (
-            <div style={{
+            <div style={isMobile ? {
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              bottom: 0,
+              width: '85vw',
+              maxWidth: '300px',
+              backgroundColor: '#131722',
+              borderRight: '1px solid var(--border-color)',
+              padding: '16px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px',
+              overflowY: 'auto',
+              zIndex: 100,
+              boxShadow: '6px 0 24px rgba(0,0,0,0.85)'
+            } : {
               width: '235px',
               backgroundColor: '#131722',
               borderRight: '1px solid var(--border-color)',
@@ -961,10 +1288,47 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
               overflowY: 'auto',
               flexShrink: 0
             }}>
+              {/* Mobile Drawer Header with Close button */}
+              {isMobile && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  paddingBottom: '10px',
+                  borderBottom: '1px solid var(--border-color)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <CalendarIcon size={18} color="#1a73e8" />
+                    <span style={{ fontSize: '15px', fontWeight: 'bold', color: '#fff' }}>Menu da Agenda</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowSidebar(false)}
+                    style={{
+                      background: 'rgba(255,255,255,0.08)',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      borderRadius: '50%',
+                      width: '30px',
+                      height: '30px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+
               {/* + Criar Button */}
               <button
                 type="button"
-                onClick={() => openNewEventModal()}
+                onClick={() => {
+                  if (isMobile) setShowSidebar(false);
+                  openNewEventModal();
+                }}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -979,7 +1343,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   cursor: 'pointer',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
                   transition: 'all 0.15s ease',
-                  width: 'fit-content'
+                  width: isMobile ? '100%' : 'fit-content',
+                  justifyContent: isMobile ? 'center' : 'flex-start'
                 }}
                 onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#2a324b')}
                 onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#202637')}
@@ -995,7 +1360,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 }}>
                   <Plus size={16} color="#fff" />
                 </div>
-                <span>Criar</span>
+                <span>Nova Tarefa</span>
               </button>
 
               {/* Mini Calendar */}
@@ -1047,7 +1412,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       <button
                         key={i}
                         type="button"
-                        onClick={() => setCurrentDate(c.date)}
+                        onClick={() => {
+                          setCurrentDate(c.date);
+                          if (isMobile) {
+                            setViewMode('day');
+                            setShowSidebar(false);
+                          }
+                        }}
                         style={{
                           background: isCurSelected ? '#1a73e8' : 'none',
                           color: isCurSelected ? '#fff' : isTodayCell ? 'var(--accent-primary)' : c.isCurrentMonth ? 'var(--text-main)' : 'rgba(255,255,255,0.2)',
@@ -1092,14 +1463,15 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       gap: '8px',
                       fontSize: '12px',
                       color: selectedAgendas[ag.key] ? '#fff' : 'var(--text-muted)',
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      padding: '4px 0'
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={selectedAgendas[ag.key] !== false}
                       onChange={e => setSelectedAgendas(prev => ({ ...prev, [ag.key]: e.target.checked }))}
-                      style={{ accentColor: ag.color, cursor: 'pointer' }}
+                      style={{ accentColor: ag.color, cursor: 'pointer', width: '16px', height: '16px' }}
                     />
                     <span style={{
                       width: '8px',
@@ -1120,16 +1492,31 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             {/* 1. WEEK VIEW (Google Calendar Style with Absolute Block Positioning) */}
             {viewMode === 'week' && (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-                {/* Sticky Top Header (Time label + 7 Days) */}
                 <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: '65px repeat(7, 1fr)',
-                  borderBottom: '1px solid var(--border-color)',
-                  backgroundColor: '#181d2c',
-                  zIndex: 20,
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
-                  flexShrink: 0
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflowX: isMobile ? 'auto' : 'hidden',
+                  overflowY: 'hidden',
+                  WebkitOverflowScrolling: 'touch'
                 }}>
+                  <div style={{
+                    minWidth: isMobile ? '720px' : '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    flex: 1,
+                    height: '100%'
+                  }}>
+                    {/* Sticky Top Header (Time label + 7 Days) */}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '50px repeat(7, 1fr)' : '65px repeat(7, 1fr)',
+                      borderBottom: '1px solid var(--border-color)',
+                      backgroundColor: '#181d2c',
+                      zIndex: 20,
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                      flexShrink: 0
+                    }}>
                   <div style={{
                     padding: '12px 6px',
                     textAlign: 'center',
@@ -1175,18 +1562,18 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   ))}
                 </div>
 
-                {/* Scrollable 24h Time Grid */}
-                <div
-                  ref={timeGridRef}
-                  style={{
-                    flex: 1,
-                    overflowY: 'auto',
-                    display: 'grid',
-                    gridTemplateColumns: '65px repeat(7, 1fr)',
-                    position: 'relative',
-                    backgroundColor: '#0f131d'
-                  }}
-                >
+                    {/* Scrollable 24h Time Grid */}
+                    <div
+                      ref={timeGridRef}
+                      style={{
+                        flex: 1,
+                        overflowY: 'auto',
+                        display: 'grid',
+                        gridTemplateColumns: isMobile ? '50px repeat(7, 1fr)' : '65px repeat(7, 1fr)',
+                        position: 'relative',
+                        backgroundColor: '#0f131d'
+                      }}
+                    >
                   {/* Left Column (24 Hours Labels) */}
                   <div style={{
                     height: '1440px',
@@ -1412,6 +1799,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                       </div>
                     );
                   })}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1422,7 +1811,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                 {/* Sticky Header */}
                 <div style={{
                   display: 'grid',
-                  gridTemplateColumns: '65px 1fr',
+                  gridTemplateColumns: isMobile ? '50px 1fr' : '65px 1fr',
                   borderBottom: '1px solid var(--border-color)',
                   backgroundColor: '#181d2c',
                   zIndex: 20,
@@ -1475,7 +1864,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     flex: 1,
                     overflowY: 'auto',
                     display: 'grid',
-                    gridTemplateColumns: '65px 1fr',
+                    gridTemplateColumns: isMobile ? '50px 1fr' : '65px 1fr',
                     position: 'relative',
                     backgroundColor: '#0f131d'
                   }}
@@ -1746,7 +2135,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                   display: 'grid',
                   gridTemplateColumns: 'repeat(7, 1fr)',
                   flex: 1,
-                  gridAutoRows: 'minmax(105px, 1fr)'
+                  gridAutoRows: isMobile ? 'minmax(75px, 1fr)' : 'minmax(105px, 1fr)'
                 }}>
                   {monthDays.map((cell, idx) => {
                     const dayEvents = filteredEvents.filter(ev => {
@@ -1759,7 +2148,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     return (
                       <div
                         key={idx}
-                        onClick={() => openNewEventModal(undefined, cell.date)}
+                        onClick={() => {
+                          if (isMobile && dayEvents.length > 0) {
+                            setCurrentDate(cell.date);
+                            setViewMode('day');
+                          } else {
+                            openNewEventModal(undefined, cell.date);
+                          }
+                        }}
                         onDragOver={(e) => {
                           e.preventDefault();
                           e.dataTransfer.dropEffect = 'move';
@@ -1789,7 +2185,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                         style={{
                           borderRight: (idx + 1) % 7 !== 0 ? '1px solid var(--border-color)' : 'none',
                           borderBottom: '1px solid var(--border-color)',
-                          padding: '6px',
+                          padding: isMobile ? '3px 2px' : '6px',
                           backgroundColor: isToday
                             ? 'rgba(16, 185, 129, 0.05)'
                             : cell.isCurrentMonth ? 'transparent' : 'rgba(0, 0, 0, 0.25)',
@@ -1805,13 +2201,13 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                           display: 'flex',
                           justifyContent: 'space-between',
                           alignItems: 'center',
-                          marginBottom: '4px'
+                          marginBottom: isMobile ? '2px' : '4px'
                         }}>
                           <span style={{
-                            fontSize: '13px',
+                            fontSize: isMobile ? '11px' : '13px',
                             fontWeight: isToday ? 'bold' : '500',
-                            width: '24px',
-                            height: '24px',
+                            width: isMobile ? '20px' : '24px',
+                            height: isMobile ? '20px' : '24px',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -1822,16 +2218,28 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             {cell.date.getDate()}
                           </span>
 
-                          {dayEvents.length > 0 && (
+                          {dayEvents.length > 0 && !isMobile && (
                             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                               {dayEvents.length} {dayEvents.length === 1 ? 'tarefa' : 'tarefas'}
+                            </span>
+                          )}
+                          {dayEvents.length > 0 && isMobile && (
+                            <span style={{
+                              fontSize: '9px',
+                              backgroundColor: 'rgba(26, 115, 232, 0.25)',
+                              color: '#60a5fa',
+                              padding: '1px 4px',
+                              borderRadius: '6px',
+                              fontWeight: 'bold'
+                            }}>
+                              {dayEvents.length}
                             </span>
                           )}
                         </div>
 
                         {/* Draggable Event Chips */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', overflowY: 'auto', flex: 1 }}>
-                          {dayEvents.slice(0, 4).map(ev => {
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', overflowY: 'auto', flex: 1 }}>
+                          {dayEvents.slice(0, isMobile ? 2 : 4).map(ev => {
                             const isDone = ev.status === 'concluido';
                             const evDt = new Date(ev.start_time);
                             const timeStr = ev.all_day ? '' : `${String(evDt.getHours()).padStart(2, '0')}:${String(evDt.getMinutes()).padStart(2, '0')}`;
@@ -1839,7 +2247,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                             return (
                               <div
                                 key={ev.id}
-                                draggable={true}
+                                draggable={!isMobile}
                                 onDragStart={(e) => {
                                   e.dataTransfer.setData('text/plain', String(ev.id));
                                   e.dataTransfer.effectAllowed = 'move';
@@ -1853,14 +2261,14 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                                   backgroundColor: isDone ? 'rgba(255, 255, 255, 0.05)' : (ev.color || '#ea580c'),
                                   color: isDone ? 'var(--text-muted)' : '#fff',
                                   textDecoration: isDone ? 'line-through' : 'none',
-                                  borderRadius: '4px',
-                                  padding: '2px 6px',
-                                  fontSize: '11px',
+                                  borderRadius: '3px',
+                                  padding: isMobile ? '1px 3px' : '2px 6px',
+                                  fontSize: isMobile ? '9px' : '11px',
                                   fontWeight: '600',
                                   display: 'flex',
                                   alignItems: 'center',
                                   gap: '4px',
-                                  cursor: 'grab',
+                                  cursor: 'pointer',
                                   opacity: isDone ? 0.65 : 0.95,
                                   border: isDone ? '1px solid var(--border-color)' : 'none',
                                   whiteSpace: 'nowrap',
@@ -1890,9 +2298,9 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                               </div>
                             );
                           })}
-                          {dayEvents.length > 4 && (
-                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 'bold' }}>
-                              +{dayEvents.length - 4} mais
+                          {dayEvents.length > (isMobile ? 2 : 4) && (
+                            <div style={{ fontSize: isMobile ? '8px' : '10px', color: 'var(--text-muted)', textAlign: 'center', fontWeight: 'bold' }}>
+                              +{dayEvents.length - (isMobile ? 2 : 4)} {isMobile ? '' : 'mais'}
                             </div>
                           )}
                         </div>
@@ -2035,6 +2443,34 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             )}
           </div>
         </div>
+
+        {/* Mobile Floating Action Button (FAB) */}
+        {isMobile && (
+          <button
+            type="button"
+            onClick={() => openNewEventModal()}
+            style={{
+              position: 'fixed',
+              bottom: '22px',
+              right: '20px',
+              zIndex: 100020,
+              width: '54px',
+              height: '54px',
+              borderRadius: '27px',
+              backgroundColor: '#1a73e8',
+              color: '#fff',
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
+              cursor: 'pointer'
+            }}
+            title="Nova Tarefa"
+          >
+            <Plus size={26} strokeWidth={2.5} />
+          </button>
+        )}
       </div>
 
       {/* New / Edit Event Modal (Form) */}
@@ -2044,19 +2480,20 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
           inset: 0,
           backgroundColor: 'rgba(0, 0, 0, 0.85)',
           backdropFilter: 'blur(8px)',
-          zIndex: 1100,
+          zIndex: 100100,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '16px'
+          padding: isMobile ? 0 : '16px'
         }}>
           <div style={{
             backgroundColor: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)',
-            borderRadius: '16px',
-            width: '100%',
-            maxWidth: '560px',
-            maxHeight: '90vh',
+            border: isMobile ? 'none' : '1px solid var(--border-color)',
+            borderRadius: isMobile ? 0 : '16px',
+            width: isMobile ? '100vw' : '100%',
+            maxWidth: isMobile ? '100vw' : '560px',
+            height: isMobile ? '100dvh' : 'auto',
+            maxHeight: isMobile ? '100dvh' : '90vh',
             display: 'flex',
             flexDirection: 'column',
             boxShadow: '0 24px 60px rgba(0,0,0,0.9)',
@@ -2802,7 +3239,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             boxShadow: '0 8px 24px rgba(0,0,0,0.7)',
             padding: '8px',
             width: '230px',
-            zIndex: 9999,
+            zIndex: 100200,
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
