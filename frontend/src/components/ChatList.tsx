@@ -377,7 +377,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             let hasUnreadClient = false;
             for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
               const r = String(msgs[i].remetente || '').toLowerCase();
-              if (r === 'cliente' && msgs[i].status !== 'read') {
+              if (r === 'cliente') {
                 hasUnreadClient = true;
                 break;
               }
@@ -774,7 +774,7 @@ export const ChatList: React.FC<ChatListProps> = ({
               !primaryConv.dados_adicionais?.pending_dismissed &&
               (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
               isRecentMessage &&
-              (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente' && lastMessage.status !== 'read'))
+              (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente'))
             );
 
             return (

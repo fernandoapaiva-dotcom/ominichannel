@@ -333,15 +333,18 @@ async def mark_all_conversations_read(
     if conv_ids:
         from sqlalchemy import update, func
         from sqlalchemy.orm.attributes import flag_modified
-        upd_msgs = (
-            update(Message)
-            .where(
-                Message.conversation_id.in_(conv_ids),
-                func.lower(Message.remetente) == "cliente"
+        chunk_size = 400
+        for i in range(0, len(conv_ids), chunk_size):
+            chunk = conv_ids[i:i + chunk_size]
+            upd_msgs = (
+                update(Message)
+                .where(
+                    Message.conversation_id.in_(chunk),
+                    func.lower(Message.remetente) == "cliente"
+                )
+                .values(status="read")
             )
-            .values(status="read")
-        )
-        await db.execute(upd_msgs)
+            await db.execute(upd_msgs)
 
         for c in convs:
             extra = dict(c.dados_adicionais or {})

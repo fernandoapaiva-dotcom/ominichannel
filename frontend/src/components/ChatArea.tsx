@@ -958,7 +958,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (conversation?.id) {
       const extra = (conversation as any).dados_adicionais || {};
       const msgs = conversation.messages || [];
-      const hasUnread = !extra.marked_as_read || !extra.pending_dismissed || msgs.some(m => m.remetente === 'cliente' && m.status !== 'read');
+      const hasUnread = !extra.marked_as_read || !extra.pending_dismissed || msgs.some(m => m.remetente === 'cliente');
 
       if (hasUnread) {
         extra.marked_as_read = true;

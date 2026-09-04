@@ -18,12 +18,15 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
+      const trimmedUser = username.trim();
+      const trimmedPass = password.trim();
+
       const formData = new URLSearchParams();
-      formData.append('username', username);
-      formData.append('password', password);
+      formData.append('username', trimmedUser);
+      formData.append('password', trimmedPass);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
 
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',
@@ -40,6 +43,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       const data = await res.json();
       localStorage.setItem('token', data.access_token);
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/');
+      }
       await onLoginSuccess();
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -117,6 +123,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <input
                 type="text"
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder="Ex: admin ou atendente1"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -141,6 +150,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <input
                 type="password"
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
