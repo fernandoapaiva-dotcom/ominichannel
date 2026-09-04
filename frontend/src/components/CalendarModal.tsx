@@ -544,41 +544,45 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   showSidebarRef.current = showSidebar;
   const isMobileRef = useRef(isMobile);
   isMobileRef.current = isMobile;
-  const calendarPushedRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!isOpen) return;
 
+    let poppedByBackButton = false;
+
+    // Push state once when modal opens
     window.history.pushState({ modal: 'calendar' }, '');
-    calendarPushedRef.current = true;
 
     const handlePopState = () => {
+      // If the event form modal is open, close it first and stay in calendar
       if (isFormOpenRef.current) {
         setIsFormOpen(false);
         window.history.pushState({ modal: 'calendar' }, '');
         return;
       }
+      // If sidebar drawer is open on mobile, close it first and stay in calendar
       if (isMobileRef.current && showSidebarRef.current) {
         setShowSidebar(false);
         window.history.pushState({ modal: 'calendar' }, '');
         return;
       }
-      calendarPushedRef.current = false;
-      onClose();
+
+      poppedByBackButton = true;
+      onCloseRef.current();
     };
 
     window.addEventListener('popstate', handlePopState);
 
     return () => {
       window.removeEventListener('popstate', handlePopState);
-      if (calendarPushedRef.current) {
-        calendarPushedRef.current = false;
-        if (window.history.state?.modal === 'calendar') {
-          window.history.back();
-        }
+      // Only pop history if modal was closed by UI button (not by back button)
+      if (!poppedByBackButton && window.history.state?.modal === 'calendar') {
+        window.history.back();
       }
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   useEffect(() => {
     if (timeGridRef.current && (viewMode === 'week' || viewMode === 'day')) {

@@ -246,6 +246,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
+  const handleCloseCalendar = useCallback(() => {
+    setIsCalendarOpen(false);
+    setCalendarPrefill(null);
+    fetchCalendarSummary();
+  }, [fetchCalendarSummary]);
+
   const loadActiveConversationDetail = useCallback(async (convId: number) => {
     try {
       const detail = await apiFetch(`/conversations/${convId}`);
@@ -995,11 +1001,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       {/* Google-Calendar-style Personal Tasks & Appointments Modal */}
       <CalendarModal
         isOpen={isCalendarOpen}
-        onClose={() => {
-          setIsCalendarOpen(false);
-          setCalendarPrefill(null);
-          fetchCalendarSummary();
-        }}
+        onClose={handleCloseCalendar}
         currentUser={user}
         initialEventData={calendarPrefill}
         onSelectConversation={(convId) => {
