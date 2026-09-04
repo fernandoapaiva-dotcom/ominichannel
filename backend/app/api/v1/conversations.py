@@ -153,7 +153,7 @@ async def list_conversations(
                     FROM messages
                     WHERE conversation_id IN ({cids_str})
                 )
-                WHERE rn <= 2
+                WHERE rn <= 5
                 ORDER BY id ASC
             """)
             m_res = await db.execute(sql)

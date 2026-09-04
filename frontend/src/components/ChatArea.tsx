@@ -464,6 +464,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   // Unified Sub-Layer Close Handler for Back Button & Esc key
   const closeTopmostSublayer = useCallback(() => {
+    if (previewMediaIndex !== null) { setPreviewMediaIndex(null); return true; }
     if (showCopilotModal) { setShowCopilotModal(false); return true; }
     if (showAttachmentMenu) { setShowAttachmentMenu(false); return true; }
     if (showEmojiPicker) { setShowEmojiPicker(false); return true; }
@@ -476,6 +477,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (isSelectionMode) { setIsSelectionMode(false); setSelectedMessagesForForward([]); return true; }
     return false;
   }, [
+    previewMediaIndex,
     showCopilotModal, showAttachmentMenu, showEmojiPicker,
     showLocationModal, showContactModal, showPixModal,
     showAvatarZoom, showParticipantsModal, showReportAIModal, isSelectionMode
@@ -483,6 +485,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   // Sync browser history state (pushState) whenever a modal/sub-layer opens
   const hasSublayer = 
+    previewMediaIndex !== null ||
     showCopilotModal || showAttachmentMenu || showEmojiPicker ||
     showLocationModal || showContactModal || showPixModal ||
     showAvatarZoom || showParticipantsModal || showReportAIModal || isSelectionMode;
@@ -828,30 +831,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const closeMediaLightbox = useCallback(() => {
     setPreviewMediaIndex(null);
-    try {
-      if (window.history.state?.lightboxOpen) {
-        window.history.back();
-      }
-    } catch {}
   }, []);
-
-  // Android System Back Button & History management for Media Lightbox
-  useEffect(() => {
-    if (previewMediaIndex !== null) {
-      try {
-        window.history.pushState({ page: 'chat', sublayerOpen: true, lightboxOpen: true }, '');
-      } catch {}
-
-      const handlePopState = () => {
-        setPreviewMediaIndex(null);
-      };
-
-      window.addEventListener('popstate', handlePopState);
-      return () => {
-        window.removeEventListener('popstate', handlePopState);
-      };
-    }
-  }, [previewMediaIndex]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

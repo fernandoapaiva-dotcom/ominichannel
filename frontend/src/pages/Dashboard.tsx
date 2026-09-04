@@ -164,6 +164,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       const data = await apiFetch(url);
       if (Array.isArray(data)) {
         setConversations(prev => {
+          const prevMap = new Map<number, Conversation>();
+          prev.forEach(c => prevMap.set(c.id, c));
+
           // Collect all optimistic/sending messages across all conversations
           const pendingMessages: { [key: string]: Message[] } = {};
           prev.forEach(c => {
@@ -182,6 +185,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           });
 
           return data.map((c: Conversation) => {
+            const prevConv = prevMap.get(c.id);
+
+            // Determine messages: if prevConv already has full history loaded, PRESERVE IT!
+            let currentMsgs = c.messages || [];
+            if (prevConv && prevConv.messages && prevConv.messages.length > 0) {
+              if (prevConv.messages.length >= currentMsgs.length) {
+                const existingIds = new Set(prevConv.messages.map(m => m.id));
+                const newIncoming = currentMsgs.filter(m => !existingIds.has(m.id));
+                currentMsgs = newIncoming.length > 0
+                  ? [...prevConv.messages, ...newIncoming]
+                  : prevConv.messages;
+              }
+            }
+
             const cid = c.contact_id || c.contact?.id;
             const phone = (c.contact?.telefone || '').replace(/\D/g, '');
             const keyCid = cid ? `cid_${cid}` : '';
@@ -195,7 +212,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             ];
 
             if (sending.length > 0) {
-              const currentMsgs = c.messages || [];
               const existingTexts = new Set(currentMsgs.map(m => (m.conteudo || '').split('|')[0].trim()));
               const existingIds = new Set(currentMsgs.map(m => m.id));
 
@@ -213,13 +229,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               });
 
               if (uniqueToKeep.length > 0) {
-                return {
-                  ...c,
-                  messages: [...currentMsgs, ...uniqueToKeep]
-                };
+                currentMsgs = [...currentMsgs, ...uniqueToKeep];
               }
             }
-            return c;
+
+            // Preserve any local state from prevConv
+            const mergedDados = {
+              ...(prevConv?.dados_adicionais || {}),
+              ...(c.dados_adicionais || {})
+            };
+
+            return {
+              ...c,
+              dados_adicionais: mergedDados,
+              messages: currentMsgs
+            };
           });
         });
       }
@@ -259,8 +283,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         setConversations(prev => {
           const index = prev.findIndex(c => c.id === convId);
           if (index >= 0) {
+            const existing = prev[index];
+            const existingMsgs = existing.messages || [];
+            const detailMsgs = detail.messages || [];
+
+            // Combine messages avoiding duplicates
+            const msgMap = new Map<number, Message>();
+            detailMsgs.forEach((m: Message) => msgMap.set(m.id, m));
+            existingMsgs.forEach((m: Message) => {
+              if (!msgMap.has(m.id) || m.id < 0 || m.status === 'sending') {
+                msgMap.set(m.id, m);
+              }
+            });
+
+            const sortedMsgs = Array.from(msgMap.values()).sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
+
             const next = [...prev];
-            next[index] = { ...next[index], ...detail };
+            next[index] = {
+              ...existing,
+              ...detail,
+              messages: sortedMsgs
+            };
             return next;
           } else {
             return [detail, ...prev];
@@ -271,6 +316,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       console.error('Error loading active conversation detail:', err);
     }
   }, []);
+
+  // Automatically ensure full message history is loaded for active conversation
+  const activeConvIdToLoad = activeConversationId || activeConversation?.id;
+  useEffect(() => {
+    if (!activeConvIdToLoad) return;
+    const conv = conversations.find(c => c.id === activeConvIdToLoad);
+    if (!conv || !conv.messages || conv.messages.length <= 5) {
+      loadActiveConversationDetail(activeConvIdToLoad);
+    }
+  }, [activeConvIdToLoad, conversations, loadActiveConversationDetail]);
 
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
@@ -358,11 +413,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   // User Presence State (digitando / gravando áudio)
   const [userPresences, setUserPresences] = useState<Record<number, { status: string; agentName?: string; expiresAt: number }>>({});
 
-  // 1. Polling Fallback Safety Net (Every 3s)
+  // 1. Polling Fallback Safety Net (Every 5s)
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
-    }, 3000);
+    }, 5000);
     return () => clearInterval(interval);
   }, [fetchConversations]);
 
