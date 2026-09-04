@@ -7,7 +7,7 @@ from app.core.config import settings
 
 logger = logging.getLogger("database")
 
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool, NullPool
 
 is_sqlite = "sqlite" in settings.DATABASE_URL.lower()
 
@@ -18,10 +18,13 @@ engine_kwargs = {
 
 if is_sqlite:
     engine_kwargs["connect_args"] = {
-        "timeout": 60.0,
+        "timeout": 15.0,
         "check_same_thread": False,
     }
-    engine_kwargs["poolclass"] = NullPool
+    engine_kwargs["poolclass"] = QueuePool
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 5
+    engine_kwargs["pool_timeout"] = 15.0
 else:
     engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_size"] = 20
@@ -41,7 +44,7 @@ if is_sqlite:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
             cursor.execute("PRAGMA foreign_keys=ON;")
-            cursor.execute("PRAGMA busy_timeout=60000;")
+            cursor.execute("PRAGMA busy_timeout=15000;")
             cursor.close()
         except Exception as e:
             logger.debug(f"SQLite PRAGMA error: {e}")

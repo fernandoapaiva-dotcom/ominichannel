@@ -82,7 +82,7 @@ export const SyncTaskbar: React.FC = () => {
     };
 
     checkProgress();
-    const interval = setInterval(checkProgress, 2000);
+    const interval = setInterval(checkProgress, 5000);
 
     return () => {
       isMounted = false;

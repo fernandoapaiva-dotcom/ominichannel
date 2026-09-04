@@ -26,7 +26,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       formData.append('password', trimmedPass);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 25000);
 
       const res = await fetch('/api/v1/auth/login', {
         method: 'POST',

@@ -5,9 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+import jwt
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import get_admin_user, get_current_user, encrypt_data, decrypt_data, mask_sensitive_string
+from app.core.security import get_admin_user, get_current_user, encrypt_data, decrypt_data, mask_sensitive_string, oauth2_scheme
 from app.models.models import WhatsAppNumber, User, user_number_access
 from app.schemas.schemas import WhatsAppNumberCreate, WhatsAppNumberResponse
 from app.services.whatsapp_sync_service import whatsapp_sync_service
@@ -56,9 +57,16 @@ async def list_accessible_whatsapp_numbers(
 
 @router.get("/sync_progress")
 async def get_sync_progress(
-    current_user: User = Depends(get_current_user)
+    token: str = Depends(oauth2_scheme)
 ):
-    return whatsapp_sync_service.get_tenant_progress(current_user.tenant_id)
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            return []
+        return whatsapp_sync_service.get_tenant_progress(int(tenant_id))
+    except Exception:
+        return []
 
 @router.post("/sync_all")
 async def trigger_sync_all_numbers(

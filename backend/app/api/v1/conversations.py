@@ -122,9 +122,9 @@ async def list_conversations(
                 Conversation.protocol_number.ilike(term),
                 Conversation.assunto_atual.ilike(term)
             )
-        ).order_by(Conversation.ultima_interacao_em.desc()).limit(500)
+        ).order_by(Conversation.ultima_interacao_em.desc()).limit(100)
     else:
-        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(1500)
+        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()
@@ -139,9 +139,9 @@ async def list_conversations(
     conv_ids = [c.id for c in conversations]
     msgs_by_conv: Dict[int, List[dict]] = {}
     if conv_ids:
-        # Fetch the latest 10 messages per conversation using SQLite ROW_NUMBER window function.
-        # This replaces loading tens of thousands of ORM objects which caused 20+ second delays and timeouts.
-        chunk_size = 400
+        # Fetch the latest 2 messages per conversation using SQLite ROW_NUMBER window function.
+        # This provides instant sidebar previews while drastically reducing memory and CPU.
+        chunk_size = 300
         for i in range(0, len(conv_ids), chunk_size):
             chunk = conv_ids[i:i + chunk_size]
             cids_str = ",".join(str(cid) for cid in chunk)
@@ -153,7 +153,7 @@ async def list_conversations(
                     FROM messages
                     WHERE conversation_id IN ({cids_str})
                 )
-                WHERE rn <= 10
+                WHERE rn <= 2
                 ORDER BY id ASC
             """)
             m_res = await db.execute(sql)
