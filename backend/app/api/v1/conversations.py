@@ -1,5 +1,6 @@
 import os
 import asyncio
+import json
 import uuid
 import base64
 import subprocess
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, text
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
@@ -123,7 +124,7 @@ async def list_conversations(
             )
         ).order_by(Conversation.ultima_interacao_em.desc()).limit(500)
     else:
-        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(2500)
+        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(1500)
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()
@@ -136,22 +137,61 @@ async def list_conversations(
     ]
 
     conv_ids = [c.id for c in conversations]
-    msgs_by_conv: Dict[int, List[Message]] = {}
+    msgs_by_conv: Dict[int, List[dict]] = {}
     if conv_ids:
-        # Batch conv_ids in chunks of 400 to avoid SQLite's 999 variable limit
+        # Fetch the latest 10 messages per conversation using SQLite ROW_NUMBER window function.
+        # This replaces loading tens of thousands of ORM objects which caused 20+ second delays and timeouts.
         chunk_size = 400
         for i in range(0, len(conv_ids), chunk_size):
             chunk = conv_ids[i:i + chunk_size]
-            m_stmt = (
-                select(Message)
-                .where(Message.conversation_id.in_(chunk))
-                .order_by(Message.id.asc())
-            )
-            m_res = await db.execute(m_stmt)
-            for m in m_res.scalars().all():
-                if m.conversation_id not in msgs_by_conv:
-                    msgs_by_conv[m.conversation_id] = []
-                msgs_by_conv[m.conversation_id].append(m)
+            cids_str = ",".join(str(cid) for cid in chunk)
+            sql = text(f"""
+                SELECT id, conversation_id, remetente, conteudo, tipo, status, whatsapp_msg_id, dados_adicionais, timestamp
+                FROM (
+                    SELECT id, conversation_id, remetente, conteudo, tipo, status, whatsapp_msg_id, dados_adicionais, timestamp,
+                           ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY id DESC) as rn
+                    FROM messages
+                    WHERE conversation_id IN ({cids_str})
+                )
+                WHERE rn <= 10
+                ORDER BY id ASC
+            """)
+            m_res = await db.execute(sql)
+            for r in m_res.fetchall():
+                cid = r[1]
+                if cid not in msgs_by_conv:
+                    msgs_by_conv[cid] = []
+
+                raw_dados = r[7]
+                if isinstance(raw_dados, str):
+                    try:
+                        dados_dict = json.loads(raw_dados)
+                    except Exception:
+                        dados_dict = {}
+                elif isinstance(raw_dados, dict):
+                    dados_dict = raw_dados
+                else:
+                    dados_dict = {}
+
+                ts = r[8]
+                if hasattr(ts, 'isoformat'):
+                    ts_str = ts.isoformat()
+                elif ts:
+                    ts_str = str(ts)
+                else:
+                    ts_str = None
+
+                msgs_by_conv[cid].append({
+                    "id": r[0],
+                    "conversation_id": r[1],
+                    "remetente": str(r[2]).lower() if r[2] else "cliente",
+                    "conteudo": r[3] or "",
+                    "tipo": str(r[4]).lower() if r[4] else "texto",
+                    "status": r[5] or "sent",
+                    "whatsapp_msg_id": r[6],
+                    "dados_adicionais": dados_dict,
+                    "timestamp": ts_str
+                })
 
     user_ids = [uid for uid in {c.assigned_user_id for c in conversations} if uid]
     user_map = {}
@@ -185,20 +225,6 @@ async def list_conversations(
                 "provider_type": c.whatsapp_number.provider_type or "evolution",
                 "status": c.whatsapp_number.status
             }
-        msgs = []
-        sorted_msgs = msgs_by_conv.get(c.id, [])
-        for m in sorted_msgs[-50:]:
-            msgs.append({
-                "id": m.id,
-                "conversation_id": m.conversation_id,
-                "remetente": m.remetente.value if hasattr(m.remetente, 'value') else str(m.remetente).lower(),
-                "conteudo": m.conteudo,
-                "tipo": m.tipo.value if hasattr(m.tipo, 'value') else str(m.tipo),
-                "status": m.status or "sent",
-                "whatsapp_msg_id": m.whatsapp_msg_id,
-                "dados_adicionais": m.dados_adicionais or {},
-                "timestamp": m.timestamp.isoformat() if m.timestamp else None
-            })
         response_list.append({
             "id": c.id,
             "tenant_id": c.tenant_id,
@@ -214,7 +240,7 @@ async def list_conversations(
             "ultima_interacao_em": c.ultima_interacao_em.isoformat() if c.ultima_interacao_em else None,
             "contact": contact_dict,
             "whatsapp_number": wn_dict,
-            "messages": msgs
+            "messages": msgs_by_conv.get(c.id, [])
         })
 
     return response_list
