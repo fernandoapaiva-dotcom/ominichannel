@@ -2,10 +2,20 @@ import React from 'react';
 import { Play, Pause, X, Mic, User } from 'lucide-react';
 import { useAudio } from '../context/AudioContext';
 
-export const StickyAudioPlayer: React.FC = () => {
+interface StickyAudioPlayerProps {
+  currentConversationId?: number;
+}
+
+export const StickyAudioPlayer: React.FC<StickyAudioPlayerProps> = ({ currentConversationId }) => {
   const { activeAudio, pauseAudio, resumeAudio, seekAudio, setSpeed, stopAudio } = useAudio();
 
   if (!activeAudio) return null;
+
+  // Não exibe o player fixo no topo se o usuário estiver dentro da conversa do áudio
+  // (a bolha já tem todos os controles e o banner no topo empurrava a tela para cima)
+  if (currentConversationId && activeAudio.conversationId && Number(currentConversationId) === Number(activeAudio.conversationId)) {
+    return null;
+  }
 
   const formatTime = (secs: number) => {
     if (!secs || isNaN(secs)) return '0:00';

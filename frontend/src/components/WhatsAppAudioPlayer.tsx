@@ -165,7 +165,11 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
       {/* Play/Pause Button */}
       <button
         type="button"
-        onClick={() => toggleAudio(message, conversation, allMessages)}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleAudio(message, conversation, allMessages);
+        }}
         style={{
           width: '38px',
           height: '38px',
@@ -196,7 +200,11 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
             min={0}
             max={duration || 100}
             value={currentTime || 0}
-            onChange={(e) => seekAudio(Number(e.target.value))}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => {
+              e.stopPropagation();
+              seekAudio(Number(e.target.value));
+            }}
             style={{
               position: 'absolute',
               top: 0,
@@ -230,6 +238,7 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
           <button
             type="button"
             onClick={(e) => {
+              e.preventDefault();
               e.stopPropagation();
               cycleSpeed();
             }}

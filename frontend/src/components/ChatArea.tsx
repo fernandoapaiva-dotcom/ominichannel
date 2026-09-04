@@ -3821,7 +3821,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      <StickyAudioPlayer />
+      <StickyAudioPlayer currentConversationId={conversation?.id} />
 
       <div
         ref={scrollContainerRef}
