@@ -7,8 +7,6 @@ from app.core.config import settings
 
 logger = logging.getLogger("database")
 
-from sqlalchemy.pool import QueuePool, NullPool
-
 is_sqlite = "sqlite" in settings.DATABASE_URL.lower()
 
 engine_kwargs = {
@@ -21,7 +19,6 @@ if is_sqlite:
         "timeout": 15.0,
         "check_same_thread": False,
     }
-    engine_kwargs["poolclass"] = QueuePool
     engine_kwargs["pool_size"] = 5
     engine_kwargs["max_overflow"] = 5
     engine_kwargs["pool_timeout"] = 15.0
