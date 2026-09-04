@@ -18,15 +18,16 @@ export const isGroupConversation = (conv: Conversation): boolean => {
 
 export const isConversationPendingForAttendant = (conv: Conversation, user?: User | null): boolean => {
   if (isGroupConversation(conv)) return false;
-  if (conv.status === 'encerrada' || conv.status === 'expirada_por_inatividade') return false;
+  const statusLower = String(conv.status || '').toLowerCase();
+  if (statusLower === 'encerrada' || statusLower === 'expirada_por_inatividade') return false;
 
-  if (user && user.role !== 'admin') {
-    const isAssigned = conv.assigned_user_id === user.id || conv.status === 'aguardando_atendente';
-    if (!isAssigned) return false;
+  const isAdmin = user?.role ? String(user.role).toLowerCase() === 'admin' : false;
+  if (!isAdmin && user) {
+    // If assigned to another attendant, skip
+    if (conv.assigned_user_id && conv.assigned_user_id !== user.id) {
+      return false;
+    }
   }
-
-  const extra = conv.dados_adicionais || {};
-  if (extra.marked_as_read || extra.pending_dismissed) return false;
 
   const msgs = conv.messages || [];
   if (msgs.length === 0) return false;
@@ -47,6 +48,10 @@ export const isConversationPendingForAttendant = (conv: Conversation, user?: Use
 
   const lastClientMsg = msgs[lastClientIndex];
   if (lastClientMsg && lastClientMsg.status === 'read') return false;
+
+  const extra = conv.dados_adicionais || {};
+  if (extra.pending_dismissed) return false;
+  if (extra.marked_as_read && lastClientMsg.status === 'read') return false;
 
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
@@ -61,8 +66,11 @@ export const isConversationPendingForAttendant = (conv: Conversation, user?: Use
 
 export const isGroupPending = (conv: Conversation): boolean => {
   if (!isGroupConversation(conv)) return false;
+  const statusLower = String(conv.status || '').toLowerCase();
+  if (statusLower === 'encerrada' || statusLower === 'expirada_por_inatividade') return false;
+
   const extra = conv.dados_adicionais || {};
-  if (extra.marked_as_read || extra.pending_dismissed) return false;
+  if (extra.pending_dismissed) return false;
 
   const msgs = conv.messages || [];
   if (msgs.length === 0) return false;
@@ -83,6 +91,7 @@ export const isGroupPending = (conv: Conversation): boolean => {
 
   const lastClientMsg = msgs[lastClientIndex];
   if (lastClientMsg && lastClientMsg.status === 'read') return false;
+  if (extra.marked_as_read && lastClientMsg.status === 'read') return false;
 
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
@@ -93,6 +102,71 @@ export const isGroupPending = (conv: Conversation): boolean => {
 
   if (lastAttendantIndex === -1) return true;
   return lastClientIndex > lastAttendantIndex;
+};
+
+/**
+ * Pede permissão nativa de notificações no navegador / Android PWA
+ */
+export const requestNotificationPermission = async (): Promise<boolean> => {
+  if (typeof window === 'undefined' || !('Notification' in window)) return false;
+  try {
+    const permission = await Notification.requestPermission();
+    return permission === 'granted';
+  } catch (err) {
+    console.warn('Erro ao solicitar permissão de notificação:', err);
+    return false;
+  }
+};
+
+/**
+ * Dispara uma notificação nativa do sistema Android para que o Launcher
+ * (Samsung One UI, Pixel, etc.) acerte imediatamente o alerta no ícone do app
+ */
+export const triggerSystemNotification = async (
+  title: string,
+  body: string,
+  isGroup: boolean = false,
+  tag: string = 'msg-alert'
+) => {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(title, {
+        body,
+        icon: '/favicon.svg',
+        badge: '/favicon.svg',
+        tag,
+        renotify: true,
+        vibrate: [200, 100, 200] as any,
+        data: { isGroup }
+      });
+    } else {
+      new Notification(title, {
+        body,
+        icon: '/favicon.svg',
+        tag
+      });
+    }
+  } catch (err) {
+    console.warn('Falha ao exibir notificação do sistema:', err);
+  }
+};
+
+/**
+ * Limpa notificações ativas do sistema
+ */
+export const clearSystemNotifications = async () => {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const notifications = await reg.getNotifications();
+    notifications.forEach(n => n.close());
+  } catch (err) {
+    // ignore
+  }
 };
 
 /**
@@ -107,6 +181,7 @@ export const updateAppBadgesAndIcon = (chatCount: number, groupCount: number) =>
       (navigator as any).setAppBadge(totalCount).catch(() => {});
     } else {
       (navigator as any).clearAppBadge().catch(() => {});
+      clearSystemNotifications().catch(() => {});
     }
   }
 

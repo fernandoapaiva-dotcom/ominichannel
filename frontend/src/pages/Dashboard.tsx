@@ -18,7 +18,9 @@ import { MobileBottomNav } from '../components/MobileBottomNav';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
-  updateAppBadgesAndIcon
+  updateAppBadgesAndIcon,
+  triggerSystemNotification,
+  requestNotificationPermission
 } from '../utils/badgeHelper';
 
 interface DashboardProps {
@@ -142,6 +144,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
   const [isMediaGalleryOpen, setIsMediaGalleryOpen] = useState(false);
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission === 'default';
+    }
+    return false;
+  });
 
   const currentSearchTermRef = useRef<string>('');
 
@@ -442,9 +450,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                   found = true;
                   const currentMsgs = c.messages || [];
                   const hasSameId = currentMsgs.some(m => m.id === newMsg.id);
+                  const isFromClient = newMsg.remetente === 'cliente';
+                  const nextDados = {
+                    ...(c.dados_adicionais || {}),
+                    ...(isFromClient ? { marked_as_read: false, pending_dismissed: false } : {})
+                  };
+
                   if (hasSameId) {
                     return {
                       ...c,
+                      dados_adicionais: nextDados,
                       ultima_interacao_em: newMsg.timestamp,
                       messages: currentMsgs.map(m => m.id === newMsg.id ? { ...m, ...newMsg } : m)
                     };
@@ -464,6 +479,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                   const alreadyPresent = replacedSending.some(m => m.id === newMsg.id);
                   return {
                     ...c,
+                    dados_adicionais: nextDados,
                     ultima_interacao_em: newMsg.timestamp,
                     messages: alreadyPresent ? replacedSending : [...replacedSending, newMsg]
                   };
@@ -480,6 +496,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
             if (payload.remetente === 'cliente') {
               playNotificationSound();
+
+              const phone = String(payload.contact_phone || payload.phone || '');
+              const isGroupMsg = Boolean(
+                phone.includes('@g.us') ||
+                phone.startsWith('120363') ||
+                payload.dados_adicionais?.is_group ||
+                payload.is_group
+              );
+              const senderName = payload.contact_name || (isGroupMsg ? 'Grupo' : 'Cliente');
+              const preview = payload.conteudo
+                ? (payload.conteudo.length > 60 ? payload.conteudo.slice(0, 60) + '...' : payload.conteudo)
+                : 'Nova mensagem recebida';
+
+              triggerSystemNotification(
+                isGroupMsg ? `🟡 ${senderName}` : `🔴 ${senderName}`,
+                preview,
+                isGroupMsg,
+                `conv-${payload.conversation_id}`
+              );
             }
           } else if (payload.type === 'conversation_pinned_toggled') {
             setConversations(prev => prev.map(c => {
@@ -740,6 +775,73 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   return (
     <div className="dashboard-layout" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
+      {showNotificationPrompt && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: '#0f172a',
+          borderBottom: '2px solid #22c55e',
+          color: '#fff',
+          padding: '10px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+          zIndex: 100050,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+          fontSize: '13px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '18px' }}>🔔</span>
+            <span>
+              <strong>Ativar alertas no ícone do celular:</strong> Receba avisos de chats (vermelho) e grupos (amarelo) no seu aparelho.
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={async () => {
+                const granted = await requestNotificationPermission();
+                setShowNotificationPrompt(false);
+                if (granted) {
+                  updateAppBadgesAndIcon(pendingBadgeCount, groupPendingBadgeCount);
+                  triggerSystemNotification('✅ Alertas Ativados!', 'OminiChannel avisará sobre novas mensagens no ícone do seu celular.', false, 'perm-ok');
+                }
+              }}
+              style={{
+                backgroundColor: '#22c55e',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '6px 14px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                fontSize: '12px'
+              }}
+            >
+              Ativar Agora
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNotificationPrompt(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                fontSize: '16px',
+                padding: '4px'
+              }}
+              title="Dispensar"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       {notificationAlert && (
         <div style={{
           position: 'fixed',

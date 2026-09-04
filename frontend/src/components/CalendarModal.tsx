@@ -537,6 +537,49 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setCurrentDate(new Date());
   };
 
+  // Handle Android / mobile hardware back button "<" so it returns to main screen instead of exiting site
+  const isFormOpenRef = useRef(isFormOpen);
+  isFormOpenRef.current = isFormOpen;
+  const showSidebarRef = useRef(showSidebar);
+  showSidebarRef.current = showSidebar;
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
+  const calendarPushedRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    window.history.pushState({ modal: 'calendar' }, '');
+    calendarPushedRef.current = true;
+
+    const handlePopState = () => {
+      if (isFormOpenRef.current) {
+        setIsFormOpen(false);
+        window.history.pushState({ modal: 'calendar' }, '');
+        return;
+      }
+      if (isMobileRef.current && showSidebarRef.current) {
+        setShowSidebar(false);
+        window.history.pushState({ modal: 'calendar' }, '');
+        return;
+      }
+      calendarPushedRef.current = false;
+      onClose();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      if (calendarPushedRef.current) {
+        calendarPushedRef.current = false;
+        if (window.history.state?.modal === 'calendar') {
+          window.history.back();
+        }
+      }
+    };
+  }, [isOpen, onClose]);
+
   useEffect(() => {
     if (timeGridRef.current && (viewMode === 'week' || viewMode === 'day')) {
       const curHour = new Date().getHours();
@@ -741,15 +784,38 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
             flexDirection: 'column',
             flexShrink: 0
           }}>
-            {/* Row 1: Menu | Logo + Month | Search, + Criar, Close */}
+            {/* Row 1: Back Button | Menu | Logo + Month | Search, + Criar, Close */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              padding: '10px 14px',
-              gap: '8px'
+              padding: '10px 12px',
+              gap: '6px'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexShrink: 1 }}>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  style={{
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid var(--border-color)',
+                    color: '#fff',
+                    cursor: 'pointer',
+                    padding: '6px 8px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '2px',
+                    fontSize: '12px',
+                    fontWeight: '700',
+                    flexShrink: 0
+                  }}
+                  title="Voltar para a tela principal"
+                >
+                  <ChevronLeft size={18} />
+                  <span>Voltar</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setShowSidebar(prev => !prev)}
@@ -758,33 +824,26 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     border: '1px solid var(--border-color)',
                     color: '#fff',
                     cursor: 'pointer',
-                    padding: '7px',
+                    padding: '6px 7px',
                     borderRadius: '8px',
                     display: 'flex',
                     alignItems: 'center',
-                    justifyContent: 'center'
+                    justifyContent: 'center',
+                    flexShrink: 0
                   }}
-                  title="Menu da Agenda"
+                  title="Filtros e Agendas"
                 >
-                  <Menu size={18} />
+                  <Menu size={16} />
                 </button>
 
-                <div style={{
-                  backgroundColor: '#1a73e8',
+                <span style={{
+                  fontSize: '14px',
+                  fontWeight: 'bold',
                   color: '#fff',
-                  width: '26px',
-                  height: '26px',
-                  borderRadius: '6px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '12px',
-                  fontWeight: '800'
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
                 }}>
-                  {new Date().getDate()}
-                </div>
-
-                <span style={{ fontSize: '15px', fontWeight: 'bold', color: '#fff' }}>
                   {MONTH_NAMES[currentDate.getMonth()].substring(0, 3)} {currentDate.getFullYear()}
                 </span>
               </div>

@@ -1529,6 +1529,7 @@ async def receive_evolution_webhook(
     # 4. Save Customer Message with WhatsApp Message ID (status received/unread)
     extra_conv = dict(conversation.dados_adicionais or {})
     extra_conv["marked_as_read"] = False
+    extra_conv["pending_dismissed"] = False
     extra_conv["aviso_1_enviado"] = False
     extra_conv["aviso_2_enviado"] = False
     extra_conv["inactivity_warning_30m_sent"] = False

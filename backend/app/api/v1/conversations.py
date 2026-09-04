@@ -128,8 +128,8 @@ async def list_conversations(
     result = await db.execute(stmt)
     conversations = result.scalars().all()
 
-    # Filter out internal store numbers and Fernando Aragão admin test numbers
-    internal_suffixes = ('32346622', '992136622', '32421100', '30421044', '98334833', '99883344')
+    # Filter out internal store numbers (keep admin test numbers visible for testing)
+    internal_suffixes = ('32346622', '992136622', '32421100', '30421044')
     conversations = [
         c for c in conversations
         if not (c.contact and c.contact.telefone and any(c.contact.telefone.endswith(s) for s in internal_suffixes))
