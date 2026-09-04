@@ -168,7 +168,26 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
+          e.currentTarget.blur();
+
+          const scrollContainer = (e.currentTarget.closest('[data-chat-scroll-container="true"]') as HTMLElement) ||
+            (document.querySelector('[data-chat-scroll-container="true"]') as HTMLElement);
+          const currentScroll = scrollContainer ? scrollContainer.scrollTop : null;
+
           toggleAudio(message, conversation, allMessages);
+
+          if (scrollContainer && currentScroll !== null) {
+            scrollContainer.scrollTop = currentScroll;
+            requestAnimationFrame(() => {
+              scrollContainer.scrollTop = currentScroll;
+            });
+            setTimeout(() => {
+              scrollContainer.scrollTop = currentScroll;
+            }, 30);
+            setTimeout(() => {
+              scrollContainer.scrollTop = currentScroll;
+            }, 100);
+          }
         }}
         style={{
           width: '38px',

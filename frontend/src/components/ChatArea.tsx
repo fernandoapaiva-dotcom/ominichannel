@@ -3821,10 +3821,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      <StickyAudioPlayer currentConversationId={conversation?.id} />
-
       <div
         ref={scrollContainerRef}
+        data-chat-scroll-container="true"
         onScroll={handleContainerScroll}
         style={{
           flex: 1,
