@@ -355,6 +355,11 @@ button {
     display: none !important;
   }
 
+  /* Show mobile app icon badge on mobile top bar */
+  .mobile-only-app-badge {
+    display: flex !important;
+  }
+
   /* Compact pill button for each department */
   .dept-bar-btn {
     width: auto !important;

@@ -12,6 +12,8 @@ interface DepartmentBarProps {
   conversations: Conversation[];
   onOpenCalendar?: () => void;
   calendarSummary?: { today_pending: number; overdue: number; total_pending: number } | null;
+  pendingBadgeCount?: number;
+  groupPendingBadgeCount?: number;
 }
 
 export const DepartmentBar: React.FC<DepartmentBarProps> = ({
@@ -20,7 +22,9 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   onSelectDepartment,
   conversations,
   onOpenCalendar,
-  calendarSummary
+  calendarSummary,
+  pendingBadgeCount = 0,
+  groupPendingBadgeCount = 0
 }) => {
 
   const getDepartmentIcon = (name: string, size = 16) => {
@@ -128,6 +132,41 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
         scrollbarWidth: 'thin',
       }}
     >
+      {/* Mobile-only app icon with red (chat) / yellow (group) alert badge */}
+      <div
+        className="mobile-only-app-badge"
+        style={{
+          position: 'relative',
+          display: 'none',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          marginRight: '2px'
+        }}
+        title={pendingBadgeCount > 0 ? `${pendingBadgeCount} conversa(s) de chat pendente(s)` : groupPendingBadgeCount > 0 ? `${groupPendingBadgeCount} grupo(s) com novas mensagens` : 'OminiChannel'}
+      >
+        <img
+          src="/favicon.svg"
+          alt="OminiChannel"
+          style={{ width: '28px', height: '28px', borderRadius: '8px' }}
+        />
+        {(pendingBadgeCount > 0 || groupPendingBadgeCount > 0) && (
+          <span
+            style={{
+              position: 'absolute',
+              top: '-3px',
+              right: '-4px',
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              backgroundColor: pendingBadgeCount > 0 ? '#ef4444' : '#f59e0b',
+              border: '2px solid var(--bg-primary)',
+              boxShadow: `0 0 6px ${pendingBadgeCount > 0 ? 'rgba(239, 68, 68, 0.8)' : 'rgba(245, 158, 11, 0.8)'}`
+            }}
+          />
+        )}
+      </div>
+
       {/* "Departamentos:" label — hidden on mobile via CSS */}
       <div
         className="dept-bar-label"

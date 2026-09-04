@@ -15,6 +15,11 @@ import { CalendarModal } from '../components/CalendarModal';
 
 import { DepartmentBar } from '../components/DepartmentBar';
 import { MobileBottomNav } from '../components/MobileBottomNav';
+import {
+  isConversationPendingForAttendant,
+  isGroupPending,
+  updateAppBadgesAndIcon
+} from '../utils/badgeHelper';
 
 interface DashboardProps {
   user: User;
@@ -119,28 +124,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, [conversations, displayedConversations, activeConversationId, selectedDeptId]);
 
   const pendingBadgeCount = useMemo(() => {
-    return conversations.filter(c => {
-      const phone = c.contact?.telefone || '';
-      const isGroup = phone.includes('@g.us') || phone.startsWith('120363') || phone.includes('-') || phone.length >= 18;
-      if (isGroup) return false;
-      const msgs = c.messages || [];
-      if (msgs.length === 0) return false;
-      const lastMsg = msgs[msgs.length - 1];
-      return lastMsg && lastMsg.remetente?.toLowerCase() === 'cliente' && lastMsg.status !== 'read';
-    }).length;
-  }, [conversations]);
+    if (!conversations || !Array.isArray(conversations)) return 0;
+    return conversations.filter(c => isConversationPendingForAttendant(c, user)).length;
+  }, [conversations, user]);
 
   const groupPendingBadgeCount = useMemo(() => {
-    return conversations.filter(c => {
-      const phone = c.contact?.telefone || '';
-      const isGroup = phone.includes('@g.us') || phone.startsWith('120363') || phone.includes('-') || phone.length >= 18;
-      if (!isGroup) return false;
-      const msgs = c.messages || [];
-      if (msgs.length === 0) return false;
-      const lastMsg = msgs[msgs.length - 1];
-      return lastMsg && lastMsg.remetente?.toLowerCase() === 'cliente' && lastMsg.status !== 'read';
-    }).length;
+    if (!conversations || !Array.isArray(conversations)) return 0;
+    return conversations.filter(isGroupPending).length;
   }, [conversations]);
+
+  // Atualiza crachá/badge do app no celular (Badging API do Android/PWA), Favicon dinâmico e título
+  useEffect(() => {
+    updateAppBadgesAndIcon(pendingBadgeCount, groupPendingBadgeCount);
+  }, [pendingBadgeCount, groupPendingBadgeCount]);
 
   // Modals state
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
@@ -799,6 +795,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               setIsCalendarOpen(true);
             }}
             calendarSummary={calendarSummary}
+            pendingBadgeCount={pendingBadgeCount}
+            groupPendingBadgeCount={groupPendingBadgeCount}
           />
           {/* Chat list + chat area row — takes remaining height */}
           <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', overflow: 'hidden', boxSizing: 'border-box' }}>
