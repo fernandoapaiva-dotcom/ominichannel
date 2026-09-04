@@ -7,12 +7,13 @@ from app.core.config import settings
 
 logger = logging.getLogger("database")
 
+from sqlalchemy.pool import NullPool
+
 is_sqlite = "sqlite" in settings.DATABASE_URL.lower()
 
 engine_kwargs = {
     "echo": False,
     "future": True,
-    "pool_pre_ping": True,
 }
 
 if is_sqlite:
@@ -20,11 +21,9 @@ if is_sqlite:
         "timeout": 60.0,
         "check_same_thread": False,
     }
-    engine_kwargs["pool_size"] = 25
-    engine_kwargs["max_overflow"] = 35
-    engine_kwargs["pool_timeout"] = 60.0
-    engine_kwargs["pool_recycle"] = 300
+    engine_kwargs["poolclass"] = NullPool
 else:
+    engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_size"] = 20
     engine_kwargs["max_overflow"] = 30
     engine_kwargs["pool_recycle"] = 300
@@ -39,6 +38,7 @@ if is_sqlite:
     def set_sqlite_pragma(dbapi_connection, connection_record):
         try:
             cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
             cursor.execute("PRAGMA foreign_keys=ON;")
             cursor.execute("PRAGMA busy_timeout=60000;")
