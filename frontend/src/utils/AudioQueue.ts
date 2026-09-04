@@ -6,20 +6,21 @@ export interface AudioQueueItem {
   conversationId?: number;
   duration?: number;
   message?: any;
-  audioElement?: HTMLAudioElement;
 }
 
 /**
  * AudioQueue
- * Reproduz áudios em sequência (FIFO): o próximo só começa
- * quando o atual termina. Pré-carrega a faixa seguinte em segundo plano.
+ * Reproduz áudios em sequência (FIFO) com elemento único persistente,
+ * garantindo compatibilidade total com navegadores Mobile (iOS Safari e Android Chrome).
  */
 export class AudioQueue {
   public queue: AudioQueueItem[] = [];
   public isPlaying: boolean = false;
   public currentItem: AudioQueueItem | null = null;
-  public currentAudio: HTMLAudioElement | null = null;
   public speed: number = 1;
+
+  // Elemento HTMLAudioElement único e persistente (obrigatório para iOS Safari e Android)
+  public audio: HTMLAudioElement;
 
   public onStart: ((item: AudioQueueItem) => void) | null = null;
   public onTimeUpdate: ((item: AudioQueueItem, currentTime: number, duration: number) => void) | null = null;
@@ -30,12 +31,32 @@ export class AudioQueue {
   private hasTriggeredNext: boolean = false;
 
   constructor() {
+    this.audio = new Audio();
+    this.audio.setAttribute('playsinline', 'true');
+    this.audio.setAttribute('webkit-playsinline', 'true');
+    this.audio.preload = 'auto';
+
     try {
       const saved = Number(localStorage.getItem('omini_audio_speed'));
       this.speed = [1, 1.5, 2].includes(saved) ? saved : 1;
     } catch {
       this.speed = 1;
     }
+    this.audio.playbackRate = this.speed;
+
+    // Handlers nativos no elemento persistente
+    this.audio.onended = () => {
+      if (this.currentItem) {
+        this._advance(this.currentItem);
+      }
+    };
+
+    this.audio.onerror = (e) => {
+      console.warn('[AudioQueue] Audio error, advancing:', e);
+      if (this.currentItem) {
+        this._advance(this.currentItem);
+      }
+    };
   }
 
   setSpeed(speed: number) {
@@ -43,12 +64,9 @@ export class AudioQueue {
     try {
       localStorage.setItem('omini_audio_speed', String(speed));
     } catch {}
-    if (this.currentAudio) {
-      this.currentAudio.playbackRate = speed;
-    }
+    this.audio.playbackRate = speed;
   }
 
-  /** Adiciona um áudio (ou lista) à fila. */
   add(item: AudioQueueItem | AudioQueueItem[], clearPrevious: boolean = false) {
     if (clearPrevious) {
       this.clear();
@@ -62,39 +80,26 @@ export class AudioQueue {
   }
 
   pause() {
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-    }
+    this.audio.pause();
   }
 
   resume() {
-    if (this.currentAudio) {
-      this.currentAudio.playbackRate = this.speed;
-      this.currentAudio.play().catch(() => {});
-    }
+    this.audio.playbackRate = this.speed;
+    this.audio.play().catch(() => {});
   }
 
   seek(time: number) {
-    if (this.currentAudio) {
-      this.currentAudio.currentTime = time;
-    }
+    this.audio.currentTime = time;
   }
 
-  /** Esvazia a fila e para o áudio atual (ex: usuário trocou de conversa). */
   clear() {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
     this.queue = [];
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.onended = null;
-      this.currentAudio.ontimeupdate = null;
-      this.currentAudio.onerror = null;
-      this.currentAudio.onloadedmetadata = null;
-      this.currentAudio = null;
-    }
+    this.audio.pause();
+    this.audio.currentTime = 0;
     this.currentItem = null;
     this.isPlaying = false;
     this.hasTriggeredNext = false;
@@ -121,7 +126,6 @@ export class AudioQueue {
 
     if (this.queue.length === 0) {
       this.isPlaying = false;
-      this.currentAudio = null;
       this.currentItem = null;
       if (this.onIdle) this.onIdle();
       return;
@@ -132,67 +136,46 @@ export class AudioQueue {
     const item = this.queue.shift()!;
     this.currentItem = item;
 
-    // Usa o elemento pré-carregado se existir, senão cria um novo
-    const audio = item.audioElement ?? new Audio(item.url);
-    this.currentAudio = audio;
-    audio.playbackRate = this.speed;
+    // Reutiliza o mesmo elemento de áudio (destravado pelo clique do usuário, funciona 100% no mobile)
+    this.audio.src = item.url;
+    this.audio.playbackRate = this.speed;
+    this.audio.currentTime = 0;
 
     const initialDuration = (item.duration && isFinite(item.duration) && item.duration > 0) ? item.duration : 0;
     if (this.onStart) this.onStart(item);
 
     const getSafeDuration = (): number => {
-      if (audio.duration && isFinite(audio.duration) && audio.duration > 0) {
-        return audio.duration;
+      if (this.audio.duration && isFinite(this.audio.duration) && this.audio.duration > 0) {
+        return this.audio.duration;
       }
       return initialDuration;
     };
 
-    audio.ontimeupdate = () => {
-      if (this.onTimeUpdate) {
-        this.onTimeUpdate(item, audio.currentTime, getSafeDuration());
-      }
-    };
-
-    audio.onloadedmetadata = () => {
-      if (this.onTimeUpdate) {
-        this.onTimeUpdate(item, audio.currentTime, getSafeDuration());
-      }
-    };
-
-    audio.onended = () => {
-      this._advance(item);
-    };
-
-    audio.onerror = (e) => {
-      console.warn("Falha ao tocar áudio, pulando:", item, e);
-      this._advance(item);
-    };
-
-    // Monitor ativo de polling (fallback para Chrome Opus Ogg)
+    // Ticker contínuo a cada 40ms: atualiza a barra de progresso suavemente e detecta o fim
     this.pollInterval = setInterval(() => {
       const dur = getSafeDuration();
-      if (audio && !audio.paused && dur > 0 && audio.currentTime >= dur - 0.12) {
+      const cur = this.audio.currentTime;
+
+      if (this.onTimeUpdate && !this.audio.paused) {
+        this.onTimeUpdate(item, cur, dur);
+      }
+
+      if (!this.audio.paused && dur > 0 && cur >= dur - 0.12) {
         this._advance(item);
       }
-    }, 60);
+    }, 40);
 
-    // Pré-carrega o PRÓXIMO áudio da fila imediatamente em segundo plano
-    if (this.queue.length > 0) {
-      const nextItem = this.queue[0];
-      if (!nextItem.audioElement) {
-        const nextAudio = new Audio(nextItem.url);
-        nextAudio.preload = 'auto';
-        nextItem.audioElement = nextAudio;
-      }
+    const playPromise = this.audio.play();
+    if (playPromise !== undefined) {
+      playPromise.catch((err) => {
+        console.warn('[AudioQueue] play() waiting for canplay:', err, item.id);
+        const onCanPlay = () => {
+          this.audio.playbackRate = this.speed;
+          this.audio.play().catch(() => this._advance(item));
+        };
+        this.audio.addEventListener('canplay', onCanPlay, { once: true });
+      });
     }
-
-    audio.play().catch((err) => {
-      console.warn("play() aguardando canplay:", err, item.id);
-      audio.addEventListener('canplay', () => {
-        audio.playbackRate = this.speed;
-        audio.play().catch(() => this._advance(item));
-      }, { once: true });
-    });
   }
 }
 

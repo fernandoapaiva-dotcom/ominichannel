@@ -30,6 +30,8 @@ interface AudioContextType {
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
+export const audioDurationCache = new Map<string | number, number>();
+
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [activeAudio, setActiveAudio] = useState<ActiveAudioState | null>(null);
   const queueRef = useRef<AudioQueue>(new AudioQueue());
@@ -73,7 +75,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         senderName: item.senderName || 'Áudio',
         senderAvatar: item.senderAvatar,
         conversationId: item.conversationId || 0,
-        duration: item.duration || 0,
+        duration: item.duration || audioDurationCache.get(item.id) || 0,
         currentTime: 0,
         isPlaying: true,
         speed: queue.speed
@@ -81,9 +83,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     queue.onTimeUpdate = (item: AudioQueueItem, currentTime: number, duration: number) => {
+      if (duration && isFinite(duration) && duration > 0) {
+        audioDurationCache.set(item.id, duration);
+        audioDurationCache.set(item.url, duration);
+      }
       setActiveAudio(prev => {
         if (!prev || prev.msgId !== item.id) return prev;
-        const validDuration = (duration && isFinite(duration) && duration > 0) ? duration : prev.duration;
+        const validDuration = (duration && isFinite(duration) && duration > 0) 
+          ? duration 
+          : (prev.duration || audioDurationCache.get(item.id) || 0);
         return {
           ...prev,
           currentTime,
@@ -119,6 +127,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [queue, setSpeed]);
 
   const playAudio = useCallback((msg: Message, conversation?: Conversation, allMessages?: Message[]) => {
+    // Destrava AudioContext para navegadores mobile (iOS Safari e Chrome Android) no toque do usuario
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx) {
+        const dummyCtx = new AudioCtx();
+        if (dummyCtx.state === 'suspended') {
+          dummyCtx.resume();
+        }
+        dummyCtx.close().catch(() => {});
+      }
+    } catch {}
+
     const msgs = (allMessages && allMessages.length > 0) ? allMessages : (conversation?.messages || []);
     const currentIndex = msgs.findIndex(m => Number(m.id) === Number(msg.id));
 
@@ -127,14 +147,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       .filter(m => isAudioMsg(m))
       .map(m => {
         const url = getAudioUrl(m.conteudo || '', m.id);
-        const durationSecs = Number((m as any)?.dados_adicionais?.seconds || (m as any)?.dados_adicionais?.duration || 0);
+        const cachedDur = audioDurationCache.get(Number(m.id)) || audioDurationCache.get(url) || 0;
+        const metaDur = Number((m as any)?.dados_adicionais?.seconds || (m as any)?.dados_adicionais?.duration || 0);
+        const durationSecs = cachedDur > 0 ? cachedDur : (metaDur > 0 ? metaDur : undefined);
         return {
           id: Number(m.id),
           url,
           senderName: m.remetente === 'cliente' ? (conversation?.contact?.nome || 'Cliente') : (m.agent_name || 'Atendente'),
           senderAvatar: m.remetente === 'cliente' ? conversation?.contact?.foto_perfil_url : undefined,
           conversationId: m.conversation_id || conversation?.id || 0,
-          duration: durationSecs > 0 ? durationSecs : undefined,
+          duration: durationSecs,
           message: m,
         };
       })

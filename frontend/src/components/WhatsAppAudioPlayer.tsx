@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Mic, User } from 'lucide-react';
 import { Message, Conversation } from '../types';
-import { useAudio } from '../context/AudioContext';
+import { useAudio, audioDurationCache } from '../context/AudioContext';
 
 /** Resolve raw message content to a playable URL */
 function resolveAudioUrl(raw: string, msgId?: number): string {
@@ -59,8 +59,12 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
         if (!AudioCtx) throw new Error('No AudioContext');
         const ctx = new AudioCtx();
         return ctx.decodeAudioData(buffer).then((decoded) => {
-          if (isMounted && decoded && decoded.duration && isFinite(decoded.duration) && decoded.duration > 0) {
-            setPreloadedDuration(decoded.duration);
+          if (decoded && decoded.duration && isFinite(decoded.duration) && decoded.duration > 0) {
+            audioDurationCache.set(Number(message.id), decoded.duration);
+            audioDurationCache.set(url, decoded.duration);
+            if (isMounted) {
+              setPreloadedDuration(decoded.duration);
+            }
           }
           ctx.close().catch(() => {});
         });
@@ -81,12 +85,14 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
   // Extra duration from WhatsApp payload (dados_adicionais.seconds)
   const extraSeconds = (message as any)?.dados_adicionais?.seconds || (message as any)?.dados_adicionais?.duration || 0;
 
+  const cachedDuration = audioDurationCache.get(Number(message.id)) || audioDurationCache.get(resolveAudioUrl(message.conteudo || '', message.id)) || 0;
   const validActiveDuration = (activeDuration > 0 && isFinite(activeDuration)) ? activeDuration : 0;
   const validPreloadedDuration = (preloadedDuration > 0 && isFinite(preloadedDuration)) ? preloadedDuration : 0;
+  const validCachedDuration = (cachedDuration > 0 && isFinite(cachedDuration)) ? cachedDuration : 0;
   const validExtraSeconds = (extraSeconds > 0 && isFinite(extraSeconds)) ? Number(extraSeconds) : 0;
 
-  // Use live duration when active, fall back to preloaded, fall back to extraSeconds from WhatsApp
-  const duration = validActiveDuration || validPreloadedDuration || validExtraSeconds || 1;
+  // Use live duration when active, fall back to preloaded, cached, extraSeconds from WhatsApp, or 1
+  const duration = validActiveDuration || validPreloadedDuration || validCachedDuration || validExtraSeconds || 1;
 
   const formatTime = (secs: number) => {
     if (!secs || isNaN(secs) || !isFinite(secs)) return '0:00';
