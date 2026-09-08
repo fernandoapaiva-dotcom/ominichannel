@@ -65,14 +65,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, []);
 
   const displayedConversations = React.useMemo(() => {
-    const INTERNAL_SUFFIXES = ['32346622', '992136622', '32421100', '30421044', '98334833', '99883344'];
+    // Only filter out the store's own bot/instance loopback numbers (to prevent instances seeing themselves as clients)
+    // NEVER filter out client numbers or admin testing numbers!
+    const STORE_INSTANCE_SUFFIXES = ['32346622', '992136622', '92136622', '32421100', '30421044'];
     return conversations.filter(c => {
       const phone = c.contact?.telefone || '';
       const name = c.contact?.nome || '';
       const cleanPhone = phone.replace(/\D/g, '');
 
-      // Do not list internal company numbers or Fernando Aragão admin test numbers as client cards
-      if (INTERNAL_SUFFIXES.some(s => cleanPhone.endsWith(s))) {
+      // Do not list internal company instance numbers talking to themselves
+      if (STORE_INSTANCE_SUFFIXES.some(s => cleanPhone.endsWith(s))) {
         return false;
       }
 
@@ -101,7 +103,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const activeConversation = useMemo(() => {
     if (activeConversationId) {
       // Direct lookup in all conversations to prevent chat disappearance during search/filters
-      const found = conversations.find(c => c.id === activeConversationId);
+      const found = conversations.find(c => Number(c.id) === Number(activeConversationId));
       if (found) {
         if (selectedDeptId !== 'all' && String(found.whatsapp_number_id) !== String(selectedDeptId)) {
           const cid = found.contact_id || found.contact?.id;
@@ -112,6 +114,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
              (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
           );
           if (sameContactInDept) return sameContactInDept;
+          // CRITICAL: Strict department isolation — NEVER return a conversation from another department!
+          const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
+          return deptConvs.length > 0 ? deptConvs[0] : null;
         }
         return found;
       }
@@ -120,6 +125,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     if (selectedDeptId !== 'all') {
       const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
       if (deptConvs.length > 0) return deptConvs[0];
+      return null;
     }
 
     return displayedConversations.length > 0 ? displayedConversations[0] : null;
@@ -167,19 +173,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           const prevMap = new Map<number, Conversation>();
           prev.forEach(c => prevMap.set(c.id, c));
 
-          // Collect all optimistic/sending messages across all conversations
+          // Collect optimistic/sending messages strictly per conversation ID
           const pendingMessages: { [key: string]: Message[] } = {};
           prev.forEach(c => {
             const sending = (c.messages || []).filter(m => m.id < 0 || m.status === 'sending');
             if (sending.length > 0) {
-              const cid = c.contact_id || c.contact?.id;
-              const phone = (c.contact?.telefone || '').replace(/\D/g, '');
-              if (cid) {
-                pendingMessages[`cid_${cid}`] = [...(pendingMessages[`cid_${cid}`] || []), ...sending];
-              }
-              if (phone.length >= 8) {
-                pendingMessages[`phone_${phone.slice(-8)}`] = [...(pendingMessages[`phone_${phone.slice(-8)}`] || []), ...sending];
-              }
               pendingMessages[`conv_${c.id}`] = [...(pendingMessages[`conv_${c.id}`] || []), ...sending];
             }
           });
@@ -199,17 +197,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
             }
 
-            const cid = c.contact_id || c.contact?.id;
-            const phone = (c.contact?.telefone || '').replace(/\D/g, '');
-            const keyCid = cid ? `cid_${cid}` : '';
-            const keyPhone = phone.length >= 8 ? `phone_${phone.slice(-8)}` : '';
-            const keyConv = `conv_${c.id}`;
-
-            const sending = [
-              ...(keyConv ? (pendingMessages[keyConv] || []) : []),
-              ...(keyCid ? (pendingMessages[keyCid] || []) : []),
-              ...(keyPhone ? (pendingMessages[keyPhone] || []) : [])
-            ];
+            const sending = pendingMessages[`conv_${c.id}`] || [];
 
             if (sending.length > 0) {
               const existingTexts = new Set(currentMsgs.map(m => (m.conteudo || '').split('|')[0].trim()));
@@ -233,11 +221,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
             }
 
-            // Preserve any local state from prevConv
+            // If the conversation is currently open on screen, it is read
+            const isCurrentlyActiveChat = c.id === activeConversationId;
+
+            // Check if server explicitly flagged this conversation with a new unread message
+            const hasServerUnreadFlag = c.dados_adicionais?.marked_as_read === false;
+
+            // Check if incoming client messages have status !== 'read'
+            const hasUnreadClientMessages = currentMsgs.some(
+              m => String(m.remetente || '').toLowerCase() === 'cliente' && String(m.status || '').toLowerCase() !== 'read'
+            );
+
+            // Is read locally ONLY if currently active chat, OR if server marked it as read,
+            // OR if prevConv was marked as read AND server didn't send a newer interaction
+            const hasNewInteraction = prevConv && (
+              new Date(c.ultima_interacao_em).getTime() > new Date(prevConv.ultima_interacao_em).getTime()
+            );
+
+            let isReadLocally = false;
+            if (isCurrentlyActiveChat) {
+              isReadLocally = true;
+            } else if (hasServerUnreadFlag || hasUnreadClientMessages) {
+              isReadLocally = false;
+            } else if (c.dados_adicionais?.marked_as_read === true) {
+              isReadLocally = true;
+            } else if (prevConv?.dados_adicionais?.marked_as_read && !hasNewInteraction) {
+              isReadLocally = true;
+            }
+
             const mergedDados = {
               ...(prevConv?.dados_adicionais || {}),
-              ...(c.dados_adicionais || {})
+              ...(c.dados_adicionais || {}),
+              ...(isReadLocally ? { marked_as_read: true, pending_dismissed: true } : { marked_as_read: false, pending_dismissed: false })
             };
+
+            if (isReadLocally) {
+              currentMsgs = currentMsgs.map(m => String(m.remetente || '').toLowerCase() === 'cliente' ? { ...m, status: 'read' } : m);
+            }
 
             return {
               ...c,
@@ -281,7 +301,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       const detail = await apiFetch(`/conversations/${convId}`);
       if (detail && detail.id) {
         setConversations(prev => {
-          const index = prev.findIndex(c => c.id === convId);
+          const index = prev.findIndex(c => Number(c.id) === Number(convId));
           if (index >= 0) {
             const existing = prev[index];
             const existingMsgs = existing.messages || [];
@@ -341,6 +361,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, [activeConversationId]);
+
+  const handleSelectDepartment = useCallback((deptId: number | 'all') => {
+    setSelectedDeptId(deptId);
+    if (deptId !== 'all') {
+      if (activeConversationId) {
+        const currentConv = conversations.find(c => Number(c.id) === Number(activeConversationId));
+        if (currentConv && String(currentConv.whatsapp_number_id) !== String(deptId)) {
+          const cid = currentConv.contact_id || currentConv.contact?.id;
+          const cleanPhone = (currentConv.contact?.telefone || '').replace(/\D/g, '');
+          const matchInNewDept = conversations.find(c =>
+            String(c.whatsapp_number_id) === String(deptId) &&
+            ((cid && (c.contact_id === cid || c.contact?.id === cid)) ||
+             (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
+          );
+          if (matchInNewDept) {
+            setActiveConversationId(matchInNewDept.id);
+            loadActiveConversationDetail(matchInNewDept.id);
+          } else {
+            setActiveConversationId(null);
+          }
+        }
+      }
+    }
+  }, [activeConversationId, conversations, loadActiveConversationDetail]);
 
   const handleSelectConversation = useCallback((convId: number) => {
     setActiveConversationId(convId);
@@ -496,16 +540,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
             setConversations(prev => {
               let found = false;
-              const targetPhone = String(payload.contact_phone || payload.phone || '').replace(/\D/g, '');
+              const targetConvId = payload.conversation_id ? Number(payload.conversation_id) : null;
               const updated = prev.map(c => {
-                const cid = c.contact_id || c.contact?.id;
-                const phone = (c.contact?.telefone || '').replace(/\D/g, '');
-
-                const matches = (
-                  c.id === payload.conversation_id ||
-                  (payload.contact_id && cid && cid === payload.contact_id) ||
-                  (targetPhone.length >= 8 && phone.length >= 8 && phone.includes(targetPhone.slice(-8)))
-                );
+                // STRICT ISOLATION: A message strictly belongs to its conversation_id!
+                // NEVER inject messages into conversations of other departments!
+                const matches = targetConvId ? Number(c.id) === targetConvId : false;
 
                 if (matches) {
                   found = true;
@@ -598,8 +637,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {
                 const isFailed = payload.status === 'failed';
+                const isRead = payload.status === 'read';
                 return {
                   ...c,
+                  dados_adicionais: {
+                    ...(c.dados_adicionais || {}),
+                    ...(isRead ? { marked_as_read: true, pending_dismissed: true } : {})
+                  },
                   messages: isFailed
                     ? (c.messages || []).filter(m => m.id !== payload.id && (!payload.whatsapp_msg_id || m.whatsapp_msg_id !== payload.whatsapp_msg_id))
                     : (c.messages || []).map(m => {
@@ -711,18 +755,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     const targetCleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
 
     // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately across all linked conversations for this contact!
+    // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately in target conversation ONLY
     setConversations(prevConvs =>
       prevConvs.map(conv => {
-        const cid = conv.contact_id || conv.contact?.id;
-        const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
-
-        const matches = (
-          conv.id === targetConv.id ||
-          (targetCid && cid && cid === targetCid) ||
-          (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
-        );
-
-        if (matches) {
+        if (Number(conv.id) === Number(targetConv.id)) {
           const currentMsgs = conv.messages || [];
           return {
             ...conv,
@@ -776,19 +812,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           })
         });
 
-        // 3. Confirm delivery: replace tempId with real server DB message across all linked views
+        // 3. Confirm delivery: replace tempId with real server DB message strictly in target conversation
         setConversations(prevConvs =>
           prevConvs.map(conv => {
-            const cid = conv.contact_id || conv.contact?.id;
-            const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
-            const matches = (
-              conv.id === targetConv.id ||
-              conv.id === finalConvId ||
-              (targetCid && cid && cid === targetCid) ||
-              (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
-            );
-
-            if (matches) {
+            if (Number(conv.id) === Number(finalConvId) || Number(conv.id) === Number(targetConv.id)) {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
@@ -803,15 +830,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         // If message failed to send to server, quietly remove optimistic message so it does not clutter the chat
         setConversations(prevConvs =>
           prevConvs.map(conv => {
-            const cid = conv.contact_id || conv.contact?.id;
-            const phone = (conv.contact?.telefone || '').replace(/\D/g, '');
-            const matches = (
-              conv.id === targetConv.id ||
-              (targetCid && cid && cid === targetCid) ||
-              (targetCleanPhone.length >= 8 && phone.length >= 8 && phone.includes(targetCleanPhone.slice(-8)))
-            );
-
-            if (matches) {
+            if (Number(conv.id) === Number(finalConvId) || Number(conv.id) === Number(targetConv.id)) {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
@@ -828,6 +847,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const handleConversationCreated = (conv: Conversation) => {
     fetchConversations();
     setActiveConversationId(conv.id);
+    if (conv.whatsapp_number_id) {
+      setSelectedDeptId(conv.whatsapp_number_id);
+    }
     setActiveTab('chats');
   };
   const [isChatListCollapsed, setIsChatListCollapsed] = useState(false);
@@ -835,7 +857,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [isMainSidebarCollapsed, setIsMainSidebarCollapsed] = useState(false);
 
   return (
-    <div className="dashboard-layout" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
+    <div className="dashboard-layout" style={{ display: 'flex', width: '100%', height: '100dvh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
       {showNotificationPrompt && (
         <div style={{
           position: 'fixed',
@@ -951,7 +973,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           <DepartmentBar
             whatsappNumbers={whatsappNumbers}
             selectedDepartmentId={selectedDeptId}
-            onSelectDepartment={(id) => setSelectedDeptId(id)}
+            onSelectDepartment={handleSelectDepartment}
             conversations={displayedConversations}
             onOpenCalendar={() => {
               setCalendarPrefill(null);
@@ -978,7 +1000,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 onSelectConversation={(conv) => handleSelectConversation(conv.id)}
                 whatsappNumbers={whatsappNumbers}
                 selectedDepartmentId={selectedDeptId}
-                setSelectedDepartmentId={setSelectedDeptId}
+                setSelectedDepartmentId={handleSelectDepartment}
                 statusFilter={statusFilter}
                 setStatusFilter={setStatusFilter}
                 onOpenNewConversationModal={() => setIsNewConvModalOpen(true)}

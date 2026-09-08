@@ -247,6 +247,10 @@ button {
   box-sizing: border-box;
 }
 
+.contacts-back-btn-mobile {
+  display: none;
+}
+
 /* ═══════════════════════════════════════════
    MOBILE LAYOUT — WhatsApp-style (≤ 768px)
    ═══════════════════════════════════════════ */
@@ -255,17 +259,23 @@ button {
   html, body, #root {
     height: 100dvh !important;
     max-height: 100dvh !important;
+    width: 100% !important;
+    max-width: 100vw !important;
     overflow: hidden !important;
+    box-sizing: border-box !important;
   }
 
   /* ── Dashboard wrapper ─────────────────── */
   .dashboard-layout {
     flex-direction: column !important;
+    width: 100% !important;
+    max-width: 100vw !important;
     height: 100dvh !important;
     max-height: 100dvh !important;
     overflow: hidden !important;
     position: relative !important;
-    padding-bottom: 60px !important; /* Space for MobileBottomNav */
+    padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important; /* Space for MobileBottomNav */
+    box-sizing: border-box !important;
   }
 
   /* ── Hide desktop sidebar completely on mobile ── */
@@ -525,32 +535,107 @@ button {
   }
 
   /* ── Mobile Admin & Config Panel Responsive Rules ── */
+  .dashboard-layout > div.admin-panel-container,
+  .dashboard-layout > div:not(.sidebar-container):not(.mobile-bottom-nav).admin-panel-container,
   .admin-panel-container {
-    padding: 14px !important;
-    padding-bottom: 100px !important;
     overflow-y: auto !important;
+    overflow-x: hidden !important;
     -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+    padding: 16px 12px 120px 12px !important;
+    height: 100% !important;
+    max-height: 100% !important;
     max-width: 100vw !important;
     box-sizing: border-box !important;
   }
 
   .admin-subtab-bar {
+    display: flex !important;
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-x !important;
     scrollbar-width: none !important;
     white-space: nowrap !important;
-    padding-bottom: 8px !important;
+    padding-bottom: 10px !important;
+    gap: 8px !important;
+    width: 100% !important;
+    max-width: 100% !important;
   }
   .admin-subtab-bar::-webkit-scrollbar { display: none !important; }
 
   .admin-subtab-btn {
     flex-shrink: 0 !important;
     white-space: nowrap !important;
+    font-size: 13px !important;
+    padding: 8px 12px !important;
+    border-radius: var(--radius-md) !important;
   }
 
   .admin-grid-2col {
+    display: grid !important;
     grid-template-columns: 1fr !important;
     gap: 16px !important;
+    width: 100% !important;
+  }
+
+  .glass-panel {
+    padding: 14px !important;
+    border-radius: 12px !important;
+  }
+
+  input, select, textarea {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  /* ── Segmentation Panel Mobile ── */
+  .segmentation-panel-container {
+    padding: 16px 12px 120px 12px !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    touch-action: pan-y !important;
+    box-sizing: border-box !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    width: 100% !important;
+    max-width: 100vw !important;
+  }
+
+  /* ── Contacts Directory Panel Mobile (WhatsApp Style) ── */
+  .contacts-container {
+    width: 100% !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
+    height: 100% !important;
+  }
+
+  .contacts-list-pane {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 100% !important;
+    box-sizing: border-box !important;
+    height: 100% !important;
+  }
+
+  .contacts-detail-pane {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 100% !important;
+    padding: 14px 12px 120px 12px !important;
+    box-sizing: border-box !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    height: 100% !important;
+  }
+
+  .contacts-list-pane.mobile-hidden,
+  .contacts-detail-pane.mobile-hidden {
+    display: none !important;
+  }
+
+  .contacts-back-btn-mobile {
+    display: inline-flex !important;
   }
 
   /* ── Mobile Attachment Bottom Sheet (WhatsApp Style) ── */

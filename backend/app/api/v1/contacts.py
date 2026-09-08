@@ -5,6 +5,7 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_, cast, String
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import get_db
 from app.core.security import get_current_user
@@ -146,6 +147,10 @@ async def update_contact(
         raise HTTPException(status_code=404, detail="Contato não encontrado")
 
     contact.nome = payload.nome.strip()
+    extra = dict(contact.dados_adicionais or {})
+    extra["custom_name_locked"] = True
+    contact.dados_adicionais = extra
+    flag_modified(contact, "dados_adicionais")
     await db.commit()
     await db.refresh(contact)
     return {

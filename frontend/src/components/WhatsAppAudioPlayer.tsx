@@ -103,10 +103,21 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
 
   const progressPercent = Math.min(100, Math.max(0, (currentTime / duration) * 100));
 
-  // Sender Avatar
+  // Sender Avatar & Fallback
+  const [avatarError, setAvatarError] = useState(false);
   const senderAvatar = isCustomer
-    ? conversation?.contact?.foto_perfil_url
+    ? (message.dados_adicionais?.participant_avatar || conversation?.contact?.foto_perfil_url)
     : undefined;
+
+  useEffect(() => {
+    setAvatarError(false);
+  }, [senderAvatar]);
+
+  const senderInitial = (
+    message.dados_adicionais?.participant_name ||
+    conversation?.contact?.nome ||
+    'U'
+  ).trim().charAt(0).toUpperCase();
 
   return (
     <div
@@ -137,10 +148,31 @@ export const WhatsAppAudioPlayer: React.FC<WhatsAppAudioPlayerProps> = ({
             overflow: 'hidden'
           }}
         >
-          {senderAvatar ? (
-            <img src={senderAvatar} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          {senderAvatar && !avatarError ? (
+            <img
+              src={senderAvatar}
+              alt=""
+              onError={() => setAvatarError(true)}
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
           ) : (
-            <User size={22} style={{ color: '#ffffff' }} />
+            <div
+              style={{
+                width: '100%',
+                height: '100%',
+                background: isCustomer
+                  ? 'linear-gradient(135deg, #128C7E 0%, #075E54 100%)'
+                  : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#ffffff',
+                fontWeight: 600,
+                fontSize: '15px'
+              }}
+            >
+              {senderInitial || <User size={20} style={{ color: '#ffffff' }} />}
+            </div>
           )}
         </div>
         <div

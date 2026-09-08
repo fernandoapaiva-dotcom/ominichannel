@@ -5,7 +5,7 @@ import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
-  Globe, Navigation
+  Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
@@ -1866,13 +1866,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     // Extract place name and address from raw text:
     let placeName = 'Servweld / Servsolda';
     let addressText = 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226';
-
     const lines = safeRawLoc.split('\n').map(l => l.trim()).filter(Boolean);
     const cleanLines = lines.filter(l =>
       !l.startsWith('http') &&
       !l.includes('LOCALIZAÇÃO') &&
       !l.includes('Localização GPS') &&
-      !l.includes('WhatsApp Map')
+      !l.includes('WhatsApp Map') &&
+      !l.includes('locationMessage') &&
+      !l.includes('liveLocationMessage')
     );
 
     if (cleanLines.length > 0) {
@@ -2425,10 +2426,115 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const isLocationText = (
           rawText.includes('LOCALIZAÇÃO ENVIADA') ||
           rawText.startsWith('📍 *LOCALIZAÇÃO') ||
-          rawText.includes('Localização GPS (WhatsApp Map)')
+          rawText.includes('Localização GPS (WhatsApp Map)') ||
+          rawText.includes('[locationMessage]') ||
+          rawText.includes('[liveLocationMessage]')
         );
         if (isLocationText) {
           return renderLocationCard(rawText, msg.dados_adicionais);
+        }
+
+        // WhatsApp Call Card Renderer (Mirror of WhatsApp Web)
+        const isCallCard = (
+          rawText.startsWith('[CHAMADA_') ||
+          rawText.includes('O CLIENTE ESTÁ LIGANDO VIA') ||
+          rawText.includes('Ligação de voz perdida') ||
+          rawText.includes('Ligação de vídeo perdida') ||
+          rawText.includes('Ligação de voz') ||
+          rawText.includes('Ligação de vídeo')
+        );
+        if (isCallCard) {
+          const isVideo = (
+            rawText.includes('VIDEO') ||
+            rawText.includes('VÍDEO') ||
+            rawText.includes('vídeo') ||
+            rawText.includes('video') ||
+            msg.dados_adicionais?.is_video ||
+            msg.dados_adicionais?.call_type === 'video'
+          );
+
+          let title = isVideo ? 'Ligação de vídeo perdida' : 'Ligação de voz perdida';
+          let subtitle = 'Clique para retornar';
+
+          if (rawText.startsWith('[CHAMADA_')) {
+            const parts = rawText.split('|');
+            if (parts.length > 1 && parts[1].trim()) title = parts[1].trim();
+            if (parts.length > 2 && parts[2].trim()) subtitle = parts[2].trim();
+          }
+
+          return (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '4px 2px',
+                minWidth: '220px',
+                maxWidth: '280px',
+                cursor: 'pointer',
+                userSelect: 'none'
+              }}
+              onClick={() => {
+                if (typeof handleStartVideoCall === 'function') {
+                  handleStartVideoCall();
+                }
+              }}
+              title="Clique para retornar a chamada"
+            >
+              {/* Call Icon Circle */}
+              <div
+                style={{
+                  width: '38px',
+                  height: '38px',
+                  borderRadius: '50%',
+                  backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}
+              >
+                {isVideo ? (
+                  <Video size={18} style={{ color: '#ef4444' }} />
+                ) : (
+                  <PhoneMissed size={18} style={{ color: '#ef4444' }} />
+                )}
+              </div>
+
+              {/* Title and Subtitle */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    color: 'inherit',
+                    lineHeight: '1.2',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  {title}
+                </div>
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--text-muted)',
+                    marginTop: '2px',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  {subtitle}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        if (!rawText.trim() && !msg.dados_adicionais?.link_preview) {
+          return null;
         }
 
         const firstUrlMatch = rawText.match(/https?:\/\/[^\s]+/i);

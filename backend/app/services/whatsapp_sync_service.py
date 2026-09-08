@@ -20,6 +20,7 @@ class WhatsAppSyncService:
         self.default_api_key = settings.EVOLUTION_API_KEY
         self.syncing_instances = set()
         self.sync_progress: Dict[str, Dict[str, Any]] = {}
+        self._sync_lock = asyncio.Lock()
 
     def _get_headers_and_url(self, custom_base_url: Optional[str] = None, custom_api_key: Optional[str] = None):
         base_url = (custom_base_url or self.default_base_url).rstrip('/')
@@ -113,7 +114,19 @@ class WhatsAppSyncService:
                     if tel:
                         phone = tel[0].strip()
                 items.append(f"{name}:{phone}")
-            return f"[CONTATOS_MULTIPLOS]|" + ";".join(items), MessageType.TEXTO
+        if "locationMessage" in msg_payload or "liveLocationMessage" in msg_payload:
+            loc_msg = msg_payload.get("locationMessage") or msg_payload.get("liveLocationMessage") or {}
+            c_lat = loc_msg.get("degreesLatitude", "")
+            c_lng = loc_msg.get("degreesLongitude", "")
+            c_name = loc_msg.get("name") or loc_msg.get("address") or "Localização Compartilhada"
+            c_addr = loc_msg.get("address") or ""
+            map_url = f"https://maps.google.com/?q={c_lat},{c_lng}" if (c_lat and c_lng) else ""
+            txt = f"📍 *LOCALIZAÇÃO*\n{c_name}"
+            if c_addr and c_addr != c_name:
+                txt += f"\n{c_addr}"
+            if map_url:
+                txt += f"\n{map_url}"
+            return txt, MessageType.LOCALIZACAO
 
         return f"[{msg_type_str}]", MessageType.TEXTO
 
@@ -150,6 +163,7 @@ class WhatsAppSyncService:
             logger.info(f"Sync already running for instance '{instance_name}'. Skipping duplicate trigger.")
             return {"success": True, "message": "Sincronização já em andamento."}
 
+        await self._sync_lock.acquire()
         self.syncing_instances.add(instance_name)
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
 
@@ -311,7 +325,7 @@ class WhatsAppSyncService:
                             existing_by_phone[phone] = c_obj
                             stats["contacts_synced"] += 1
                         else:
-                            if c_obj.nome != ab_info["name"]:
+                            if c_obj.nome != ab_info["name"] and not (c_obj.dados_adicionais or {}).get("custom_name_locked"):
                                 c_obj.nome = ab_info["name"]
                             if ab_info.get("profile_pic") and not c_obj.foto_perfil_url:
                                 c_obj.foto_perfil_url = ab_info["profile_pic"]
@@ -480,6 +494,9 @@ class WhatsAppSyncService:
                                 logger.warning(f"Erro ao salvar dados do chat {jid}: {db_err}")
                                 break
 
+                        # Cooperative yield to ensure real-time webhooks and incoming messages are never blocked
+                        await asyncio.sleep(0.05)
+
                     stats["status"] = "completed"
                     stats["percentage"] = 100
                     stats["current_contact"] = "Sincronização concluída com sucesso!"
@@ -496,6 +513,8 @@ class WhatsAppSyncService:
             return {"success": False, "stats": stats, "error": str(e)}
         finally:
             self.syncing_instances.discard(instance_name)
+            if self._sync_lock.locked():
+                self._sync_lock.release()
 
     def trigger_background_sync(
         self,

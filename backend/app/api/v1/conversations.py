@@ -486,7 +486,8 @@ async def start_new_conversation(
 
     contact_stmt = select(Contact).where(
         Contact.tenant_id == current_user.tenant_id,
-        Contact.telefone.in_(phone_variants)
+        Contact.telefone.notlike("%@g.us%"),
+        (Contact.telefone.in_(phone_variants) | (Contact.telefone.like(f"%{clean_phone[-8:]}%") if len(clean_phone) >= 8 else False))
     )
     contact_res = await db.execute(contact_stmt)
     contact = contact_res.scalars().first()
@@ -500,7 +501,7 @@ async def start_new_conversation(
         db.add(contact)
         await db.commit()
         await db.refresh(contact)
-    elif payload.nome and (not contact.nome or contact.nome.startswith("Contato ")):
+    elif payload.nome and (not contact.nome or contact.nome.startswith("Contato ")) and not (contact.dados_adicionais or {}).get("custom_name_locked"):
         contact.nome = payload.nome
         await db.commit()
 

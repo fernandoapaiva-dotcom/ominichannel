@@ -56,6 +56,8 @@ export const isConversationPendingForAttendant = (conv: Conversation, user?: Use
   if (extra.marked_as_read) return false;
 
   const lastClientMsg = msgs[lastClientIndex];
+  if (lastClientMsg && lastClientMsg.status === 'read') return false;
+
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
     if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000 && !conv.protocol_number) {
@@ -97,6 +99,7 @@ export const isGroupPending = (conv: Conversation): boolean => {
   }
 
   const lastClientMsg = msgs[lastClientIndex];
+  if (lastClientMsg && lastClientMsg.status === 'read') return false;
   if (lastClientMsg && lastClientMsg.timestamp) {
     const t = new Date(lastClientMsg.timestamp).getTime();
     if (!isNaN(t) && (Date.now() - t) > 7 * 24 * 60 * 60 * 1000) {
@@ -188,11 +191,25 @@ export const updateAppBadgesAndIcon = (chatCount: number, groupCount: number) =>
     }
   }
 
-  if (typeof navigator !== 'undefined' && navigator.serviceWorker?.controller) {
-    navigator.serviceWorker.controller.postMessage({
-      type: 'SET_BADGE',
-      count: totalCount
-    });
+  if (typeof navigator !== 'undefined') {
+    const postToSw = (sw: ServiceWorker | null | undefined) => {
+      if (sw) {
+        try {
+          sw.postMessage({
+            type: 'SET_BADGE',
+            count: totalCount,
+            chatCount,
+            groupCount
+          });
+        } catch (e) {}
+      }
+    };
+
+    if (navigator.serviceWorker?.controller) {
+      postToSw(navigator.serviceWorker.controller);
+    } else if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+      navigator.serviceWorker.ready.then(reg => postToSw(reg.active)).catch(() => {});
+    }
   }
 
   // 2. Título da página com emoji identificador

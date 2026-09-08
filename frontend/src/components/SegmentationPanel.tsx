@@ -150,7 +150,7 @@ export const SegmentationPanel: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: 'var(--bg-primary)', padding: '28px', overflowY: 'auto' }}>
+    <div className="segmentation-panel-container" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: 'var(--bg-primary)', padding: '28px', overflowY: 'auto' }}>
       
       {/* Meta API & LGPD Compliance Security Banner */}
       <div style={{
@@ -175,7 +175,7 @@ export const SegmentationPanel: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+      <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
         
         {/* Left Column: Tags & Saved Segments */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>

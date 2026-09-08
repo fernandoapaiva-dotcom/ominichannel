@@ -15,13 +15,12 @@ engine_kwargs = {
 }
 
 if is_sqlite:
+    from sqlalchemy.pool import NullPool
+    engine_kwargs["poolclass"] = NullPool
     engine_kwargs["connect_args"] = {
-        "timeout": 15.0,
+        "timeout": 30.0,
         "check_same_thread": False,
     }
-    engine_kwargs["pool_size"] = 5
-    engine_kwargs["max_overflow"] = 5
-    engine_kwargs["pool_timeout"] = 15.0
 else:
     engine_kwargs["pool_pre_ping"] = True
     engine_kwargs["pool_size"] = 20
@@ -41,7 +40,7 @@ if is_sqlite:
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
             cursor.execute("PRAGMA foreign_keys=ON;")
-            cursor.execute("PRAGMA busy_timeout=15000;")
+            cursor.execute("PRAGMA busy_timeout=30000;")
             cursor.close()
         except Exception as e:
             logger.debug(f"SQLite PRAGMA error: {e}")

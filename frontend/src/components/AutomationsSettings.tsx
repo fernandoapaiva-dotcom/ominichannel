@@ -419,12 +419,14 @@ export const AutomationsSettings: React.FC = () => {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '16px',
         padding: '20px 24px',
         backgroundColor: 'rgba(0, 230, 153, 0.06)',
         border: '1px solid rgba(0, 230, 153, 0.25)',
         borderRadius: 'var(--radius-lg)'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
           <div style={{
             width: '44px',
             height: '44px',
@@ -448,7 +450,7 @@ export const AutomationsSettings: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={() => setIsAiCopilotOpen(true)}
@@ -500,7 +502,7 @@ export const AutomationsSettings: React.FC = () => {
       )}
 
       {/* Grid: OS Handler & Diagnostic Table */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+      <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
         {/* LEFT COLUMN: OS Handler Configuration & Sequence Templates */}
         <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
@@ -522,7 +524,7 @@ export const AutomationsSettings: React.FC = () => {
           </div>
 
           {/* Trigger Triggers & Timing */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
             <div>
               <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)', display: 'block', marginBottom: '6px' }}>
                 Disparo Automático:
@@ -575,13 +577,13 @@ export const AutomationsSettings: React.FC = () => {
 
           {/* Keywords & Matching Mode */}
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', flexWrap: 'wrap', gap: '8px' }}>
               <label style={{ fontSize: '12px', fontWeight: '600', color: 'var(--text-main)' }}>
                 Palavras-Chave de Ativação (separadas por vírgula):
               </label>
 
               {/* Mode Toggle */}
-              <div style={{ display: 'flex', gap: '10px' }}>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <label style={{ fontSize: '11px', color: osMatchMode === 'any' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <input
                     type="radio"
@@ -890,17 +892,17 @@ export const AutomationsSettings: React.FC = () => {
       </div>
 
       {/* Custom Rules & Interactive Simulator */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
+      <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '24px' }}>
         {/* Custom Quick Rules */}
         <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <MessageSquare size={20} color="var(--accent-primary)" />
               <h4 style={{ fontSize: '16px', fontWeight: '700', color: 'var(--text-main)', margin: 0 }}>
                 Gatilhos Customizados de Respostas Rápidas
               </h4>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button
                 type="button"
                 onClick={() => setIsAiCopilotOpen(true)}
@@ -929,9 +931,9 @@ export const AutomationsSettings: React.FC = () => {
                 placeholder="Nome da regra (ex: Horário de Funcionamento)..."
                 style={{ width: '100%', padding: '6px 10px', fontSize: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', color: '#fff', borderRadius: '4px' }}
               />
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                 <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Modo de Ativação:</span>
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                   <label style={{ fontSize: '11px', color: newRuleMatchMode === 'any' ? 'var(--accent-primary)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <input
                       type="radio"
@@ -1083,7 +1085,7 @@ export const AutomationsSettings: React.FC = () => {
               />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+            <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <div>
                 <label style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>
                   Nome do Cliente Teste:

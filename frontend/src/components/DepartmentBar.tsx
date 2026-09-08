@@ -45,25 +45,15 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
     return conversations.filter(c => {
       if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
       const extra = c.dados_adicionais || {};
-      if (extra.marked_as_read) return false;
+      if (extra.marked_as_read || extra.pending_dismissed) return false;
       const msgs = c.messages || [];
       if (msgs.length === 0) return false;
 
-      let lastAttendantIdx = -1;
-      for (let i = 0; i < msgs.length; i++) {
-        const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
-          lastAttendantIdx = i;
-        }
-      }
-
-      for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
-        const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente') {
-          return true;
-        }
-      }
-      return false;
+      return msgs.some(m => {
+        const r = String(m.remetente || '').toLowerCase();
+        const s = String(m.status || '').toLowerCase();
+        return r === 'cliente' && s !== 'read';
+      });
     }).length;
   };
 

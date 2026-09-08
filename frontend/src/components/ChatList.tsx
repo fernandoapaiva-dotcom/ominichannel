@@ -137,6 +137,29 @@ const formatMessagePreview = (msg: any | undefined): string => {
   const c = String(msg.conteudo || '').trim();
   const t = String(msg.tipo || '').toLowerCase();
 
+  // WhatsApp Calls formatting
+  if (c.startsWith('[CHAMADA_VIDEO_PERDIDA]') || c.includes('Ligação de vídeo perdida') || (c.includes('CHAMADA') && c.includes('VÍDEO'))) {
+    return '📹 Ligação de vídeo perdida';
+  }
+  if (c.startsWith('[CHAMADA_VOZ_PERDIDA]') || c.includes('Ligação de voz perdida') || c.includes('O CLIENTE ESTÁ LIGANDO') || (c.includes('CHAMADA') && c.includes('VOZ'))) {
+    return '📞 Ligação de voz perdida';
+  }
+  if (c.startsWith('[CHAMADA_VIDEO]') || c.includes('Ligação de vídeo')) {
+    return '📹 Ligação de vídeo';
+  }
+  if (c.startsWith('[CHAMADA_VOZ]') || c.includes('Ligação de voz')) {
+    return '📞 Ligação de voz';
+  }
+  if (c.startsWith('[CONTATO]|') || c.includes('BEGIN:VCARD')) {
+    return '👤 Contato';
+  }
+  if (c.startsWith('[CONTATOS_MULTIPLOS]|')) {
+    return '👥 Contatos';
+  }
+  if (t === 'localizacao' || c.startsWith('📍') || c.includes('LOCALIZAÇÃO')) {
+    return '📍 Localização';
+  }
+
   if (t === 'imagem' || c.endsWith('.png') || c.endsWith('.jpg') || c.endsWith('.jpeg')) {
     if (c.includes('Comprovante') || c.includes('PIX') || c.includes('Pix')) return '💸 Comprovante Pix';
     return '📷 Foto';
@@ -320,11 +343,31 @@ export const ChatList: React.FC<ChatListProps> = ({
 
   // Group conversations by unique customer (normalized phone) to guarantee a SINGLE card per client
   const contactGroups = useMemo(() => {
+    // 1. Build lookup maps for phone and name across all conversations to handle partial contact objects
+    const phoneByCid = new Map<number, string>();
+    const nameByCid = new Map<number, string>();
+    conversations.forEach(c => {
+      const cid = c.contact_id || c.contact?.id;
+      const p = (c.contact?.telefone || '').trim();
+      const n = (c.contact?.nome || '').trim();
+      if (cid && p && !phoneByCid.has(cid)) phoneByCid.set(cid, p);
+      if (cid && n && !isGenericName(n) && !nameByCid.has(cid)) nameByCid.set(cid, n);
+    });
+
+    // 2. Strict department isolation: if a department is selected, filter conversations to that department FIRST
+    const relevantConvs = conversations.filter(conv => {
+      if (selectedDepartmentId !== 'all' && String(conv.whatsapp_number_id) !== String(selectedDepartmentId)) {
+        return false;
+      }
+      return true;
+    });
+
     const map = new Map<string, Conversation[]>();
 
-    conversations.forEach(conv => {
-      const rawPhone = (conv.contact?.telefone || '').trim();
-      const rawName = (conv.contact?.nome || '').trim();
+    relevantConvs.forEach(conv => {
+      const cid = conv.contact_id || conv.contact?.id;
+      const rawPhone = (conv.contact?.telefone || (cid ? phoneByCid.get(cid) : '') || '').trim();
+      const rawName = (conv.contact?.nome || (cid ? nameByCid.get(cid) : '') || '').trim();
       const cleanDigits = rawPhone.replace(/\D/g, '');
       const isGroup = rawPhone.includes('@g.us') || 
                       rawPhone.startsWith('120363') || 
@@ -337,14 +380,20 @@ export const ChatList: React.FC<ChatListProps> = ({
                       rawName.includes('Servweld/Servsolda');
       
       const deptId = conv.whatsapp_number_id || 0;
-      let groupKey = '';
+      let clientIdentity = '';
       if (isGroup) {
-        groupKey = `wn_${deptId}_group_${cleanDigits || rawPhone}`;
+        clientIdentity = `group_${cleanDigits || rawPhone}`;
       } else if (cleanDigits.length >= 8 && !cleanDigits.startsWith('120363')) {
-        groupKey = `wn_${deptId}_client_${cleanDigits.slice(-8)}`;
+        clientIdentity = `client_${cleanDigits.slice(-8)}`;
+      } else if (cid) {
+        clientIdentity = `contact_${cid}`;
       } else {
-        groupKey = `wn_${deptId}_contact_${conv.contact_id || conv.contact?.id || 0}`;
+        clientIdentity = `conv_${conv.id}`;
       }
+
+      const groupKey = selectedDepartmentId === 'all'
+        ? `wn_${deptId}_${clientIdentity}`
+        : `wn_${selectedDepartmentId}_${clientIdentity}`;
 
       if (!map.has(groupKey)) {
         map.set(groupKey, []);
@@ -363,21 +412,15 @@ export const ChatList: React.FC<ChatListProps> = ({
         let matchesStatus = true;
         if (statusFilter === 'nao_lidas') {
           const extra = conv.dados_adicionais || {};
-          if (extra.marked_as_read) {
+          if (extra.marked_as_read || extra.pending_dismissed) {
             matchesStatus = false;
           } else {
             const msgs = conv.messages || [];
-            let lastAttendantIdx = -1;
+            let hasUnreadClient = false;
             for (let i = 0; i < msgs.length; i++) {
               const r = String(msgs[i].remetente || '').toLowerCase();
-              if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
-                lastAttendantIdx = i;
-              }
-            }
-            let hasUnreadClient = false;
-            for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
-              const r = String(msgs[i].remetente || '').toLowerCase();
-              if (r === 'cliente') {
+              const s = String(msgs[i].status || '').toLowerCase();
+              if (r === 'cliente' && s !== 'read') {
                 hasUnreadClient = true;
                 break;
               }
@@ -418,30 +461,30 @@ export const ChatList: React.FC<ChatListProps> = ({
         }
       });
 
+      // If this conversation is currently open, it is READ
+      const isSelected = activeConversation?.id === primary.id || 
+                         (activeConversation?.contact_id && activeConversation.contact_id === primary.contact_id) ||
+                         matchingConvs.some(c => c.id === activeConversation?.id);
+
       let groupUnreadCount = 0;
-      matchingConvs.forEach(conv => {
-        const extra = conv.dados_adicionais || {};
-        if (extra.marked_as_read) return;
-        const msgs = conv.messages || [];
-        if (msgs.length === 0) return;
+      if (!isSelected) {
+        matchingConvs.forEach(conv => {
+          const extra = conv.dados_adicionais || {};
+          if (extra.marked_as_read || extra.pending_dismissed) return;
+          const msgs = conv.messages || [];
+          if (msgs.length === 0) return;
 
-        let lastAttendantIdx = -1;
-        for (let i = 0; i < msgs.length; i++) {
-          const r = String(msgs[i].remetente || '').toLowerCase();
-          if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
-            lastAttendantIdx = i;
+          let convUnread = 0;
+          for (let i = 0; i < msgs.length; i++) {
+            const r = String(msgs[i].remetente || '').toLowerCase();
+            const s = String(msgs[i].status || '').toLowerCase();
+            if (r === 'cliente' && s !== 'read') {
+              convUnread++;
+            }
           }
-        }
-
-        let convUnread = 0;
-        for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
-          const r = String(msgs[i].remetente || '').toLowerCase();
-          if (r === 'cliente') {
-            convUnread++;
-          }
-        }
-        groupUnreadCount += convUnread;
-      });
+          groupUnreadCount += convUnread;
+        });
+      }
 
       const hasUnread = groupUnreadCount > 0;
 
@@ -493,27 +536,18 @@ export const ChatList: React.FC<ChatListProps> = ({
       const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
       if (!matchesDept) return false;
       const extra = conv.dados_adicionais || {};
-      if (extra.marked_as_read) return false;
+      if (extra.marked_as_read || extra.pending_dismissed) return false;
+      if (activeConversation?.id === conv.id) return false;
       const msgs = conv.messages || [];
       if (msgs.length === 0) return false;
 
-      let lastAttendantIdx = -1;
-      for (let i = 0; i < msgs.length; i++) {
-        const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'atendente' || r === 'sistema' || r === 'ia' || r === 'bot') {
-          lastAttendantIdx = i;
-        }
-      }
-
-      for (let i = lastAttendantIdx + 1; i < msgs.length; i++) {
-        const r = String(msgs[i].remetente || '').toLowerCase();
-        if (r === 'cliente') {
-          return true;
-        }
-      }
-      return false;
+      return msgs.some(m => {
+        const r = String(m.remetente || '').toLowerCase();
+        const s = String(m.status || '').toLowerCase();
+        return r === 'cliente' && s !== 'read';
+      });
     }).length;
-  }, [conversations, selectedDepartmentId]);
+  }, [conversations, selectedDepartmentId, activeConversation?.id]);
 
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
 
@@ -774,12 +808,12 @@ export const ChatList: React.FC<ChatListProps> = ({
               !primaryConv.dados_adicionais?.pending_dismissed &&
               (primaryConv.status === 'com_humano' || primaryConv.status === 'aguardando_atendente') &&
               isRecentMessage &&
-              (group.hasUnread || (lastMessage && lastMessage.remetente?.toLowerCase() === 'cliente'))
+              group.hasUnread
             );
 
             return (
               <div
-                key={group.contactId}
+                key={`grp_${group.primaryConv.whatsapp_number_id || 0}_${group.primaryConv.id}_${group.contactId}`}
                 style={{
                   borderBottom: '1px solid var(--border-color)',
                   backgroundColor: isGroupSelected ? 'rgba(0, 230, 153, 0.04)' : (isGroupPinned ? 'rgba(234, 179, 8, 0.03)' : 'transparent'),

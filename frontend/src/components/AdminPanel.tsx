@@ -914,8 +914,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
   return (
     <div className="admin-panel-container" style={{ flex: 1, height: '100%', padding: '32px', overflowY: 'auto', backgroundColor: 'var(--bg-primary)' }}>
-      <div style={{ maxWidth: '1050px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+      <div style={{ maxWidth: '1050px', margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
           {onBack && (
             <button
               type="button"
@@ -940,7 +940,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               <span>Voltar</span>
             </button>
           )}
-          <h1 style={{ fontFamily: 'var(--font-heading)', fontSize: '26px', fontWeight: '700', margin: 0 }}>
+          <h1 style={{ fontFamily: 'var(--font-heading)', fontSize: 'clamp(18px, 5vw, 26px)', fontWeight: '700', margin: 0, wordBreak: 'break-word' }}>
             Painel de Administração Multitenant
           </h1>
         </div>
@@ -1136,8 +1136,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {numbers.map(num => (
                   <div key={num.id} style={{ padding: '14px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'rgba(255, 255, 255, 0.02)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: '600', fontSize: '15px' }}>{num.nome_departamento}</span>
                         <span style={{
                           fontSize: '10px',
@@ -1168,7 +1168,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                           </span>
                         )}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                         {num.provider_type !== 'meta' && (
                           <>
                             <button
@@ -1723,6 +1723,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '14px',
                 padding: '16px 20px',
                 backgroundColor: 'rgba(59, 130, 246, 0.1)',
                 border: '1px solid rgba(59, 130, 246, 0.3)',
@@ -1777,7 +1779,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               </div>
 
               {/* Scope & Department Selection Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
+              <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
                 <div
                   onClick={() => { setRagScope('geral'); setRagDeptId(''); }}
                   style={{
@@ -1868,7 +1870,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               )}
 
               {/* Forms Section: Multi-File Upload + Direct Text Upload */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
                 {/* 1. Multi-File Uploader Form */}
                 <form onSubmit={handleUploadFilesRAG} style={{ padding: '20px', backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                   <h4 style={{ margin: 0, fontSize: '15px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2009,7 +2011,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                         border: '1px solid var(--border-color)',
                         display: 'flex',
                         justifyContent: 'space-between',
-                        alignItems: 'center'
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '10px'
                       }}
                     >
                       <div style={{ flex: 1, marginRight: '16px' }}>
@@ -2130,19 +2134,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                       Chave Criptografada: <code style={{ color: 'var(--accent-primary)', fontWeight: '600' }}>{maskedSettings?.gemini_api_key_masked}</code>
                     </span>
                   </div>
-                  <div style={{ display: 'flex', gap: '12px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
                     <input
                       type="password"
                       placeholder={maskedSettings?.gemini_configured ? "•••••••••••••••• (Chave salva e ativa no banco. Digite apenas se desejar alterar)" : "Digite sua API Key do Gemini (ex: AIzaSy...)"}
                       value={geminiKeyInput}
                       onChange={(e) => setGeminiKeyInput(e.target.value)}
-                      style={{ flex: 1, padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
+                      style={{ flex: '1 1 200px', minWidth: '180px', padding: '10px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)' }}
                     />
                     <button
                       type="button"
                       onClick={() => handleTestConnection('gemini')}
                       className="btn-secondary"
                       disabled={testLoading}
+                      style={{ whiteSpace: 'nowrap' }}
                     >
                       Testar Conexão Gemini
                     </button>
@@ -2199,7 +2204,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                 {/* Evolution API Integration */}
                 <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-secondary)' }}>
                   <label style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', display: 'block' }}>Evolution API (Self-Hosted)</label>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                  <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
                     <div>
                       <label style={{ fontSize: '12px', color: 'var(--text-muted)' }}>URL da API Server</label>
                       <input
@@ -2234,7 +2239,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                 </div>
 
                 {/* Inactivity & Google Drive */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                   <div style={{ padding: '16px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--bg-secondary)' }}>
                     <label style={{ fontWeight: '600', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Clock size={16} /> Tempo de Inatividade (Minutos)
@@ -2256,7 +2261,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                       {/* OAuth Client Credentials Inputs */}
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                         <div>
                           <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block', fontWeight: '600' }}>
                             Google OAuth Client ID
@@ -2284,7 +2289,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                       </div>
 
                       {/* OAuth Connection Status & Button */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', padding: '12px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                         <div>
                           <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>Conexão com a Conta Google</div>
                           <div style={{ fontSize: '12px', color: maskedSettings?.google_drive_connected ? '#34d399' : '#f87171', marginTop: '2px', fontWeight: '500' }}>
@@ -2510,7 +2515,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
                   <div>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Tipo</label>
                     <select
@@ -2552,7 +2557,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+                <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
                   <div>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Cidade</label>
                     <input
@@ -2684,7 +2689,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
         {/* 7. Store Employees & Technicians Tab */}
         {activeSubTab === 'technicians' && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '24px' }}>
+          <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: '24px' }}>
             {/* Form */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -2742,7 +2747,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                   />
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div className="admin-grid-2col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
                     <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>Cargo / Função</label>
                     <select

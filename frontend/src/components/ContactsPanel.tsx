@@ -328,9 +328,9 @@ export const ContactsPanel: React.FC = () => {
 
 
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: 'var(--bg-primary)', overflow: 'hidden' }}>
+    <div className="contacts-container" style={{ display: 'flex', width: '100%', height: '100%', backgroundColor: 'var(--bg-primary)', overflow: 'hidden' }}>
       {/* Left List Pane: Contacts Directory */}
-      <div style={{
+      <div className={`contacts-list-pane ${selectedContact ? 'mobile-hidden' : ''}`} style={{
         width: '400px',
         height: '100%',
         borderRight: '1px solid var(--border-color)',
@@ -478,7 +478,7 @@ export const ContactsPanel: React.FC = () => {
       </div>
 
       {/* Right Content Pane: Conversation Timeline Details */}
-      <div style={{ flex: 1, height: '100%', overflowY: 'auto', padding: '32px', backgroundColor: 'var(--bg-secondary)' }}>
+      <div className={`contacts-detail-pane ${!selectedContact ? 'mobile-hidden' : ''}`} style={{ flex: 1, height: '100%', overflowY: 'auto', padding: '32px', backgroundColor: 'var(--bg-secondary)' }}>
         {!selectedContact ? (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
             <User size={48} style={{ opacity: 0.3, marginBottom: '16px' }} />
@@ -488,8 +488,28 @@ export const ContactsPanel: React.FC = () => {
           <div style={{ maxWidth: '960px', margin: '0 auto' }}>
             {/* Contact Details Header */}
             <div className="glass-panel" style={{ padding: '24px', borderRadius: 'var(--radius-lg)', marginBottom: '24px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedContact(null)}
+                    className="contacts-back-btn-mobile"
+                    style={{
+                      background: 'rgba(0, 230, 153, 0.15)',
+                      border: '1px solid rgba(0, 230, 153, 0.35)',
+                      color: '#00e699',
+                      cursor: 'pointer',
+                      padding: '6px 12px',
+                      borderRadius: '8px',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontSize: '12px',
+                      fontWeight: '700',
+                      flexShrink: 0
+                    }}
+                  >
+                    <ArrowLeft size={16} /> Voltar
+                  </button>
                   <div style={{
                     width: '52px',
                     height: '52px',

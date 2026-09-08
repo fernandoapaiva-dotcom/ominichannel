@@ -247,8 +247,9 @@ async def resolve_and_bind_contact(
     else:
         # Update existing contact if better name or phone resolved
         if resolved_name and resolved_name not in ["Cliente", "Cliente WhatsApp", clean_digits, real_phone]:
-            if contact.nome in ["Cliente", "Cliente WhatsApp", contact.telefone, clean_digits]:
-                contact.nome = resolved_name
+            if not (contact.dados_adicionais or {}).get("custom_name_locked"):
+                if contact.nome in ["Cliente", "Cliente WhatsApp", contact.telefone, clean_digits]:
+                    contact.nome = resolved_name
         if contact.telefone != real_phone and real_phone.startswith("55") and not contact.telefone.startswith("55"):
             contact.telefone = real_phone
         if is_lid:

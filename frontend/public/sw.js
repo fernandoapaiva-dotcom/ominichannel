@@ -62,11 +62,44 @@ self.addEventListener('message', (event) => {
   if (!event.data) return;
   if (event.data.type === 'SET_BADGE') {
     const count = Number(event.data.count || 0);
+    const chatCount = Number(event.data.chatCount || 0);
+    const groupCount = Number(event.data.groupCount || 0);
+
+    // 1. App Badging API (Chromium / WebAPK)
     if (self.navigator && 'setAppBadge' in self.navigator) {
       if (count > 0) {
         self.navigator.setAppBadge(count).catch(() => {});
       } else {
         self.navigator.clearAppBadge().catch(() => {});
+      }
+    }
+
+    // 2. Android Launcher Notification Badge (Samsung One UI, Pixel, etc.)
+    // Os launchers do Android computam o número no ícone a partir das notificações ativas do app
+    if (self.registration && 'showNotification' in self.registration) {
+      if (count > 0) {
+        let summaryText = '';
+        if (chatCount > 0 && groupCount > 0) {
+          summaryText = `${chatCount} cliente(s) aguardando • ${groupCount} grupo(s) com novidades`;
+        } else if (chatCount > 0) {
+          summaryText = `${chatCount} cliente(s) aguardando atendimento`;
+        } else {
+          summaryText = `${groupCount} grupo(s) com atividade recente`;
+        }
+
+        self.registration.showNotification(`OminiChannel (${count})`, {
+          body: summaryText,
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+          tag: 'ominichannel-badge-summary',
+          renotify: false,
+          silent: true,
+          data: { url: '/' }
+        }).catch(() => {});
+      } else {
+        self.registration.getNotifications({ tag: 'ominichannel-badge-summary' })
+          .then(notifs => notifs.forEach(n => n.close()))
+          .catch(() => {});
       }
     }
   }

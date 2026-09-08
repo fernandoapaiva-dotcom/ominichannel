@@ -1482,7 +1482,8 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                         if u.get("telefone") and u["telefone"] != c_obj.telefone:
                                             c_obj.telefone = u["telefone"]
                                         if u.get("nome") and u["nome"] != c_obj.nome:
-                                            c_obj.nome = u["nome"]
+                                            if not (c_obj.dados_adicionais or {}).get("custom_name_locked"):
+                                                c_obj.nome = u["nome"]
                                         if u.get("foto_perfil_url") and u["foto_perfil_url"] != c_obj.foto_perfil_url:
                                             c_obj.foto_perfil_url = u["foto_perfil_url"]
                                 await db.commit()
