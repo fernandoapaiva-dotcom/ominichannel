@@ -99,6 +99,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     });
   }, [conversations, activeTab]);
   
+  // Synchronize activeConversationId automatically on desktop when not set
+  useEffect(() => {
+    if (window.innerWidth > 768 && activeConversationId === null && displayedConversations.length > 0) {
+      setActiveConversationId(displayedConversations[0].id);
+    }
+  }, [activeConversationId, displayedConversations]);
+
   // Computes active conversation prioritizing active selected ID then department
   const activeConversation = useMemo(() => {
     if (activeConversationId) {
@@ -114,21 +121,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
              (cleanPhone.length >= 8 && (c.contact?.telefone || '').replace(/\D/g, '').includes(cleanPhone.slice(-8))))
           );
           if (sameContactInDept) return sameContactInDept;
-          // CRITICAL: Strict department isolation — NEVER return a conversation from another department!
-          const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
-          return deptConvs.length > 0 ? deptConvs[0] : null;
+          return found;
         }
         return found;
       }
     }
 
-    if (selectedDeptId !== 'all') {
-      const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
-      if (deptConvs.length > 0) return deptConvs[0];
-      return null;
+    if (window.innerWidth > 768 && displayedConversations.length > 0) {
+      if (selectedDeptId !== 'all') {
+        const deptConvs = displayedConversations.filter(c => String(c.whatsapp_number_id) === String(selectedDeptId));
+        if (deptConvs.length > 0) return deptConvs[0];
+      }
+      return displayedConversations[0];
     }
 
-    return displayedConversations.length > 0 ? displayedConversations[0] : null;
+    return null;
   }, [conversations, displayedConversations, activeConversationId, selectedDeptId]);
 
   const pendingBadgeCount = useMemo(() => {
@@ -245,8 +252,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
             }
 
+            const currentActiveId = activeConversationId || activeConversation?.id;
             // If the conversation is currently open on screen, it is read
-            const isCurrentlyActiveChat = Number(c.id) === Number(activeConversationId);
+            const isCurrentlyActiveChat = currentActiveId && Number(c.id) === Number(currentActiveId);
 
             // Check if server explicitly flagged this conversation with a new unread message
             const hasServerUnreadFlag = c.dados_adicionais?.marked_as_read === false;
@@ -291,10 +299,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           });
 
           // Ensure active conversation is never dropped from the state if search or limit excluded it
-          if (activeConversationId) {
-            const exists = updatedList.some((c: Conversation) => Number(c.id) === Number(activeConversationId));
+          const currentActiveId = activeConversationId || activeConversation?.id;
+          if (currentActiveId) {
+            const exists = updatedList.some((c: Conversation) => Number(c.id) === Number(currentActiveId));
             if (!exists) {
-              const activePrev = prevMap.get(Number(activeConversationId));
+              const activePrev = prevMap.get(Number(currentActiveId));
               if (activePrev) {
                 updatedList.unshift(activePrev);
               }
@@ -396,11 +405,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       return;
     }
     const cid = Number(activeConvIdToLoad);
-    if (lastActiveConvIdRef.current !== cid) {
+    const conv = conversations.find(c => Number(c.id) === cid);
+    const msgCount = conv?.messages?.length || 0;
+    if (lastActiveConvIdRef.current !== cid || msgCount <= 5) {
       lastActiveConvIdRef.current = cid;
       loadActiveConversationDetail(cid);
     }
-  }, [activeConvIdToLoad, loadActiveConversationDetail]);
+  }, [activeConvIdToLoad, conversations, loadActiveConversationDetail]);
 
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
@@ -516,20 +527,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
-      if (activeConversationId) {
-        loadActiveConversationDetail(Number(activeConversationId));
+      const currentActiveId = activeConversationId || activeConversation?.id;
+      if (currentActiveId) {
+        loadActiveConversationDetail(Number(currentActiveId));
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchConversations, activeConversationId, loadActiveConversationDetail]);
+  }, [fetchConversations, activeConversationId, activeConversation?.id, loadActiveConversationDetail]);
 
   // Synchronize immediately when user returns to the tab or window regains focus
   useEffect(() => {
     const handleReFocus = () => {
       if (document.visibilityState === 'visible') {
         fetchConversations();
-        if (activeConversationId) {
-          loadActiveConversationDetail(Number(activeConversationId));
+        const currentActiveId = activeConversationId || activeConversation?.id;
+        if (currentActiveId) {
+          loadActiveConversationDetail(Number(currentActiveId));
         }
       }
     };
@@ -539,7 +552,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       window.removeEventListener('focus', handleReFocus);
       document.removeEventListener('visibilitychange', handleReFocus);
     };
-  }, [fetchConversations, activeConversationId, loadActiveConversationDetail]);
+  }, [fetchConversations, activeConversationId, activeConversation?.id, loadActiveConversationDetail]);
 
   // 2. WebSocket Live Realtime Connection with Auto-Reconnect & Dynamic Host
   useEffect(() => {
@@ -560,8 +573,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
       socket.onopen = () => {
         fetchConversations();
-        if (activeConversationId) {
-          loadActiveConversationDetail(Number(activeConversationId));
+        const currentActiveId = activeConversationId || activeConversation?.id;
+        if (currentActiveId) {
+          loadActiveConversationDetail(Number(currentActiveId));
         }
       };
 
@@ -673,6 +687,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
               if (!found) {
                 fetchConversations();
+                if (targetConvId) {
+                  loadActiveConversationDetail(targetConvId);
+                }
                 return prev;
               }
               return updated;

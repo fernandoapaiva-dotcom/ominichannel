@@ -1904,6 +1904,7 @@ async def receive_evolution_webhook(
                 }
             )
 
+        text_lower = (text_content or "").lower()
         explicit_ai_keywords = ["falar com ia", "reativar ia", "chamar ia", "iniciar ia", "menu ia"]
         if any(k in text_lower for k in explicit_ai_keywords):
             conversation.status = ConversationStatus.COM_IA
