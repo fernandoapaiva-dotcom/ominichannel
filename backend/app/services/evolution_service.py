@@ -312,14 +312,16 @@ class EvolutionService:
         text: str = "",
         presence_type: str = "composing",
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        skip_anti_ban_pacing: bool = False
     ):
         """
-        Enforces 100% Anti-Ban safeguards:
-        1. Rate-limiting / inter-message spacing (cooldown gap between consecutive messages).
-        2. 'composing' or 'recording' presence stanza sent to WhatsApp Web.
-        3. Dynamic human typing delay (simulates typing proportional to text length + jitter).
+        Enforces 100% Anti-Ban safeguards for automated bots/campaigns.
+        Human attendants who already type in the UI skip this artificial delay.
         """
+        if skip_anti_ban_pacing:
+            return
+
         clean_number = self._format_target_number(number)
         lock_key = f"{instance_name}:{clean_number}"
         lock = self._get_contact_lock(lock_key)
@@ -383,17 +385,20 @@ class EvolutionService:
         mentioned: Optional[List[str]] = None,
         quoted: Optional[Dict[str, Any]] = None,
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        skip_anti_ban_pacing: bool = False
     ) -> Dict[str, Any]:
-        # 1. Apply 100% Anti-Ban safeguards: presence simulation, human delay, and rate limiting
-        await self._apply_anti_ban_pacing_and_presence(
-            instance_name=instance_name,
-            number=number,
-            text=text,
-            presence_type="composing",
-            custom_base_url=custom_base_url,
-            custom_api_key=custom_api_key
-        )
+        # 1. Apply Anti-Ban safeguards (skipped for human attendants)
+        if not skip_anti_ban_pacing:
+            await self._apply_anti_ban_pacing_and_presence(
+                instance_name=instance_name,
+                number=number,
+                text=text,
+                presence_type="composing",
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key,
+                skip_anti_ban_pacing=skip_anti_ban_pacing
+            )
 
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"
@@ -684,7 +689,8 @@ class EvolutionService:
         number: str,
         audio_media: str,
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        skip_anti_ban_pacing: bool = False
     ) -> Dict[str, Any]:
         """
         Sends a native WhatsApp Voice Note (PTT / Push-To-Talk audio) with waveform icon via Evolution API v2.
@@ -692,15 +698,17 @@ class EvolutionService:
         NOTE: Evolution API 2.3.7 accepts public HTTPS URL or pure base64 (no "data:" prefix).
         It REJECTS "data:audio/ogg;base64,..." format.
         """
-        # 1. Apply Anti-Ban pacing & presence ("recording")
-        await self._apply_anti_ban_pacing_and_presence(
-            instance_name=instance_name,
-            number=number,
-            text="",
-            presence_type="recording",
-            custom_base_url=custom_base_url,
-            custom_api_key=custom_api_key
-        )
+        # 1. Apply Anti-Ban pacing & presence ("recording") (skipped for human attendants)
+        if not skip_anti_ban_pacing:
+            await self._apply_anti_ban_pacing_and_presence(
+                instance_name=instance_name,
+                number=number,
+                text="",
+                presence_type="recording",
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key,
+                skip_anti_ban_pacing=skip_anti_ban_pacing
+            )
 
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendWhatsAppAudio/{instance_name}"
@@ -801,7 +809,8 @@ class EvolutionService:
         file_name: str = "",
         caption: str = "",
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        skip_anti_ban_pacing: bool = False
     ) -> Dict[str, Any]:
         if media_type == "audio" or (mimetype and mimetype.startswith("audio/")):
             return await self.send_whatsapp_audio(
@@ -809,18 +818,21 @@ class EvolutionService:
                 number=number,
                 audio_media=media,
                 custom_base_url=custom_base_url,
-                custom_api_key=custom_api_key
+                custom_api_key=custom_api_key,
+                skip_anti_ban_pacing=skip_anti_ban_pacing
             )
 
-        # 1. Apply Anti-Ban pacing & presence ("composing")
-        await self._apply_anti_ban_pacing_and_presence(
-            instance_name=instance_name,
-            number=number,
-            text=caption or file_name or "Mídia",
-            presence_type="composing",
-            custom_base_url=custom_base_url,
-            custom_api_key=custom_api_key
-        )
+        # 1. Apply Anti-Ban pacing & presence ("composing") (skipped for human attendants)
+        if not skip_anti_ban_pacing:
+            await self._apply_anti_ban_pacing_and_presence(
+                instance_name=instance_name,
+                number=number,
+                text=caption or file_name or "Mídia",
+                presence_type="composing",
+                custom_base_url=custom_base_url,
+                custom_api_key=custom_api_key,
+                skip_anti_ban_pacing=skip_anti_ban_pacing
+            )
 
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendMedia/{instance_name}"
@@ -873,7 +885,8 @@ class EvolutionService:
         number: str,
         sticker_media: str,
         custom_base_url: Optional[str] = None,
-        custom_api_key: Optional[str] = None
+        custom_api_key: Optional[str] = None,
+        skip_anti_ban_pacing: bool = False
     ) -> Dict[str, Any]:
         """
         Sends a native WhatsApp sticker (.webp) via Evolution API v2.

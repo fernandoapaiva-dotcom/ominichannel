@@ -127,7 +127,7 @@ async def list_conversations(
                     FROM messages
                     WHERE conversation_id IN ({cids_str})
                 )
-                WHERE rn <= 5
+                WHERE rn <= 15
                 ORDER BY id ASC
             """)
             m_res = await db.execute(sql)
@@ -1044,9 +1044,10 @@ async def send_agent_message(
                 evolution_service.send_sticker(
                     instance_name=active_inst,
                     number=target_phone,
-                    sticker_media=sticker_media
+                    sticker_media=sticker_media,
+                    skip_anti_ban_pacing=True
                 ),
-                timeout=3.5
+                timeout=10.0
             )
         elif is_gif and active_inst:
             send_res = await asyncio.wait_for(
@@ -1056,9 +1057,10 @@ async def send_agent_message(
                     media_type="video",
                     mimetype="video/mp4",
                     media=raw_content,
-                    file_name="animacao.mp4"
+                    file_name="animacao.mp4",
+                    skip_anti_ban_pacing=True
                 ),
-                timeout=3.5
+                timeout=10.0
             )
         elif is_media and active_inst:
             media_path = raw_content.split("|")[0].strip()
@@ -1115,9 +1117,10 @@ async def send_agent_message(
                     mimetype=mimetype,
                     media=media_data,
                     file_name=fname,
-                    caption=formatted_caption
+                    caption=formatted_caption,
+                    skip_anti_ban_pacing=True
                 ),
-                timeout=3.5
+                timeout=10.0
             )
         else:
             formatted_whatsapp_text = f"*👤 {agent_nome}:*\n\n{msg_in.conteudo}"
@@ -1158,9 +1161,10 @@ async def send_agent_message(
                     number=target_phone,
                     text=formatted_whatsapp_text,
                     mentioned=mentioned_list if mentioned_list else None,
-                    quoted={"key": {"id": quoted_stanza_id}} if quoted_stanza_id else None
+                    quoted={"key": {"id": quoted_stanza_id}} if quoted_stanza_id else None,
+                    skip_anti_ban_pacing=True
                 ),
-                timeout=3.5
+                timeout=10.0
             )
 
         wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
@@ -1247,7 +1251,8 @@ async def send_agent_message(
                             bg_send_res = await evolution_service.send_sticker(
                                 instance_name=active_inst,
                                 number=target_phone,
-                                sticker_media=sticker_media
+                                sticker_media=sticker_media,
+                                skip_anti_ban_pacing=True
                             )
                         elif is_gif and active_inst:
                             bg_send_res = await evolution_service.send_media_message(
@@ -1256,7 +1261,8 @@ async def send_agent_message(
                                 media_type="video",
                                 mimetype="video/mp4",
                                 media=raw_content,
-                                file_name="animacao.mp4"
+                                file_name="animacao.mp4",
+                                skip_anti_ban_pacing=True
                             )
                         elif is_media and active_inst:
                             bg_send_res = await evolution_service.send_media_message(
@@ -1266,14 +1272,16 @@ async def send_agent_message(
                                 mimetype=mimetype,
                                 media=media_data,
                                 file_name=fname,
-                                caption=formatted_caption
+                                caption=formatted_caption,
+                                skip_anti_ban_pacing=True
                             )
                         else:
                             bg_send_res = await provider.send_text_message(
                                 number=target_phone,
                                 text=formatted_whatsapp_text,
                                 mentioned=mentioned_list if mentioned_list else None,
-                                quoted={"key": {"id": quoted_stanza_id}} if quoted_stanza_id else None
+                                quoted={"key": {"id": quoted_stanza_id}} if quoted_stanza_id else None,
+                                skip_anti_ban_pacing=True
                             )
 
                         bg_wa_key_id = bg_send_res.get("key", {}).get("id") if isinstance(bg_send_res.get("key"), dict) else bg_send_res.get("id")
@@ -1428,7 +1436,8 @@ async def retry_message_send(
                         send_res = await evolution_service.send_sticker(
                             instance_name=target_instance_name,
                             number=target_phone,
-                            sticker_media=sticker_media
+                            sticker_media=sticker_media,
+                            skip_anti_ban_pacing=True
                         )
                     elif is_gif and target_instance_name:
                         send_res = await evolution_service.send_media_message(
@@ -1437,7 +1446,8 @@ async def retry_message_send(
                             media_type="video",
                             mimetype="video/mp4",
                             media=raw_content,
-                            file_name="animacao.mp4"
+                            file_name="animacao.mp4",
+                            skip_anti_ban_pacing=True
                         )
                     elif is_media and target_instance_name:
                         media_path = raw_content.split("|")[0].strip()
@@ -1473,13 +1483,15 @@ async def retry_message_send(
                             mimetype=mimetype,
                             media=media_data,
                             file_name=fname,
-                            caption=formatted_caption
+                            caption=formatted_caption,
+                            skip_anti_ban_pacing=True
                         )
                     else:
                         formatted_whatsapp_text = raw_content if raw_content.startswith("*👤") else f"*👤 {agent_nome}:*\n\n{raw_content}"
                         send_res = await provider.send_text_message(
                             number=target_phone,
-                            text=formatted_whatsapp_text
+                            text=formatted_whatsapp_text,
+                            skip_anti_ban_pacing=True
                         )
 
                     wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
@@ -1833,7 +1845,8 @@ async def send_pix_in_conversation(
         mimetype="image/png",
         media=base64_img,
         file_name="qrcode_pix.png",
-        caption=formatted_caption
+        caption=formatted_caption,
+        skip_anti_ban_pacing=True
     )
 
     if not res_media.get("success"):
@@ -2032,7 +2045,8 @@ async def send_agent_media(
         mimetype=mimetype,
         media=base64_data,
         file_name=file.filename or unique_filename,
-        caption=formatted_caption
+        caption=formatted_caption,
+        skip_anti_ban_pacing=True
     )
 
     is_success = send_res.get("success", False) or bool(send_res.get("key")) or bool(send_res.get("id")) or send_res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201]

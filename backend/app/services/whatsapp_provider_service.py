@@ -11,7 +11,7 @@ logger = logging.getLogger("whatsapp_provider_service")
 
 class WhatsAppProviderInterface(ABC):
     @abstractmethod
-    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None) -> Dict[str, Any]:
+    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None, quoted: Optional[Dict[str, Any]] = None, skip_anti_ban_pacing: bool = False) -> Dict[str, Any]:
         """Sends text message to a specific phone number."""
         pass
 
@@ -24,7 +24,7 @@ class EvolutionProvider(WhatsAppProviderInterface):
     def __init__(self, instance_name: Optional[str]):
         self.instance_name = instance_name or ""
 
-    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None, quoted: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None, quoted: Optional[Dict[str, Any]] = None, skip_anti_ban_pacing: bool = False) -> Dict[str, Any]:
         if not self.instance_name:
             return {"success": False, "error": "Nome da instância na Evolution API não configurado."}
         return await evolution_service.send_text_message(
@@ -32,7 +32,8 @@ class EvolutionProvider(WhatsAppProviderInterface):
             number=number,
             text=text,
             mentioned=mentioned,
-            quoted=quoted
+            quoted=quoted,
+            skip_anti_ban_pacing=skip_anti_ban_pacing
         )
 
     async def get_status(self) -> Dict[str, Any]:
@@ -49,7 +50,7 @@ class MetaCloudProvider(WhatsAppProviderInterface):
         self.waba_id = waba_id or ""
         self.access_token = decrypt_data(access_token_encrypted) if access_token_encrypted else ""
 
-    async def send_text_message(self, number: str, text: str) -> Dict[str, Any]:
+    async def send_text_message(self, number: str, text: str, mentioned: Optional[list] = None, quoted: Optional[Dict[str, Any]] = None, skip_anti_ban_pacing: bool = False) -> Dict[str, Any]:
         if not self.phone_number_id or not self.access_token:
             return {
                 "success": False,

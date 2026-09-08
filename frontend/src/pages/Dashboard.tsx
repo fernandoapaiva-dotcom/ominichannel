@@ -239,9 +239,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               sending.forEach(m => {
                 const isStale = m.timestamp && (now - new Date(m.timestamp).getTime() > 15000);
                 const rawContent = (m.conteudo || '').split('|')[0].trim();
-                if (!isStale && !seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(rawContent)) {
+                if (!seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(rawContent)) {
                   seenTempIds.add(m.id);
-                  uniqueToKeep.push(m);
+                  uniqueToKeep.push(isStale ? { ...m, status: 'failed' as any } : m);
                 }
               });
 
@@ -397,18 +397,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   // Automatically ensure full message history is loaded for active conversation
   const activeConvIdToLoad = activeConversationId || activeConversation?.id;
-  const lastActiveConvIdRef = useRef<number | null>(null);
+  const loadedFullHistoryRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
-    if (!activeConvIdToLoad) {
-      lastActiveConvIdRef.current = null;
-      return;
-    }
+    if (!activeConvIdToLoad) return;
     const cid = Number(activeConvIdToLoad);
     const conv = conversations.find(c => Number(c.id) === cid);
     const msgCount = conv?.messages?.length || 0;
-    if (lastActiveConvIdRef.current !== cid || msgCount <= 5) {
-      lastActiveConvIdRef.current = cid;
+    if (!loadedFullHistoryRef.current.has(cid) || msgCount <= 5) {
+      loadedFullHistoryRef.current.add(cid);
       loadActiveConversationDetail(cid);
     }
   }, [activeConvIdToLoad, conversations, loadActiveConversationDetail]);
@@ -662,11 +659,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     };
                   }
                   let replaced = false;
+                  const sendingCount = currentMsgs.filter(m => (m.id < 0 || m.status === 'sending') && m.remetente === newMsg.remetente).length;
                   const replacedSending = currentMsgs.map(m => {
                     if (!replaced && (m.id < 0 || m.status === 'sending') && m.remetente === newMsg.remetente) {
                       const c1 = (m.conteudo || '').split('|')[0].trim();
                       const c2 = (newMsg.conteudo || '').split('|')[0].trim();
-                      if (m.id < 0 || c1 === c2 || m.tipo === 'audio' || newMsg.tipo === 'audio') {
+                      if (c1 === c2 || m.tipo === 'audio' || newMsg.tipo === 'audio' || sendingCount === 1) {
                         replaced = true;
                         return newMsg;
                       }
@@ -745,22 +743,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     ...(c.dados_adicionais || {}),
                     ...(isRead ? { marked_as_read: true, pending_dismissed: true } : {})
                   },
-                  messages: isFailed
-                    ? (c.messages || []).filter(m => m.id !== payload.id && (!payload.whatsapp_msg_id || m.whatsapp_msg_id !== payload.whatsapp_msg_id))
-                    : (c.messages || []).map(m => {
-                        if (
-                          (payload.id && m.id === payload.id) ||
-                          (payload.whatsapp_msg_id && m.whatsapp_msg_id === payload.whatsapp_msg_id) ||
-                          (payload.status === 'read' && m.remetente === 'cliente')
-                        ) {
-                          return {
-                            ...m,
-                            status: payload.status,
-                            whatsapp_msg_id: payload.whatsapp_msg_id || m.whatsapp_msg_id
-                          };
-                        }
-                        return m;
-                      })
+                  messages: (c.messages || []).map(m => {
+                    if (
+                      (payload.id && m.id === payload.id) ||
+                      (payload.whatsapp_msg_id && m.whatsapp_msg_id === payload.whatsapp_msg_id) ||
+                      (payload.status === 'read' && m.remetente === 'cliente')
+                    ) {
+                      return {
+                        ...m,
+                        status: payload.status,
+                        whatsapp_msg_id: payload.whatsapp_msg_id || m.whatsapp_msg_id
+                      };
+                    }
+                    return m;
+                  })
                 };
               }
               return c;
@@ -928,14 +924,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         );
       } catch (err: any) {
         console.error('Optimistic message send error:', err);
-        // If message failed to send to server, quietly remove optimistic message so it does not clutter the chat
+        // Retain optimistic message on screen with status 'failed', NEVER delete it!
         setConversations(prevConvs =>
           prevConvs.map(conv => {
             if (Number(conv.id) === Number(finalConvId) || Number(conv.id) === Number(targetConv.id)) {
               const currentMsgs = conv.messages || [];
               return {
                 ...conv,
-                messages: currentMsgs.filter(m => m.id !== tempId)
+                messages: currentMsgs.map(m => m.id === tempId ? { ...m, status: 'failed' as any } : m)
               };
             }
             return conv;
