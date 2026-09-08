@@ -360,7 +360,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     | { type: 'image_album'; messages: Message[]; originalIndices: number[] };
 
   const processedMessageGroups = useMemo<RenderGroup[]>(() => {
-    const rawMsgs = conversation?.messages || [];
+    const rawMsgs = [...(conversation?.messages || [])].sort(
+      (a, b) => normalizeIsoDate(a.timestamp).getTime() - normalizeIsoDate(b.timestamp).getTime()
+    );
     
     // Deduplicate messages: by ID, whatsapp_msg_id, or identical attendant content sent within 60s
     const seenIds = new Set<number>();
@@ -1117,15 +1119,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleRetryMessage = async (msgId: number) => {
     setActiveActionMenuMsgId(null);
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: 'sending' } : m));
     try {
-      const res: any = await apiFetch(`/conversations/messages/${msgId}/retry`, { method: 'POST' });
-      if (res && res.status) {
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: res.status } : m));
-      }
+      await apiFetch(`/conversations/messages/${msgId}/retry`, { method: 'POST' });
+      if (onStatusToggle) onStatusToggle();
     } catch (err) {
       console.error('Failed to retry message:', err);
-      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, status: 'failed' } : m));
     }
   };
 
@@ -1139,14 +1137,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           tipo: 'audio',
           conteudo: audioUrl
         };
-        const newMsg: any = await apiFetch(`/conversations/${conversation.id}/messages`, {
+        await apiFetch(`/conversations/${conversation.id}/messages`, {
           method: 'POST',
           body: JSON.stringify(payload)
         });
-        if (newMsg) {
-          setMessages(prev => [...prev, newMsg]);
-          scrollToBottom();
-        }
+        if (onStatusToggle) onStatusToggle();
+        scrollToBottom();
       }
     } catch (err) {
       console.error('Error sending audio message:', err);

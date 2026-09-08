@@ -1688,7 +1688,13 @@ async def send_conversation_presence(
     db: AsyncSession = Depends(get_db)
 ):
     presence_state = presence_in.get("presence", "composing")
-    conv = await get_conversation_or_404(db, conversation_id, current_user.tenant_id)
+    stmt = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.tenant_id == current_user.tenant_id
+    )
+    conv = (await db.execute(stmt)).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
     contact = await db.get(Contact, conv.contact_id)
     wn = await db.get(WhatsAppNumber, conv.whatsapp_number_id)
     

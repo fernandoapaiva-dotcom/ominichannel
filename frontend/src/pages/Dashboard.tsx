@@ -171,7 +171,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       if (Array.isArray(data)) {
         setConversations(prev => {
           const prevMap = new Map<number, Conversation>();
-          prev.forEach(c => prevMap.set(c.id, c));
+          prev.forEach(c => prevMap.set(Number(c.id), c));
 
           // Collect optimistic/sending messages strictly per conversation ID
           const pendingMessages: { [key: string]: Message[] } = {};
@@ -182,19 +182,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             }
           });
 
-          return data.map((c: Conversation) => {
-            const prevConv = prevMap.get(c.id);
+          const updatedList = data.map((c: Conversation) => {
+            const cidNum = Number(c.id);
+            const prevConv = prevMap.get(cidNum);
 
-            // Determine messages: if prevConv already has full history loaded, PRESERVE IT!
-            let currentMsgs = c.messages || [];
+            // Determine messages:
+            // CRITICAL: NEVER truncate messages for ANY conversation that already has messages loaded!
+            let currentMsgs: Message[] = [];
+            const serverMsgs = c.messages || [];
+
             if (prevConv && prevConv.messages && prevConv.messages.length > 0) {
-              if (prevConv.messages.length >= currentMsgs.length) {
-                const existingIds = new Set(prevConv.messages.map(m => m.id));
-                const newIncoming = currentMsgs.filter(m => !existingIds.has(m.id));
-                currentMsgs = newIncoming.length > 0
-                  ? [...prevConv.messages, ...newIncoming]
-                  : prevConv.messages;
-              }
+              const msgMap = new Map<number, Message>();
+              const waIdMap = new Map<string, Message>();
+
+              // Preserve all previously loaded messages
+              prevConv.messages.forEach((m: Message) => {
+                msgMap.set(m.id, m);
+                if (m.whatsapp_msg_id) waIdMap.set(m.whatsapp_msg_id, m);
+              });
+
+              // Merge any new messages from server without losing older ones
+              serverMsgs.forEach((m: Message) => {
+                if (!msgMap.has(m.id) && (!m.whatsapp_msg_id || !waIdMap.has(m.whatsapp_msg_id))) {
+                  msgMap.set(m.id, m);
+                  if (m.whatsapp_msg_id) waIdMap.set(m.whatsapp_msg_id, m);
+                } else if (msgMap.has(m.id)) {
+                  const existing = msgMap.get(m.id)!;
+                  msgMap.set(m.id, { ...existing, ...m });
+                }
+              });
+
+              currentMsgs = Array.from(msgMap.values()).sort(
+                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+              );
+            } else {
+              currentMsgs = serverMsgs;
             }
 
             const sending = pendingMessages[`conv_${c.id}`] || [];
@@ -217,12 +239,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               });
 
               if (uniqueToKeep.length > 0) {
-                currentMsgs = [...currentMsgs, ...uniqueToKeep];
+                currentMsgs = [...currentMsgs, ...uniqueToKeep].sort(
+                  (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                );
               }
             }
 
             // If the conversation is currently open on screen, it is read
-            const isCurrentlyActiveChat = c.id === activeConversationId;
+            const isCurrentlyActiveChat = Number(c.id) === Number(activeConversationId);
 
             // Check if server explicitly flagged this conversation with a new unread message
             const hasServerUnreadFlag = c.dados_adicionais?.marked_as_read === false;
@@ -265,6 +289,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               messages: currentMsgs
             };
           });
+
+          // Ensure active conversation is never dropped from the state if search or limit excluded it
+          if (activeConversationId) {
+            const exists = updatedList.some((c: Conversation) => Number(c.id) === Number(activeConversationId));
+            if (!exists) {
+              const activePrev = prevMap.get(Number(activeConversationId));
+              if (activePrev) {
+                updatedList.unshift(activePrev);
+              }
+            }
+          }
+
+          return updatedList;
         });
       }
     } catch (err) {
@@ -307,11 +344,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             const existingMsgs = existing.messages || [];
             const detailMsgs = detail.messages || [];
 
-            // Combine messages avoiding duplicates
+            // Combine messages avoiding duplicates by both id and whatsapp_msg_id
             const msgMap = new Map<number, Message>();
-            detailMsgs.forEach((m: Message) => msgMap.set(m.id, m));
+            const waIdMap = new Map<string, Message>();
+
+            detailMsgs.forEach((m: Message) => {
+              msgMap.set(m.id, m);
+              if (m.whatsapp_msg_id) waIdMap.set(m.whatsapp_msg_id, m);
+            });
+
             existingMsgs.forEach((m: Message) => {
-              if (!msgMap.has(m.id) || m.id < 0 || m.status === 'sending') {
+              if (m.id < 0 || m.status === 'sending') {
+                msgMap.set(m.id, m);
+              } else if (!msgMap.has(m.id) && (!m.whatsapp_msg_id || !waIdMap.has(m.whatsapp_msg_id))) {
                 msgMap.set(m.id, m);
               }
             });
@@ -324,7 +369,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             next[index] = {
               ...existing,
               ...detail,
-              messages: sortedMsgs
+              messages: sortedMsgs,
+              dados_adicionais: {
+                ...(existing.dados_adicionais || {}),
+                ...(detail.dados_adicionais || {})
+              }
             };
             return next;
           } else {
@@ -339,13 +388,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   // Automatically ensure full message history is loaded for active conversation
   const activeConvIdToLoad = activeConversationId || activeConversation?.id;
+  const lastActiveConvIdRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!activeConvIdToLoad) return;
-    const conv = conversations.find(c => c.id === activeConvIdToLoad);
-    if (!conv || !conv.messages || conv.messages.length <= 5) {
-      loadActiveConversationDetail(activeConvIdToLoad);
+    if (!activeConvIdToLoad) {
+      lastActiveConvIdRef.current = null;
+      return;
     }
-  }, [activeConvIdToLoad, conversations, loadActiveConversationDetail]);
+    const cid = Number(activeConvIdToLoad);
+    if (lastActiveConvIdRef.current !== cid) {
+      lastActiveConvIdRef.current = cid;
+      loadActiveConversationDetail(cid);
+    }
+  }, [activeConvIdToLoad, loadActiveConversationDetail]);
 
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
@@ -461,9 +516,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
+      if (activeConversationId) {
+        loadActiveConversationDetail(Number(activeConversationId));
+      }
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchConversations]);
+  }, [fetchConversations, activeConversationId, loadActiveConversationDetail]);
+
+  // Synchronize immediately when user returns to the tab or window regains focus
+  useEffect(() => {
+    const handleReFocus = () => {
+      if (document.visibilityState === 'visible') {
+        fetchConversations();
+        if (activeConversationId) {
+          loadActiveConversationDetail(Number(activeConversationId));
+        }
+      }
+    };
+    window.addEventListener('focus', handleReFocus);
+    document.addEventListener('visibilitychange', handleReFocus);
+    return () => {
+      window.removeEventListener('focus', handleReFocus);
+      document.removeEventListener('visibilitychange', handleReFocus);
+    };
+  }, [fetchConversations, activeConversationId, loadActiveConversationDetail]);
 
   // 2. WebSocket Live Realtime Connection with Auto-Reconnect & Dynamic Host
   useEffect(() => {
@@ -481,6 +557,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       const wsUrl = `${wsProtocol}//${window.location.host}/ws?token=${token}`;
 
       socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        fetchConversations();
+        if (activeConversationId) {
+          loadActiveConversationDetail(Number(activeConversationId));
+        }
+      };
 
       socket.onmessage = (event) => {
         try {
@@ -549,7 +632,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 if (matches) {
                   found = true;
                   const currentMsgs = c.messages || [];
-                  const hasSameId = currentMsgs.some(m => m.id === newMsg.id);
+                  const hasSameId = currentMsgs.some(m => (m.id === newMsg.id) || (Boolean(newMsg.whatsapp_msg_id) && m.whatsapp_msg_id === newMsg.whatsapp_msg_id));
                   const isFromClient = newMsg.remetente === 'cliente';
                   const nextDados = {
                     ...(c.dados_adicionais || {}),
@@ -561,7 +644,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                       ...c,
                       dados_adicionais: nextDados,
                       ultima_interacao_em: newMsg.timestamp,
-                      messages: currentMsgs.map(m => m.id === newMsg.id ? { ...m, ...newMsg } : m)
+                      messages: currentMsgs.map(m => ((m.id === newMsg.id) || (Boolean(newMsg.whatsapp_msg_id) && m.whatsapp_msg_id === newMsg.whatsapp_msg_id)) ? { ...m, ...newMsg } : m)
                     };
                   }
                   let replaced = false;
@@ -576,12 +659,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     }
                     return m;
                   });
-                  const alreadyPresent = replacedSending.some(m => m.id === newMsg.id);
+                  const alreadyPresent = replacedSending.some(m => (m.id === newMsg.id) || (Boolean(newMsg.whatsapp_msg_id) && m.whatsapp_msg_id === newMsg.whatsapp_msg_id));
+                  const finalMsgs = alreadyPresent ? replacedSending : [...replacedSending, newMsg];
                   return {
                     ...c,
                     dados_adicionais: nextDados,
                     ultima_interacao_em: newMsg.timestamp,
-                    messages: alreadyPresent ? replacedSending : [...replacedSending, newMsg]
+                    messages: finalMsgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
                   };
                 }
                 return c;
