@@ -361,11 +361,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const processedMessageGroups = useMemo<RenderGroup[]>(() => {
     const rawMsgs = conversation?.messages || [];
+    
+    // Deduplicate messages: by ID, whatsapp_msg_id, or identical attendant content sent within 60s
+    const seenIds = new Set<number>();
+    const seenWaIds = new Set<string>();
+    const filteredMsgs: Message[] = [];
+
+    for (const msg of rawMsgs) {
+      if (msg.id && seenIds.has(msg.id)) continue;
+      if (msg.whatsapp_msg_id && seenWaIds.has(msg.whatsapp_msg_id)) continue;
+
+      if (msg.remetente === 'atendente') {
+        const cleanContent = (msg.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
+        const msgTime = normalizeIsoDate(msg.timestamp).getTime();
+        const isDuplicate = filteredMsgs.some(prev => {
+          if (prev.remetente !== 'atendente') return false;
+          const prevTime = normalizeIsoDate(prev.timestamp).getTime();
+          if (Math.abs(msgTime - prevTime) > 60000) return false;
+          const prevClean = (prev.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
+          return prevClean === cleanContent;
+        });
+        if (isDuplicate) continue;
+      }
+
+      if (msg.id) seenIds.add(msg.id);
+      if (msg.whatsapp_msg_id) seenWaIds.add(msg.whatsapp_msg_id);
+      filteredMsgs.push(msg);
+    }
+
     const groups: RenderGroup[] = [];
     let i = 0;
 
-    while (i < rawMsgs.length) {
-      const msg = rawMsgs[i];
+    while (i < filteredMsgs.length) {
+      const msg = filteredMsgs[i];
       const isImg = msg.tipo === 'imagem' || (msg.conteudo && (msg.conteudo.endsWith('.jpg') || msg.conteudo.endsWith('.png') || msg.conteudo.endsWith('.jpeg') || msg.conteudo.endsWith('.webp')) && !msg.conteudo.includes('figurinha'));
       
       if (isImg) {
@@ -374,8 +402,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const indices: number[] = [i];
         let j = i + 1;
 
-        while (j < rawMsgs.length) {
-          const nextMsg = rawMsgs[j];
+        while (j < filteredMsgs.length) {
+          const nextMsg = filteredMsgs[j];
           const nextIsImg = nextMsg.tipo === 'imagem' || (nextMsg.conteudo && (nextMsg.conteudo.endsWith('.jpg') || nextMsg.conteudo.endsWith('.png') || nextMsg.conteudo.endsWith('.jpeg') || nextMsg.conteudo.endsWith('.webp')) && !nextMsg.conteudo.includes('figurinha'));
           
           if (nextIsImg && nextMsg.remetente === msg.remetente) {
@@ -1310,11 +1338,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const renderFormattedMessageText = (text: string) => {
     if (!text || typeof text !== 'string') return null;
 
+    // Strip attendant prefix if present, e.g. "*👤 Fernando M. Aragão:*\n\n"
+    let cleanText = text.replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
+    if (!cleanText && text) cleanText = text;
+
     // Check WhatsApp quoted reply format (e.g. "> *Sender:* Quote text\n\nActual message")
-    if (text.startsWith('> ')) {
-      const splitIdx = text.indexOf('\n\n');
+    if (cleanText.startsWith('> ')) {
+      const splitIdx = cleanText.indexOf('\n\n');
       if (splitIdx !== -1) {
-        const bodyPart = text.substring(splitIdx + 2).trim();
+        const bodyPart = cleanText.substring(splitIdx + 2).trim();
         return <div>{renderFormattedMessageText(bodyPart)}</div>;
       }
     }
@@ -1333,14 +1365,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     let match;
     let keyIdx = 0;
 
-    while ((match = tokenRegex.exec(text)) !== null) {
+    while ((match = tokenRegex.exec(cleanText)) !== null) {
       const matchStart = match.index;
       const matchEnd = tokenRegex.lastIndex;
       const urlMatch = match[1];
       const rawTag = match[2];
 
       if (matchStart > lastIndex) {
-        parts.push(text.substring(lastIndex, matchStart));
+        parts.push(cleanText.substring(lastIndex, matchStart));
       }
 
       if (urlMatch) {
@@ -1390,11 +1422,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       lastIndex = matchEnd;
     }
 
-    if (lastIndex < text.length) {
-      parts.push(text.substring(lastIndex));
+    if (lastIndex < cleanText.length) {
+      parts.push(cleanText.substring(lastIndex));
     }
 
-    return parts.length > 0 ? parts : text;
+    return parts.length > 0 ? parts : cleanText;
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -4311,7 +4343,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   <span style={{ fontWeight: '700', color: isAI ? 'var(--status-ia)' : isCustomer ? (isGroupChat ? '#38bdf8' : 'var(--text-muted)') : 'var(--accent-primary)' }}>
-                    {isCustomer ? (isGroupChat ? (participantName || 'Participante') : (conversation.contact?.nome || 'Cliente')) : isAI ? '🤖 IA Concierge' : '👤 Atendente'}
+                    {isCustomer 
+                      ? (isGroupChat ? (participantName || 'Participante') : (conversation.contact?.nome || 'Cliente')) 
+                      : isAI 
+                        ? '🤖 IA Concierge' 
+                        : `👤 ${(lastMsg as any).dados_adicionais?.agent_name || (lastMsg.conteudo?.match(/^\*👤\s*([^:*]+):?\*/)?.[1]?.trim()) || conversation.assigned_user_name || (conversation.assigned_user ? conversation.assigned_user.nome : '') || (currentUser as any)?.nome || 'Atendente'}:`}
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span>{formatTime(lastMsg.timestamp)}</span>

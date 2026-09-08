@@ -1531,8 +1531,55 @@ async def receive_evolution_webhook(
 
     # 4. If message was sent from mobile cellphone by attendant/staff (fromMe: True)
     if from_me:
+        # Check if this outgoing message is already recorded in the database
+        if msg_id:
+            existing_outgoing_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
+            existing_outgoing_res = await db.execute(existing_outgoing_stmt)
+            if existing_outgoing_res.scalars().first():
+                logger.info(f"[OUTGOING DEDUP] Mensagem '{msg_id}' já gravada no sistema. Descartando duplicata.")
+                return {"status": "success", "action": "ignored_duplicate"}
+
+        # Check if an attendant message was sent recently (last 60s) with matching text
+        clean_text_compare = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', text_content).strip().rstrip('\u200b')
+        recent_cutoff = datetime.utcnow() - timedelta(seconds=60)
+        recent_att_stmt = select(Message).where(
+            Message.conversation_id == conversation.id,
+            Message.remetente.in_([MessageSender.ATENDENTE, "atendente"]),
+            Message.timestamp >= recent_cutoff
+        ).order_by(Message.id.desc())
+        recent_att_res = await db.execute(recent_att_stmt)
+        matched_existing = None
+        for r_msg in recent_att_res.scalars().all():
+            r_c = (r_msg.conteudo or "").strip().rstrip('\u200b')
+            r_c_clean = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', r_c).strip().rstrip('\u200b')
+            if (
+                (msg_id and r_msg.whatsapp_msg_id == msg_id) or
+                r_c == clean_text_compare or
+                r_c_clean == clean_text_compare or
+                r_c == text_content.strip().rstrip('\u200b') or
+                (r_msg.whatsapp_msg_id is None and (clean_text_compare in r_c or r_c in clean_text_compare))
+            ):
+                matched_existing = r_msg
+                break
+
+        if matched_existing:
+            logger.info(f"[OUTGOING DEDUP] Mensagem #{matched_existing.id} enviada via painel já existe na conversa #{conversation.id}. Vinculando whatsapp_msg_id '{msg_id}' e ignorando duplicata.")
+            if msg_id and not matched_existing.whatsapp_msg_id:
+                matched_existing.whatsapp_msg_id = msg_id
+                await db.commit()
+            return {"status": "success", "action": "ignored_duplicate"}
+
+        # If it genuinely came from the mobile device directly, strip any prefix if present
+        clean_outgoing_text = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', text_content).strip().rstrip('\u200b') if text_content.startswith('*👤 ') else text_content
+        agent_extracted_name = None
+        m_agent = re.match(r'^\*👤\s*([^:*]+):?\*', text_content)
+        if m_agent:
+            agent_extracted_name = m_agent.group(1).strip()
+
         quote_data = parse_quoted_context(data, from_me=True, contact_name=contact.nome)
         attendant_msg_extra = {}
+        if agent_extracted_name:
+            attendant_msg_extra["agent_name"] = agent_extracted_name
         if quote_data:
             if quote_data.get("stanza_id"):
                 p_stmt = select(Message).where(Message.whatsapp_msg_id == quote_data["stanza_id"])
@@ -1551,7 +1598,7 @@ async def receive_evolution_webhook(
         attendant_msg = Message(
             conversation_id=conversation.id,
             remetente=MessageSender.ATENDENTE,
-            conteudo=text_content,
+            conteudo=clean_outgoing_text,
             tipo=msg_type,
             status="read",
             whatsapp_msg_id=msg_id if msg_id else None,
