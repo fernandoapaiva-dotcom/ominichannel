@@ -32,6 +32,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin'>('chats');
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
+  const activeConversationIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all' | 'nao_lidas'>('all');
@@ -220,7 +224,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               });
 
               currentMsgs = Array.from(msgMap.values()).sort(
-                (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
               );
             } else {
               currentMsgs = serverMsgs;
@@ -229,17 +233,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             const sending = pendingMessages[`conv_${c.id}`] || [];
 
             if (sending.length > 0) {
-              const existingTexts = new Set(currentMsgs.map(m => (m.conteudo || '').split('|')[0].trim()));
               const existingIds = new Set(currentMsgs.map(m => m.id));
-
               const now = Date.now();
               const uniqueToKeep: Message[] = [];
               const seenTempIds = new Set<number>();
 
               sending.forEach(m => {
-                const isStale = m.timestamp && (now - new Date(m.timestamp).getTime() > 15000);
-                const rawContent = (m.conteudo || '').split('|')[0].trim();
-                if (!seenTempIds.has(m.id) && !existingIds.has(m.id) && !existingTexts.has(rawContent)) {
+                const isStale = m.timestamp && (now - new Date(m.timestamp).getTime() > 45000);
+                if (!seenTempIds.has(m.id) && !existingIds.has(m.id)) {
                   seenTempIds.add(m.id);
                   uniqueToKeep.push(isStale ? { ...m, status: 'failed' as any } : m);
                 }
@@ -247,12 +248,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
               if (uniqueToKeep.length > 0) {
                 currentMsgs = [...currentMsgs, ...uniqueToKeep].sort(
-                  (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                  (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
                 );
               }
             }
 
-            const currentActiveId = activeConversationId || activeConversation?.id;
+            const currentActiveId = activeConversationIdRef.current || activeConversationId || activeConversation?.id;
             // If the conversation is currently open on screen, it is read
             const isCurrentlyActiveChat = currentActiveId && Number(c.id) === Number(currentActiveId);
 
@@ -299,7 +300,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           });
 
           // Ensure active conversation is never dropped from the state if search or limit excluded it
-          const currentActiveId = activeConversationId || activeConversation?.id;
+          const currentActiveId = activeConversationIdRef.current || activeConversationId || activeConversation?.id;
           if (currentActiveId) {
             const exists = updatedList.some((c: Conversation) => Number(c.id) === Number(currentActiveId));
             if (!exists) {
@@ -371,7 +372,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             });
 
             const sortedMsgs = Array.from(msgMap.values()).sort(
-              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+              (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
             );
 
             const next = [...prev];
@@ -450,6 +451,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, [activeConversationId, conversations, loadActiveConversationDetail]);
 
   const handleSelectConversation = useCallback((convId: number) => {
+    activeConversationIdRef.current = convId;
     setActiveConversationId(convId);
     loadActiveConversationDetail(convId);
     try {
@@ -677,7 +679,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     ...c,
                     dados_adicionais: nextDados,
                     ultima_interacao_em: newMsg.timestamp,
-                    messages: finalMsgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                    messages: finalMsgs.sort(
+                      (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
+                    )
                   };
                 }
                 return c;
@@ -828,7 +832,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       else if (lower.endsWith('.webp') || lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) actualTipo = 'imagem';
       else if (lower.endsWith('.pdf')) actualTipo = 'arquivo';
     }
-    const tempId = -Date.now();
+    const tempId = -Date.now() - Math.floor(Math.random() * 10000);
     const optimisticMsg: Message = {
       id: tempId,
       conversation_id: targetConv.id,
@@ -851,15 +855,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     const targetCid = targetConv.contact_id || targetConv.contact?.id;
     const targetCleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
 
-    // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately across all linked conversations for this contact!
     // 1. INSTANT 0ms OPTIMISTIC UI UPDATE: Display message immediately in target conversation ONLY
     setConversations(prevConvs =>
       prevConvs.map(conv => {
         if (Number(conv.id) === Number(targetConv.id)) {
           const currentMsgs = conv.messages || [];
+          const nextMsgs = [...currentMsgs, optimisticMsg].sort(
+            (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
+          );
           return {
             ...conv,
-            messages: [...currentMsgs, optimisticMsg],
+            messages: nextMsgs,
             ultima_interacao_em: new Date().toISOString()
           };
         }
@@ -914,9 +920,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           prevConvs.map(conv => {
             if (Number(conv.id) === Number(finalConvId) || Number(conv.id) === Number(targetConv.id)) {
               const currentMsgs = conv.messages || [];
+              const hasConfirmed = currentMsgs.some(m => m.id === res.id || (res.whatsapp_msg_id && m.whatsapp_msg_id === res.whatsapp_msg_id));
+              const updated = currentMsgs.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m));
+              const finalMsgs = hasConfirmed
+                ? updated.filter(m => m.id !== tempId)
+                : (updated.some(m => m.id === res.id) ? updated : [...updated, { ...res, status: 'sent' }]);
               return {
                 ...conv,
-                messages: currentMsgs.map(m => (m.id === tempId ? { ...res, status: 'sent' } : m))
+                messages: finalMsgs.sort(
+                  (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
+                )
               };
             }
             return conv;
@@ -940,6 +953,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       }
     })();
   };
+
+  const handleOptimisticMessageAdded = useCallback((msg: Message) => {
+    setConversations(prev =>
+      prev.map(c => {
+        if (Number(c.id) === Number(msg.conversation_id)) {
+          const currentMsgs = c.messages || [];
+          const exists = currentMsgs.some(m => (m.id && m.id === msg.id) || (msg.whatsapp_msg_id && m.whatsapp_msg_id === msg.whatsapp_msg_id));
+          if (exists) return c;
+          const nextMsgs = [...currentMsgs, msg].sort(
+            (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
+          );
+          return {
+            ...c,
+            messages: nextMsgs,
+            ultima_interacao_em: msg.timestamp || new Date().toISOString()
+          };
+        }
+        return c;
+      })
+    );
+  }, []);
 
   const handleConversationCreated = (conv: Conversation) => {
     fetchConversations();
@@ -1130,6 +1164,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 whatsappNumbers={whatsappNumbers}
                 drafts={conversationDrafts}
                 onSaveDraft={handleSaveDraft}
+                onOptimisticMessageAdded={handleOptimisticMessageAdded}
               />
             </div>
           </div>

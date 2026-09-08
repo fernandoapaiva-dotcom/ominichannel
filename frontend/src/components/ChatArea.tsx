@@ -39,6 +39,7 @@ interface ChatAreaProps {
   drafts?: { [convId: number]: string };
   userPresences?: { [convId: number]: { status: string; agentName?: string; expiresAt: number } };
   onSaveDraft?: (convId: number, text: string) => void;
+  onOptimisticMessageAdded?: (msg: Message) => void;
 }
 
 const normalizeIsoDate = (ts: string | Date | undefined): Date => {
@@ -283,6 +284,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   whatsappNumbers,
   drafts = {},
   onSaveDraft,
+  onOptimisticMessageAdded,
   userPresences = {}
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
@@ -360,11 +362,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     | { type: 'image_album'; messages: Message[]; originalIndices: number[] };
 
   const processedMessageGroups = useMemo<RenderGroup[]>(() => {
-    const rawMsgs = [...(conversation?.messages || [])].sort(
-      (a, b) => normalizeIsoDate(a.timestamp).getTime() - normalizeIsoDate(b.timestamp).getTime()
-    );
+    const rawMsgs = [...(conversation?.messages || [])].sort((a, b) => {
+      const tA = normalizeIsoDate(a.timestamp).getTime();
+      const tB = normalizeIsoDate(b.timestamp).getTime();
+      if (tA !== tB) return tA - tB;
+      return (a.id || 0) - (b.id || 0);
+    });
     
-    // Deduplicate messages: by ID, whatsapp_msg_id, or identical attendant content sent within 60s
+    // Deduplicate messages: by ID, whatsapp_msg_id, or optimistic temporary message (< 0) with matching confirmed message
     const seenIds = new Set<number>();
     const seenWaIds = new Set<string>();
     const filteredMsgs: Message[] = [];
@@ -373,17 +378,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       if (msg.id && seenIds.has(msg.id)) continue;
       if (msg.whatsapp_msg_id && seenWaIds.has(msg.whatsapp_msg_id)) continue;
 
-      if (msg.remetente === 'atendente') {
+      // Only suppress an optimistic/temporary message (< 0) if a confirmed server message already exists with the same content
+      if (msg.id && msg.id < 0 && msg.remetente === 'atendente') {
         const cleanContent = (msg.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
         const msgTime = normalizeIsoDate(msg.timestamp).getTime();
-        const isDuplicate = filteredMsgs.some(prev => {
-          if (prev.remetente !== 'atendente') return false;
+        const isDuplicateOfServerMsg = filteredMsgs.some(prev => {
+          if (!prev.id || prev.id < 0 || prev.remetente !== 'atendente') return false;
           const prevTime = normalizeIsoDate(prev.timestamp).getTime();
           if (Math.abs(msgTime - prevTime) > 60000) return false;
           const prevClean = (prev.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
           return prevClean === cleanContent;
         });
-        if (isDuplicate) continue;
+        if (isDuplicateOfServerMsg) continue;
       }
 
       if (msg.id) seenIds.add(msg.id);
@@ -1637,17 +1643,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const uploadedMsgs: any[] = await Promise.all(uploadPromises);
 
         // Atualizar imediatamente as mensagens na tela para feedback instantâneo ao atendente
-        if (conversation && uploadedMsgs && uploadedMsgs.length > 0) {
-          if (!conversation.messages) conversation.messages = [];
+        if (uploadedMsgs && uploadedMsgs.length > 0) {
           uploadedMsgs.forEach((newMsg: any) => {
-            if (newMsg && newMsg.id) {
-              const exists = conversation.messages!.some(m => m.id === newMsg.id);
-              if (!exists) {
-                conversation.messages!.push({
-                  ...newMsg,
-                  status: newMsg.status || 'sent'
-                });
-              }
+            if (newMsg && newMsg.id && onOptimisticMessageAdded) {
+              onOptimisticMessageAdded({
+                ...newMsg,
+                status: newMsg.status || 'sent'
+              });
             }
           });
         }
