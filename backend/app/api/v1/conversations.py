@@ -59,40 +59,13 @@ async def list_conversations(
         return []
     default_wn_id = accessible_wn_ids[0]
 
-    # If search term is provided, auto-create placeholder conversations for contacts matching search that have no conversation yet
-    if search and isinstance(search, str) and search.strip():
-        term = f"%{search.strip()}%"
-        existing_contact_ids_stmt = select(Conversation.contact_id).where(
-            Conversation.tenant_id == current_user.tenant_id,
-            Conversation.contact_id.isnot(None)
-        )
-        c_res = await db.execute(existing_contact_ids_stmt)
-        existing_contact_ids = set(c_res.scalars().all())
-
-        unlinked_contacts_stmt = select(Contact).where(
-            Contact.tenant_id == current_user.tenant_id,
-            or_(
-                Contact.nome.ilike(term),
-                Contact.telefone.ilike(term)
-            )
-        )
-        if existing_contact_ids:
-            unlinked_contacts_stmt = unlinked_contacts_stmt.where(Contact.id.notin_(existing_contact_ids))
-
-        unlinked_contacts_res = await db.execute(unlinked_contacts_stmt)
-        unlinked_contacts = unlinked_contacts_res.scalars().all()
-
-        if unlinked_contacts:
-            for u_contact in unlinked_contacts:
-                new_conv = Conversation(
-                    tenant_id=current_user.tenant_id,
-                    whatsapp_number_id=whatsapp_number_id if whatsapp_number_id else default_wn_id,
-                    contact_id=u_contact.id,
-                    status=ConversationStatus.COM_HUMANO,
-                    ultima_interacao_em=datetime.utcnow()
-                )
-                db.add(new_conv)
-            await db.commit()
+    # Mirror WhatsApp: only display conversations that actually have messages
+    has_msg_subquery = (
+        select(Message.id)
+        .where(Message.conversation_id == Conversation.id)
+        .limit(1)
+        .scalar_subquery()
+    )
 
     stmt = (
         select(Conversation)
@@ -102,7 +75,8 @@ async def list_conversations(
         )
         .where(
             Conversation.tenant_id == current_user.tenant_id,
-            Conversation.whatsapp_number_id.in_(accessible_wn_ids)
+            Conversation.whatsapp_number_id.in_(accessible_wn_ids),
+            has_msg_subquery.isnot(None)
         )
     )
 

@@ -439,7 +439,8 @@ export const ChatList: React.FC<ChatListProps> = ({
                               contactName.toLowerCase().includes(term) ||
                               contactPhone.includes(term) ||
                               protoNumber.toLowerCase().includes(term);
-        return matchesDept && matchesStatus && matchesSearch;
+        const hasMessages = (conv.messages && conv.messages.length > 0) || conv.id === activeConversation?.id;
+        return matchesDept && matchesStatus && matchesSearch && hasMessages;
       });
 
       if (matchingConvs.length === 0) return;
