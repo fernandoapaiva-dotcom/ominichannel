@@ -772,6 +772,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
     // 2. Asynchronous Network Dispatch in background without blocking UI
     (async () => {
+      let finalConvId = targetConv.id;
       try {
         const rawTargetPhone = targetConv.contact?.telefone || '';
         const rawTargetName = targetConv.contact?.nome || '';
@@ -787,7 +788,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           rawTargetName.includes('Servweld/Servsolda')
         );
 
-        let finalConvId = targetConv.id;
         if (!isGroup && selectedDeptId !== 'all' && String(targetConv.whatsapp_number_id) !== String(selectedDeptId)) {
           const cid = targetConv.contact_id || targetConv.contact?.id;
           const cleanPhone = (targetConv.contact?.telefone || '').replace(/\D/g, '');
