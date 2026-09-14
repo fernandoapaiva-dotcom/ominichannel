@@ -965,23 +965,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     })();
   };
 
-  const handleOptimisticMessageAdded = useCallback((msg: Message) => {
+  // replaceTempId: when set, this call is confirming (or failing) a media upload that was
+  // already shown optimistically with a local blob preview — swap that placeholder for the
+  // real message (or mark it failed) instead of appending a second bubble.
+  const handleOptimisticMessageAdded = useCallback((msg: Message, replaceTempId?: number) => {
     setConversations(prev =>
       prev.map(c => {
-        if (Number(c.id) === Number(msg.conversation_id)) {
-          const currentMsgs = c.messages || [];
-          const exists = currentMsgs.some(m => (m.id && m.id === msg.id) || (msg.whatsapp_msg_id && m.whatsapp_msg_id === msg.whatsapp_msg_id));
-          if (exists) return c;
-          const nextMsgs = [...currentMsgs, msg].sort(
-            (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
-          );
-          return {
-            ...c,
-            messages: nextMsgs,
-            ultima_interacao_em: msg.timestamp || new Date().toISOString()
-          };
+        if (Number(c.id) !== Number(msg.conversation_id)) return c;
+        const currentMsgs = c.messages || [];
+        // A failed upload re-reports the SAME tempId (just with status:'failed'), so it must
+        // never count as "the real message already arrived" — exclude the placeholder itself
+        // from this check, or the failed bubble gets treated as a stray dupe and removed.
+        const alreadyHasReal = currentMsgs.some(m =>
+          m.id !== replaceTempId &&
+          ((m.id && m.id === msg.id) || (msg.whatsapp_msg_id && m.whatsapp_msg_id === msg.whatsapp_msg_id))
+        );
+
+        let nextMsgs: Message[];
+        if (alreadyHasReal) {
+          // The real message already arrived some other way (e.g. websocket echo) —
+          // just drop the temp placeholder if it's still there, don't duplicate.
+          nextMsgs = replaceTempId ? currentMsgs.filter(m => m.id !== replaceTempId) : currentMsgs;
+        } else if (replaceTempId && currentMsgs.some(m => m.id === replaceTempId)) {
+          nextMsgs = currentMsgs.map(m => (m.id === replaceTempId ? msg : m));
+        } else {
+          const existsAlready = currentMsgs.some(m => m.id === msg.id);
+          nextMsgs = existsAlready ? currentMsgs : [...currentMsgs, msg];
         }
-        return c;
+
+        nextMsgs = nextMsgs.sort(
+          (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
+        );
+
+        return {
+          ...c,
+          messages: nextMsgs,
+          ultima_interacao_em: msg.timestamp || new Date().toISOString()
+        };
       })
     );
   }, []);

@@ -40,7 +40,7 @@ interface ChatAreaProps {
   drafts?: { [convId: number]: string };
   userPresences?: { [convId: number]: { status: string; agentName?: string; expiresAt: number } };
   onSaveDraft?: (convId: number, text: string) => void;
-  onOptimisticMessageAdded?: (msg: Message) => void;
+  onOptimisticMessageAdded?: (msg: Message, replaceTempId?: number) => void;
 }
 
 const normalizeIsoDate = (ts: string | Date | undefined): Date => {
@@ -1710,6 +1710,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       if (pendingFiles.length > 0) {
         const filesToUpload = [...pendingFiles];
         const captionText = textToSend;
+        const convId = conversation?.id;
 
         // Clear UI immediately for instant feedback
         setPendingFiles([]);
@@ -1719,30 +1720,73 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         setIsUserScrolledUp(false);
         scrollToBottom('smooth');
 
-        // Parallel compressed upload
-        const uploadPromises = filesToUpload.map(async (file, idx) => {
-          const compressed = await compressImageIfNeeded(file);
-          const formData = new FormData();
-          formData.append('file', compressed);
-          if (idx === 0 && captionText) {
-            formData.append('caption', captionText);
-          }
-          return apiUpload(`/conversations/${conversation?.id}/media`, formData);
+        const nowIso = new Date().toISOString();
+        const detectTipo = (file: File): string => {
+          if (file.type.startsWith('image/')) return 'imagem';
+          if (file.type.startsWith('video/')) return 'video';
+          if (file.type.startsWith('audio/')) return 'audio';
+          return 'arquivo';
+        };
+
+        // Show each file immediately as an "enviando..." bubble with its real local
+        // preview (like WhatsApp does), instead of leaving nothing in the chat until
+        // the upload finishes — which made the media look like it vanished and only
+        // "came back" once fully loaded.
+        const uploadTasks = filesToUpload.map((file, idx) => {
+          const tempId = -Date.now() - idx - Math.floor(Math.random() * 10000);
+          const localUrl = URL.createObjectURL(file);
+          const tipo = detectTipo(file);
+
+          const optimisticMsg: Message = {
+            id: tempId,
+            conversation_id: convId,
+            remetente: 'atendente',
+            conteudo: (idx === 0 && captionText) ? `${localUrl}|${captionText}` : localUrl,
+            tipo: tipo as any,
+            timestamp: nowIso,
+            status: 'sending',
+            dados_adicionais: { original_filename: file.name, file_name: file.name }
+          } as unknown as Message;
+
+          if (onOptimisticMessageAdded) onOptimisticMessageAdded(optimisticMsg);
+
+          return { file, idx, tempId, localUrl, tipo };
         });
 
-        const uploadedMsgs: any[] = await Promise.all(uploadPromises);
+        scrollToBottom('smooth');
+        setTimeout(() => scrollToBottom('smooth'), 50);
 
-        // Atualizar imediatamente as mensagens na tela para feedback instantâneo ao atendente
-        if (uploadedMsgs && uploadedMsgs.length > 0) {
-          uploadedMsgs.forEach((newMsg: any) => {
-            if (newMsg && newMsg.id && onOptimisticMessageAdded) {
-              onOptimisticMessageAdded({
-                ...newMsg,
-                status: newMsg.status || 'sent'
-              });
+        await Promise.allSettled(uploadTasks.map(async ({ file, idx, tempId, localUrl, tipo }) => {
+          try {
+            const compressed = await compressImageIfNeeded(file);
+            const formData = new FormData();
+            formData.append('file', compressed);
+            if (idx === 0 && captionText) {
+              formData.append('caption', captionText);
             }
-          });
-        }
+            const newMsg = await apiUpload(`/conversations/${convId}/media`, formData);
+            if (newMsg && newMsg.id && onOptimisticMessageAdded) {
+              onOptimisticMessageAdded({ ...newMsg, status: newMsg.status || 'sent' }, tempId);
+            }
+            URL.revokeObjectURL(localUrl);
+          } catch (err) {
+            console.error('File upload error:', err);
+            // Keep the local blob preview alive so the failed bubble still shows what
+            // was being sent — only revoke it once the user retries or it's replaced.
+            if (onOptimisticMessageAdded) {
+              onOptimisticMessageAdded({
+                id: tempId,
+                conversation_id: convId,
+                remetente: 'atendente',
+                conteudo: (idx === 0 && captionText) ? `${localUrl}|${captionText}` : localUrl,
+                tipo: tipo as any,
+                timestamp: nowIso,
+                status: 'failed',
+                dados_adicionais: { original_filename: file.name, file_name: file.name }
+              } as unknown as Message, tempId);
+            }
+          }
+        }));
 
         if (onStatusToggle) onStatusToggle();
         scrollToBottom('smooth');
@@ -2121,6 +2165,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   };
 
+  // Overlay shown directly on top of a media thumbnail while it's uploading or if the
+  // upload failed — mirrors WhatsApp's "media appears immediately with a progress
+  // indicator" behavior instead of leaving the bubble blank until the upload finishes.
+  const renderUploadStatusOverlay = (status: any) => {
+    if (status === 'sending' || status === 'pending') {
+      return (
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none'
+        }}>
+          <div className="animate-spin" style={{
+            width: '30px', height: '30px', borderRadius: '50%',
+            border: '3px solid rgba(255,255,255,0.35)', borderTopColor: '#fff'
+          }} />
+        </div>
+      );
+    }
+    if (status === 'failed') {
+      return (
+        <div style={{
+          position: 'absolute', inset: 0,
+          backgroundColor: 'rgba(239,68,68,0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none'
+        }}>
+          <span style={{ color: '#fff', fontSize: '11px', fontWeight: 700, background: 'rgba(0,0,0,0.65)', padding: '4px 10px', borderRadius: '6px' }}>
+            ⚠️ Falha no envio
+          </span>
+        </div>
+      );
+    }
+    return null;
+  };
+
   const renderMediaContent = (msg: any) => {
     const raw = msg.conteudo || '';
     const { mediaPath, caption, fileName } = extractMediaAndCaption(raw, msg.dados_adicionais);
@@ -2182,6 +2262,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   borderRadius: isSticker ? '0' : '8px'
                 }}
               />
+              {renderUploadStatusOverlay(msg.status)}
               {isSticker ? (
                 <button
                   type="button"
@@ -2225,11 +2306,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       case 'video':
         return (
           <div style={{ maxWidth: '320px', borderRadius: '8px', overflow: 'hidden' }}>
-            <video
-              src={fullUrl}
-              controls
-              style={{ width: '100%', maxHeight: '300px', borderRadius: '8px', display: 'block' }}
-            />
+            <div style={{ position: 'relative' }}>
+              <video
+                src={fullUrl}
+                controls
+                style={{ width: '100%', maxHeight: '300px', borderRadius: '8px', display: 'block' }}
+              />
+              {renderUploadStatusOverlay(msg.status)}
+            </div>
             {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', marginTop: '6px', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{renderFormattedMessageText(caption)}</p>}
           </div>
         );
@@ -2324,6 +2408,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       <Eye size={12} /> 1ª Página • Abrir
                     </div>
                   </div>
+                  {renderUploadStatusOverlay(msg.status)}
                 </div>
 
                 {/* Footer bar with file title and download button */}
@@ -2397,13 +2482,22 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}
             >
-              <FileText size={28} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+              <div style={{ position: 'relative', flexShrink: 0, width: 28, height: 28 }}>
+                <FileText size={28} style={{ color: 'var(--accent-primary)' }} />
+                {(msg.status === 'sending' || msg.status === 'pending') && (
+                  <div className="animate-spin" style={{
+                    position: 'absolute', inset: -3,
+                    borderRadius: '50%',
+                    border: '2px solid rgba(0,230,153,0.25)', borderTopColor: 'var(--accent-primary)'
+                  }} />
+                )}
+              </div>
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontSize: '13px', fontWeight: '600', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={realFileName}>
                   {displayFileName}
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  Clique para ver detalhes
+                <div style={{ fontSize: '11px', color: msg.status === 'failed' ? '#ef4444' : 'var(--text-muted)', marginTop: '2px', fontWeight: msg.status === 'failed' ? 700 : 400 }}>
+                  {msg.status === 'sending' || msg.status === 'pending' ? 'Enviando...' : msg.status === 'failed' ? '⚠️ Falha no envio' : 'Clique para ver detalhes'}
                 </div>
               </div>
             </div>
