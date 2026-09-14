@@ -975,14 +975,14 @@ class EvolutionService:
         }
         client = self.get_client()
         try:
-            res = await client.post(url, json=payload, headers=headers, timeout=20.0)
+            res = await client.post(url, json=payload, headers=headers, timeout=8.0)
             if res.status_code in (200, 201):
                 data = res.json()
                 return data.get("base64")
             else:
                 # If from_me failed, try the inverse
                 key_obj["fromMe"] = not from_me
-                res2 = await client.post(url, json=payload, headers=headers, timeout=20.0)
+                res2 = await client.post(url, json=payload, headers=headers, timeout=8.0)
                 if res2.status_code in (200, 201):
                     data2 = res2.json()
                     return data2.get("base64")

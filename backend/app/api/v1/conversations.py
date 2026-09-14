@@ -11,7 +11,7 @@ import logging
 import unicodedata
 import httpx
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -914,6 +914,19 @@ async def get_message_media_stream(
                 headers={"Content-Disposition": f'inline; filename="{final_name}"'}
             )
 
+    # If a previous attempt already confirmed this media is gone (WhatsApp's encrypted
+    # CDN link expires after a while), don't hammer Evolution API again on every view —
+    # that round-trip alone was taking 10-15s per click and still failing at the end,
+    # making the file look like it "won't open" instead of failing fast.
+    failed_at_raw = extra_data.get("media_unavailable_since")
+    if failed_at_raw:
+        try:
+            failed_at = datetime.fromisoformat(failed_at_raw)
+            if (datetime.utcnow() - failed_at) < timedelta(hours=24):
+                raise HTTPException(status_code=404, detail="Mídia não disponível (link do WhatsApp expirado)")
+        except ValueError:
+            pass
+
     # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API
     if msg.whatsapp_msg_id and msg.conversation and msg.conversation.whatsapp_number:
         conv = msg.conversation
@@ -1008,7 +1021,19 @@ async def get_message_media_stream(
     if media_path.startswith("http") and not "mmg.whatsapp.net" in media_path:
         return RedirectResponse(url=media_path)
 
-    raise HTTPException(status_code=404, detail="Mídia não disponível")
+    # Remember this failure so the next click doesn't wait through the same slow,
+    # doomed Evolution API round-trip again (see the cooldown check above).
+    try:
+        from sqlalchemy.orm.attributes import flag_modified
+        extra = dict(msg.dados_adicionais or {})
+        extra["media_unavailable_since"] = datetime.utcnow().isoformat()
+        msg.dados_adicionais = extra
+        flag_modified(msg, "dados_adicionais")
+        await db.commit()
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="Mídia não disponível (link do WhatsApp expirado)")
 
 @router.post("/{conversation_id}/messages", response_model=MessageResponse)
 async def send_agent_message(

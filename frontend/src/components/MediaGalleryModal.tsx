@@ -133,6 +133,27 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
     });
   }, [mediaMessages]);
 
+  // Older documents whose media was never cached locally point straight at WhatsApp's
+  // encrypted CDN link, which expires after a while. Pre-check each PDF once so we can
+  // show a clear "arquivo indisponível" state instead of a blank preview.
+  const [pdfAvailability, setPdfAvailability] = useState<Record<string, 'checking' | 'ok' | 'unavailable'>>({});
+  useEffect(() => {
+    const pdfUrls = Array.from(new Set(parsedMediaItems.filter(i => i.isPdf).map(i => i.fullUrl)));
+    const toCheck = pdfUrls.filter(url => !pdfAvailability[url]);
+    toCheck.forEach(url => {
+      setPdfAvailability(prev => ({ ...prev, [url]: 'checking' }));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      fetch(url, { signal: controller.signal })
+        .then(res => setPdfAvailability(prev => ({ ...prev, [url]: res.ok ? 'ok' : 'unavailable' })))
+        .catch(() => setPdfAvailability(prev => ({ ...prev, [url]: 'unavailable' })))
+        .finally(() => clearTimeout(timeoutId));
+    });
+    // pdfAvailability intentionally excluded from deps: only read to skip re-checking URLs
+    // already in flight/checked; including it would re-run this on every check result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsedMediaItems]);
+
   const filteredItems = useMemo(() => {
     return parsedMediaItems.filter(item => {
       // 1. Type filter
@@ -493,11 +514,18 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
                     ) : item.isPdf ? (
                       /* Live PDF 1st page Cover Preview */
                       <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                        <iframe
-                          src={`${item.fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-                          title="Capa do PDF"
-                          style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none', display: 'block' }}
-                        />
+                        {pdfAvailability[item.fullUrl] === 'unavailable' ? (
+                          <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'var(--text-muted)', padding: '0 10px', textAlign: 'center' }}>
+                            <FileText size={28} style={{ opacity: 0.5 }} />
+                            <span style={{ fontSize: '10px' }}>Indisponível</span>
+                          </div>
+                        ) : (
+                          <iframe
+                            src={`${item.fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+                            title="Capa do PDF"
+                            style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none', display: 'block' }}
+                          />
+                        )}
                         <div style={{
                           position: 'absolute',
                           top: '6px',
@@ -641,11 +669,17 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
                       <Music size={22} color="#c084fc" />
                     ) : item.isPdf ? (
                       <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-                        <iframe
-                          src={`${item.fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-                          title="Miniatura PDF"
-                          style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
-                        />
+                        {pdfAvailability[item.fullUrl] === 'unavailable' ? (
+                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <FileText size={18} color="var(--text-muted)" style={{ opacity: 0.5 }} />
+                          </div>
+                        ) : (
+                          <iframe
+                            src={`${item.fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+                            title="Miniatura PDF"
+                            style={{ width: '100%', height: '100%', border: 'none', pointerEvents: 'none' }}
+                          />
+                        )}
                       </div>
                     ) : (
                       <FileText size={22} color="#34d399" />
@@ -815,6 +849,27 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
                 }}>
                   <Music size={48} color="#c084fc" />
                   <audio src={previewMediaUrl.url} controls autoPlay style={{ width: '320px' }} />
+                </div>
+              ) : pdfAvailability[previewMediaUrl.url] === 'unavailable' ? (
+                <div style={{
+                  padding: '32px 40px',
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderRadius: '16px',
+                  border: '1px solid var(--border-color)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: '12px',
+                  maxWidth: '450px',
+                  textAlign: 'center'
+                }}>
+                  <FileText size={64} style={{ color: 'var(--text-muted)', opacity: 0.6 }} />
+                  <div style={{ fontSize: '16px', fontWeight: '600', color: '#fff', wordBreak: 'break-word' }}>
+                    {previewMediaUrl.title}
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                    Este arquivo não está mais disponível — o link do WhatsApp expirou e ele nunca chegou a ser salvo no servidor.
+                  </div>
                 </div>
               ) : (
                 <iframe

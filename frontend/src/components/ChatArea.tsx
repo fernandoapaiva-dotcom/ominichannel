@@ -475,6 +475,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const dragCounterRef = useRef(0);
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
+  const [pdfAvailability, setPdfAvailability] = useState<Record<string, 'checking' | 'ok' | 'unavailable'>>({});
   const [isUserScrolledUp, setIsUserScrolledUp] = useState(false);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [activeTabMedia, setActiveTabMedia] = useState<'all' | 'imagem' | 'video' | 'audio' | 'arquivo'>('all');
@@ -853,9 +854,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const conversationMedia = (conversation?.messages || [])
     .filter(m => ['imagem', 'video', 'audio', 'arquivo'].includes(m.tipo))
     .map(m => {
-      const { mediaPath, caption } = extractMediaAndCaption(m.conteudo);
-      const fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
-      const fileName = mediaPath.split('/').pop() || 'Arquivo';
+      const { mediaPath, caption, fileName: extractedFileName } = extractMediaAndCaption(m.conteudo, m.dados_adicionais);
+      // Media that was never cached locally (still a raw WhatsApp mmg/.enc link) has to go
+      // through the API resolver/proxy, same as the in-chat bubble — otherwise the lightbox
+      // tries to load the (often already-expired) WhatsApp CDN URL directly and fails.
+      let fullUrl = mediaPath;
+      if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && m.id && m.id > 0) {
+        fullUrl = `/api/v1/conversations/messages/${m.id}/media`;
+      }
+      const fileName = extractedFileName || mediaPath.split('/').pop() || 'Arquivo';
       return {
         id: m.id,
         tipo: m.tipo,
@@ -866,6 +873,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         sender: m.remetente
       };
     });
+
+  // Older documents whose media was never cached locally point straight at WhatsApp's
+  // encrypted CDN link, which expires after a while. Rather than let the PDF preview sit
+  // blank (looking broken) while a doomed fetch silently fails behind it, pre-check each
+  // PDF once so we can show a clear "arquivo indisponível" state instead.
+  useEffect(() => {
+    const pdfUrls = (conversation?.messages || [])
+      .filter(m => m.tipo === 'arquivo')
+      .map(m => {
+        const { mediaPath, fileName } = extractMediaAndCaption(m.conteudo, m.dados_adicionais);
+        let url = mediaPath;
+        if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && m.id && m.id > 0) {
+          url = `/api/v1/conversations/messages/${m.id}/media`;
+        }
+        const rawFileName = mediaPath.split('/').pop() || '';
+        const isPdf = url.toLowerCase().endsWith('.pdf') || rawFileName.toLowerCase().endsWith('.pdf') || Boolean(fileName && fileName.toLowerCase().endsWith('.pdf'));
+        return isPdf ? url : null;
+      })
+      .filter((u): u is string => Boolean(u));
+
+    const toCheck = Array.from(new Set(pdfUrls)).filter(url => !pdfAvailability[url]);
+    toCheck.forEach(url => {
+      setPdfAvailability(prev => ({ ...prev, [url]: 'checking' }));
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      fetch(url, { signal: controller.signal })
+        .then(res => setPdfAvailability(prev => ({ ...prev, [url]: res.ok ? 'ok' : 'unavailable' })))
+        .catch(() => setPdfAvailability(prev => ({ ...prev, [url]: 'unavailable' })))
+        .finally(() => clearTimeout(timeoutId));
+    });
+    // pdfAvailability intentionally excluded: it's only read to avoid re-checking URLs
+    // already in flight/checked, and including it would re-run this on every check result.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation?.messages]);
 
   useEffect(() => {
     setZoomScale(1);
@@ -2239,18 +2280,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }}
               >
                 {/* 1st Page Live Preview of PDF */}
-                <div style={{ position: 'relative', width: '100%', height: '170px', backgroundColor: '#ffffff', overflow: 'hidden' }}>
-                  <iframe
-                    src={`${fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
-                    title="Pré-visualização do PDF"
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      border: 'none',
-                      pointerEvents: 'none',
-                      display: 'block'
-                    }}
-                  />
+                <div style={{ position: 'relative', width: '100%', height: '170px', backgroundColor: pdfAvailability[fullUrl] === 'unavailable' ? 'var(--bg-secondary)' : '#ffffff', overflow: 'hidden' }}>
+                  {pdfAvailability[fullUrl] === 'unavailable' ? (
+                    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '6px', color: 'var(--text-muted)', padding: '0 16px', textAlign: 'center' }}>
+                      <FileText size={28} style={{ opacity: 0.5 }} />
+                      <span style={{ fontSize: '11px' }}>Arquivo indisponível (link do WhatsApp expirou)</span>
+                    </div>
+                  ) : (
+                    <iframe
+                      src={`${fullUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`}
+                      title="Pré-visualização do PDF"
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        border: 'none',
+                        pointerEvents: 'none',
+                        display: 'block'
+                      }}
+                    />
+                  )}
                   {/* Hover Overlay Badge */}
                   <div style={{
                     position: 'absolute',
@@ -3173,7 +3221,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               )}
               {currentMedia.tipo === 'arquivo' && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' }}>
-                  {currentMedia.fileName.toLowerCase().endsWith('.pdf') || currentMedia.url.toLowerCase().includes('.pdf') ? (
+                  {pdfAvailability[currentMedia.url] === 'unavailable' ? (
+                    <div style={{
+                      padding: '32px 40px',
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderRadius: '16px',
+                      border: '1px solid var(--border-color)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '12px',
+                      boxShadow: '0 8px 30px rgba(0,0,0,0.8)',
+                      maxWidth: '450px',
+                      textAlign: 'center'
+                    }}>
+                      <FileText size={64} style={{ color: 'var(--text-muted)', opacity: 0.6 }} />
+                      <div style={{ fontSize: '16px', fontWeight: '600', color: '#fff', wordBreak: 'break-word' }}>
+                        {currentMedia.fileName}
+                      </div>
+                      <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                        Este arquivo não está mais disponível — o link do WhatsApp expirou e ele nunca chegou a ser salvo no servidor.
+                      </div>
+                    </div>
+                  ) : currentMedia.fileName.toLowerCase().endsWith('.pdf') || currentMedia.url.toLowerCase().includes('.pdf') ? (
                     <iframe
                       src={currentMedia.url}
                       title="Visualizador de PDF"
@@ -3207,27 +3277,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <a
-                      href={currentMedia.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary"
-                      style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                    >
-                      <Eye size={18} /> Visualizar no Navegador
-                    </a>
-                    <a
-                      href={currentMedia.url}
-                      download
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-secondary"
-                      style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                    >
-                      <Download size={18} /> Baixar Arquivo
-                    </a>
-                  </div>
+                  {pdfAvailability[currentMedia.url] !== 'unavailable' && (
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                      <a
+                        href={currentMedia.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-primary"
+                        style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        <Eye size={18} /> Visualizar no Navegador
+                      </a>
+                      <a
+                        href={currentMedia.url}
+                        download
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn-secondary"
+                        style={{ textDecoration: 'none', padding: '10px 20px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        <Download size={18} /> Baixar Arquivo
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
               {currentMedia.caption && (
