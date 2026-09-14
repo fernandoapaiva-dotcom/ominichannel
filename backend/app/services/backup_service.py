@@ -3,25 +3,29 @@ import shutil
 import asyncio
 import logging
 from datetime import datetime
+from typing import Optional
 from app.core.config import settings
 
 logger = logging.getLogger("backup_service")
 
 BACKUP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "backups_db")
 
-def create_db_snapshot() -> bool:
+def create_db_snapshot() -> Optional[str]:
+    """Creates a local snapshot copy of the database. Returns the snapshot's file path on
+    success (also used as the source file for the daily Google Drive upload), or None on
+    failure."""
     try:
         os.makedirs(BACKUP_DIR, exist_ok=True)
         db_path = settings.DATABASE_URL.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
-        
+
         if not os.path.exists(db_path):
-            return False
+            return None
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         backup_file = os.path.join(BACKUP_DIR, f"omini_channel_snapshot_{timestamp}.db")
-        
+
         shutil.copy2(db_path, backup_file)
-        
+
         wal_path = f"{db_path}-wal"
         if os.path.exists(wal_path):
             shutil.copy2(wal_path, f"{backup_file}-wal")
@@ -40,10 +44,10 @@ def create_db_snapshot() -> bool:
                     pass
 
         logger.info(f"Database ACID persistence snapshot created successfully: {os.path.basename(backup_file)}")
-        return True
+        return backup_file
     except Exception as e:
         logger.error(f"Error creating database backup snapshot: {e}")
-        return False
+        return None
 
 async def start_backup_scheduler_loop(interval_hours: int = 6):
     logger.info("Database ACID persistence and backup scheduler loop started.")

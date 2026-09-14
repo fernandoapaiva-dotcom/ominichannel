@@ -31,6 +31,7 @@ from app.services.calendar_reminder_service import start_calendar_reminder_loop
 from app.services.whatsapp_watchdog_service import start_whatsapp_watchdog_loop
 from app.services.whatsapp_reconciliation_service import start_whatsapp_reconciliation_loop
 from app.services.backup_service import start_backup_scheduler_loop
+from app.services.daily_backup_drive_service import start_daily_drive_backup_loop
 
 import mimetypes
 
@@ -50,6 +51,11 @@ async def lifespan(app: FastAPI):
     # Start database ACID persistence & snapshot scheduler loop (every 6h + startup)
     backup_task = asyncio.create_task(start_backup_scheduler_loop(interval_hours=6))
     logger.info("💾 Database ACID persistence snapshot background loop started.")
+
+    # Start daily full-system backup upload to Google Drive (once per tenant that has
+    # completed the OAuth connection in Settings > Integrações)
+    drive_backup_task = asyncio.create_task(start_daily_drive_backup_loop(interval_hours=24))
+    logger.info("☁️ Google Drive daily system backup background loop started (24h interval).")
 
     # Start inactivity background monitor task (sweeps every 60 seconds — reduced from 15s to prevent WhatsApp rate-limit/ban)
     inactivity_task = asyncio.create_task(start_inactivity_checker_loop(interval_seconds=60))
@@ -81,6 +87,7 @@ async def lifespan(app: FastAPI):
     
     # Shutdown actions
     backup_task.cancel()
+    drive_backup_task.cancel()
     inactivity_task.cancel()
     profile_pic_task.cancel()
     business_hours_task.cancel()

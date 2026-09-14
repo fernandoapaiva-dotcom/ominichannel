@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.models.models import IntegrationSettings, AuditLog, User
+from app.models.models import IntegrationSettings, AuditLog, User, Tenant
 from app.core.security import encrypt_data, decrypt_data, mask_sensitive_string
 from app.core.config import settings as env_settings
 
@@ -58,6 +58,17 @@ class SettingsService:
 
     async def get_tenant_masked_settings(self, db: AsyncSession, tenant_id: int) -> Dict[str, Any]:
         decrypted = await self.get_tenant_decrypted_settings(db, tenant_id)
+
+        last_backup_at = None
+        last_backup_success = None
+        last_backup_detail = None
+        tenant_res = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
+        tenant = tenant_res.scalar_one_or_none()
+        if tenant and tenant.config_geral:
+            last_backup_at = tenant.config_geral.get("last_gdrive_backup_at")
+            last_backup_success = tenant.config_geral.get("last_gdrive_backup_success")
+            last_backup_detail = tenant.config_geral.get("last_gdrive_backup_detail")
+
         return {
             "gemini_configured": bool(decrypted["gemini_api_key"]),
             "gemini_api_key_masked": mask_sensitive_string(decrypted["gemini_api_key"]),
@@ -68,7 +79,10 @@ class SettingsService:
             "google_drive_connected": bool(decrypted["gdrive_refresh_token"]),
             "google_drive_folder_id": decrypted["gdrive_folder_id"],
             "google_client_id": decrypted["google_client_id"],
-            "google_client_secret_masked": mask_sensitive_string(decrypted["google_client_secret"])
+            "google_client_secret_masked": mask_sensitive_string(decrypted["google_client_secret"]),
+            "last_gdrive_backup_at": last_backup_at,
+            "last_gdrive_backup_success": last_backup_success,
+            "last_gdrive_backup_detail": last_backup_detail
         }
 
     async def save_tenant_integration_settings(

@@ -309,6 +309,25 @@ async def test_google_drive_connection(
         return {"success": False, "message": f"Erro ao acessar Google Drive ou pasta informada: {str(e)}"}
 
 
+@router.post("/gdrive/run-backup-now")
+async def run_gdrive_backup_now(
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Creates a fresh full-database snapshot and uploads it right away to the admin's
+    configured Google Drive folder, instead of waiting for the daily scheduled run.
+    Lets the admin confirm the backup actually works after setting it up.
+    """
+    from app.services.backup_service import create_db_snapshot
+    from app.services.daily_backup_drive_service import run_backup_for_tenant
+
+    snapshot_path = create_db_snapshot()
+    if not snapshot_path:
+        return {"success": False, "message": "Não foi possível criar o snapshot local do banco de dados."}
+
+    return await run_backup_for_tenant(admin_user.tenant_id, snapshot_path)
+
 
 @router.get("/automations")
 async def get_automations(

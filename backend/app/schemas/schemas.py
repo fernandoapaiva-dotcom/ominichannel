@@ -272,6 +272,9 @@ class IntegrationSettingsMaskedResponse(BaseModel):
     google_drive_folder_id: str
     google_client_id: str
     google_client_secret_masked: str
+    last_gdrive_backup_at: Optional[str] = None
+    last_gdrive_backup_success: Optional[bool] = None
+    last_gdrive_backup_detail: Optional[str] = None
 
 class TestIntegrationRequest(BaseModel):
     integration_type: str # 'gemini' or 'evolution'

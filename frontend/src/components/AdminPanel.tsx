@@ -91,6 +91,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [gdriveClientSecretInput, setGdriveClientSecretInput] = useState('');
   const [gdriveConnecting, setGdriveConnecting] = useState(false);
   const [gdriveTesting, setGdriveTesting] = useState(false);
+  const [gdriveBackingUp, setGdriveBackingUp] = useState(false);
 
   // Connection Test Badges State
   const [testResult, setTestResult] = useState<{ type: string; success: boolean; message: string } | null>(null);
@@ -410,7 +411,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
       const params = new URLSearchParams(window.location.search);
       const gdriveStatus = params.get('gdrive');
       if (gdriveStatus === 'success') {
-        alert('🎉 Sucesso! Conta do Google Drive conectada e autorizada com sucesso! O backup automático em nuvem agora está 100% ativo.');
+        alert('🎉 Conta do Google Drive conectada e autorizada com sucesso!\n\nO backup diário do sistema será enviado automaticamente a partir de agora (1x por dia). Se quiser confirmar que está funcionando sem esperar, use o botão "Rodar Backup Agora" logo abaixo.');
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, document.title, cleanUrl);
       } else if (gdriveStatus === 'error') {
@@ -968,6 +969,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
       alert(`❌ Erro ao testar Google Drive: ${err.message}`);
     } finally {
       setGdriveTesting(false);
+    }
+  };
+
+  const handleRunBackupNow = async () => {
+    try {
+      setGdriveBackingUp(true);
+      const res = await apiFetch('/settings/gdrive/run-backup-now', { method: 'POST' });
+      if (res.success) {
+        alert(`✅ BACKUP ENVIADO COM SUCESSO!\n\n${res.message}`);
+      } else {
+        alert(`❌ BACKUP NÃO FOI ENVIADO:\n\n${res.message}`);
+      }
+      await loadSettingsAndAudit();
+    } catch (err: any) {
+      alert(`❌ Erro ao rodar backup: ${err.message}`);
+    } finally {
+      setGdriveBackingUp(false);
     }
   };
 
@@ -2440,6 +2458,46 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                           │   └── 📂 [Nome do Cliente - Telefone]/<br />
                           │       ├── 📄 backup_historico_conversa.json<br />
                           │       └── 📷 arquivos_e_midias/
+                        </div>
+                      </div>
+
+                      {/* Daily System Backup Status Card */}
+                      <div style={{ padding: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>💾 Backup Diário Completo do Sistema</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              Envia uma cópia completa do banco de dados para o Google Drive uma vez por dia (separado do backup por conversa acima).
+                            </div>
+                            {maskedSettings?.last_gdrive_backup_at ? (
+                              <div style={{
+                                fontSize: '12px',
+                                marginTop: '6px',
+                                fontWeight: '600',
+                                color: maskedSettings.last_gdrive_backup_success ? '#34d399' : '#f87171'
+                              }}>
+                                {maskedSettings.last_gdrive_backup_success ? '● Último backup: ' : '○ Última tentativa falhou: '}
+                                {new Date(maskedSettings.last_gdrive_backup_at).toLocaleString('pt-BR')}
+                                {!maskedSettings.last_gdrive_backup_success && maskedSettings.last_gdrive_backup_detail && (
+                                  <div style={{ fontWeight: '400', color: 'var(--text-muted)', marginTop: '2px' }}>{maskedSettings.last_gdrive_backup_detail}</div>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '12px', marginTop: '6px', color: 'var(--text-muted)' }}>
+                                Ainda nenhum backup diário foi feito. Clique em "Rodar Backup Agora" para testar, ou aguarde a execução automática (1x por dia).
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleRunBackupNow}
+                            disabled={gdriveBackingUp || !maskedSettings?.google_drive_connected}
+                            className="btn-secondary"
+                            title={!maskedSettings?.google_drive_connected ? 'Conecte a conta Google primeiro' : undefined}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', whiteSpace: 'nowrap' }}
+                          >
+                            <RefreshCw size={14} className={gdriveBackingUp ? 'animate-spin' : ''} /> {gdriveBackingUp ? 'Enviando...' : 'Rodar Backup Agora'}
+                          </button>
                         </div>
                       </div>
                     </div>

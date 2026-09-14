@@ -99,5 +99,41 @@ class GDriveBackupService:
             logger.error(f"Erro no backup do Google Drive para conversa {conversation_id}: {e}")
             return False
 
+    def upload_file_to_drive(
+        self,
+        folder_id: str,
+        filepath: str,
+        filename: str,
+        client_id: str,
+        refresh_token: str,
+        client_secret: str,
+        mimetype: str = "application/octet-stream",
+    ) -> bool:
+        """
+        Uploads an arbitrary local file (e.g. a full database snapshot) to a Google Drive
+        folder using the tenant's stored OAuth refresh token. Used by the daily system
+        backup job — separate from sync_conversation_to_drive, which only handles the
+        per-conversation JSON export.
+        """
+        if not folder_id or not refresh_token or not client_id or not client_secret:
+            raise ValueError("Google Drive não está totalmente configurado (pasta e/ou credenciais OAuth faltando).")
+
+        drive_service = self._get_drive_service_from_refresh_token(client_id, client_secret, refresh_token)
+        if not drive_service:
+            raise RuntimeError("Falha ao autenticar no Google Drive com o token salvo (pode ter expirado ou sido revogado).")
+
+        from googleapiclient.http import MediaFileUpload
+
+        file_metadata = {'name': filename, 'parents': [folder_id]}
+        media = MediaFileUpload(filepath, mimetype=mimetype, resumable=False)
+        uploaded_file = drive_service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id,name'
+        ).execute()
+
+        logger.info(f"✅ Backup diário enviado ao Google Drive: '{uploaded_file.get('name')}' | ID: {uploaded_file.get('id')}")
+        return True
+
 
 gdrive_service = GDriveBackupService()
