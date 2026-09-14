@@ -49,6 +49,21 @@ class EvolutionService:
         self._http_client: Optional[httpx.AsyncClient] = None
         self._contact_locks: Dict[str, asyncio.Lock] = {}
         self._last_send_time: Dict[str, float] = {}
+        self._hourly_send_timestamps: Dict[str, List[float]] = {}
+
+    def _check_hourly_circuit_breaker(self, instance_name: str, max_per_hour: int = 35) -> bool:
+        """Returns True if sending is allowed, False if safety hourly cap reached."""
+        now = time.time()
+        one_hour_ago = now - 3600.0
+        timestamps = self._hourly_send_timestamps.get(instance_name, [])
+        timestamps = [ts for ts in timestamps if ts > one_hour_ago]
+        self._hourly_send_timestamps[instance_name] = timestamps
+        if len(timestamps) >= max_per_hour:
+            logger.warning(f"🚨 [CIRCUIT BREAKER] Instância '{instance_name}' atingiu limite de segurança ({len(timestamps)} msgs/hora). Bloqueando envio automático para proteção contra ban.")
+            return False
+        timestamps.append(now)
+        self._hourly_send_timestamps[instance_name] = timestamps
+        return True
 
     def _get_contact_lock(self, key: str) -> asyncio.Lock:
         if key not in self._contact_locks:
@@ -319,7 +334,13 @@ class EvolutionService:
         Enforces 100% Anti-Ban safeguards for automated bots/campaigns.
         Human attendants who already type in the UI skip this artificial delay.
         """
-        if skip_anti_ban_pacing:
+        is_shielded_instance = (instance_name in ["instancia_vendas"])
+        if is_shielded_instance and skip_anti_ban_pacing:
+            # Para a instância recém-liberada de vendas, NUNCA enviar mensagens instantâneas sem presença.
+            # Garante simulação humana mesmo em respostas de atendentes do painel.
+            skip_anti_ban_pacing = False
+
+        if skip_anti_ban_pacing or "@g.us" in str(number) or "120363" in str(number) or len(str(number)) > 15:
             return
 
         clean_number = self._format_target_number(number)
@@ -327,11 +348,11 @@ class EvolutionService:
         lock = self._get_contact_lock(lock_key)
 
         async with lock:
-            # 1. Enforce minimum inter-message gap (cooldown gap of 2.2s - 3.8s)
+            # 1. Enforce minimum inter-message gap (cooldown gap de 3.5s - 5.5s para vendas)
             now = time.time()
             last_time = self._last_send_time.get(lock_key, 0.0)
             elapsed = now - last_time
-            min_gap = random.uniform(2.2, 3.8)
+            min_gap = random.uniform(3.5, 5.5) if is_shielded_instance else random.uniform(2.2, 3.8)
             if elapsed < min_gap:
                 wait_time = min_gap - elapsed
                 logger.info(f"[ANTI-BAN] Throttling message to {clean_number} (waiting {wait_time:.2f}s gap)")
@@ -342,10 +363,10 @@ class EvolutionService:
                 typing_delay_sec = random.uniform(2.5, 4.2)
             elif presence_type == "composing":
                 char_count = len(text or "")
-                raw_delay = 1.6 + (char_count * 0.035) + random.uniform(0.3, 1.1)
-                typing_delay_sec = max(1.8, min(6.5, raw_delay))
+                raw_delay = 2.0 + (char_count * 0.035) + random.uniform(0.5, 1.5)
+                typing_delay_sec = max(2.5, min(6.5, raw_delay)) if is_shielded_instance else max(1.8, min(6.5, raw_delay))
             else:
-                typing_delay_sec = 1.5
+                typing_delay_sec = 2.0 if is_shielded_instance else 1.5
 
             delay_ms = int(typing_delay_sec * 1000)
 
@@ -388,8 +409,14 @@ class EvolutionService:
         custom_api_key: Optional[str] = None,
         skip_anti_ban_pacing: bool = False
     ) -> Dict[str, Any]:
+        # Circuit Breaker check for high-probation instances (instancia_vendas)
+        if instance_name in ["instancia_vendas"]:
+            if not self._check_hourly_circuit_breaker(instance_name, max_per_hour=35):
+                logger.warning(f"🚨 [ESCUDO ANTI-BAN] Envio para {number} suspenso pelo circuit-breaker da {instance_name} (limite horário excedido).")
+                return {"success": False, "error": "Disjuntor de segurança anti-ban ativado: limite horário de disparos atingido para proteger a linha."}
+
         # 1. Apply Anti-Ban safeguards (skipped for human attendants)
-        if not skip_anti_ban_pacing:
+        if not skip_anti_ban_pacing or instance_name in ["instancia_vendas"]:
             await self._apply_anti_ban_pacing_and_presence(
                 instance_name=instance_name,
                 number=number,
@@ -946,21 +973,21 @@ class EvolutionService:
             "message": msg_payload,
             "convertToMp4": False
         }
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            try:
-                res = await client.post(url, json=payload, headers=headers, timeout=25.0)
-                if res.status_code in (200, 201):
-                    data = res.json()
-                    return data.get("base64")
-                else:
-                    # If from_me failed, try the inverse
-                    key_obj["fromMe"] = not from_me
-                    res2 = await client.post(url, json=payload, headers=headers, timeout=25.0)
-                    if res2.status_code in (200, 201):
-                        data2 = res2.json()
-                        return data2.get("base64")
-            except Exception as e:
-                logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {e}")
+        client = self.get_client()
+        try:
+            res = await client.post(url, json=payload, headers=headers, timeout=20.0)
+            if res.status_code in (200, 201):
+                data = res.json()
+                return data.get("base64")
+            else:
+                # If from_me failed, try the inverse
+                key_obj["fromMe"] = not from_me
+                res2 = await client.post(url, json=payload, headers=headers, timeout=20.0)
+                if res2.status_code in (200, 201):
+                    data2 = res2.json()
+                    return data2.get("base64")
+        except Exception as e:
+            logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {e}")
         return None
 
     async def mark_message_as_read(

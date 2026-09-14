@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck } from 'lucide-react';
+import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download } from 'lucide-react';
 import { User, Conversation } from '../types';
 import { apiFetch } from '../services/api';
 
@@ -1068,6 +1068,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* User Avatar with Badge, Theme Switcher & Logout */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+        {/* Download Desktop App Button */}
+        <a
+          href="/downloads/OminiChannel-Setup.exe"
+          download="OminiChannel-Setup.exe"
+          title="Baixar Aplicativo OminiChannel para Computador (Windows)"
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(0, 230, 153, 0.12)',
+            color: '#00e699',
+            border: '1px solid rgba(0, 230, 153, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            textDecoration: 'none'
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = 'scale(1.1)';
+            e.currentTarget.style.background = 'rgba(0, 230, 153, 0.22)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = 'scale(1)';
+            e.currentTarget.style.background = 'rgba(0, 230, 153, 0.12)';
+          }}
+        >
+          <Download size={20} />
+        </a>
+
         <button
           onClick={toggleTheme}
           title={theme === 'dark' ? 'Mudar para Modo Dia (Claro)' : 'Mudar para Modo Noite (Escuro)'}

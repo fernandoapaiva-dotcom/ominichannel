@@ -186,53 +186,58 @@ export const ForwardModal: React.FC<ForwardModalProps> = ({
     if (onForwardSuccess) onForwardSuccess();
     onClose();
 
-    // 2. Asynchronous background network forwarding
+    // 2. Asynchronous background network forwarding in parallel across all targets
     (async () => {
       try {
-        for (const target of targets) {
-          let targetConvId = target.conversationId;
+        await Promise.allSettled(
+          targets.map(async (target) => {
+            let targetConvId = target.conversationId;
 
-          // Ensure conversation in the intended sending department
-          if (target.whatsappNumberId) {
-            try {
-              const matchedConv = conversations.find(
-                c => c.whatsapp_number_id === target.whatsappNumberId &&
-                     c.contact?.telefone === target.contactPhone
-              );
+            // Ensure conversation in the intended sending department
+            if (target.whatsappNumberId) {
+              try {
+                const matchedConv = conversations.find(
+                  c => c.whatsapp_number_id === target.whatsappNumberId &&
+                       c.contact?.telefone === target.contactPhone
+                );
 
-              if (matchedConv) {
-                targetConvId = matchedConv.id;
-              } else {
-                const startRes = await apiFetch('/conversations/start', {
-                  method: 'POST',
-                  body: JSON.stringify({
-                    whatsapp_number_id: target.whatsappNumberId,
-                    telefone: target.contactPhone,
-                    nome: target.contactName
-                  })
-                });
-                if (startRes && startRes.id) {
-                  targetConvId = startRes.id;
+                if (matchedConv) {
+                  targetConvId = matchedConv.id;
+                } else {
+                  const startRes = await apiFetch('/conversations/start', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                      whatsapp_number_id: target.whatsappNumberId,
+                      telefone: target.contactPhone,
+                      nome: target.contactName
+                    })
+                  });
+                  if (startRes && startRes.id) {
+                    targetConvId = startRes.id;
+                  }
                 }
+              } catch (createErr) {
+                console.warn(`Usando conversa padrão para ${target.contactName}:`, createErr);
               }
-            } catch (createErr) {
-              console.warn(`Usando conversa padrão para ${target.contactName}:`, createErr);
             }
-          }
 
-          // Send all selected messages to the resolved conversation
-          for (const msg of msgsList) {
-            await apiFetch(`/conversations/${targetConvId}/messages`, {
-              method: 'POST',
-              body: JSON.stringify({
-                conversation_id: targetConvId,
-                conteudo: msg.conteudo,
-                tipo: msg.tipo || 'texto',
-                remetente: 'atendente'
-              })
-            });
-          }
-        }
+            if (!targetConvId) return;
+
+            // Send all selected messages sequentially to this target to maintain ordering
+            for (const msg of msgsList) {
+              await apiFetch(`/conversations/${targetConvId}/messages`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  conversation_id: targetConvId,
+                  conteudo: msg.conteudo,
+                  tipo: msg.tipo || 'texto',
+                  remetente: 'atendente',
+                  dados_adicionais: msg.dados_adicionais
+                })
+              });
+            }
+          })
+        );
       } catch (err) {
         console.error('Erro em segundo plano ao encaminhar mensagens:', err);
       }

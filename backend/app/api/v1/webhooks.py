@@ -6,12 +6,12 @@ import os
 import re
 import time
 import httpx
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Request, HTTPException
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, or_
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -40,6 +40,10 @@ router = APIRouter(prefix="/webhooks", tags=["Webhooks Integration"])
 
 SEEN_WEBHOOK_KEYS = {}
 _conversation_ai_timestamps: Dict[int, float] = {}
+_conversation_location_timestamps: Dict[int, float] = {}
+_in_flight_webhook_messages: Dict[str, float] = {}
+_in_flight_ai_conversations: Dict[int, float] = {}
+_last_customer_msg_timestamps: Dict[int, float] = {}
 
 def extract_message_datetime(data: Any) -> datetime:
     if not isinstance(data, dict):
@@ -152,16 +156,36 @@ async def receive_evolution_webhook(
     
     # Deduplicate incoming webhooks (Evolution API sends duplicate events for same msg_id)
     if msg_id:
-        dedup_key = f"{instance_name}_{event_type}_{msg_id}"
-        now_ts = datetime.utcnow().timestamp()
+        now_ts = time.time()
         # Clean cache older than 60s
-        to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if (now_ts - (ts.timestamp() if isinstance(ts, datetime) else float(ts))) > 60]
+        to_del = [k for k, ts in SEEN_WEBHOOK_KEYS.items() if (now_ts - (ts if isinstance(ts, (int, float)) else ts.timestamp())) > 60]
         for k in to_del:
             del SEEN_WEBHOOK_KEYS[k]
-        if dedup_key in SEEN_WEBHOOK_KEYS:
-            logger.info(f"Ignoring duplicate webhook for key '{dedup_key}'")
+
+        # Prevent concurrent in-flight race conditions for the exact same message id
+        inflight_ts = _in_flight_webhook_messages.get(msg_id, 0.0)
+        if (now_ts - inflight_ts) < 10.0:
+            logger.info(f"[ANTI-RACE] Mensagem '{msg_id}' já está em processamento concorrente há {(now_ts - inflight_ts):.2f}s. Ignorando payload repetido.")
+            return {"status": "ignored", "reason": "Message currently in-flight"}
+
+        norm_ev_check = str(event_type or "").lower().replace("_", ".").strip()
+        is_status_update = norm_ev_check in ["messages.update", "message.update"]
+
+        dedup_keys = [
+            f"{instance_name}_{msg_id}",
+            f"msg_{msg_id}",
+            f"{instance_name}_{event_type}_{msg_id}"
+        ]
+        if not is_status_update:
+            dedup_keys.insert(0, msg_id)
+
+        if any(k in SEEN_WEBHOOK_KEYS for k in dedup_keys):
+            logger.info(f"[DEDUP INICIAL] Ignorando webhook duplicado para msg_id '{msg_id}' (instância '{instance_name}', evento '{event_type}')")
             return {"status": "ignored", "reason": "Duplicate webhook payload"}
-        SEEN_WEBHOOK_KEYS[dedup_key] = now_ts
+
+        for k in dedup_keys:
+            SEEN_WEBHOOK_KEYS[k] = now_ts
+        _in_flight_webhook_messages[msg_id] = now_ts
 
     # Handle QRCODE_UPDATED event to cache QR code in real-time
     if event_type in ["qrcode.updated", "qrcode_updated", "qrcode"]:
@@ -179,10 +203,14 @@ async def receive_evolution_webhook(
             logger.info(f"Updated cached QR Code for instance '{instance_name}' via webhook event '{event_type}'")
             return {"status": "success", "event": event_type, "message": "QR Code cached successfully"}
 
-    # Handle CONNECTION_UPDATE event (log state without aggressive auto-sync to protect account from WhatsApp ban)
+    # Handle CONNECTION_UPDATE event (trigger auto-reconciliation when connection is restored)
     if event_type in ["connection.update", "connection_update", "CONNECTION_UPDATE"]:
         conn_state = data.get("state") or data.get("status") or payload.get("state")
         logger.info(f"[CONNECTION_UPDATE] Instância '{instance_name}' estado: '{conn_state}'")
+        if str(conn_state).lower() in ["open", "connected"] and instance_name:
+            logger.info(f"🔄 [AUTO-RECONCILE] Instância '{instance_name}' restabelecida! Executando varredura em segundo plano...")
+            from app.services.whatsapp_reconciliation_service import whatsapp_reconciliation_service
+            asyncio.create_task(whatsapp_reconciliation_service.reconcile_by_instance_name(instance_name))
         return {"status": "success", "event": event_type, "state": conn_state}
 
     # Handle PRESENCE_UPDATE event (Customer typing or recording audio on WhatsApp)
@@ -312,8 +340,16 @@ async def receive_evolution_webhook(
                 return {"status": "ignored", "reason": f"Call status '{status_call}' ignored"}
 
             call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
-            raw_phone = data.get("caller") or data.get("from") or data.get("chatId") or (data.get("key") or {}).get("remoteJid", "")
-            raw_phone = raw_phone.split("@")[0] if "@" in str(raw_phone) else str(raw_phone)
+            raw_caller_jid = (
+                data.get("caller") or
+                data.get("from") or
+                data.get("chatId") or
+                data.get("creator") or
+                data.get("creatorJid") or
+                data.get("peerJid") or
+                (data.get("key") or {}).get("remoteJid", "")
+            )
+            raw_phone = str(raw_caller_jid).split("@")[0] if "@" in str(raw_caller_jid) else str(raw_caller_jid)
             phone_number = "".join(filter(str.isdigit, raw_phone))
 
             is_video = bool(data.get("isVideo", False))
@@ -331,21 +367,19 @@ async def receive_evolution_webhook(
             if not wn:
                 return {"status": "error", "message": "Nenhum número cadastrado"}
 
-            # Find contact by phone or latest active conversation
+            # Resolve contact strictly to the caller (no erroneous fallback to recent active conversation)
             contact = None
-            if phone_number and len(phone_number) >= 8:
-                c_stmt = select(Contact).where(Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            if raw_caller_jid:
+                contact = await resolve_and_bind_contact(
+                    session=db,
+                    tenant_id=wn.tenant_id,
+                    raw_jid=str(raw_caller_jid),
+                    push_name=push_name
+                )
+            elif phone_number and len(phone_number) >= 8:
+                c_stmt = select(Contact).where(Contact.tenant_id == wn.tenant_id, Contact.telefone.like(f"%{phone_number[-8:]}%"))
                 c_res = await db.execute(c_stmt)
                 contact = c_res.scalars().first()
-
-            if not contact:
-                conv_recent = select(Conversation).options(selectinload(Conversation.contact)).where(
-                    Conversation.whatsapp_number_id == wn.id
-                ).order_by(Conversation.ultima_interacao_em.desc())
-                cr_res = await db.execute(conv_recent)
-                conv_obj = cr_res.scalars().first()
-                if conv_obj and conv_obj.contact:
-                    contact = conv_obj.contact
 
             now = datetime.utcnow()
             call_dt = extract_message_datetime(data)
@@ -709,6 +743,18 @@ async def receive_evolution_webhook(
 
     message_obj = data.get("message", {})
 
+    # "View Once" photos/videos (the circled "1" toggle shown when sending a photo
+    # straight from the in-chat camera) wrap the real imageMessage/videoMessage one
+    # level deeper under viewOnceMessage/viewOnceMessageV2/viewOnceMessageV2Extension.
+    # Without unwrapping it here, img_msg/vid_msg below are never found, so the photo
+    # is silently discarded — this is why sending a photo via the phone camera can
+    # appear to "not send" even though WhatsApp itself delivered it fine.
+    for _vo_key in ("viewOnceMessageV2Extension", "viewOnceMessageV2", "viewOnceMessage"):
+        _vo_wrap = message_obj.get(_vo_key)
+        if isinstance(_vo_wrap, dict) and isinstance(_vo_wrap.get("message"), dict):
+            message_obj = _vo_wrap["message"]
+            break
+
     # Handle incoming WhatsApp Emoji Reaction (reactionMessage) from customer
     reaction_msg = message_obj.get("reactionMessage")
     if reaction_msg or data.get("messageType") == "reactionMessage":
@@ -1004,11 +1050,6 @@ async def receive_evolution_webhook(
 
     msg_id = key.get("id", "") if isinstance(key, dict) else ""
     if msg_id:
-        in_mem_key = f"{instance_name}_{msg_id}" if instance_name else msg_id
-        if in_mem_key in SEEN_WEBHOOK_KEYS:
-            logger.info(f"[DEDUPLICACAO IN-MEMORY] Mensagem '{msg_id}' para instância '{instance_name}' já processada recentemente. Descartando duplicata.")
-            return {"status": "success", "action": "ignored_duplicate"}
-
         now_ts = datetime.utcnow().timestamp()
         if instance_name:
             existing_msg_stmt = (
@@ -1026,12 +1067,7 @@ async def receive_evolution_webhook(
         existing_msg_res = await db.execute(existing_msg_stmt)
         if existing_msg_res.scalars().first():
             logger.info(f"[DEDUPLICACAO DB] Mensagem '{msg_id}' para instância '{instance_name}' já gravada no banco. Descartando duplicata.")
-            SEEN_WEBHOOK_KEYS[in_mem_key] = now_ts
             return {"status": "success", "action": "ignored_duplicate"}
-
-        SEEN_WEBHOOK_KEYS[in_mem_key] = now_ts
-        if len(SEEN_WEBHOOK_KEYS) > 5000:
-            SEEN_WEBHOOK_KEYS.clear()
 
     media_base64 = data.get("base64") or (data.get("media", {}).get("base64") if isinstance(data.get("media"), dict) else None)
 
@@ -1133,8 +1169,17 @@ async def receive_evolution_webhook(
         elif doc_msg:
             msg_type = MessageType.ARQUIVO
             caption = doc_msg.get("caption") or ""
-            doc_filename = doc_msg.get("fileName") or "documento.pdf"
+            if caption and re.match(r'^\*👤 [^*]+:\*\s*$', caption.strip()):
+                caption = ""
+            doc_filename = doc_msg.get("fileName") or doc_msg.get("title") or "documento.pdf"
             ext = os.path.splitext(doc_filename)[1] or ".bin"
+            msg_extra["original_filename"] = doc_filename
+            msg_extra["file_name"] = doc_filename
+
+        target_obj = stk_msg or img_msg or vid_msg or aud_msg or doc_msg or {}
+        if target_obj.get("fileName"):
+            msg_extra["original_filename"] = target_obj.get("fileName")
+            msg_extra["file_name"] = target_obj.get("fileName")
 
         # If base64 is present, ALWAYS save file to disk using absolute path
         saved_media_url = None
@@ -1152,13 +1197,24 @@ async def receive_evolution_webhook(
                 logger.error(f"Error saving incoming media file: {e}")
 
         if saved_media_url:
-            text_content = f"{saved_media_url}|{caption}" if caption else saved_media_url
+            if doc_msg:
+                if caption and caption != doc_filename:
+                    text_content = f"{saved_media_url}|{doc_filename}|{caption}"
+                else:
+                    text_content = f"{saved_media_url}|{doc_filename}"
+            else:
+                text_content = f"{saved_media_url}|{caption}" if caption else saved_media_url
         else:
             # Fallback to direct media URL if base64 decoding was not available
-            target_obj = stk_msg or img_msg or vid_msg or aud_msg or doc_msg or {}
             fallback_url = target_obj.get("url") or target_obj.get("directPath") or ""
             if fallback_url:
-                text_content = f"{fallback_url}|{caption}" if caption else fallback_url
+                if doc_msg:
+                    if caption and caption != doc_filename:
+                        text_content = f"{fallback_url}|{doc_filename}|{caption}"
+                    else:
+                        text_content = f"{fallback_url}|{doc_filename}"
+                else:
+                    text_content = f"{fallback_url}|{caption}" if caption else fallback_url
             elif caption:
                 text_content = caption
             elif stk_msg:
@@ -1524,6 +1580,10 @@ async def receive_evolution_webhook(
         "Protocolo de Atendimento:" in text_content or
         "Protocolo:" in text_content or
         "DADOS OFICIAIS PARA PAGAMENTO VIA PIX" in text_content or
+        "RESUMO DE ONBOARDING" in text_content or
+        "Resumo de Onboarding" in text_content or
+        "equipe especialista dar continuidade" in text_content or
+        "Seja bem-vindo(a) à" in text_content or
         ("Servweld" in text_content and "GPS" in text_content) or
         ("SOF Q 5" in text_content and "71215-226" in text_content) or
         is_bot_or_menu_message(text_content)
@@ -1531,6 +1591,29 @@ async def receive_evolution_webhook(
 
     # 4. If message was sent from mobile cellphone by attendant/staff (fromMe: True)
     if from_me:
+        # Echo Shield: Never record bot/system replies as human attendant messages!
+        if is_bot_echo:
+            logger.info(f"[ECHO ESCUDO] Mensagem com fromMe:True é eco do próprio robô/IA ('{text_content[:60]}...'). Descartando para não atribuir a atendente.")
+            if msg_id:
+                try:
+                    bot_msg_stmt = (
+                        select(Message)
+                        .where(
+                            Message.conversation_id == conversation.id,
+                            Message.remetente.in_([MessageSender.IA, "ia", "sistema"]),
+                            Message.whatsapp_msg_id == None
+                        )
+                        .order_by(Message.id.desc())
+                    )
+                    b_res = await db.execute(bot_msg_stmt)
+                    b_msg = b_res.scalars().first()
+                    if b_msg:
+                        b_msg.whatsapp_msg_id = msg_id
+                        await db.commit()
+                except Exception as link_err:
+                    logger.debug(f"Não foi possível vincular whatsapp_msg_id ao bot: {link_err}")
+            return {"status": "success", "action": "bot_echo_ignored"}
+
         # Check if this outgoing message is already recorded in the database
         if msg_id:
             existing_outgoing_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
@@ -1542,23 +1625,52 @@ async def receive_evolution_webhook(
         # Check if an attendant message was sent recently (last 60s) with matching text
         clean_text_compare = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', text_content).strip().rstrip('\u200b')
         recent_cutoff = datetime.utcnow() - timedelta(seconds=60)
+        # IA/SISTEMA senders are included here too: the dedicated bot-echo shield above only
+        # catches known phrase markers (see is_bot_echo), so a freeform AI reply without those
+        # markers would otherwise fall through to here, find no match among ATENDENTE-only rows,
+        # and get re-inserted as a second, duplicate message on screen.
         recent_att_stmt = select(Message).where(
             Message.conversation_id == conversation.id,
-            Message.remetente.in_([MessageSender.ATENDENTE, "atendente"]),
+            Message.remetente.in_([MessageSender.ATENDENTE, "atendente", MessageSender.IA, "ia", MessageSender.SISTEMA, "sistema"]),
             Message.timestamp >= recent_cutoff
         ).order_by(Message.id.desc())
         recent_att_res = await db.execute(recent_att_stmt)
         matched_existing = None
+        is_media_type = msg_type not in [MessageType.TEXTO, "texto"]
+
         for r_msg in recent_att_res.scalars().all():
             r_c = (r_msg.conteudo or "").strip().rstrip('\u200b')
             r_c_clean = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', r_c).strip().rstrip('\u200b')
-            if (
+
+            # Extract captions if media format: "/uploads/xyz.ext|Caption"
+            cap_existing = r_c_clean.split("|", 1)[1].strip() if "|" in r_c_clean else ""
+            cap_webhook = clean_text_compare.split("|", 1)[1].strip() if "|" in clean_text_compare else ""
+
+            # IMPORTANT: text-content matching must only link this webhook echo to an
+            # existing message that is still unlinked (whatsapp_msg_id is None, i.e. it was
+            # optimistically saved when dispatched from the panel and is awaiting its real
+            # WhatsApp id). Without this guard, sending the same/similar text twice in a row
+            # (e.g. from the attendant's own phone) makes the second, genuinely distinct
+            # message get discarded as a "duplicate" of the first one, which already has its
+            # own whatsapp_msg_id \u2014 causing real messages to silently vanish from the panel.
+            text_match = (
                 (msg_id and r_msg.whatsapp_msg_id == msg_id) or
-                r_c == clean_text_compare or
-                r_c_clean == clean_text_compare or
-                r_c == text_content.strip().rstrip('\u200b') or
-                (r_msg.whatsapp_msg_id is None and (clean_text_compare in r_c or r_c in clean_text_compare))
-            ):
+                (r_msg.whatsapp_msg_id is None and (
+                    r_c == clean_text_compare or
+                    r_c_clean == clean_text_compare or
+                    r_c == text_content.strip().rstrip('\u200b') or
+                    clean_text_compare in r_c or r_c in clean_text_compare
+                ))
+            )
+
+            # Media match: same media type or media file sent recently by attendant from web panel
+            media_match = False
+            if is_media_type or "/uploads/" in text_content or text_content.startswith("/uploads/"):
+                if r_msg.tipo != MessageType.TEXTO or "/uploads/" in (r_msg.conteudo or ""):
+                    if not r_msg.whatsapp_msg_id or r_msg.whatsapp_msg_id == msg_id:
+                        media_match = True
+
+            if text_match or media_match:
                 matched_existing = r_msg
                 break
 
@@ -1571,6 +1683,19 @@ async def receive_evolution_webhook(
 
         # If it genuinely came from the mobile device directly, strip any prefix if present
         clean_outgoing_text = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', text_content).strip().rstrip('\u200b') if text_content.startswith('*👤 ') else text_content
+        clean_outgoing_text = re.sub(r'\|\*👤 [^*]+:\*$', '', clean_outgoing_text).strip()
+
+        # Prevent media from being marked as plain text if it contains an uploads URL
+        if "/uploads/" in clean_outgoing_text or "http" in clean_outgoing_text:
+            c_low = clean_outgoing_text.lower()
+            if ".pdf" in c_low:
+                msg_type = MessageType.ARQUIVO
+            elif any(e in c_low for e in [".png", ".jpg", ".jpeg", ".webp"]):
+                msg_type = MessageType.IMAGEM
+            elif any(e in c_low for e in [".mp4", ".mov", ".avi"]):
+                msg_type = MessageType.VIDEO
+            elif any(e in c_low for e in [".ogg", ".mp3", ".wav", ".m4a"]):
+                msg_type = MessageType.AUDIO
         agent_extracted_name = None
         m_agent = re.match(r'^\*👤\s*([^:*]+):?\*', text_content)
         if m_agent:
@@ -1725,6 +1850,15 @@ async def receive_evolution_webhook(
             logger.error(f"Error transcribing customer audio note lazily: {audio_err}")
 
     msg_dt = extract_message_datetime(data)
+
+    # Ensure customer message is not already saved in database for this msg_id
+    if msg_id:
+        chk_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
+        chk_res = await db.execute(chk_stmt)
+        if chk_res.scalars().first():
+            logger.info(f"[DB DEDUP] Mensagem cliente '{msg_id}' já gravada no banco. Ignorando inserção duplicada.")
+            return {"status": "success", "action": "ignored_duplicate"}
+
     user_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.CLIENTE,
@@ -1797,117 +1931,27 @@ async def receive_evolution_webhook(
         await db.commit()
         return {"status": "success", "action": "group_or_bot_silenced"}
 
-    # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
-    # Safe Re-engagement & Instant Basic Info (Location, Hours) even during human attendance
-    if conversation.status == ConversationStatus.COM_HUMANO:
-        dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
-        store_intent = await gemini_service.classify_store_info_intent(
-            user_message=text_content,
-            tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
-            tenant_gemini_model_name=dec_sets.get("gemini_model_name")
-        )
+    # Check if conversation is handled by human attendant (or has had attendant interaction)
+    att_stmt = select(Message.id).where(
+        Message.conversation_id == conversation.id,
+        Message.remetente.in_([MessageSender.ATENDENTE, "atendente"])
+    ).limit(1)
+    att_res = await db.execute(att_stmt)
+    has_attendant_messages = att_res.scalars().first() is not None
+    is_human_handled = (
+        conversation.status == ConversationStatus.COM_HUMANO or
+        conversation.assigned_user_id is not None or
+        has_attendant_messages
+    )
 
-        if store_intent == "STORE_LOCATION":
-            auto_loc_text = (
-                "📍 *Aqui está a localização da Servweld:*\n\n"
-                "*Servweld Equipamentos & Assistência Técnica*\n"
-                "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF\n"
-                "CEP: 71215-226\n\n"
-                "🗺️ *Como Chegar (Google Maps / GPS):*\n"
-                "https://maps.google.com/?q=-15.820418,-47.956467\n\n"
-                "Você também pode clicar no mapa interativo abaixo para navegar direto no seu GPS (Google Maps / Waze)!"
-            )
-            if whatsapp_number and whatsapp_number.instancia_evolution_api:
-                try:
-                    await evolution_service.send_text_message(
-                        instance_name=whatsapp_number.instancia_evolution_api,
-                        number=phone_number,
-                        text=f"*🤖 IA Concierge:*\n\n{auto_loc_text}"
-                    )
-                    await evolution_service.send_location_message(
-                        instance_name=whatsapp_number.instancia_evolution_api,
-                        number=phone_number,
-                        latitude=-15.820418,
-                        longitude=-47.956467,
-                        name="Servweld / Servsolda",
-                        address="SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
-                    )
-                except Exception as e:
-                    logger.warning(f"Error sending auto location reply: {e}")
-
-            loc_msg = Message(
-                conversation_id=conversation.id,
-                remetente=MessageSender.IA,
-                conteudo=auto_loc_text,
-                tipo=MessageType.TEXTO,
-                status="delivered",
-                dados_adicionais={"auto_reply": True, "info_type": "location"},
-                timestamp=datetime.utcnow()
-            )
-            db.add(loc_msg)
-            await db.commit()
-
-            await ws_manager.broadcast_to_department(
-                tenant_id=tenant_id,
-                whatsapp_number_id=whatsapp_number.id,
-                message_data={
-                    "type": "NEW_MESSAGE",
-                    "conversation_id": conversation.id,
-                    "id": loc_msg.id,
-                    "remetente": "ia",
-                    "tipo": "texto",
-                    "conteudo": auto_loc_text,
-                    "timestamp": loc_msg.timestamp.isoformat() + "Z"
-                }
-            )
-
-        elif store_intent == "STORE_HOURS":
-            auto_hours_text = (
-                "⏰ *Horário de Atendimento Servweld:*\n\n"
-                "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
-                "• *Sábados, Domingos e Feriados:* Fechado\n\n"
-                "Nosso laboratório e loja estão à sua disposição durante todo o horário comercial!"
-            )
-            if whatsapp_number and whatsapp_number.instancia_evolution_api:
-                try:
-                    await evolution_service.send_text_message(
-                        instance_name=whatsapp_number.instancia_evolution_api,
-                        number=phone_number,
-                        text=f"*🤖 IA Concierge:*\n\n{auto_hours_text}"
-                    )
-                except Exception as e:
-                    logger.warning(f"Error sending auto hours reply: {e}")
-
-            hours_msg = Message(
-                conversation_id=conversation.id,
-                remetente=MessageSender.IA,
-                conteudo=auto_hours_text,
-                tipo=MessageType.TEXTO,
-                status="delivered",
-                dados_adicionais={"auto_reply": True, "info_type": "hours"},
-                timestamp=datetime.utcnow()
-            )
-            db.add(hours_msg)
-            await db.commit()
-
-            await ws_manager.broadcast_to_department(
-                tenant_id=tenant_id,
-                whatsapp_number_id=whatsapp_number.id,
-                message_data={
-                    "type": "NEW_MESSAGE",
-                    "conversation_id": conversation.id,
-                    "id": hours_msg.id,
-                    "remetente": "ia",
-                    "tipo": "texto",
-                    "conteudo": auto_hours_text,
-                    "timestamp": hours_msg.timestamp.isoformat() + "Z"
-                }
-            )
-
+    if is_human_handled:
         text_lower = (text_content or "").lower()
         explicit_ai_keywords = ["falar com ia", "reativar ia", "chamar ia", "iniciar ia", "menu ia"]
-        if any(k in text_lower for k in explicit_ai_keywords):
+        is_explicit_ai = any(k in text_lower for k in explicit_ai_keywords)
+
+        if is_explicit_ai:
             conversation.status = ConversationStatus.COM_IA
+            conversation.assigned_user_id = None
             logger.info(f"[IA REATIVADA EXPLICITAMENTE] Conversa {conversation.id} com {contact.nome or contact.telefone} reativada para COM_IA a pedido do cliente.")
             await ws_manager.broadcast_to_department(
                 tenant_id=tenant_id,
@@ -1918,18 +1962,169 @@ async def receive_evolution_webhook(
                     "status": "com_ia"
                 }
             )
+        else:
+            # Enforce COM_HUMANO
+            if conversation.status != ConversationStatus.COM_HUMANO:
+                conversation.status = ConversationStatus.COM_HUMANO
+
+            dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+            store_intent = await gemini_service.classify_store_info_intent(
+                user_message=text_content,
+                tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
+                tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+            )
+
+            if store_intent == "STORE_LOCATION":
+                now_ts = time.time()
+                last_loc_ts = _conversation_location_timestamps.get(conversation.id, 0.0)
+                if (now_ts - last_loc_ts) < 15.0:
+                    logger.info(f"[DEBOUNCE LOCATION] Conversa {conversation.id} já recebeu localização há {(now_ts - last_loc_ts):.1f}s. Silenciando disparo duplicado.")
+                    return {"status": "success", "action": "ignored_duplicate_location"}
+                _conversation_location_timestamps[conversation.id] = now_ts
+
+                client_first_name = contact.nome.strip().split()[0] if (contact and contact.nome and contact.nome.strip().lower() not in ["cliente", "unknown", ""]) else ""
+                greeting_name = f", {client_first_name}" if client_first_name else ""
+                auto_loc_text = f"Com certeza{greeting_name}! Segue a nossa localização no mapa abaixo. Ficamos à sua disposição e aguardamos sua visita! 📍"
+
+                target_inst = (whatsapp_number.instancia_evolution_api if whatsapp_number else "") or instance_name
+                if target_inst:
+                    try:
+                        await evolution_service.send_text_message(
+                            instance_name=target_inst,
+                            number=phone_number,
+                            text=f"*🤖 IA Concierge:*\n\n{auto_loc_text}"
+                        )
+                        await evolution_service.send_location_message(
+                            instance_name=target_inst,
+                            number=phone_number,
+                            latitude=-15.820418,
+                            longitude=-47.956467,
+                            name="Servweld / Servsolda",
+                            address="SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Error sending auto location reply: {e}")
+
+                loc_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente=MessageSender.IA,
+                    conteudo=auto_loc_text,
+                    tipo=MessageType.TEXTO,
+                    status="delivered",
+                    dados_adicionais={"auto_reply": True, "info_type": "location"},
+                    timestamp=datetime.utcnow()
+                )
+                db.add(loc_msg)
+                await db.commit()
+
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=whatsapp_number.id,
+                    message_data={
+                        "type": "NEW_MESSAGE",
+                        "conversation_id": conversation.id,
+                        "id": loc_msg.id,
+                        "remetente": "ia",
+                        "tipo": "texto",
+                        "conteudo": auto_loc_text,
+                        "timestamp": loc_msg.timestamp.isoformat() + "Z"
+                    }
+                )
+                return {"status": "success", "action": "store_location_sent"}
+
+            elif store_intent == "STORE_HOURS":
+                auto_hours_text = (
+                    "⏰ *Horário de Atendimento Servweld:*\n\n"
+                    "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
+                    "• *Sábados, Domingos e Feriados:* Fechado\n\n"
+                    "Nosso laboratório e loja estão à sua disposição durante todo o horário comercial!"
+                )
+                if whatsapp_number and whatsapp_number.instancia_evolution_api:
+                    try:
+                        await evolution_service.send_text_message(
+                            instance_name=whatsapp_number.instancia_evolution_api,
+                            number=phone_number,
+                            text=f"*🤖 IA Concierge:*\n\n{auto_hours_text}"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Error sending auto hours reply: {e}")
+
+                hours_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente=MessageSender.IA,
+                    conteudo=auto_hours_text,
+                    tipo=MessageType.TEXTO,
+                    status="delivered",
+                    dados_adicionais={"auto_reply": True, "info_type": "hours"},
+                    timestamp=datetime.utcnow()
+                )
+                db.add(hours_msg)
+                await db.commit()
+
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=whatsapp_number.id,
+                    message_data={
+                        "type": "NEW_MESSAGE",
+                        "conversation_id": conversation.id,
+                        "id": hours_msg.id,
+                        "remetente": "ia",
+                        "tipo": "texto",
+                        "conteudo": auto_hours_text,
+                        "timestamp": hours_msg.timestamp.isoformat() + "Z"
+                    }
+                )
+                return {"status": "success", "action": "store_hours_sent"}
+
+            # For all other messages during human attendance, SILENCE the AI completely!
+            logger.info(f"[HUMAN SHIELD] Conversa #{conversation.id} possui atendimento humano ativo ({contact.nome or contact.telefone}). IA Concierge 100% silenciada.")
+            await db.commit()
+            return {"status": "success", "action": "human_handled_ai_silenced"}
 
     # 5. Process AI Concierge response if conversation is with AI
     current_status_str = getattr(conversation.status, 'value', str(conversation.status))
     if current_status_str == ConversationStatus.COM_IA.value or conversation.status == ConversationStatus.COM_IA:
-        # Anti-Spam / Burst Debounce: se a IA respondeu nesta conversa há menos de 3.5 segundos,
-        # grava a mensagem no banco e transmite via WebSocket, mas silencia o disparo duplicado da IA para acumular contexto
         now_ts = time.time()
+
+        # Anti-Spam / Burst Debounce: se a IA respondeu nesta conversa há menos de 8.0 segundos,
+        # grava a mensagem no banco e transmite via WebSocket, mas silencia o disparo duplicado da IA para não enviar rajadas
         last_ai_ts = _conversation_ai_timestamps.get(conversation.id, 0.0)
-        if (now_ts - last_ai_ts) < 3.5:
-            logger.info(f"[DEBOUNCE AI] Conversa {conversation.id} recebeu mensagem em rajada ({(now_ts - last_ai_ts):.1f}s desde última resposta da IA). Mensagem gravada no banco; silenciando disparo duplicado.")
-            await db.commit()
+        if (now_ts - last_ai_ts) < 8.0:
+            logger.info(f"[DEBOUNCE AI] Conversa #{conversation.id} recebeu mensagem em rajada ({(now_ts - last_ai_ts):.1f}s desde última resposta da IA). Silenciando disparo duplicado.")
             return {"status": "success", "action": "message_saved_ai_debounced"}
+
+        # Acumulador inteligente de digitação do cliente:
+        # Quando um cliente envia frases separadas rapidamente, aguarda breve intervalo (4.5s) para consolidar
+        _last_customer_msg_timestamps[conversation.id] = now_ts
+        await asyncio.sleep(4.5)
+
+        # Se uma mensagem mais recente do cliente chegou durante esta janela, o webhook mais novo responderá
+        latest_cust_ts = _last_customer_msg_timestamps.get(conversation.id, now_ts)
+        if latest_cust_ts > now_ts:
+            logger.info(f"[BURST ACCUMULATOR] Conversa #{conversation.id}: cliente continuou digitando. Absorvendo mensagem para resposta única consolidada.")
+            return {"status": "success", "action": "absorbed_by_newer_message"}
+
+        conv_id = conversation.id
+
+        # In-Flight Concurrency Shield: se esta conversa já possui IA em execução, descarta duplicata
+        inflight_ai_ts = _in_flight_ai_conversations.get(conv_id, 0.0)
+        if (time.time() - inflight_ai_ts) < 20.0:
+            logger.info(f"[AI LOCK] Conversa #{conv_id} já possui resposta de IA em processamento ({(time.time() - inflight_ai_ts):.1f}s atrás). Silenciando webhook concorrente.")
+            return {"status": "success", "action": "ai_already_in_flight"}
+        _in_flight_ai_conversations[conv_id] = time.time()
+
+        # Recarrega a conversa com relacionamentos para ler mensagens que foram salvas durante os 4.5s
+        conv_fresh_stmt = (
+            select(Conversation)
+            .options(selectinload(Conversation.messages), selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+            .where(Conversation.id == conv_id)
+        )
+        fresh_res = await db.execute(conv_fresh_stmt)
+        fresh_conv = fresh_res.scalar_one_or_none()
+        if fresh_conv:
+            conversation = fresh_conv
+            contact = fresh_conv.contact
+            whatsapp_number = fresh_conv.whatsapp_number
 
 
         # Check if message comes from a WhatsApp group and whether AI is explicitly allowed
@@ -1944,6 +2139,7 @@ async def receive_evolution_webhook(
 
             if not group_obj or not group_obj.ia_ativa:
                 logger.info(f"Skipping AI response for group '{remote_jid}' (ia_ativa = False or group not registered)")
+                _in_flight_ai_conversations.pop(conversation.id, None)
                 await db.commit()
                 return {"status": "success", "message": "Group message logged; AI interaction disabled for this group."}
 
@@ -2212,29 +2408,27 @@ async def receive_evolution_webhook(
                         "escalar_humano": False,
                         "nova_memoria": f"Aguardando confirmação do cliente para transferir para {target_wn.nome_departamento}"
                     }
-                else:
-                    should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
-                    ai_output = await gemini_service.generate_concierge_response(
-                        customer_name=contact.nome or "Cliente",
-                        department_name=whatsapp_number.nome_departamento,
-                        user_message=text_content,
-                        conversation_history=history,
-                        memory_summary=memory_summary,
-                        rag_context=rag_context,
-                        available_departments=available_dept_names,
-                        available_attendants=available_attendants,
-                        protocol_number=conversation.protocol_number,
-                        should_announce_protocol=should_announce_proto,
-                        is_technician_or_admin=False,
-                        customer_phone=phone_number,
-                        tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
-                        tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
-                    )
-                    extra = dict(conversation.dados_adicionais or {})
-                    extra["protocol_announced"] = True
-                    conversation.dados_adicionais = extra
-            else:
-                should_announce_proto = not bool((conversation.dados_adicionais or {}).get("protocol_announced"))
+                # Verificação de segurança no histórico do banco para protocolo já anunciado
+                extra = dict(conversation.dados_adicionais or {})
+                protocol_already_announced = bool(extra.get("protocol_announced"))
+                if not protocol_already_announced:
+                    check_proto_stmt = select(Message.id).where(
+                        Message.conversation_id == conversation.id,
+                        Message.remetente.in_([MessageSender.IA, MessageSender.ATENDENTE, "ia", "atendente"]),
+                        or_(
+                            Message.conteudo.like("%Protocolo%"),
+                            Message.conteudo.like("%Seja bem-vindo%"),
+                            Message.conteudo.like("%bem-vindo(a)%")
+                        )
+                    ).limit(1)
+                    check_proto_res = await db.execute(check_proto_stmt)
+                    if check_proto_res.scalars().first() is not None:
+                        protocol_already_announced = True
+                        extra["protocol_announced"] = True
+                        conversation.dados_adicionais = extra
+                        flag_modified(conversation, "dados_adicionais")
+
+                should_announce_proto = not protocol_already_announced
                 ai_output = await gemini_service.generate_concierge_response(
                     customer_name=contact.nome or "Cliente",
                     department_name=whatsapp_number.nome_departamento,
@@ -2251,9 +2445,49 @@ async def receive_evolution_webhook(
                     tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                     tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
                 )
-                extra = dict(conversation.dados_adicionais or {})
                 extra["protocol_announced"] = True
                 conversation.dados_adicionais = extra
+                flag_modified(conversation, "dados_adicionais")
+            else:
+                extra = dict(conversation.dados_adicionais or {})
+                protocol_already_announced = bool(extra.get("protocol_announced"))
+                if not protocol_already_announced:
+                    check_proto_stmt = select(Message.id).where(
+                        Message.conversation_id == conversation.id,
+                        Message.remetente.in_([MessageSender.IA, MessageSender.ATENDENTE, "ia", "atendente"]),
+                        or_(
+                            Message.conteudo.like("%Protocolo%"),
+                            Message.conteudo.like("%Seja bem-vindo%"),
+                            Message.conteudo.like("%bem-vindo(a)%")
+                        )
+                    ).limit(1)
+                    check_proto_res = await db.execute(check_proto_stmt)
+                    if check_proto_res.scalars().first() is not None:
+                        protocol_already_announced = True
+                        extra["protocol_announced"] = True
+                        conversation.dados_adicionais = extra
+                        flag_modified(conversation, "dados_adicionais")
+
+                should_announce_proto = not protocol_already_announced
+                ai_output = await gemini_service.generate_concierge_response(
+                    customer_name=contact.nome or "Cliente",
+                    department_name=whatsapp_number.nome_departamento,
+                    user_message=text_content,
+                    conversation_history=history,
+                    memory_summary=memory_summary,
+                    rag_context=rag_context,
+                    available_departments=available_dept_names,
+                    available_attendants=available_attendants,
+                    protocol_number=conversation.protocol_number,
+                    should_announce_protocol=should_announce_proto,
+                    is_technician_or_admin=False,
+                    customer_phone=phone_number,
+                    tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                    tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+                )
+                extra["protocol_announced"] = True
+                conversation.dados_adicionais = extra
+                flag_modified(conversation, "dados_adicionais")
 
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
@@ -2264,17 +2498,16 @@ async def receive_evolution_webhook(
 
         # Guarantee Protocol Number is sent ONLY AND EXCLUSIVELY ONCE per conversation/protocol!
         extra = dict(conversation.dados_adicionais or {})
-        protocol_already_announced = bool(extra.get("protocol_announced"))
         proto_str = str(conversation.protocol_number).strip() if conversation.protocol_number else ""
 
         if not protocol_already_announced and proto_str:
-            # Check conversation history in DB: did any prior message already announce this protocol?
             for h in (history or []):
                 h_content = str(h.get("conteudo", ""))
                 if proto_str in h_content or "📋 *Protocolo:*" in h_content or "Protocolo de Atendimento" in h_content or "*Protocolo:*" in h_content:
                     protocol_already_announced = True
                     extra["protocol_announced"] = True
                     conversation.dados_adicionais = extra
+                    flag_modified(conversation, "dados_adicionais")
                     break
 
         if not is_tech and conversation.protocol_number:
@@ -2284,13 +2517,16 @@ async def receive_evolution_webhook(
                     ai_reply = f"📋 *Protocolo:* #{proto_str}\n\n{ai_reply}"
                 extra["protocol_announced"] = True
                 conversation.dados_adicionais = extra
+                flag_modified(conversation, "dados_adicionais")
             else:
                 # PROTOCOL ALREADY ANNOUNCED: NEVER send protocol banner again!
                 # If AI text repeated the protocol number/header, strip it clean!
-                if proto_str in ai_reply or "📋 *Protocolo:*" in ai_reply or "*Protocolo:*" in ai_reply:
-                    ai_reply = re.sub(r'📋\s*\*?Protocolo:\*?\s*#?' + re.escape(proto_str) + r'\s*', '', ai_reply, flags=re.IGNORECASE).strip()
-                    ai_reply = re.sub(r'^\s*📋\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
-                    ai_reply = re.sub(r'^\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
+                ai_reply = re.sub(r'📋\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
+                ai_reply = re.sub(r'^\s*\*?Protocolo:.*?\n+', '', ai_reply, flags=re.IGNORECASE).strip()
+                if proto_str:
+                    ai_reply = re.sub(r'#?' + re.escape(proto_str), '', ai_reply).strip()
+                # Strip repetitive welcome greeting if already welcomed
+                ai_reply = re.sub(r'^(?:Olá!?\s*)?Seja bem-vindo\(a\)[^.!?]*[.!?]\s*', '', ai_reply, flags=re.IGNORECASE).strip()
 
         # Enforce Pix Payload Appending if AI or customer requested Pix data and details are present
         msg_lower = text_content.lower()
@@ -2384,51 +2620,16 @@ async def receive_evolution_webhook(
         )
         db.add(ai_msg)
 
-        # Dispatch Native WhatsApp Location Message if requested by customer/IA
+        # Prepare Native WhatsApp Location Card if requested by customer/IA
+        should_send_location = False
         if enviar_localizacao:
-            # Official Servweld location coordinates: SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF (-15.820418, -47.956467)
-            loc_name = "Servweld / Servsolda"
-            loc_addr = "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
-            loc_lat = -15.820418
-            loc_lng = -47.956467
-
-            # Try sending via incoming instance first (the exact line customer contacted), fallback to all tenant instances if needed
-            instances_to_try = [instance_name] + [wn.instancia_evolution_api for wn in all_wns if wn.instancia_evolution_api != instance_name]
-            
-            loc_sent = False
-            for inst in instances_to_try:
-                if not inst:
-                    continue
-                res_loc = await evolution_service.send_location_message(
-                    instance_name=inst,
-                    number=contact.telefone,
-                    latitude=loc_lat,
-                    longitude=loc_lng,
-                    name=loc_name,
-                    address=loc_addr
-                )
-                if res_loc.get("success"):
-                    logger.info(f"Successfully sent native location card to {contact.telefone} via instance '{inst}'")
-                    loc_sent = True
-                    break
-                else:
-                    logger.warning(f"Failed to send location via instance '{inst}': {res_loc.get('error')}")
-
-            if loc_sent:
-                # Record location message in conversation DB
-                loc_db_msg = Message(
-                    conversation_id=conversation.id,
-                    remetente=MessageSender.IA,
-                    conteudo=f"📍 *LOCALIZAÇÃO ENVIADA*\n{loc_name}\n{loc_addr}\nhttps://maps.google.com/?q={loc_lat},{loc_lng}",
-                    tipo=MessageType.LOCALIZACAO,
-                    timestamp=datetime.utcnow()
-                )
-                db.add(loc_db_msg)
+            now_ts = time.time()
+            last_loc_ts = _conversation_location_timestamps.get(conversation.id, 0.0)
+            if (now_ts - last_loc_ts) < 15.0:
+                logger.info(f"[DEBOUNCE LOCATION] Conversa {conversation.id} já enviou localização há {(now_ts - last_loc_ts):.1f}s. Evitando reenvio em rajada.")
             else:
-                # Fallback: if native map card dispatch fails across all instances, ensure Google Maps link is included in text reply
-                maps_link = f"https://maps.google.com/?q={loc_lat},{loc_lng}"
-                if maps_link not in ai_reply:
-                    ai_reply += f"\n\n📍 *Localização no Google Maps:* {maps_link}"
+                _conversation_location_timestamps[conversation.id] = now_ts
+                should_send_location = True
 
         # Dispatch Native WhatsApp Pix QR Code Image (with preset amount) if requested by customer/IA
         if wants_pix:
@@ -2560,12 +2761,19 @@ async def receive_evolution_webhook(
 
             logger.info(f"Conversation {conversation.id} escalated and assigned to {assigned_user_name} (business_hours={is_open}).")
 
-            # Dedup check: Avoid duplicate onboarding summaries if already generated for this state
+            # Dedup check: Avoid duplicate onboarding summaries if already generated for this protocol
             conv_extra = dict(conversation.dados_adicionais or {})
-            last_onboarding_hash = conv_extra.get("last_onboarding_msg_id")
-            current_msg_hash = f"{conversation.id}_{msg_id}_{len(history)}"
+            has_onboarding_for_proto = conv_extra.get("onboarding_summary_protocol") == conversation.protocol_number
+            if not has_onboarding_for_proto:
+                onb_stmt = select(Message.id).where(
+                    Message.conversation_id == conversation.id,
+                    Message.conteudo.like("%RESUMO DE ONBOARDING%")
+                ).limit(1)
+                onb_res = await db.execute(onb_stmt)
+                if onb_res.scalars().first():
+                    has_onboarding_for_proto = True
 
-            if last_onboarding_hash != current_msg_hash:
+            if not has_onboarding_for_proto:
                 # Generate structured Onboarding Summary with Provenance Tracking (Tarefa 2)
                 onboarding_summary = await gemini_service.generate_onboarding_summary(
                     customer_name=contact.nome or "Cliente",
@@ -2585,7 +2793,7 @@ async def receive_evolution_webhook(
                     timestamp=datetime.utcnow()
                 )
                 db.add(sys_escalate_msg)
-                conv_extra["last_onboarding_msg_id"] = current_msg_hash
+                conv_extra["onboarding_summary_protocol"] = conversation.protocol_number
                 conversation.dados_adicionais = conv_extra
 
             # Broadcast high-priority escalation alert with summary & assigned operator!
@@ -2609,8 +2817,12 @@ async def receive_evolution_webhook(
 
         await db.commit()
 
-        # Send AI reply back to WhatsApp via Evolution API with header
-        formatted_ai_text = f"*🤖 IA Concierge:*\n\n{ai_reply}"
+        # Send AI reply back to WhatsApp via Evolution API
+        # Se for mensagem continuada, não repete *🤖 IA Concierge:* para manter diálogo natural e humanizado
+        if protocol_already_announced:
+            formatted_ai_text = ai_reply
+        else:
+            formatted_ai_text = f"*🤖 IA Concierge:*\n\n{ai_reply}"
         target_dest = remote_jid if ("@lid" in str(remote_jid) or "@g.us" in str(remote_jid)) else phone_number
         await evolution_service.send_text_message(
             instance_name=instance_name,
@@ -2618,6 +2830,27 @@ async def receive_evolution_webhook(
             text=formatted_ai_text
         )
         _conversation_ai_timestamps[conversation.id] = time.time()
+
+        # Dispatch Native WhatsApp Location Card right below the text reply
+        if should_send_location:
+            loc_name = "Servweld / Servsolda"
+            loc_addr = "SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
+            loc_lat = -15.820418
+            loc_lng = -47.956467
+            target_inst = instance_name or (whatsapp_number.instancia_evolution_api if whatsapp_number else "")
+            if target_inst:
+                try:
+                    await evolution_service.send_location_message(
+                        instance_name=target_inst,
+                        number=contact.telefone,
+                        latitude=loc_lat,
+                        longitude=loc_lng,
+                        name=loc_name,
+                        address=loc_addr
+                    )
+                    logger.info(f"Successfully sent native location card to {contact.telefone} via instance '{target_inst}'")
+                except Exception as loc_err:
+                    logger.warning(f"Failed to send native location card: {loc_err}")
 
         # Broadcast AI message to WebSocket clients with ISO Z timestamp
         ts_str = ai_msg.timestamp.isoformat() + "Z" if hasattr(ai_msg.timestamp, "isoformat") else str(ai_msg.timestamp)
@@ -2631,9 +2864,9 @@ async def receive_evolution_webhook(
                 "conteudo": ai_reply,
                 "timestamp": ts_str,
                 "conversation_status": getattr(conversation.status, 'value', str(conversation.status))
-
             }
         )
+        _in_flight_ai_conversations.pop(conv_id, None)
 
     else:
         await db.commit()

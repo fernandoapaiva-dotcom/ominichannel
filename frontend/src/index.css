@@ -289,10 +289,15 @@ button {
   }
 
   /* ── Main content area (takes all space above bottom nav) */
-  .dashboard-layout > div:not(.sidebar-container):not(.mobile-bottom-nav) {
+  .dashboard-layout > div:not(.sidebar-container):not(.mobile-bottom-nav):not(.dashboard-notification-banner) {
     flex: 1 1 0 !important;
     min-height: 0 !important;
     overflow: hidden !important;
+  }
+
+  /* ── Notification permission banner: size to content, never flex-grow ── */
+  .dashboard-layout > .dashboard-notification-banner {
+    flex: 0 0 auto !important;
   }
 
   /* ── Department Bar (tabs) ─────────────── */

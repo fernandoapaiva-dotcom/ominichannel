@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite+aiosqlite:///{os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'omini_channel.db')}"
     
     # Evolution API (Self-Hosted)
-    EVOLUTION_API_URL: str = "http://localhost:8080"
-    EVOLUTION_API_KEY: str = "omini_master_key_123"
+    EVOLUTION_API_URL: str = os.getenv("EVOLUTION_API_URL", "http://ominichannel.duckdns.org:8080")
+    EVOLUTION_API_KEY: str = os.getenv("EVOLUTION_API_KEY", "omini_master_key_123")
 
     # Webhook base URL (used by Evolution API to send events back to this server)
     # In OCI/production, set this to your public domain, e.g. https://ominichannel.duckdns.org

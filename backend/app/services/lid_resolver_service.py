@@ -107,6 +107,40 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
         except Exception:
             pass
 
+    # HTTP fallback via Evolution API findMessages / findChats across instances
+    if not real_phone or not name:
+        try:
+            from app.core.config import settings
+            base_url = settings.EVOLUTION_API_URL.rstrip('/')
+            headers = {"apikey": settings.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+            instances = ["instancia_vendas", "instancia_tecnica", "instancia_financeiro", "instancia_locacao"]
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                for inst in instances:
+                    try:
+                        r_msg = await client.post(
+                            f"{base_url}/chat/findMessages/{inst}",
+                            headers=headers,
+                            json={"where": {"key": {"remoteJid": lid_jid}}, "limit": 2}
+                        )
+                        if r_msg.status_code == 200:
+                            recs = r_msg.json().get("messages", {}).get("records", []) if isinstance(r_msg.json(), dict) else []
+                            for rm in recs:
+                                k = rm.get("key", {})
+                                alt = k.get("remoteJidAlt", "")
+                                if "@s.whatsapp.net" in alt and not real_phone:
+                                    real_phone = alt.split("@")[0].split(":")[0]
+                                pname = rm.get("pushName")
+                                if pname and not name and pname not in ["Você", clean_lid, "Cliente"]:
+                                    name = pname
+                                if real_phone and name:
+                                    break
+                        if real_phone and name:
+                            break
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"Evolution fallback error for LID {clean_lid}: {e}")
+
     info_res = {
         "lid": clean_lid,
         "real_phone": real_phone,

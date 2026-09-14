@@ -1,4 +1,5 @@
 import { Conversation, User } from '../types';
+import { formatMessageContent } from './messageFormatter';
 
 export const isGroupConversation = (conv: Conversation): boolean => {
   const phone = conv.contact?.telefone || '';
@@ -137,11 +138,13 @@ export const triggerSystemNotification = async (
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
 
+  const cleanBody = formatMessageContent(body);
+
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.ready;
       await reg.showNotification(title, {
-        body,
+        body: cleanBody,
         icon: '/favicon.svg',
         badge: '/favicon.svg',
         tag,
@@ -151,7 +154,7 @@ export const triggerSystemNotification = async (
       });
     } else {
       new Notification(title, {
-        body,
+        body: cleanBody,
         icon: '/favicon.svg',
         tag
       });

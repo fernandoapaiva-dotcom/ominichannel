@@ -12,6 +12,8 @@ env/
 
 # Databases & Local SQLite
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 omini_channel.db
@@ -25,9 +27,13 @@ backups_json/
 node_modules/
 dist/
 build/
+dist-electron/
 .vite/
 .npm
 *.log
+
+# Built installers / large binaries (distribute via GitHub Releases instead)
+frontend/public/downloads/
 
 # Environment variables & secrets
 .env

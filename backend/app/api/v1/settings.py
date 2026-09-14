@@ -226,7 +226,7 @@ async def google_oauth_callback(
     redirect_uri = "https://ominichannel.duckdns.org/api/v1/settings/auth/google/callback"
 
     if not client_id or not client_secret:
-        return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=credentials_missing")
+        return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&subtab=integrations&gdrive=error&msg=credentials_missing")
 
     # Exchange authorization code for tokens
     try:
@@ -243,15 +243,16 @@ async def google_oauth_callback(
             )
             token_data = resp.json()
     except Exception as e:
-        return RedirectResponse(url=f"https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=token_exchange_failed")
+        return RedirectResponse(url=f"https://ominichannel.duckdns.org/?tab=admin&subtab=integrations&gdrive=error&msg=token_exchange_failed")
 
     access_token = token_data.get("access_token", "")
     refresh_token = token_data.get("refresh_token", "")
 
     if not access_token:
-        return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=error&msg=no_access_token")
+        error_desc = token_data.get("error_description") or token_data.get("error") or "no_access_token"
+        return RedirectResponse(url=f"https://ominichannel.duckdns.org/?tab=admin&subtab=integrations&gdrive=error&msg={error_desc}")
 
-    # Save tokens + preserve existing folder_id
+    # Save tokens + preserve existing folder_id, client_id, client_secret
     existing_folder_id = decrypted.get("gdrive_folder_id", "") or "1Xv8qI4NLU9pjbbUvCZami3TfkgsjRfd0"
     await settings_service.save_gdrive_tokens(
         db=db,
@@ -262,7 +263,50 @@ async def google_oauth_callback(
         folder_id=existing_folder_id
     )
 
-    return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&gdrive=success")
+    return RedirectResponse(url="https://ominichannel.duckdns.org/?tab=admin&subtab=integrations&gdrive=success")
+
+
+@router.post("/auth/google/test")
+async def test_google_drive_connection(
+    admin_user: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Tests live connection to Google Drive by verifying credentials, tokens and folder access.
+    """
+    decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
+    client_id = decrypted.get("google_client_id", "")
+    client_secret = decrypted.get("google_client_secret", "")
+    refresh_token = decrypted.get("gdrive_refresh_token", "")
+    folder_id = decrypted.get("gdrive_folder_id", "")
+
+    if not client_id or not client_secret:
+        return {"success": False, "message": "Client ID ou Client Secret do Google não estão configurados."}
+
+    if not refresh_token:
+        return {"success": False, "message": "Conta do Google Drive ainda não conectada. Clique em 'Conectar Conta Google via OAuth2' primeiro."}
+
+    from app.services.gdrive_service import gdrive_service
+    drive_service = gdrive_service._get_drive_service_from_refresh_token(client_id, client_secret, refresh_token)
+    if not drive_service:
+        return {"success": False, "message": "Falha na autenticação com a API do Google Drive usando o Refresh Token salvo."}
+
+    try:
+        clean_folder = folder_id.strip()
+        if "folders/" in clean_folder:
+            clean_folder = clean_folder.split("folders/")[-1].split("?")[0].strip()
+
+        if clean_folder:
+            folder = drive_service.files().get(fileId=clean_folder, fields="id, name, mimeType").execute()
+            folder_name = folder.get("name", clean_folder)
+            return {"success": True, "message": f"Conexão com Google Drive realizada com sucesso! Pasta de destino encontrada: '{folder_name}' (ID: {clean_folder})."}
+        else:
+            about = drive_service.about().get(fields="user(emailAddress,displayName)").execute()
+            user_info = about.get("user", {})
+            return {"success": True, "message": f"Conexão com Google Drive realizada com sucesso! Conta: {user_info.get('displayName')} ({user_info.get('emailAddress')})."}
+    except Exception as e:
+        logger.error(f"Erro ao validar Google Drive: {e}")
+        return {"success": False, "message": f"Erro ao acessar Google Drive ou pasta informada: {str(e)}"}
 
 
 

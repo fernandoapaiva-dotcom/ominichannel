@@ -42,6 +42,26 @@ from app.api.websockets import manager as ws_manager
 
 router = APIRouter(prefix="/conversations", tags=["Conversas e Mensagens"])
 
+def extract_evolution_msg_id(res: Any) -> Optional[str]:
+    """Robustly extracts WhatsApp message ID from various Evolution API response schemas."""
+    if not isinstance(res, dict):
+        return None
+    if isinstance(res.get("key"), dict) and res["key"].get("id"):
+        return res["key"]["id"]
+    if isinstance(res.get("response"), dict):
+        resp = res["response"]
+        if isinstance(resp.get("key"), dict) and resp["key"].get("id"):
+            return resp["key"]["id"]
+        if resp.get("id"):
+            return resp["id"]
+    if isinstance(res.get("message"), dict):
+        msg = res["message"]
+        if isinstance(msg.get("key"), dict) and msg["key"].get("id"):
+            return msg["key"]["id"]
+        if msg.get("id"):
+            return msg["id"]
+    return res.get("id")
+
 @router.get("/")
 async def list_conversations(
     status_filter: Optional[ConversationStatus] = None,
@@ -80,24 +100,33 @@ async def list_conversations(
         )
     )
 
-    if status_filter:
-        stmt = stmt.where(Conversation.status == status_filter)
-    if whatsapp_number_id:
-        if whatsapp_number_id not in accessible_wn_ids:
-            raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
-        stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
-
     if search and isinstance(search, str) and search.strip():
         term = f"%{search.strip()}%"
-        stmt = stmt.join(Conversation.contact).where(
-            or_(
-                Contact.nome.ilike(term),
-                Contact.telefone.ilike(term),
-                Conversation.protocol_number.ilike(term),
-                Conversation.assunto_atual.ilike(term)
+        digits = "".join(filter(str.isdigit, search.strip()))
+
+        search_conds = [
+            Contact.nome.ilike(term),
+            Contact.telefone.ilike(term),
+            Conversation.protocol_number.ilike(term),
+            Conversation.assunto_atual.ilike(term),
+            Conversation.id.in_(
+                select(Message.conversation_id)
+                .where(Message.conteudo.ilike(term))
+                .distinct()
             )
-        ).order_by(Conversation.ultima_interacao_em.desc()).limit(100)
+        ]
+        if digits and len(digits) >= 4:
+            search_conds.append(Contact.telefone.ilike(f"%{digits}%"))
+
+        # Mirror WhatsApp: when searching, search globally across all accessible departments and statuses!
+        stmt = stmt.join(Conversation.contact).where(or_(*search_conds)).order_by(Conversation.ultima_interacao_em.desc()).limit(150)
     else:
+        if status_filter:
+            stmt = stmt.where(Conversation.status == status_filter)
+        if whatsapp_number_id:
+            if whatsapp_number_id not in accessible_wn_ids:
+                raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
+            stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
         stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
 
     result = await db.execute(stmt)
@@ -859,6 +888,17 @@ async def get_message_media_stream(
     raw = msg.conteudo or ""
     media_path = raw.split("|")[0].strip() if "|" in raw else raw.strip()
 
+    # Extract original filename if stored in dados_adicionais or raw content
+    extra_data = msg.dados_adicionais if isinstance(msg.dados_adicionais, dict) else {}
+    orig_filename = extra_data.get("original_filename") or extra_data.get("file_name")
+
+    if not orig_filename and "|" in raw:
+        parts = [p.strip() for p in raw.split("|") if p.strip()]
+        if len(parts) >= 2:
+            candidate = parts[1]
+            if "." in candidate and len(candidate.split(".")[-1]) <= 6:
+                orig_filename = candidate
+
     upload_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads"))
     os.makedirs(upload_dir, exist_ok=True)
 
@@ -867,7 +907,12 @@ async def get_message_media_stream(
         fname = os.path.basename(media_path)
         abs_file = os.path.join(upload_dir, fname)
         if os.path.exists(abs_file):
-            return FileResponse(abs_file)
+            final_name = orig_filename or fname
+            return FileResponse(
+                abs_file,
+                filename=final_name,
+                headers={"Content-Disposition": f'inline; filename="{final_name}"'}
+            )
 
     # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API
     if msg.whatsapp_msg_id and msg.conversation and msg.conversation.whatsapp_number:
@@ -917,12 +962,45 @@ async def get_message_media_stream(
                 with open(fpath, "wb") as f:
                     f.write(raw_bytes)
 
-                caption = raw.split("|", 1)[1] if "|" in raw else ""
-                new_conteudo = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
+                caption = ""
+                if "|" in raw:
+                    parts = [p.strip() for p in raw.split("|") if p.strip()]
+                    if len(parts) >= 3:
+                        orig_filename = orig_filename or parts[1]
+                        caption = "|".join(parts[2:])
+                    elif len(parts) == 2:
+                        if not orig_filename and "." in parts[1] and len(parts[1].split(".")[-1]) <= 6:
+                            orig_filename = parts[1]
+                        else:
+                            caption = parts[1]
+
+                if orig_filename and (msg.tipo in (MessageType.ARQUIVO, "arquivo") or orig_filename != fname):
+                    if caption:
+                        new_conteudo = f"/uploads/{fname}|{orig_filename}|{caption}"
+                    else:
+                        new_conteudo = f"/uploads/{fname}|{orig_filename}"
+                elif caption:
+                    new_conteudo = f"/uploads/{fname}|{caption}"
+                else:
+                    new_conteudo = f"/uploads/{fname}"
+
                 msg.conteudo = new_conteudo
+                if orig_filename:
+                    extra = dict(msg.dados_adicionais or {})
+                    extra["original_filename"] = orig_filename
+                    extra["file_name"] = orig_filename
+                    msg.dados_adicionais = extra
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(msg, "dados_adicionais")
+
                 await db.commit()
 
-                return FileResponse(fpath)
+                final_name = orig_filename or fname
+                return FileResponse(
+                    fpath,
+                    filename=final_name,
+                    headers={"Content-Disposition": f'inline; filename="{final_name}"'}
+                )
             except Exception as e:
                 logger.error(f"Error caching media base64: {e}")
 
@@ -1047,7 +1125,7 @@ async def send_agent_message(
                     sticker_media=sticker_media,
                     skip_anti_ban_pacing=True
                 ),
-                timeout=10.0
+                timeout=15.0
             )
         elif is_gif and active_inst:
             send_res = await asyncio.wait_for(
@@ -1060,11 +1138,27 @@ async def send_agent_message(
                     file_name="animacao.mp4",
                     skip_anti_ban_pacing=True
                 ),
-                timeout=10.0
+                timeout=25.0
             )
         elif is_media and active_inst:
-            media_path = raw_content.split("|")[0].strip()
-            caption_text = raw_content.split("|")[1].strip() if "|" in raw_content else None
+            parts = [p.strip() for p in raw_content.split("|") if p.strip()]
+            media_path = parts[0] if parts else raw_content
+            orig_filename = msg_extra_dict.get("original_filename") or msg_extra_dict.get("file_name")
+            caption_text = None
+
+            if len(parts) >= 3:
+                orig_filename = orig_filename or parts[1]
+                caption_text = "|".join(parts[2:])
+            elif len(parts) == 2:
+                if orig_filename:
+                    caption_text = parts[1]
+                else:
+                    p1 = parts[1]
+                    if "." in p1 and len(p1.split(".")[-1]) <= 6 and "\n" not in p1:
+                        orig_filename = p1
+                    else:
+                        caption_text = p1
+
             formatted_caption = f"*👤 {agent_nome}:*\n\n{caption_text}" if caption_text else f"*👤 {agent_nome}:*"
 
             media_data = media_path
@@ -1079,7 +1173,8 @@ async def send_agent_message(
                     with open(lpath, "rb") as f:
                         media_data = base64.b64encode(f.read()).decode("utf-8")
 
-            f_lower = fname.lower()
+            final_file_name = orig_filename or fname
+            f_lower = final_file_name.lower()
             if f_lower.endswith(".png"):
                 mimetype = "image/png"
                 media_type = "image"
@@ -1116,12 +1211,30 @@ async def send_agent_message(
                     media_type=media_type,
                     mimetype=mimetype,
                     media=media_data,
-                    file_name=fname,
+                    file_name=final_file_name,
                     caption=formatted_caption,
                     skip_anti_ban_pacing=True
                 ),
-                timeout=10.0
+                timeout=25.0
             )
+
+            if orig_filename:
+                msg_extra_dict["original_filename"] = orig_filename
+                msg_extra_dict["file_name"] = orig_filename
+
+            # Normalize clean_db_content so original filename is preserved in DB
+            rel_media = media_path
+            if "/uploads/" in media_path:
+                rel_media = "/uploads/" + media_path.split("/uploads/")[-1]
+            if orig_filename and (actual_tipo in (MessageType.ARQUIVO, "arquivo") or orig_filename != fname):
+                if caption_text:
+                    clean_db_content = f"{rel_media}|{orig_filename}|{caption_text}"
+                else:
+                    clean_db_content = f"{rel_media}|{orig_filename}"
+            elif caption_text:
+                clean_db_content = f"{rel_media}|{caption_text}"
+            else:
+                clean_db_content = rel_media
         else:
             formatted_whatsapp_text = f"*👤 {agent_nome}:*\n\n{msg_in.conteudo}"
 
@@ -1167,7 +1280,7 @@ async def send_agent_message(
                 timeout=10.0
             )
 
-        wa_key_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+        wa_key_id = extract_evolution_msg_id(send_res)
         if not (send_res.get("success", False) or wa_key_id):
             final_status = "failed"
     except Exception as dispatch_err:
@@ -1183,6 +1296,7 @@ async def send_agent_message(
             if target_instance_name:
                 SEEN_WEBHOOK_KEYS[f"{target_instance_name}_{wa_key_id}"] = now_ts
             SEEN_WEBHOOK_KEYS[wa_key_id] = now_ts
+            SEEN_WEBHOOK_KEYS[f"msg_{wa_key_id}"] = now_ts
         except Exception:
             pass
 
@@ -1237,7 +1351,8 @@ async def send_agent_message(
     msg_id = message.id
 
     # 3. If fast-dispatch was not yet delivered (e.g. timeout), trigger background retry
-    if not wa_key_id and final_status == "pending":
+    # STRICT GUARD: Never retry media/sticker/gif in background to avoid sending duplicate files to WhatsApp!
+    if not wa_key_id and final_status == "pending" and not is_media and not is_sticker and not is_gif:
         async def _async_dispatch_to_whatsapp():
             try:
                 from app.core.database import AsyncSessionLocal
@@ -2030,7 +2145,8 @@ async def send_agent_media(
 
     # 3. Send via Evolution API
     agent_name = current_user.nome or "Atendente"
-    formatted_caption = f"*👤 {agent_name}:*\n\n{caption}" if caption else f"*👤 {agent_name}:*"
+    # Only set a caption if the user actually typed one. Never stamp pure attendant names as file caption!
+    formatted_caption = f"*👤 {agent_name}:*\n\n{caption.strip()}" if (caption and caption.strip()) else None
     base64_data = base64.b64encode(file_bytes).decode('utf-8')
 
     primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
@@ -2045,7 +2161,7 @@ async def send_agent_media(
         mimetype=mimetype,
         media=base64_data,
         file_name=file.filename or unique_filename,
-        caption=formatted_caption,
+        caption=formatted_caption or "",
         skip_anti_ban_pacing=True
     )
 
@@ -2062,8 +2178,29 @@ async def send_agent_media(
     conv.assigned_user_id = current_user.id
     conv.ultima_interacao_em = datetime.utcnow()
 
-    db_content = f"{file_url}|{caption}" if caption else file_url
-    wa_msg_id = send_res.get("key", {}).get("id") if isinstance(send_res.get("key"), dict) else send_res.get("id")
+    original_fn = file.filename or unique_filename
+    if msg_type == MessageType.ARQUIVO:
+        if caption:
+            db_content = f"{file_url}|{original_fn}|{caption}"
+        else:
+            db_content = f"{file_url}|{original_fn}"
+    else:
+        db_content = f"{file_url}|{caption}" if caption else file_url
+
+    wa_msg_id = extract_evolution_msg_id(send_res)
+
+    if wa_msg_id:
+        try:
+            from app.api.v1.webhooks import SEEN_WEBHOOK_KEYS
+            now_ts = datetime.utcnow().timestamp()
+            if primary_inst:
+                SEEN_WEBHOOK_KEYS[f"{primary_inst}_{wa_msg_id}"] = now_ts
+            SEEN_WEBHOOK_KEYS[wa_msg_id] = now_ts
+            SEEN_WEBHOOK_KEYS[f"msg_{wa_msg_id}"] = now_ts
+        except Exception:
+            pass
+
+    extra_msg_data = {"original_filename": original_fn, "file_name": original_fn}
 
     message = Message(
         conversation_id=conv.id,
@@ -2072,6 +2209,7 @@ async def send_agent_media(
         tipo=msg_type,
         status="sent",
         whatsapp_msg_id=wa_msg_id,
+        dados_adicionais=extra_msg_data,
         timestamp=datetime.utcnow()
     )
     db.add(message)
@@ -2092,6 +2230,7 @@ async def send_agent_media(
             "tipo": msg_type.value,
             "status": "sent",
             "whatsapp_msg_id": wa_msg_id,
+            "dados_adicionais": message.dados_adicionais,
             "timestamp": iso_ts,
             "agent_name": current_user.nome
         }
@@ -3155,6 +3294,51 @@ async def get_conversation_participants(
         "subject": subject,
         "total_participants": len(mapped_participants),
         "participants": mapped_participants
+    }
+
+
+@router.post("/reconcile-whatsapp")
+async def reconcile_whatsapp_chats(
+    whatsapp_number_id: Optional[int] = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Triggers an instant sweep & reconciliation of WhatsApp chats & messages:
+    - Restores missing messages and conversations.
+    - Synchronizes true contact names from phone agenda.
+    - Re-aligns conversations chronologically according to WhatsApp Web.
+    """
+    from app.services.whatsapp_reconciliation_service import whatsapp_reconciliation_service
+    
+    stmt = select(WhatsAppNumber).where(
+        WhatsAppNumber.tenant_id == current_user.tenant_id,
+        WhatsAppNumber.status == True
+    )
+    if whatsapp_number_id:
+        stmt = stmt.where(WhatsAppNumber.id == whatsapp_number_id)
+        
+    wn_res = await db.execute(stmt)
+    numbers = wn_res.scalars().all()
+    
+    if not numbers:
+        raise HTTPException(status_code=404, detail="Nenhuma instância do WhatsApp ativa encontrada.")
+        
+    total_recovered = 0
+    for wn in numbers:
+        if wn.instancia_evolution_api:
+            recovered = await whatsapp_reconciliation_service.reconcile_instance(
+                instance_name=wn.instancia_evolution_api,
+                whatsapp_number_id=wn.id,
+                tenant_id=wn.tenant_id,
+                dept_name=wn.nome_departamento or "Geral"
+            )
+            total_recovered += recovered
+            
+    return {
+        "success": True,
+        "message": f"Varredura concluída! {total_recovered} mensagens/chats reconciliados.",
+        "recovered_count": total_recovered
     }
 
 

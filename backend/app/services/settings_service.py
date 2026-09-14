@@ -111,8 +111,12 @@ class SettingsService:
 
         # 4. Update Google Drive Settings
         if "google_drive_folder_id" in payload or "google_client_id" in payload or "google_client_secret" in payload:
+            folder_val = payload.get("google_drive_folder_id") if "google_drive_folder_id" in payload else existing["gdrive_folder_id"]
+            if folder_val and "folders/" in str(folder_val):
+                folder_val = str(folder_val).split("folders/")[-1].split("?")[0].strip()
+
             raw_gdrive = {
-                "folder_id": payload.get("google_drive_folder_id") if "google_drive_folder_id" in payload else existing["gdrive_folder_id"],
+                "folder_id": folder_val or "",
                 "client_id": payload.get("google_client_id") if "google_client_id" in payload else existing["google_client_id"],
                 "client_secret": payload.get("google_client_secret") if "google_client_secret" in payload else existing["google_client_secret"],
                 "access_token": existing["gdrive_access_token"],
@@ -142,10 +146,13 @@ class SettingsService:
         refresh_token: str,
         folder_id: Optional[str] = None
     ):
+        existing = await self.get_tenant_decrypted_settings(db, tenant_id)
         raw_gdrive = {
-            "folder_id": folder_id or "",
+            "folder_id": folder_id if (folder_id is not None and folder_id.strip() != "") else existing.get("gdrive_folder_id", ""),
             "access_token": access_token,
-            "refresh_token": refresh_token
+            "refresh_token": refresh_token or existing.get("gdrive_refresh_token", ""),
+            "client_id": existing.get("google_client_id", ""),
+            "client_secret": existing.get("google_client_secret", "")
         }
         enc_gdrive = encrypt_data(json.dumps(raw_gdrive))
         await self._upsert_setting(db, tenant_id, "gdrive", enc_gdrive)

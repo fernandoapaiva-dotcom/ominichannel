@@ -13,7 +13,16 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers, onBack }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations'>('numbers');
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations'>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const st = params.get('subtab');
+      if (st && ['numbers', 'users', 'rag', 'technicians', 'integrations', 'groups', 'pix', 'automations'].includes(st)) {
+        return st as any;
+      }
+    } catch {}
+    return 'numbers';
+  });
   const [numbers, setNumbers] = useState<WhatsAppNumber[]>(initialNumbers);
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<WhatsAppGroup[]>([]);
@@ -80,6 +89,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [gdriveFolderInput, setGdriveFolderInput] = useState('');
   const [gdriveClientIdInput, setGdriveClientIdInput] = useState('');
   const [gdriveClientSecretInput, setGdriveClientSecretInput] = useState('');
+  const [gdriveConnecting, setGdriveConnecting] = useState(false);
+  const [gdriveTesting, setGdriveTesting] = useState(false);
 
   // Connection Test Badges State
   const [testResult, setTestResult] = useState<{ type: string; success: boolean; message: string } | null>(null);
@@ -393,6 +404,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
     loadRagDocuments();
     loadPixKeys();
     loadTechnicians();
+
+    // Check Google Drive OAuth callback results in URL
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const gdriveStatus = params.get('gdrive');
+      if (gdriveStatus === 'success') {
+        alert('🎉 Sucesso! Conta do Google Drive conectada e autorizada com sucesso! O backup automático em nuvem agora está 100% ativo.');
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      } else if (gdriveStatus === 'error') {
+        const errorMsg = params.get('msg') || 'Erro desconhecido na autorização Google OAuth';
+        alert(`❌ Falha na conexão com Google Drive:\n\n${errorMsg}`);
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    } catch {}
 
     const interval = setInterval(() => {
       if (numbers.length > 0) {
@@ -895,12 +922,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
 
   const handleConnectGoogleOAuth = async () => {
     try {
+      setGdriveConnecting(true);
+
+      const clientId = gdriveClientIdInput.trim();
+      const clientSecret = gdriveClientSecretInput.trim();
+      let folderId = gdriveFolderInput.trim();
+      if (folderId.includes('folders/')) {
+        folderId = folderId.split('folders/')[1].split('?')[0].trim();
+      }
+
+      // Automatically persist credentials to database if provided in inputs
+      if (clientId || clientSecret || folderId) {
+        await apiFetch('/settings/', {
+          method: 'POST',
+          body: JSON.stringify({
+            google_client_id: clientId || undefined,
+            google_client_secret: clientSecret || undefined,
+            google_drive_folder_id: folderId || undefined
+          })
+        });
+        await loadSettingsAndAudit();
+      }
+
       const res = await apiFetch('/settings/auth/google/url');
       if (res.url) {
-        window.open(res.url, '_blank');
+        window.location.href = res.url;
       }
     } catch (err: any) {
-      alert(err.message);
+      alert(`❌ Erro ao conectar com Google Drive:\n\n${err.message}`);
+    } finally {
+      setGdriveConnecting(false);
+    }
+  };
+
+  const handleTestGoogleDrive = async () => {
+    try {
+      setGdriveTesting(true);
+      const res = await apiFetch('/settings/auth/google/test', { method: 'POST' });
+      if (res.success) {
+        alert(`✅ CONEXÃO COM GOOGLE DRIVE OK!\n\n${res.message}`);
+      } else {
+        alert(`❌ FALHA NO TESTE DO GOOGLE DRIVE:\n\n${res.message}`);
+      }
+    } catch (err: any) {
+      alert(`❌ Erro ao testar Google Drive: ${err.message}`);
+    } finally {
+      setGdriveTesting(false);
     }
   };
 
@@ -2288,6 +2355,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                         </div>
                       </div>
 
+                      {/* Google Cloud Console Redirect URI instructions */}
+                      <div style={{ padding: '10px 14px', backgroundColor: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)', borderRadius: 'var(--radius-md)', fontSize: '12px', color: 'var(--text-main)' }}>
+                        <div style={{ fontWeight: '600', color: '#60a5fa', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          🔑 Configuração Obrigatória no Google Cloud Console:
+                        </div>
+                        <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: '0 0 6px 0', lineHeight: '1.4' }}>
+                          No seu Google Cloud Console, acesse seu <strong>Client ID OAuth 2.0</strong> e cadastre em <strong>"URIs de redirecionamento autorizados"</strong>:
+                        </p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          <code style={{ backgroundColor: 'var(--bg-primary)', padding: '5px 10px', borderRadius: '4px', color: 'var(--accent-primary)', fontSize: '11px', border: '1px solid var(--border-color)', wordBreak: 'break-all' }}>
+                            https://ominichannel.duckdns.org/api/v1/settings/auth/google/callback
+                          </code>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText('https://ominichannel.duckdns.org/api/v1/settings/auth/google/callback');
+                              alert('URI copiada para a área de transferência!');
+                            }}
+                            className="btn-secondary"
+                            style={{ padding: '4px 10px', fontSize: '11px' }}
+                          >
+                            Copiar URI
+                          </button>
+                        </div>
+                      </div>
+
                       {/* OAuth Connection Status & Button */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', padding: '12px', backgroundColor: 'var(--bg-primary)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                         <div>
@@ -2296,14 +2389,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                             Status: {maskedSettings?.google_drive_connected ? '● Conta Google Conectada e Autorizada' : '○ Não conectado'}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={handleConnectGoogleOAuth}
-                          className="btn-secondary"
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}
-                        >
-                          Conectar Conta Google via OAuth2
-                        </button>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {maskedSettings?.google_drive_connected && (
+                            <button
+                              type="button"
+                              onClick={handleTestGoogleDrive}
+                              disabled={gdriveTesting}
+                              className="btn-secondary"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}
+                            >
+                              <Activity size={14} /> {gdriveTesting ? 'Testando...' : 'Testar Conexão Google Drive'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleConnectGoogleOAuth}
+                            disabled={gdriveConnecting}
+                            className="btn-primary"
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '8px 16px' }}
+                          >
+                            <Link2 size={14} /> {gdriveConnecting ? 'Conectando...' : (maskedSettings?.google_drive_connected ? 'Reconectar / Trocar Conta' : 'Conectar Conta Google via OAuth2')}
+                          </button>
+                        </div>
                       </div>
 
                       {/* Target Folder ID Input */}

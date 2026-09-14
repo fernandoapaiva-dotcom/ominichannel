@@ -13,16 +13,28 @@ interface MediaGalleryModalProps {
   conversation: Conversation | null;
 }
 
-const extractMediaAndCaption = (raw: string | undefined | null) => {
-  if (!raw) return { mediaPath: '', caption: null as string | null };
+const extractMediaAndCaption = (raw: string | undefined | null, dadosAdicionais?: any) => {
+  if (!raw) return { mediaPath: '', caption: null as string | null, fileName: null as string | null };
   let str = String(raw).trim();
   let mediaPath = '';
   let caption: string | null = null;
+  let fileName: string | null = (dadosAdicionais?.original_filename || dadosAdicionais?.file_name) || null;
 
   if (str.includes('|')) {
     const parts = str.split('|');
     mediaPath = parts[0].trim();
-    caption = parts.slice(1).join('|').trim() || null;
+    if (parts.length >= 3) {
+      fileName = fileName || parts[1].trim();
+      caption = parts.slice(2).join('|').trim() || null;
+    } else if (parts.length === 2) {
+      const p1 = parts[1].trim();
+      if (!fileName && p1.includes('.') && p1.split('.').pop()!.length <= 5 && !p1.includes('\n')) {
+        fileName = p1;
+        caption = null;
+      } else {
+        caption = p1 || null;
+      }
+    }
   } else if (str.startsWith('[') && str.includes(']')) {
     const match = str.match(/^\[(.*?)\]\s*([\s\S]*)$/);
     if (match) {
@@ -40,7 +52,10 @@ const extractMediaAndCaption = (raw: string | undefined | null) => {
   }
 
   mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '').trim();
-  return { mediaPath, caption };
+  if (!fileName && dadosAdicionais?.original_filename) {
+    fileName = dadosAdicionais.original_filename;
+  }
+  return { mediaPath, caption, fileName };
 };
 
 export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
@@ -86,16 +101,17 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
 
   const parsedMediaItems = useMemo(() => {
     return mediaMessages.map(msg => {
-      const { mediaPath, caption } = extractMediaAndCaption(msg.conteudo);
+      const { mediaPath, caption, fileName } = extractMediaAndCaption(msg.conteudo, msg.dados_adicionais);
       let fullUrl = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
       if ((mediaPath.includes('mmg.whatsapp.net') || mediaPath.includes('.enc') || (!mediaPath.startsWith('/uploads/') && !mediaPath.startsWith('http'))) && msg.id && msg.id > 0) {
         fullUrl = `/api/v1/conversations/messages/${msg.id}/media`;
       }
       
       const rawFileName = mediaPath.split('/').pop() || 'Arquivo';
-      const isPdf = fullUrl.toLowerCase().endsWith('.pdf') || fullUrl.toLowerCase().includes('.pdf') || rawFileName.toLowerCase().endsWith('.pdf');
+      const isPdf = fullUrl.toLowerCase().endsWith('.pdf') || fullUrl.toLowerCase().includes('.pdf') || rawFileName.toLowerCase().endsWith('.pdf') || Boolean(fileName && fileName.toLowerCase().endsWith('.pdf'));
       
-      let displayTitle = caption || rawFileName;
+      const realFileName = fileName || (caption && caption.includes('.') && !caption.startsWith('http') ? caption : rawFileName);
+      let displayTitle = realFileName;
       if (displayTitle.length > 35 && !displayTitle.includes(' ')) {
         displayTitle = displayTitle.substring(0, 28) + '...' + (isPdf ? '.pdf' : '');
       }
@@ -107,6 +123,7 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
         mediaPath,
         fullUrl,
         rawFileName,
+        realFileName,
         isPdf,
         displayTitle,
         caption,
@@ -556,7 +573,7 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
 
                       <button
                         type="button"
-                        onClick={(e) => handleDownload(e, item.fullUrl, item.rawFileName)}
+                        onClick={(e) => handleDownload(e, item.fullUrl, item.realFileName || item.rawFileName)}
                         title="Baixar arquivo"
                         style={{
                           background: 'rgba(255, 255, 255, 0.08)',
@@ -670,7 +687,7 @@ export const MediaGalleryModal: React.FC<MediaGalleryModalProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={(e) => handleDownload(e, item.fullUrl, item.rawFileName)}
+                      onClick={(e) => handleDownload(e, item.fullUrl, item.realFileName || item.rawFileName)}
                       className="btn-secondary"
                       style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--accent-primary)' }}
                     >

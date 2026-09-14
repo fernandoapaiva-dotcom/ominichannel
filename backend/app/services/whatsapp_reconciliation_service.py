@@ -4,17 +4,17 @@ import os
 import uuid
 import base64
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, 
-    MessageSender, MessageType, ConversationStatus
+    MessageSender, MessageType, ConversationStatus, WhatsAppGroup
 )
-from app.services.lid_resolver_service import resolve_and_bind_contact
+from app.services.lid_resolver_service import resolve_and_bind_contact, download_and_cache_avatar_locally
 from app.services.whatsapp_sync_service import whatsapp_sync_service, parse_quoted_context
 from app.api.websockets import manager as ws_manager
 
@@ -25,221 +25,463 @@ class WhatsAppReconciliationService:
         self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
         self.default_api_key = settings.EVOLUTION_API_KEY
         self._is_running = False
+        self._reconciling_instances = set()
 
-    def _get_headers_and_url(self):
-        base_url = self.default_base_url
-        if "localhost" in base_url:
-            base_url = base_url.replace("localhost", "127.0.0.1")
+    async def _get_active_base_url(self) -> str:
+        """
+        Determines the active base_url for Evolution API.
+        Tests primary EVOLUTION_API_URL; if unreachable, falls back to public OCI URL.
+        """
+        urls_to_try = [self.default_base_url]
+        if "localhost" in self.default_base_url:
+            urls_to_try.append(self.default_base_url.replace("localhost", "127.0.0.1"))
+        fallback_url = "http://ominichannel.duckdns.org:8080"
+        if fallback_url not in urls_to_try:
+            urls_to_try.append(fallback_url)
+
         headers = {
             "apikey": self.default_api_key,
             "Content-Type": "application/json"
         }
-        return base_url, headers
 
-    async def reconcile_instance(self, instance_name: str, whatsapp_number_id: int, tenant_id: int, dept_name: str, limit: int = 50) -> int:
-        base_url, headers = self._get_headers_and_url()
-        url = f"{base_url}/chat/findMessages/{instance_name}"
-        payload = {"limit": limit}
+        for u in urls_to_try:
+            clean_u = u.rstrip('/')
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as client:
+                    r = await client.get(f"{clean_u}/instance/fetchInstances", headers=headers)
+                    if r.status_code in [200, 401, 403]:
+                        return clean_u
+            except Exception:
+                continue
 
+        return self.default_base_url
+
+    def _parse_ts(self, ts_raw: Any) -> datetime:
+        if not ts_raw:
+            return datetime.utcnow()
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                res = await client.post(url, headers=headers, json=payload)
-                if res.status_code != 200:
-                    return 0
-                records = res.json().get("messages", {}).get("records", [])
-                if not records:
-                    return 0
+            ts_int = int(ts_raw)
+            if ts_int > 1e11:
+                ts_int = ts_int / 1000.0
+            return datetime.utcfromtimestamp(ts_int)
+        except Exception:
+            return datetime.utcnow()
+
+    async def sync_contacts_agenda(self, client: httpx.AsyncClient, base_url: str, headers: dict, instance_name: str, tenant_id: int) -> dict:
+        """
+        Scans /chat/findContacts and updates or creates Contact records in the database with the official
+        name saved in the phone's address book (Google Contacts/Agenda), prioritizing saved name over pushName.
+        """
+        try:
+            res = await client.post(f"{base_url}/chat/findContacts/{instance_name}", headers=headers, json={})
+            if res.status_code != 200:
+                return {"created": 0, "updated": 0}
+            contacts_list = res.json()
+            if not isinstance(contacts_list, list):
+                return {"created": 0, "updated": 0}
+
+            created_count = 0
+            updated_count = 0
+            async with AsyncSessionLocal() as db:
+                db_contacts_res = await db.execute(select(Contact).where(Contact.tenant_id == tenant_id))
+                db_contacts = {c.telefone: c for c in db_contacts_res.scalars().all() if c.telefone}
+
+                for ct in contacts_list:
+                    if not isinstance(ct, dict):
+                        continue
+                    remote_jid = ct.get("remoteJid") or ""
+                    if not remote_jid or "@g.us" in remote_jid:
+                        continue
+
+                    # Prioritize official address book name over pushName
+                    saved_name = ct.get("name") or ct.get("verifiedName")
+                    push_name = ct.get("pushName")
+                    pic_url = ct.get("profilePicUrl")
+
+                    clean_phone = remote_jid.split("@")[0].split(":")[0]
+                    clean_phone = "".join(filter(str.isdigit, clean_phone))
+
+                    target_name = (saved_name or "").strip() or (push_name or "").strip()
+                    if not clean_phone or len(clean_phone) < 8:
+                        continue
+
+                    # Find matching contact in DB
+                    c_obj = db_contacts.get(clean_phone)
+                    if not c_obj and len(clean_phone) >= 8:
+                        for p, obj in db_contacts.items():
+                            if p and len(p) >= 8 and (clean_phone.endswith(p[-8:]) or p.endswith(clean_phone[-8:])):
+                                c_obj = obj
+                                break
+
+                    if c_obj:
+                        locked = (c_obj.dados_adicionais or {}).get("custom_name_locked", False)
+                        has_changed = False
+                        if not locked:
+                            if saved_name and c_obj.nome != saved_name:
+                                c_obj.nome = saved_name
+                                has_changed = True
+                            elif target_name and (not c_obj.nome or c_obj.nome == c_obj.telefone or c_obj.nome.startswith("Contato ")):
+                                c_obj.nome = target_name
+                                has_changed = True
+                        if pic_url and not c_obj.foto_perfil_url:
+                            c_obj.foto_perfil_url = pic_url
+                            has_changed = True
+
+                        if has_changed:
+                            updated_count += 1
+                    else:
+                        # Create brand new contact imported directly from WhatsApp / phone agenda
+                        new_c = Contact(
+                            tenant_id=tenant_id,
+                            telefone=clean_phone,
+                            nome=target_name or clean_phone,
+                            foto_perfil_url=pic_url,
+                            dados_adicionais={"origin": "phone_agenda", "instance": instance_name}
+                        )
+                        db.add(new_c)
+                        db_contacts[clean_phone] = new_c
+                        created_count += 1
+
+                if created_count > 0 or updated_count > 0:
+                    await db.commit()
+                    logger.info(f"[AGENDA SYNC] Instância '{instance_name}': {created_count} criados, {updated_count} atualizados.")
+
+            return {"created": created_count, "updated": updated_count}
         except Exception as e:
-            logger.debug(f"[RECONCILE] Error fetching messages for {instance_name}: {e}")
+            logger.debug(f"[AGENDA SYNC] Erro ao sincronizar contatos de {instance_name}: {e}")
+            return {"created": 0, "updated": 0}
+
+    async def sync_all_contacts_agenda(self, tenant_id: Optional[int] = None) -> dict:
+        """
+        Pulls phonebook contacts across all active WhatsApp numbers for the given tenant (or all tenants).
+        """
+        base_url = await self._get_active_base_url()
+        headers = {
+            "apikey": self.default_api_key,
+            "Content-Type": "application/json"
+        }
+        total_created = 0
+        total_updated = 0
+
+        async with AsyncSessionLocal() as db:
+            stmt = select(WhatsAppNumber).where(WhatsAppNumber.status == True)
+            if tenant_id:
+                stmt = stmt.where(WhatsAppNumber.tenant_id == tenant_id)
+            wns = (await db.execute(stmt)).scalars().all()
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for wn in wns:
+                if wn.instancia_evolution_api:
+                    res = await self.sync_contacts_agenda(
+                        client=client,
+                        base_url=base_url,
+                        headers=headers,
+                        instance_name=wn.instancia_evolution_api,
+                        tenant_id=wn.tenant_id
+                    )
+                    total_created += res.get("created", 0)
+                    total_updated += res.get("updated", 0)
+
+        return {"created": total_created, "updated": total_updated}
+
+    async def reconcile_instance(
+        self,
+        instance_name: str,
+        whatsapp_number_id: int,
+        tenant_id: int,
+        dept_name: str,
+        limit_chats: int = 60,
+        limit_msgs: int = 50
+    ) -> int:
+        """
+        Executes a complete sweep of an instance:
+        1. Synchronizes contacts address book names.
+        2. Scans recent chats (/chat/findChats) to restore missing chats & chronological timestamps.
+        3. Imports any missing messages and call cards.
+        """
+        if instance_name in self._reconciling_instances:
+            logger.debug(f"[RECONCILE] Instância {instance_name} já em reconciliação. Ignorando.")
             return 0
 
-        # Sort chronologically (oldest to newest)
-        def get_ts(m):
-            ts = m.get("messageTimestamp") or 0
-            try:
-                return int(ts)
-            except Exception:
-                return 0
-        records.sort(key=get_ts)
+        self._reconciling_instances.add(instance_name)
+        total_synced = 0
 
-        synced_count = 0
-        for m in records:
-            k = m.get("key", {})
-            msg_id = k.get("id")
-            if not msg_id:
-                continue
+        try:
+            base_url = await self._get_active_base_url()
+            headers = {
+                "apikey": self.default_api_key,
+                "Content-Type": "application/json"
+            }
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                # 1. Sync phonebook contact names
+                await self.sync_contacts_agenda(client, base_url, headers, instance_name, tenant_id)
 
-            remote_jid = k.get("remoteJid", "")
-            if not remote_jid or "status@broadcast" in remote_jid:
-                continue
+                # 2. Sweep active chats list (/chat/findChats)
+                try:
+                    c_res = await client.post(f"{base_url}/chat/findChats/{instance_name}", headers=headers, json={})
+                    if c_res.status_code == 200:
+                        raw_chats = c_res.json()
+                        if isinstance(raw_chats, list) and raw_chats:
+                            # Process top chats
+                            for chat_item in raw_chats[:limit_chats]:
+                                if not isinstance(chat_item, dict):
+                                    continue
+                                r_jid = chat_item.get("remoteJid") or ""
+                                if not r_jid or "status@broadcast" in r_jid:
+                                    continue
 
-            remote_jid_alt = k.get("remoteJidAlt") or m.get("remoteJidAlt") or ""
-            if "@s.whatsapp.net" in str(remote_jid_alt):
-                remote_jid = remote_jid_alt
+                                p_name = chat_item.get("pushName") or chat_item.get("name") or "Cliente"
+                                last_msg = chat_item.get("lastMessage") or {}
+                                last_key = last_msg.get("key", {}) if isinstance(last_msg, dict) else {}
+                                last_msg_id = last_key.get("id")
 
-            try:
-                async with AsyncSessionLocal() as db:
-                    # 1. Fast check if message already exists
-                    stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
-                    exists = (await db.execute(stmt)).scalars().first()
-                    if exists:
-                        continue
-
-                    # 2. Extract message info
-                    from_me = k.get("fromMe", False)
-                    push_name = m.get("pushName") or "Cliente"
-
-                    # 3. Resolve contact (handles LIDs, phone numbers, avatars)
-                    contact = await resolve_and_bind_contact(
-                        session=db,
-                        tenant_id=tenant_id,
-                        raw_jid=remote_jid,
-                        push_name=push_name,
-                        remote_jid_alt=remote_jid_alt
-                    )
-
-                    # Auto fetch avatar if missing
-                    if not contact.foto_perfil_url and contact.telefone and contact.telefone.startswith("55"):
-                        from app.services.evolution_service import evolution_service
-                        asyncio.create_task(evolution_service.fetch_and_update_contact_avatar(contact.id, instance_name, contact.telefone))
-
-                    # 4. Strict instance isolation: find or create conversation for THIS whatsapp_number_id
-                    c_stmt = (
-                        select(Conversation)
-                        .where(
-                            Conversation.tenant_id == tenant_id,
-                            Conversation.contact_id == contact.id,
-                            Conversation.whatsapp_number_id == whatsapp_number_id
-                        )
-                        .order_by(Conversation.ultima_interacao_em.desc())
-                    )
-                    conv = (await db.execute(c_stmt)).scalars().first()
-
-                    # 5. Parse content
-                    text_content, msg_type = whatsapp_sync_service._parse_message_content(m)
-                    if not text_content:
-                        continue
-
-                    # Proactive media decryption and local storage
-                    if "mmg.whatsapp.net" in text_content and msg_id:
-                        try:
-                            from app.services.evolution_service import evolution_service
-                            b64 = await evolution_service.get_media_base64(
-                                instance_name=instance_name,
-                                message_id=msg_id,
-                                from_me=from_me,
-                                remote_jid=remote_jid
-                            )
-                            if b64:
-                                ext = ".ogg" if (msg_type == MessageType.AUDIO or msg_type == "audio") else (
-                                    ".png" if (msg_type == MessageType.IMAGEM or msg_type == "imagem") else (
-                                        ".mp4" if (msg_type == MessageType.VIDEO or msg_type == "video") else ".pdf"
-                                    )
+                                # Check timestamp
+                                chat_ts_raw = (
+                                    last_msg.get("messageTimestamp")
+                                    if isinstance(last_msg, dict) and last_msg.get("messageTimestamp")
+                                    else chat_item.get("updatedAt")
                                 )
-                                if "," in b64:
-                                    b64 = b64.split(",")[1]
-                                raw_bytes = base64.b64decode(b64)
-                                fname = f"{uuid.uuid4().hex}{ext}"
-                                fpath = os.path.join("uploads", fname)
-                                os.makedirs("uploads", exist_ok=True)
-                                with open(fpath, "wb") as f:
-                                    f.write(raw_bytes)
-                                caption = text_content.split("|", 1)[1] if "|" in text_content else ""
-                                text_content = f"/uploads/{fname}|{caption}" if caption else f"/uploads/{fname}"
-                        except Exception as dl_err:
-                            logger.error(f"[RECONCILE] Error proactively caching media: {dl_err}")
+                                chat_dt = datetime.utcnow()
+                                if chat_ts_raw:
+                                    if isinstance(chat_ts_raw, str) and ("T" in chat_ts_raw or "-" in chat_ts_raw):
+                                        try:
+                                            chat_dt = datetime.fromisoformat(chat_ts_raw.replace("Z", "+00:00")).replace(tzinfo=None)
+                                        except Exception:
+                                            chat_dt = datetime.utcnow()
+                                    else:
+                                        chat_dt = self._parse_ts(chat_ts_raw)
 
-                    # 6. Parse timestamp
-                    ts_raw = m.get("messageTimestamp")
-                    msg_dt = datetime.utcnow()
-                    if ts_raw:
-                        try:
-                            ts_int = int(ts_raw)
-                            if ts_int > 1e11:
-                                ts_int = ts_int / 1000.0
-                            msg_dt = datetime.utcfromtimestamp(ts_int)
-                        except Exception:
-                            pass
+                                # Resolve contact and conversation
+                                async with AsyncSessionLocal() as db:
+                                    contact = await resolve_and_bind_contact(
+                                        session=db,
+                                        tenant_id=tenant_id,
+                                        raw_jid=r_jid,
+                                        push_name=p_name
+                                    )
 
-                    if not conv:
-                        conv = Conversation(
-                            tenant_id=tenant_id,
-                            whatsapp_number_id=whatsapp_number_id,
-                            contact_id=contact.id,
-                            status=ConversationStatus.COM_HUMANO,
-                            protocol_number=None,
-                            dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
-                            criado_em=msg_dt,
-                            ultima_interacao_em=msg_dt
-                        )
-                        db.add(conv)
-                        await db.flush()
+                                    conv_stmt = select(Conversation).where(
+                                        Conversation.tenant_id == tenant_id,
+                                        Conversation.contact_id == contact.id,
+                                        Conversation.whatsapp_number_id == whatsapp_number_id
+                                    ).order_by(Conversation.ultima_interacao_em.desc())
+                                    conv = (await db.execute(conv_stmt)).scalars().first()
 
-                    # 7. Add message with quote support
-                    remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
-                    quote_data = parse_quoted_context(m, from_me=from_me, contact_name=contact.nome)
-                    reconcile_extra = {}
-                    if quote_data:
-                        if quote_data.get("stanza_id"):
-                            p_stmt = select(Message).where(Message.whatsapp_msg_id == quote_data["stanza_id"])
-                            p_msg = (await db.execute(p_stmt)).scalars().first()
-                            if p_msg:
-                                quote_data["message_id"] = p_msg.id
-                                if p_msg.remetente in [MessageSender.ATENDENTE, "atendente"]:
-                                    quote_data["sender_name"] = "Você"
-                                else:
-                                    quote_data["sender_name"] = contact.nome or "Cliente"
-                                if not quote_data.get("text") and p_msg.conteudo:
-                                    quote_data["text"] = p_msg.conteudo[:120]
-                        reconcile_extra["quoted_message"] = quote_data
+                                    if not conv:
+                                        conv = Conversation(
+                                            tenant_id=tenant_id,
+                                            whatsapp_number_id=whatsapp_number_id,
+                                            contact_id=contact.id,
+                                            status=ConversationStatus.COM_HUMANO,
+                                            protocol_number=None,
+                                            dados_adicionais={"is_migrated": True},
+                                            criado_em=chat_dt,
+                                            ultima_interacao_em=chat_dt
+                                        )
+                                        db.add(conv)
+                                        await db.flush()
+                                        logger.info(f"[RECONCILE CHAT] Criada conversa ausente #{conv.id} para '{contact.nome}' ({contact.telefone})")
 
-                    new_msg = Message(
-                        conversation_id=conv.id,
-                        remetente=remetente,
-                        conteudo=text_content,
-                        tipo=msg_type,
-                        status="read",
-                        whatsapp_msg_id=msg_id,
-                        dados_adicionais=reconcile_extra if reconcile_extra else None,
-                        timestamp=msg_dt
+                                    # If last message is missing in DB, fetch recent messages for this chat
+                                    missing_last = False
+                                    if last_msg_id:
+                                        m_exists = (await db.execute(select(Message.id).where(Message.whatsapp_msg_id == last_msg_id))).scalars().first()
+                                        if not m_exists:
+                                            missing_last = True
+
+                                    # Update ultima_interacao_em if chat_dt is newer
+                                    if conv.ultima_interacao_em is None or chat_dt > conv.ultima_interacao_em:
+                                        conv.ultima_interacao_em = chat_dt
+
+                                    await db.commit()
+
+                                # If last message was missing, fetch chat's recent messages
+                                if missing_last:
+                                    try:
+                                        chat_msgs_res = await client.post(
+                                            f"{base_url}/chat/findMessages/{instance_name}",
+                                            headers=headers,
+                                            json={"where": {"key": {"remoteJid": r_jid}}, "limit": 15}
+                                        )
+                                        if chat_msgs_res.status_code == 200:
+                                            m_records = chat_msgs_res.json().get("messages", {}).get("records", []) if isinstance(chat_msgs_res.json(), dict) else []
+                                            for rm in m_records:
+                                                rk = rm.get("key", {})
+                                                rm_id = rk.get("id")
+                                                if not rm_id:
+                                                    continue
+                                                async with AsyncSessionLocal() as db_m:
+                                                    if (await db_m.execute(select(Message.id).where(Message.whatsapp_msg_id == rm_id))).scalars().first():
+                                                        continue
+                                                    r_from_me = rk.get("fromMe", False)
+                                                    r_text, r_tipo = whatsapp_sync_service._parse_message_content(rm)
+                                                    if not r_text:
+                                                        continue
+                                                    r_dt = self._parse_ts(rm.get("messageTimestamp"))
+                                                    r_extra = {}
+                                                    r_doc = (rm.get("message", {}).get("documentMessage") or
+                                                             rm.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
+                                                    if r_doc:
+                                                        fn = r_doc.get("fileName") or r_doc.get("title")
+                                                        if fn:
+                                                            r_extra["original_filename"] = fn
+                                                            r_extra["file_name"] = fn
+
+                                                    n_msg = Message(
+                                                        conversation_id=conv.id,
+                                                        remetente=MessageSender.ATENDENTE if r_from_me else MessageSender.CLIENTE,
+                                                        conteudo=r_text,
+                                                        tipo=r_tipo,
+                                                        status="read",
+                                                        whatsapp_msg_id=rm_id,
+                                                        dados_adicionais=r_extra if r_extra else None,
+                                                        timestamp=r_dt
+                                                    )
+                                                    db_m.add(n_msg)
+                                                    await db_m.commit()
+                                                    total_synced += 1
+                                    except Exception:
+                                        pass
+                except Exception as chats_err:
+                    logger.debug(f"[RECONCILE] Erro ao varrer chats de {instance_name}: {chats_err}")
+
+                # 3. Global recent messages fallback (/chat/findMessages)
+                try:
+                    msgs_res = await client.post(
+                        f"{base_url}/chat/findMessages/{instance_name}",
+                        headers=headers,
+                        json={"limit": limit_msgs}
                     )
-                    db.add(new_msg)
+                    if msgs_res.status_code == 200:
+                        records = msgs_res.json().get("messages", {}).get("records", []) if isinstance(msgs_res.json(), dict) else []
+                        for m in records:
+                            k = m.get("key", {})
+                            msg_id = k.get("id")
+                            if not msg_id:
+                                continue
+                            remote_jid = k.get("remoteJid", "")
+                            if not remote_jid or "status@broadcast" in remote_jid:
+                                continue
+                            remote_jid_alt = k.get("remoteJidAlt") or m.get("remoteJidAlt") or ""
+                            if "@s.whatsapp.net" in str(remote_jid_alt):
+                                remote_jid = remote_jid_alt
 
-                    if conv.ultima_interacao_em is None or msg_dt > conv.ultima_interacao_em:
-                        conv.ultima_interacao_em = msg_dt
+                            async with AsyncSessionLocal() as db:
+                                exists = (await db.execute(select(Message.id).where(Message.whatsapp_msg_id == msg_id))).scalars().first()
+                                if exists:
+                                    continue
 
-                    await db.commit()
-                    synced_count += 1
-                    logger.info(f"[RECONCILE] Recovered missing message #{new_msg.id} for conv #{conv.id} ({contact.nome} - {dept_name}): {text_content[:40]}")
+                                from_me = k.get("fromMe", False)
+                                push_name = m.get("pushName") or "Cliente"
+                                contact = await resolve_and_bind_contact(
+                                    session=db,
+                                    tenant_id=tenant_id,
+                                    raw_jid=remote_jid,
+                                    push_name=push_name,
+                                    remote_jid_alt=remote_jid_alt
+                                )
 
-                    # 8. Broadcast to frontend agents so chat reflects it immediately
-                    try:
-                        await ws_manager.broadcast_to_department(
-                            tenant_id=tenant_id,
-                            whatsapp_number_id=whatsapp_number_id,
-                            message_data={
-                                "type": "NEW_MESSAGE",
-                                "conversation_id": conv.id,
-                                "id": new_msg.id,
-                                "remetente": remetente.value,
-                                "conteudo": text_content,
-                                "dados_adicionais": new_msg.dados_adicionais,
-                                "tipo": new_msg.tipo.value if hasattr(new_msg.tipo, "value") else str(new_msg.tipo),
-                                "timestamp": msg_dt.isoformat() + "Z",
-                                "contact_name": contact.nome,
-                                "contact_phone": contact.telefone,
-                                "department": dept_name
-                            }
-                        )
-                    except Exception:
-                        pass
-            except Exception as loop_err:
-                logger.debug(f"[RECONCILE] Error saving message {msg_id}: {loop_err}")
-                continue
+                                c_stmt = select(Conversation).where(
+                                    Conversation.tenant_id == tenant_id,
+                                    Conversation.contact_id == contact.id,
+                                    Conversation.whatsapp_number_id == whatsapp_number_id
+                                ).order_by(Conversation.ultima_interacao_em.desc())
+                                conv = (await db.execute(c_stmt)).scalars().first()
 
-        return synced_count
+                                text_content, msg_type = whatsapp_sync_service._parse_message_content(m)
+                                if not text_content:
+                                    continue
+
+                                msg_dt = self._parse_ts(m.get("messageTimestamp"))
+
+                                if not conv:
+                                    conv = Conversation(
+                                        tenant_id=tenant_id,
+                                        whatsapp_number_id=whatsapp_number_id,
+                                        contact_id=contact.id,
+                                        status=ConversationStatus.COM_HUMANO,
+                                        protocol_number=None,
+                                        dados_adicionais={"is_migrated": True},
+                                        criado_em=msg_dt,
+                                        ultima_interacao_em=msg_dt
+                                    )
+                                    db.add(conv)
+                                    await db.flush()
+
+                                quote_data = parse_quoted_context(m, from_me=from_me, contact_name=contact.nome)
+                                extra_dict = {}
+                                if quote_data:
+                                    extra_dict["quoted_message"] = quote_data
+                                m_doc = (m.get("message", {}).get("documentMessage") or
+                                         m.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
+                                if m_doc:
+                                    fn = m_doc.get("fileName") or m_doc.get("title")
+                                    if fn:
+                                        extra_dict["original_filename"] = fn
+                                        extra_dict["file_name"] = fn
+
+                                new_msg = Message(
+                                    conversation_id=conv.id,
+                                    remetente=MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE,
+                                    conteudo=text_content,
+                                    tipo=msg_type,
+                                    status="read",
+                                    whatsapp_msg_id=msg_id,
+                                    dados_adicionais=extra_dict if extra_dict else None,
+                                    timestamp=msg_dt
+                                )
+                                db.add(new_msg)
+
+                                if conv.ultima_interacao_em is None or msg_dt > conv.ultima_interacao_em:
+                                    conv.ultima_interacao_em = msg_dt
+
+                                await db.commit()
+                                total_synced += 1
+                                logger.info(f"[RECONCILE MSG] Mensagem #{new_msg.id} recuperada para conv #{conv.id} ({contact.nome}): {text_content[:40]}")
+                except Exception as msgs_err:
+                    logger.debug(f"[RECONCILE] Erro ao varrer mensagens globais de {instance_name}: {msgs_err}")
+
+            # Notify department clients to refresh chronological order
+            if total_synced > 0:
+                try:
+                    await ws_manager.broadcast_to_department(
+                        tenant_id=tenant_id,
+                        whatsapp_number_id=whatsapp_number_id,
+                        message_data={"type": "CONVERSATIONS_RECONCILED", "synced_count": total_synced}
+                    )
+                except Exception:
+                    pass
+
+            return total_synced
+        except Exception as err:
+            logger.error(f"[RECONCILE FATAL] Falha na reconciliação de {instance_name}: {err}", exc_info=True)
+            return total_synced
+        finally:
+            self._reconciling_instances.discard(instance_name)
+
+    async def reconcile_by_instance_name(self, instance_name: str) -> int:
+        """Helper to run reconciliation for a specific instance by name."""
+        try:
+            async with AsyncSessionLocal() as db:
+                stmt = select(WhatsAppNumber).where(
+                    WhatsAppNumber.instancia_evolution_api == instance_name,
+                    WhatsAppNumber.status == True
+                )
+                wn = (await db.execute(stmt)).scalars().first()
+                if not wn:
+                    return 0
+                return await self.reconcile_instance(
+                    instance_name=wn.instancia_evolution_api,
+                    whatsapp_number_id=wn.id,
+                    tenant_id=wn.tenant_id,
+                    dept_name=wn.nome_departamento or "Geral"
+                )
+        except Exception as e:
+            logger.error(f"Erro em reconcile_by_instance_name({instance_name}): {e}")
+            return 0
 
     async def reconcile_all_instances(self):
+        """Runs reconciliation across all active WhatsApp numbers in database."""
         try:
             async with AsyncSessionLocal() as db:
                 stmt = select(WhatsAppNumber).where(WhatsAppNumber.status == True)
@@ -258,9 +500,9 @@ class WhatsAppReconciliationService:
 
 whatsapp_reconciliation_service = WhatsAppReconciliationService()
 
-async def start_whatsapp_reconciliation_loop(interval_seconds: int = 30):
+async def start_whatsapp_reconciliation_loop(interval_seconds: int = 60):
     logger.info(f"🔄 WhatsApp Continuous Reconciliation Watchdog started ({interval_seconds}s interval).")
-    await asyncio.sleep(10) # Brief pause after boot
+    await asyncio.sleep(15)  # Brief pause after boot
     while True:
         try:
             await whatsapp_reconciliation_service.reconcile_all_instances()

@@ -1,0 +1,52 @@
+{
+  "name": "ominichannel-desktop",
+  "version": "1.0.0",
+  "description": "OminiChannel WhatsApp & Atendimento Desktop App",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "author": "OminiChannel",
+  "license": "MIT",
+  "build": {
+    "appId": "com.ominichannel.desktop",
+    "productName": "OminiChannel",
+    "copyright": "Copyright \u00a9 2026 OminiChannel",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OminiChannel",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

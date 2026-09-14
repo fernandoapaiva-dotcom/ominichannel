@@ -187,17 +187,23 @@ class BusinessHoursService:
                     closing_text = self.get_shift_closing_message(cust_name, proto)
 
                     # 6. Enviar mensagem de encerramento via WhatsApp com delay para proteção anti-bloqueio
+                    # REGRA DE PROTEÇÃO MÁXIMA ANTI-BAN: Instâncias protegidas/recém-liberadas (como vendas)
+                    # NUNCA devem disparar mensagens ativas em lote às 18h. O encerramento ocorre apenas no sistema.
+                    is_shielded_instance = wn.instancia_evolution_api in ["instancia_vendas"]
                     if conv.contact and wn.instancia_evolution_api:
-                        try:
-                            await evolution_service.send_text_message(
-                                instance_name=wn.instancia_evolution_api,
-                                number=conv.contact.telefone,
-                                text=closing_text
-                            )
-                            # Delay de 2.5s entre mensagens para não ser classificado como spam pelo WhatsApp
-                            await asyncio.sleep(2.5)
-                        except Exception as send_err:
-                            logger.warning(f"Erro ao enviar encerramento das 18h na conversa #{conv.id}: {send_err}")
+                        if is_shielded_instance:
+                            logger.info(f"🛡️ [ESCUDO ANTI-BAN] Conversa #{conv.id} na instância '{wn.instancia_evolution_api}': Encerramento das 18h registrado internamente no CRM. Disparo ativo de WhatsApp silenciado para proteção contra bloqueio da Meta.")
+                        else:
+                            try:
+                                await evolution_service.send_text_message(
+                                    instance_name=wn.instancia_evolution_api,
+                                    number=conv.contact.telefone,
+                                    text=closing_text
+                                )
+                                # Delay de 2.5s entre mensagens para não ser classificado como spam pelo WhatsApp
+                                await asyncio.sleep(2.5)
+                            except Exception as send_err:
+                                logger.warning(f"Erro ao enviar encerramento das 18h na conversa #{conv.id}: {send_err}")
 
                     # 7. Registrar mensagem de auditoria do sistema
                     sys_msg = Message(

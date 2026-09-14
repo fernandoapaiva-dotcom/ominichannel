@@ -5,8 +5,9 @@ import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
-  Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing
+  Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, Sparkles
 } from 'lucide-react';
+import { correctFullText, correctLastWordBeforeCursor } from '../utils/spellingCorrector';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
@@ -447,6 +448,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
     return '';
   });
+  const [autoCorrectEnabled, setAutoCorrectEnabled] = useState<boolean>(() => {
+    const saved = localStorage.getItem('chat_autocorrect_enabled');
+    return saved !== null ? saved === 'true' : true;
+  });
+  const [lastCorrectionNotice, setLastCorrectionNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (lastCorrectionNotice) {
+      const timer = setTimeout(() => setLastCorrectionNotice(null), 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [lastCorrectionNotice]);
+
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
@@ -781,16 +795,37 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const documentInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const extractMediaAndCaption = (raw: string | undefined | null) => {
-    if (!raw) return { mediaPath: '', caption: null as string | null };
+  const extractMediaAndCaption = (raw: string | undefined | null, dadosAdicionais?: any) => {
+    if (!raw) return { mediaPath: '', caption: null as string | null, fileName: null as string | null };
     let str = String(raw).trim();
     let mediaPath = '';
     let caption: string | null = null;
+    let fileName: string | null = (dadosAdicionais?.original_filename || dadosAdicionais?.file_name) || null;
 
     if (str.includes('|')) {
       const parts = str.split('|');
       mediaPath = parts[0].trim();
-      caption = parts.slice(1).join('|').trim() || null;
+      if (parts.length >= 3) {
+        const p1 = parts[1].trim();
+        const p2 = parts.slice(2).join('|').trim();
+        if (/^\*👤\s*[^:*]+:?\*$/.test(p1)) {
+          fileName = fileName || (p2.includes('.') ? p2 : null);
+          caption = p2.includes('.') ? null : p2;
+        } else {
+          fileName = fileName || p1;
+          caption = (/^\*👤\s*[^:*]+:?\*$/.test(p2)) ? null : (p2 || null);
+        }
+      } else if (parts.length === 2) {
+        const p1 = parts[1].trim();
+        if (/^\*👤\s*[^:*]+:?\*$/.test(p1)) {
+          caption = null;
+        } else if (!fileName && p1.includes('.') && p1.split('.').pop()!.length <= 5 && !p1.includes('\n')) {
+          fileName = p1;
+          caption = null;
+        } else {
+          caption = p1 || null;
+        }
+      }
     } else if (str.startsWith('[') && str.includes(']')) {
       const match = str.match(/^\[(.*?)\]\s*([\s\S]*)$/);
       if (match) {
@@ -808,7 +843,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     mediaPath = mediaPath.replace(/^\[/, '').replace(/\]$/, '').trim();
-    return { mediaPath, caption };
+    if (!fileName && dadosAdicionais?.original_filename) {
+      fileName = dadosAdicionais.original_filename;
+    }
+    return { mediaPath, caption, fileName };
   };
 
   // Extract all media items in conversation for universal gallery navigation (Images, Videos, Audios, Files)
@@ -1594,6 +1632,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSending) return;
     if (!inputText.trim() && pendingFiles.length === 0) return;
 
     // Validation for unfulfilled placeholder brackets [...]
@@ -1604,12 +1643,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     let textToSend = inputText.trim();
+    if (autoCorrectEnabled && textToSend) {
+      const fullCorr = correctFullText(textToSend);
+      if (fullCorr.changesCount > 0) {
+        textToSend = fullCorr.text;
+        setInputText(textToSend);
+        if (fullCorr.lastCorrection) {
+          setLastCorrectionNotice(`Corrigido antes de enviar: "${fullCorr.lastCorrection.from}" ➔ "${fullCorr.lastCorrection.to}"`);
+        }
+      }
+    }
     const quoteTarget = replyingToMessage;
     if (replyingToMessage) {
       setReplyingToMessage(null);
     }
 
     setSendError(null);
+    setIsSending(true);
 
     try {
       if (conversation?.id && onSaveDraft) {
@@ -1617,7 +1667,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
 
       if (pendingFiles.length > 0) {
-        setIsSending(true);
         const filesToUpload = [...pendingFiles];
         const captionText = textToSend;
 
@@ -1654,7 +1703,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           });
         }
 
-        setIsSending(false);
         if (onStatusToggle) onStatusToggle();
         scrollToBottom('smooth');
         setTimeout(() => scrollToBottom('smooth'), 100);
@@ -1675,6 +1723,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } catch (err: any) {
       console.error('Send error:', err);
       setSendError(err.message || 'Falha ao enviar arquivo ou mensagem.');
+    } finally {
       setIsSending(false);
     }
   };
@@ -1688,11 +1737,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const handleDownloadMedia = (msg: Message) => {
-    const { mediaPath } = extractMediaAndCaption(msg.conteudo);
+    const { mediaPath, fileName, caption } = extractMediaAndCaption(msg.conteudo, msg.dados_adicionais);
     const url = mediaPath.startsWith('http') ? mediaPath : `${mediaPath}`;
+    const rawFname = mediaPath.split('/').pop() || 'arquivo';
+    const finalDownloadName = fileName || (caption && caption.includes('.') ? caption : rawFname);
     const a = document.createElement('a');
     a.href = url;
-    a.download = mediaPath.split('/').pop() || 'arquivo';
+    a.download = finalDownloadName;
     a.target = '_blank';
     document.body.appendChild(a);
     a.click();
@@ -2042,14 +2093,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     let effectiveTipo = (msg.tipo || '').toLowerCase();
     if ((!effectiveTipo || effectiveTipo === 'texto' || effectiveTipo === 'text') && raw) {
       const c = raw.toLowerCase();
+      const firstPart = c.split('|')[0].trim();
       if (c.includes('/uploads/') || c.startsWith('http')) {
-        if (c.endsWith('.ogg') || c.endsWith('.webm') || c.endsWith('.mp3') || c.endsWith('.wav') || c.endsWith('.m4a') || c.includes('voice_note')) {
+        if (firstPart.endsWith('.ogg') || firstPart.endsWith('.webm') || firstPart.endsWith('.mp3') || firstPart.endsWith('.wav') || firstPart.endsWith('.m4a') || c.includes('voice_note')) {
           effectiveTipo = 'audio';
-        } else if (c.endsWith('.png') || c.endsWith('.jpg') || c.endsWith('.jpeg') || c.endsWith('.webp')) {
+        } else if (firstPart.endsWith('.png') || firstPart.endsWith('.jpg') || firstPart.endsWith('.jpeg') || firstPart.endsWith('.webp')) {
           effectiveTipo = 'imagem';
-        } else if (c.endsWith('.mp4') || c.endsWith('.mov') || c.endsWith('.avi')) {
+        } else if (firstPart.endsWith('.mp4') || firstPart.endsWith('.mov') || firstPart.endsWith('.avi')) {
           effectiveTipo = 'video';
-        } else if (c.endsWith('.pdf')) {
+        } else if (firstPart.endsWith('.pdf') || c.includes('.pdf')) {
           effectiveTipo = 'arquivo';
         }
       }
@@ -2131,11 +2183,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       case 'video':
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ position: 'relative', cursor: 'pointer', borderRadius: '8px', overflow: 'hidden', maxWidth: '320px' }} onClick={() => setPreviewMediaIndex(mediaIndex >= 0 ? mediaIndex : 0)}>
-              <video src={fullUrl} controls style={{ width: '100%', maxWidth: '320px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }} />
-            </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{caption}</p>}
+          <div style={{ maxWidth: '320px', borderRadius: '8px', overflow: 'hidden' }}>
+            <video
+              src={fullUrl}
+              controls
+              style={{ width: '100%', maxHeight: '300px', borderRadius: '8px', display: 'block' }}
+            />
+            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', marginTop: '6px', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{renderFormattedMessageText(caption)}</p>}
           </div>
         );
 
@@ -2153,11 +2207,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       case 'arquivo':
         const rawFileName = mediaPath.split('/').pop() || 'Arquivo';
-        const isPdf = fullUrl.toLowerCase().endsWith('.pdf') || fullUrl.toLowerCase().includes('.pdf') || rawFileName.toLowerCase().endsWith('.pdf');
+        const isPdf = fullUrl.toLowerCase().endsWith('.pdf') || fullUrl.toLowerCase().includes('.pdf') || rawFileName.toLowerCase().endsWith('.pdf') || Boolean(fileName && fileName.toLowerCase().endsWith('.pdf'));
         
-        let displayFileName = caption && !caption.startsWith('http') ? caption : rawFileName;
-        if (displayFileName.length > 32 && !displayFileName.includes(' ')) {
-          displayFileName = displayFileName.substring(0, 24) + '...' + (isPdf ? '.pdf' : '');
+        const realFileName = fileName || (caption && !caption.startsWith('http') && caption.includes('.') && !/^\*👤/.test(caption) ? caption : rawFileName);
+        let displayFileName = realFileName;
+        if (displayFileName.length > 38 && !displayFileName.includes(' ')) {
+          displayFileName = displayFileName.substring(0, 30) + '...' + (isPdf ? '.pdf' : '');
         }
 
         if (isPdf) {
@@ -2244,18 +2299,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                     }}>
                       PDF
                     </span>
-                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ fontSize: '13px', fontWeight: '600', color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={realFileName}>
                       {displayFileName}
                     </span>
                   </div>
 
                   <a
                     href={fullUrl}
-                    download
+                    download={realFileName}
                     onClick={e => e.stopPropagation()}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title="Baixar PDF"
+                    title={`Baixar ${realFileName}`}
                     style={{
                       color: 'var(--accent-primary)',
                       padding: '4px',
@@ -2269,7 +2324,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </a>
                 </div>
               </div>
-              {caption && caption !== displayFileName && (
+              {caption && caption !== displayFileName && caption !== realFileName && (
                 <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>
                   {caption}
                 </p>
@@ -2296,7 +2351,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               <FileText size={28} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{ fontSize: '13px', fontWeight: '600', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: 'inherit', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={realFileName}>
                   {displayFileName}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -2304,7 +2359,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               </div>
             </div>
-            {caption && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{renderFormattedMessageText(caption)}</p>}
+            {caption && caption !== displayFileName && caption !== realFileName && <p style={{ fontSize: '13px', lineHeight: '1.4', color: 'inherit', opacity: 0.95, whiteSpace: 'pre-wrap' }}>{renderFormattedMessageText(caption)}</p>}
           </div>
         );
 
@@ -3489,7 +3544,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           display: 'flex',
           gap: '5px',
           alignItems: 'center',
-          flexShrink: 0,
+          flexShrink: 1,
+          minWidth: 0,
+          maxWidth: '100%',
           padding: '2px 0',
           justifyContent: 'flex-end',
           flexWrap: 'wrap'
@@ -5711,6 +5768,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </div>
             )}
 
+            {lastCorrectionNotice && (
+              <div style={{
+                margin: '0 20px 6px 20px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '5px 12px',
+                borderRadius: '8px',
+                backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                border: '1px solid rgba(56, 189, 248, 0.4)',
+                color: '#38bdf8',
+                fontSize: '12px',
+                fontWeight: '600',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
+                animation: 'fadeIn 0.15s ease'
+              }}>
+                <Sparkles size={14} />
+                <span>{lastCorrectionNotice}</span>
+              </div>
+            )}
+
             <form
               onSubmit={handleSend}
               className="chat-input-form"
@@ -5920,6 +5998,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   setShowMentionMenu(false);
                   return;
                 }
+
+                // Correção ortográfica automática em tempo real ao digitar espaço ou pontuação
+                if (autoCorrectEnabled && (e.key === ' ' || e.key === '.' || e.key === ',' || e.key === '!' || e.key === '?')) {
+                  const target = e.currentTarget;
+                  const cursorPos = target.selectionStart;
+                  const text = target.value;
+                  const res = correctLastWordBeforeCursor(text, cursorPos);
+                  if (res.correctedWord) {
+                    e.preventDefault();
+                    const updatedText = res.newText.slice(0, res.newCursor) + e.key + res.newText.slice(res.newCursor);
+                    setInputText(updatedText);
+                    if (conversation?.id && onSaveDraft) {
+                      onSaveDraft(conversation.id, updatedText);
+                    }
+                    const nextPos = res.newCursor + 1;
+                    setTimeout(() => {
+                      target.selectionStart = target.selectionEnd = nextPos;
+                    }, 0);
+                    setLastCorrectionNotice(`💡 Corrigido: "${res.correctedWord.from}" ➔ "${res.correctedWord.to}"`);
+                    return;
+                  }
+                }
+
                 if (e.key === 'Enter') {
                   if (e.ctrlKey || e.shiftKey) {
                     if (e.ctrlKey && !e.shiftKey) {
@@ -5966,6 +6067,54 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             />
 
             <AudioRecorder onSendAudio={handleSendAudioMessage} />
+
+            {/* Botão de Correção Ortográfica e Indicador */}
+            <button
+              type="button"
+              onClick={() => {
+                if (inputText.trim()) {
+                  const res = correctFullText(inputText);
+                  if (res.changesCount > 0) {
+                    setInputText(res.text);
+                    if (conversation?.id && onSaveDraft) {
+                      onSaveDraft(conversation.id, res.text);
+                    }
+                    setLastCorrectionNotice(`✨ ${res.changesCount} palavra(s) corrigida(s) com sucesso!`);
+                  } else {
+                    setLastCorrectionNotice('✨ Ortografia perfeita: nenhuma palavra incorreta encontrada!');
+                  }
+                } else {
+                  const nextState = !autoCorrectEnabled;
+                  setAutoCorrectEnabled(nextState);
+                  localStorage.setItem('chat_autocorrect_enabled', String(nextState));
+                  setLastCorrectionNotice(nextState ? '✨ Corretor Automático ATIVADO' : '⚠️ Corretor Automático DESATIVADO');
+                }
+              }}
+              className="btn-secondary chat-corretor-btn"
+              style={{
+                height: '42px',
+                padding: '0 12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                color: autoCorrectEnabled ? '#38bdf8' : 'var(--text-muted)',
+                borderColor: autoCorrectEnabled ? 'rgba(56, 189, 248, 0.4)' : 'var(--border-color)',
+                backgroundColor: autoCorrectEnabled ? 'rgba(56, 189, 248, 0.1)' : 'transparent',
+                fontWeight: '600',
+                fontSize: '13px',
+                boxShadow: autoCorrectEnabled ? '0 2px 8px rgba(56, 189, 248, 0.15)' : 'none',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+              title={
+                autoCorrectEnabled
+                  ? (inputText.trim() ? "Clique para revisar e corrigir a ortografia do texto agora" : "Corretor Ortográfico Automático Ativo (Clique para desativar)")
+                  : "Corretor Ortográfico Desativado (Clique para ativar)"
+              }
+            >
+              <Sparkles size={16} />
+              <span className="chat-btn-text">{inputText.trim() ? 'Corrigir' : (autoCorrectEnabled ? 'Corretor ON' : 'Corretor OFF')}</span>
+            </button>
 
             <button
               type="button"

@@ -67,8 +67,11 @@ class WhatsAppSyncService:
 
         if "documentMessage" in msg_payload or "documentWithCaptionMessage" in msg_payload:
             doc = msg_payload.get("documentMessage") or msg_payload.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {})
-            title = doc.get("title") or doc.get("fileName") or "[Documento]"
+            title = doc.get("fileName") or doc.get("title") or "[Documento]"
+            caption = doc.get("caption") or ""
             url = doc.get("url", "")
+            if caption and caption != title:
+                return f"{url}|{title}|{caption}" if url else f"{title}|{caption}", MessageType.ARQUIVO
             return f"{url}|{title}" if url else title, MessageType.ARQUIVO
 
         if "stickerMessage" in msg_payload:
@@ -470,6 +473,15 @@ class WhatsAppSyncService:
                                         if existing_res.scalars().first():
                                             continue
 
+                                        msg_extra = {}
+                                        doc_info = (m_obj.get("message", {}).get("documentMessage") or
+                                                    m_obj.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
+                                        if doc_info:
+                                            fn = doc_info.get("fileName") or doc_info.get("title")
+                                            if fn:
+                                                msg_extra["original_filename"] = fn
+                                                msg_extra["file_name"] = fn
+
                                         db_msg = Message(
                                             conversation_id=conv.id,
                                             remetente=remetente,
@@ -477,6 +489,7 @@ class WhatsAppSyncService:
                                             tipo=msg_type,
                                             status="delivered",
                                             whatsapp_msg_id=msg_wa_id,
+                                            dados_adicionais=msg_extra if msg_extra else None,
                                             timestamp=msg_dt
                                         )
                                         session.add(db_msg)

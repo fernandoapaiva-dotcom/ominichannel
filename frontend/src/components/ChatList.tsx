@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
-import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck, Pin, Clock, AlertCircle, Building, User as UserIcon, X } from 'lucide-react';
+import { Search, Phone, Bot, Headphones, Plus, ChevronDown, ChevronRight, History, Layers, PanelLeftClose, PanelLeftOpen, Users, Globe, CheckCheck, Pin, Clock, AlertCircle, Building, User as UserIcon, X, RefreshCw } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { Conversation, WhatsAppNumber, ConversationStatus } from '../types';
 import { AvatarModal } from './AvatarModal';
+import { formatMessagePreview } from '../utils/messageFormatter';
 
 export const parseIsoDate = (ts: string | Date | undefined): Date => {
   if (!ts) return new Date();
@@ -132,61 +133,6 @@ export const getCleanDisplayName = (rawName: string | undefined | null, phone: s
   return formattedPhone || 'WhatsApp';
 };
 
-const formatMessagePreview = (msg: any | undefined): string => {
-  if (!msg || !msg.conteudo) return 'Conversa iniciada';
-  const c = String(msg.conteudo || '').trim();
-  const t = String(msg.tipo || '').toLowerCase();
-
-  // WhatsApp Calls formatting
-  if (c.startsWith('[CHAMADA_VIDEO_PERDIDA]') || c.includes('Ligação de vídeo perdida') || (c.includes('CHAMADA') && c.includes('VÍDEO'))) {
-    return '📹 Ligação de vídeo perdida';
-  }
-  if (c.startsWith('[CHAMADA_VOZ_PERDIDA]') || c.includes('Ligação de voz perdida') || c.includes('O CLIENTE ESTÁ LIGANDO') || (c.includes('CHAMADA') && c.includes('VOZ'))) {
-    return '📞 Ligação de voz perdida';
-  }
-  if (c.startsWith('[CHAMADA_VIDEO]') || c.includes('Ligação de vídeo')) {
-    return '📹 Ligação de vídeo';
-  }
-  if (c.startsWith('[CHAMADA_VOZ]') || c.includes('Ligação de voz')) {
-    return '📞 Ligação de voz';
-  }
-  if (c.startsWith('[CONTATO]|') || c.includes('BEGIN:VCARD')) {
-    return '👤 Contato';
-  }
-  if (c.startsWith('[CONTATOS_MULTIPLOS]|')) {
-    return '👥 Contatos';
-  }
-  if (t === 'localizacao' || c.startsWith('📍') || c.includes('LOCALIZAÇÃO')) {
-    return '📍 Localização';
-  }
-
-  if (t === 'imagem' || c.endsWith('.png') || c.endsWith('.jpg') || c.endsWith('.jpeg')) {
-    if (c.includes('Comprovante') || c.includes('PIX') || c.includes('Pix')) return '💸 Comprovante Pix';
-    return '📷 Foto';
-  }
-  if (t === 'audio' || t === 'voice' || c.endsWith('.ogg') || c.endsWith('.mp3')) {
-    return '🎙️ Áudio';
-  }
-  if (t === 'video' || c.endsWith('.mp4')) {
-    return '🎥 Vídeo';
-  }
-  if (t === 'documento' || t === 'document' || c.endsWith('.pdf')) {
-    return '📄 Documento';
-  }
-  if (t === 'sticker' || t === 'figurinha') {
-    return '💟 Figurinha';
-  }
-  if (c.startsWith('/uploads/')) {
-    const pipeParts = c.split('|');
-    if (pipeParts.length > 1 && pipeParts[1].trim()) {
-      return pipeParts[1].trim();
-    }
-    if (c.endsWith('.pdf')) return '📄 Documento PDF';
-    return '📎 Mídia';
-  }
-  return c;
-};
-
 interface ChatListProps {
   conversations: Conversation[];
   activeConversation: Conversation | null;
@@ -242,6 +188,9 @@ export const ChatList: React.FC<ChatListProps> = ({
   const [expandedContactIds, setExpandedContactIds] = useState<number[]>([]);
   const [avatarModalData, setAvatarModalData] = useState<{ name: string; phone?: string; avatarUrl?: string | null; contactId?: number } | null>(null);
 
+  const [searchedAgendaContacts, setSearchedAgendaContacts] = useState<any[]>([]);
+  const [loadingAgendaSearch, setLoadingAgendaSearch] = useState(false);
+
   // Debounced search to trigger global backend search across all contacts & conversations
   React.useEffect(() => {
     const timer = setTimeout(() => {
@@ -251,6 +200,49 @@ export const ChatList: React.FC<ChatListProps> = ({
     }, 300);
     return () => clearTimeout(timer);
   }, [searchTerm, onSearch]);
+
+  // Search phonebook agenda contacts to match WhatsApp precision
+  React.useEffect(() => {
+    const q = searchTerm.trim();
+    if (!q || q.length < 2) {
+      setSearchedAgendaContacts([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingAgendaSearch(true);
+        const data = await apiFetch(`/contacts/?q=${encodeURIComponent(q)}&limit=15`);
+        if (Array.isArray(data)) {
+          setSearchedAgendaContacts(data);
+        }
+      } catch (err) {
+        console.error('Error fetching agenda contacts:', err);
+      } finally {
+        setLoadingAgendaSearch(false);
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const handleStartOrOpenChat = async (contact: any) => {
+    try {
+      const chosenWnId = selectedDepartmentId !== 'all' ? Number(selectedDepartmentId) : (whatsappNumbers[0]?.id || 1);
+      const res = await apiFetch('/conversations/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          whatsapp_number_id: chosenWnId,
+          telefone: contact.telefone,
+          nome: contact.nome
+        })
+      });
+      if (res && res.id) {
+        onSelectConversation(res);
+        setSearchTerm('');
+      }
+    } catch (err) {
+      console.error('Failed to start chat from agenda search:', err);
+    }
+  };
 
   const toggleExpand = (e: React.MouseEvent, contactId: number) => {
     e.stopPropagation();
@@ -391,7 +383,8 @@ export const ChatList: React.FC<ChatListProps> = ({
         clientIdentity = `conv_${conv.id}`;
       }
 
-      const groupKey = selectedDepartmentId === 'all'
+      const isSearching = Boolean(searchTerm.trim());
+      const groupKey = (selectedDepartmentId === 'all' || isSearching)
         ? `wn_${deptId}_${clientIdentity}`
         : `wn_${selectedDepartmentId}_${clientIdentity}`;
 
@@ -407,38 +400,49 @@ export const ChatList: React.FC<ChatListProps> = ({
       convs.sort((a, b) => new Date(b.ultima_interacao_em).getTime() - new Date(a.ultima_interacao_em).getTime());
 
       const matchingConvs = convs.filter(conv => {
-        const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
+        const isSearching = Boolean(searchTerm.trim());
+        const matchesDept = isSearching || selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
         
         let matchesStatus = true;
-        if (statusFilter === 'nao_lidas') {
-          const extra = conv.dados_adicionais || {};
-          if (extra.marked_as_read || extra.pending_dismissed) {
-            matchesStatus = false;
-          } else {
-            const msgs = conv.messages || [];
-            let hasUnreadClient = false;
-            for (let i = 0; i < msgs.length; i++) {
-              const r = String(msgs[i].remetente || '').toLowerCase();
-              const s = String(msgs[i].status || '').toLowerCase();
-              if (r === 'cliente' && s !== 'read') {
-                hasUnreadClient = true;
-                break;
+        if (!isSearching) {
+          if (statusFilter === 'nao_lidas') {
+            const extra = conv.dados_adicionais || {};
+            if (extra.marked_as_read || extra.pending_dismissed) {
+              matchesStatus = false;
+            } else {
+              const msgs = conv.messages || [];
+              let hasUnreadClient = false;
+              for (let i = 0; i < msgs.length; i++) {
+                const r = String(msgs[i].remetente || '').toLowerCase();
+                const s = String(msgs[i].status || '').toLowerCase();
+                if (r === 'cliente' && s !== 'read') {
+                  hasUnreadClient = true;
+                  break;
+                }
               }
+              matchesStatus = hasUnreadClient;
             }
-            matchesStatus = hasUnreadClient;
+          } else if (statusFilter !== 'all') {
+            matchesStatus = conv.status === statusFilter;
           }
-        } else if (statusFilter !== 'all') {
-          matchesStatus = conv.status === statusFilter;
         }
 
         const contactName = conv.contact?.nome || '';
         const contactPhone = conv.contact?.telefone || '';
         const protoNumber = (conv as any).protocol_number || '';
         const term = searchTerm.toLowerCase().trim();
+
+        let messageMatches = false;
+        if (term && conv.messages && conv.messages.length > 0) {
+          messageMatches = conv.messages.some(m => (m.conteudo || '').toLowerCase().includes(term));
+        }
+
         const matchesSearch = !term ||
                               contactName.toLowerCase().includes(term) ||
                               contactPhone.includes(term) ||
-                              protoNumber.toLowerCase().includes(term);
+                              protoNumber.toLowerCase().includes(term) ||
+                              messageMatches;
+
         const hasMessages = (conv.messages && conv.messages.length > 0) || conv.id === activeConversation?.id;
         return matchesDept && matchesStatus && matchesSearch && hasMessages;
       });
@@ -532,6 +536,30 @@ export const ChatList: React.FC<ChatListProps> = ({
     });
   }, [conversations, selectedDepartmentId, statusFilter, searchTerm, activeConversation, effectiveUserId]);
 
+  const phonebookOnlyContacts = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return [];
+
+    const existingContactIds = new Set<number>();
+    const existingPhones = new Set<string>();
+
+    contactGroups.forEach(g => {
+      if (g.contactId) existingContactIds.add(g.contactId);
+      g.allConversations.forEach(c => {
+        if (c.contact_id) existingContactIds.add(c.contact_id);
+        const p = c.contact?.telefone?.replace(/\D/g, '');
+        if (p) existingPhones.add(p);
+      });
+    });
+
+    return searchedAgendaContacts.filter((c: any) => {
+      if (c.id && existingContactIds.has(c.id)) return false;
+      const p = (c.telefone || '').replace(/\D/g, '');
+      if (p && existingPhones.has(p)) return false;
+      return true;
+    });
+  }, [searchTerm, searchedAgendaContacts, contactGroups]);
+
   const totalUnread = useMemo(() => {
     return conversations.filter(conv => {
       const matchesDept = selectedDepartmentId === 'all' || String(conv.whatsapp_number_id) === String(selectedDepartmentId);
@@ -551,6 +579,23 @@ export const ChatList: React.FC<ChatListProps> = ({
   }, [conversations, selectedDepartmentId, activeConversation?.id]);
 
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
+
+  const handleReconcileWhatsApp = async () => {
+    if (isReconciling) return;
+    setIsReconciling(true);
+    try {
+      const q = selectedDepartmentId !== 'all' ? `?whatsapp_number_id=${selectedDepartmentId}` : '';
+      await apiFetch(`/conversations/reconcile-whatsapp${q}`, {
+        method: 'POST'
+      });
+      if (onStatusToggle) onStatusToggle();
+    } catch (err) {
+      console.error('Failed to reconcile WhatsApp conversations:', err);
+    } finally {
+      setIsReconciling(false);
+    }
+  };
 
   const handleMarkAllAsRead = async () => {
     setIsMarkingAllRead(true);
@@ -651,6 +696,29 @@ export const ChatList: React.FC<ChatListProps> = ({
             >
               <CheckCheck size={14} />
               {isMarkingAllRead ? '...' : 'Lidas'}
+            </button>
+
+            <button
+              onClick={handleReconcileWhatsApp}
+              disabled={isReconciling}
+              style={{
+                background: isReconciling ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255,255,255,0.04)',
+                border: '1px solid var(--border-color)',
+                color: isReconciling ? 'var(--accent-primary)' : 'var(--text-muted)',
+                borderRadius: 'var(--radius-md)',
+                padding: '5px 8px',
+                fontSize: '11px',
+                fontWeight: '600',
+                cursor: isReconciling ? 'default' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.2s ease'
+              }}
+              title="Varrer mensagens e alinhar conversas com o WhatsApp"
+            >
+              <RefreshCw size={13} className={isReconciling ? 'animate-spin' : ''} />
+              {isReconciling ? '...' : 'Sincronizar'}
             </button>
 
             {onOpenNewConversationModal && (
@@ -788,12 +856,37 @@ export const ChatList: React.FC<ChatListProps> = ({
 
       {/* List items (Grouped by Contact) */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
-        {contactGroups.length === 0 ? (
+        {contactGroups.length === 0 && phonebookOnlyContacts.length === 0 ? (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-            {activeTab === 'groups' ? 'Nenhum grupo encontrado.' : 'Nenhum cliente encontrado.'}
+            {searchTerm.trim() ? (
+              <div>
+                <p style={{ margin: '0 0 12px 0', color: '#94a3b8' }}>
+                  Nenhum resultado encontrado para "<strong>{searchTerm}</strong>".
+                </p>
+                {onOpenNewConversationModal && (
+                  <button
+                    onClick={onOpenNewConversationModal}
+                    className="btn-primary"
+                    style={{
+                      fontSize: '12px',
+                      padding: '7px 14px',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Plus size={14} /> Iniciar nova conversa
+                  </button>
+                )}
+              </div>
+            ) : (
+              activeTab === 'groups' ? 'Nenhum grupo encontrado.' : 'Nenhum cliente encontrado.'
+            )}
           </div>
         ) : (
-          contactGroups.map(group => {
+          <>
+          {contactGroups.map(group => {
             const isGroupSelected = group.allConversations.some(c => c.id === activeConversation?.id);
             const isExpanded = expandedContactIds.includes(group.contactId);
             const primaryConv = group.primaryConv;
@@ -802,6 +895,18 @@ export const ChatList: React.FC<ChatListProps> = ({
             const isGroupPinned = isConvPinned(primaryConv) || group.allConversations.some(c => isConvPinned(c));
             const lastMsgTime = lastMessage?.timestamp ? parseIsoDate(lastMessage.timestamp).getTime() : 0;
             const isRecentMessage = lastMsgTime > 0 && (Date.now() - lastMsgTime) < 24 * 60 * 60 * 1000;
+
+            const searchKeyword = searchTerm.trim().toLowerCase();
+            let matchedMessageExcerpt: string | null = null;
+            if (searchKeyword) {
+              for (const c of group.allConversations) {
+                const found = (c.messages || []).slice().reverse().find(m => (m.conteudo || '').toLowerCase().includes(searchKeyword));
+                if (found && found.conteudo) {
+                  matchedMessageExcerpt = found.conteudo;
+                  break;
+                }
+              }
+            }
 
             const isWaitingAttendant = Boolean(
               !isSelected &&
@@ -925,6 +1030,22 @@ export const ChatList: React.FC<ChatListProps> = ({
                           {group.contactName}
                         </span>
 
+                        {/* Department badge when searching across departments */}
+                        {searchTerm.trim() && primaryConv.whatsapp_number?.nome_departamento && (
+                          <span style={{
+                            fontSize: '9px',
+                            padding: '1px 5px',
+                            borderRadius: '4px',
+                            backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                            color: '#93c5fd',
+                            fontWeight: '600',
+                            flexShrink: 0,
+                            whiteSpace: 'nowrap'
+                          }} title={`Departamento: ${primaryConv.whatsapp_number.nome_departamento}`}>
+                            {primaryConv.whatsapp_number.nome_departamento}
+                          </span>
+                        )}
+
                         {/* IA / Humano Status Badge */}
                         <button
                           onClick={(e) => handleToggleStatus(e, primaryConv)}
@@ -1003,6 +1124,11 @@ export const ChatList: React.FC<ChatListProps> = ({
                                 <span style={{ color: '#22c55e', fontWeight: '700' }}>Rascunho: </span>
                                 <span style={{ color: 'var(--text-muted)' }}>{draftText}</span>
                               </>
+                            ) : matchedMessageExcerpt ? (
+                              <span style={{ color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                <span style={{ color: 'var(--text-muted)' }}>💬</span>
+                                <span>"{matchedMessageExcerpt.length > 50 ? matchedMessageExcerpt.substring(0, 50) + '...' : matchedMessageExcerpt}"</span>
+                              </span>
                             ) : (
                               formatMessagePreview(lastMessage)
                             )}
@@ -1109,7 +1235,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                                 {subGroupConv.contact?.nome || 'Grupo'}
                               </div>
                               <div style={{ fontSize: '10px', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {subLastMsg ? subLastMsg.conteudo : 'Conversa iniciada'}
+                                {formatMessagePreview(subLastMsg)}
                               </div>
                             </div>
 
@@ -1197,7 +1323,7 @@ export const ChatList: React.FC<ChatListProps> = ({
                                     </>
                                   );
                                 }
-                                return subLastMsg ? subLastMsg.conteudo : 'Sem mensagens';
+                                return subLastMsg ? formatMessagePreview(subLastMsg) : 'Sem mensagens';
                               })()}
                             </div>
                           </div>
@@ -1235,7 +1361,101 @@ export const ChatList: React.FC<ChatListProps> = ({
                 )}
               </div>
             );
-          })
+          })}
+
+          {/* Phonebook agenda contacts matching search */}
+          {phonebookOnlyContacts.length > 0 && (
+            <div style={{ borderTop: contactGroups.length > 0 ? '1px solid var(--border-color)' : 'none' }}>
+              <div style={{
+                padding: '8px 16px',
+                backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                fontSize: '11px',
+                fontWeight: '700',
+                color: 'var(--text-muted)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}>
+                <span>📖 Contatos da Agenda ({phonebookOnlyContacts.length})</span>
+              </div>
+              {phonebookOnlyContacts.map((contact: any) => (
+                <div
+                  key={`agenda_contact_${contact.id || contact.telefone}`}
+                  onClick={() => handleStartOrOpenChat(contact)}
+                  style={{
+                    padding: '10px 16px',
+                    borderBottom: '1px solid var(--border-color)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                    transition: 'var(--transition-fast)'
+                  }}
+                  className="hover:bg-[rgba(255,255,255,0.04)]"
+                >
+                  <div style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '50%',
+                    backgroundColor: '#3b82f6',
+                    color: '#ffffff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: '700',
+                    fontSize: '14px',
+                    flexShrink: 0
+                  }}>
+                    {(contact.nome || contact.telefone || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontWeight: '600',
+                      fontSize: '13px',
+                      color: 'var(--text-main)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis'
+                    }}>
+                      {contact.nome || 'Contato sem nome'}
+                    </div>
+                    <div style={{
+                      fontSize: '12px',
+                      color: 'var(--text-muted)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis'
+                    }}>
+                      {formatWhatsAppPhone(contact.telefone || '')}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleStartOrOpenChat(contact);
+                    }}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: '600',
+                      borderRadius: '4px',
+                      backgroundColor: 'rgba(0, 230, 153, 0.12)',
+                      color: 'var(--accent-primary)',
+                      border: '1px solid rgba(0, 230, 153, 0.3)',
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    Conversar
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          </>
         )}
       </div>
 

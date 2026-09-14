@@ -199,19 +199,22 @@ class InactivityService:
                             f"Caso ainda precise de suporte, basta nos enviar uma nova mensagem a qualquer momento!"
                         )
                         if inst_name and conv.contact:
-                            try:
-                                if _check_and_increment_daily_counter():
-                                    await evolution_service.send_text_message(
-                                        instance_name=inst_name,
-                                        number=conv.contact.telefone,
-                                        text=closing_msg
-                                    )
-                                    msgs_sent_this_cycle += 1
-                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                else:
-                                    logger.warning(f"[ANTI-SPAM] Skipped closing message for conv #{conv.id} — daily cap reached.")
-                            except Exception as err:
-                                logger.warning(f"Failed to send inactivity closing message to #{conv.id}: {err}")
+                            if inst_name in ["instancia_vendas"]:
+                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade final na conversa #{conv.id} ('{inst_name}'): Chamado expirado no CRM. Mensagem de encerramento no WhatsApp silenciada para proteção contra bloqueio da Meta.")
+                            else:
+                                try:
+                                    if _check_and_increment_daily_counter():
+                                        await evolution_service.send_text_message(
+                                            instance_name=inst_name,
+                                            number=conv.contact.telefone,
+                                            text=closing_msg
+                                        )
+                                        msgs_sent_this_cycle += 1
+                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                    else:
+                                        logger.warning(f"[ANTI-SPAM] Skipped closing message for conv #{conv.id} — daily cap reached.")
+                                except Exception as err:
+                                    logger.warning(f"Failed to send inactivity closing message to #{conv.id}: {err}")
 
 
                         # System audit message
@@ -296,25 +299,28 @@ class InactivityService:
                             f"Estamos à disposição caso queira dar continuidade!"
                         )
                         if inst_name and conv.contact:
-                            try:
-                                if _check_and_increment_daily_counter():
-                                    await evolution_service.send_text_message(
-                                        instance_name=inst_name,
-                                        number=conv.contact.telefone,
-                                        text=warning_text
-                                    )
-                                    msgs_sent_this_cycle += 1
-                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                else:
-                                    logger.warning(f"[ANTI-SPAM] Skipped 10m warning for conv #{conv.id} — daily cap reached.")
-                            except Exception as err:
-                                logger.warning(f"Failed to send 10m warning message to #{conv.id}: {err}")
+                            if inst_name in ["instancia_vendas"]:
+                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade (aviso 10m) na conversa #{conv.id} ('{inst_name}'): Mensagem no WhatsApp silenciada para proteção contra bloqueio da Meta.")
+                            else:
+                                try:
+                                    if _check_and_increment_daily_counter():
+                                        await evolution_service.send_text_message(
+                                            instance_name=inst_name,
+                                            number=conv.contact.telefone,
+                                            text=warning_text
+                                        )
+                                        msgs_sent_this_cycle += 1
+                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                    else:
+                                        logger.warning(f"[ANTI-SPAM] Skipped 10m warning for conv #{conv.id} — daily cap reached.")
+                                except Exception as err:
+                                    logger.warning(f"Failed to send 10m warning message to #{conv.id}: {err}")
 
 
                         sys_msg = Message(
                             conversation_id=conv.id,
                             remetente="sistema",
-                            conteudo="⏳ Segundo aviso prévio de inatividade (10 minutos restantes) enviado ao cliente.",
+                            conteudo="⏳ Segundo aviso prévio de inatividade (10 minutos restantes) registrado pelo sistema.",
                             tipo=MessageType.TEXTO,
                             timestamp=now
                         )
@@ -331,7 +337,7 @@ class InactivityService:
                     # TIER 1: WARNING 1 (30 min restantes / inatividade >= 3h30 = 210 min)
                     # ----------------------------------------------------
                     if inatividade_util >= (TIMEOUT_INATIVIDADE - AVISO_1) and not extra.get("aviso_1_enviado") and not extra.get("inactivity_warning_30m_sent"):
-                        logger.info(f"[INATIVIDADE ÚTIL] Enviando 1º aviso prévio (30 min restantes) para conversa #{conv.id}...")
+                        logger.info(f"[INATIVIDADE ÚTIL] Verificando 1º aviso prévio (30 min restantes) para conversa #{conv.id}...")
                         
                         warning_text = (
                             f"⏳ *Aviso de Atendimento*\n\n"
@@ -339,19 +345,22 @@ class InactivityService:
                             f"Seu atendimento (Protocolo: {proto}) será encerrado em aproximadamente 30 minutos caso não haja nova resposta."
                         )
                         if inst_name and conv.contact:
-                            try:
-                                if _check_and_increment_daily_counter():
-                                    await evolution_service.send_text_message(
-                                        instance_name=inst_name,
-                                        number=conv.contact.telefone,
-                                        text=warning_text
-                                    )
-                                    msgs_sent_this_cycle += 1
-                                    await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                else:
-                                    logger.warning(f"[ANTI-SPAM] Skipped 30m warning for conv #{conv.id} — daily cap reached.")
-                            except Exception as err:
-                                logger.warning(f"Failed to send 30m warning message to #{conv.id}: {err}")
+                            if inst_name in ["instancia_vendas"]:
+                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade (aviso 30m) na conversa #{conv.id} ('{inst_name}'): Mensagem no WhatsApp silenciada para proteção contra bloqueio da Meta.")
+                            else:
+                                try:
+                                    if _check_and_increment_daily_counter():
+                                        await evolution_service.send_text_message(
+                                            instance_name=inst_name,
+                                            number=conv.contact.telefone,
+                                            text=warning_text
+                                        )
+                                        msgs_sent_this_cycle += 1
+                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
+                                    else:
+                                        logger.warning(f"[ANTI-SPAM] Skipped 30m warning for conv #{conv.id} — daily cap reached.")
+                                except Exception as err:
+                                    logger.warning(f"Failed to send 30m warning message to #{conv.id}: {err}")
 
 
                         sys_msg = Message(

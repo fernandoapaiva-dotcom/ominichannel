@@ -30,7 +30,11 @@ export interface ProtocolSession {
   messages: Message[];
 }
 
-export const ContactsPanel: React.FC = () => {
+interface ContactsPanelProps {
+  onStartChat?: (phone: string, name?: string) => void;
+}
+
+export const ContactsPanel: React.FC<ContactsPanelProps> = ({ onStartChat }) => {
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [search, setSearch] = useState('');
   const [selectedContact, setSelectedContact] = useState<ContactItem | null>(null);
@@ -53,10 +57,10 @@ export const ContactsPanel: React.FC = () => {
   const fetchContacts = async (query = '') => {
     try {
       setLoadingContacts(true);
-      const url = query.trim() ? `/contacts/?q=${encodeURIComponent(query.trim())}` : '/contacts/';
+      const url = query.trim() ? `/contacts/?q=${encodeURIComponent(query.trim())}&limit=100` : '/contacts/?limit=100';
       const data = await apiFetch(url);
-      setContacts(data);
-      if (data.length > 0) {
+      setContacts(data || []);
+      if (data && data.length > 0) {
         const currentStillExists = data.find((c: ContactItem) => c.id === selectedContact?.id);
         if (!currentStillExists) {
           handleSelectContact(data[0]);
@@ -74,35 +78,38 @@ export const ContactsPanel: React.FC = () => {
 
   const handleSyncAllHistory = async () => {
     setSyncingHistory(true);
-    setSyncFeedback('Iniciando sincronização automática em massa de todas as instâncias do WhatsApp...');
+    setSyncFeedback('Puxando contatos da agenda do telefone e sincronizando mensagens...');
     try {
+      // 1. Sync phone agenda
+      await apiFetch('/contacts/sync-agenda', { method: 'POST' });
+      // 2. Sync history
       const res = await apiFetch('/whatsapp-numbers/sync_all', { method: 'POST' });
-      setSyncFeedback(res.message || 'Sincronização iniciada com sucesso!');
+      setSyncFeedback(res.message || 'Agenda e histórico sincronizados com sucesso!');
       setTimeout(() => {
         fetchContacts(search);
-      }, 3000);
-      setTimeout(() => setSyncFeedback(null), 6000);
+      }, 1500);
+      setTimeout(() => setSyncFeedback(null), 5000);
     } catch (err: any) {
       setSyncFeedback('Erro ao sincronizar: ' + (err.message || 'Falha na conexão'));
-      setTimeout(() => setSyncFeedback(null), 6000);
+      setTimeout(() => setSyncFeedback(null), 5000);
     } finally {
       setSyncingHistory(false);
     }
   };
 
   useEffect(() => {
-    fetchContacts();
-  }, []);
+    const timer = setTimeout(() => {
+      fetchContacts(search);
+    }, search ? 250 : 0);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setSearch(val);
-    fetchContacts(val);
+    setSearch(e.target.value);
   };
 
   const handleClearSearch = () => {
     setSearch('');
-    fetchContacts('');
   };
 
   const handleSelectContact = async (contact: ContactItem) => {
@@ -532,6 +539,27 @@ export const ContactsPanel: React.FC = () => {
                       <Phone size={14} /> Telefone: <strong>{selectedContact.telefone}</strong>
                     </p>
                   </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  {onStartChat && (
+                    <button
+                      onClick={() => onStartChat(selectedContact.telefone, selectedContact.nome)}
+                      className="btn-primary"
+                      style={{
+                        padding: '8px 16px',
+                        fontSize: '13px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        borderRadius: 'var(--radius-md)',
+                        cursor: 'pointer'
+                      }}
+                      title="Abrir chat no WhatsApp com este contato"
+                    >
+                      <MessageSquare size={16} /> Conversar no WhatsApp
+                    </button>
+                  )}
                 </div>
 
                 {search && (

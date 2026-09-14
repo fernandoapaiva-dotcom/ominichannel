@@ -72,9 +72,10 @@ async def lifespan(app: FastAPI):
     watchdog_task = asyncio.create_task(start_whatsapp_watchdog_loop(interval_seconds=30))
     logger.info("🛡️ WhatsApp Instance Auto-Heal Watchdog background loop started (30s interval).")
 
-    # Start WhatsApp Continuous Message Reconciliation Watchdog (Zero Missing Messages)
-    reconcile_task = asyncio.create_task(start_whatsapp_reconciliation_loop(interval_seconds=30))
-    logger.info("🔄 WhatsApp Continuous Message Reconciliation Watchdog loop started (30s interval).")
+    # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
+    # Reconciliation is triggered passively via connection webhooks or manual admin action.
+    reconcile_task = None
+    logger.info("🛡️ WhatsApp Continuous Polling disabled for safety (anti-ban protection).")
     
     yield
     
@@ -85,7 +86,8 @@ async def lifespan(app: FastAPI):
     business_hours_task.cancel()
     calendar_reminder_task.cancel()
     watchdog_task.cancel()
-    reconcile_task.cancel()
+    if reconcile_task:
+        reconcile_task.cancel()
     logger.info("Application shutdown completed.")
 
 app = FastAPI(

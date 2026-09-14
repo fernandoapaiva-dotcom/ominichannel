@@ -493,10 +493,10 @@ class GeminiService:
             "   - Cumprimente o cliente com simpatia e profissionalismo.\n"
             f"   - {'Atenção: Este é o primeiro contato. O sistema já anexa o número do protocolo automaticamente no topo, portanto NÃO repita o número do protocolo no corpo da mensagem.' if should_announce_protocol else 'O protocolo já foi aberto anteriormente nesta conversa. NUNCA mencione número de protocolo nem reinicie saudações de boas-vindas.'}\n\n"
             "2. LOCALIZAÇÃO E ENDEREÇO:\n"
-            "   - Se o cliente perguntar sobre onde fica a loja, endereço, localização, como chegar, rota, mapa ou GPS, responda acolhedoramente com o endereço completo e avise que o mapa interativo para abrir no GPS (Google Maps / Waze) está logo abaixo:\n"
-            "     📍 Endereço: SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, CEP: 71215-226\n"
-            "     🗺️ Google Maps: https://maps.google.com/?q=-15.820418,-47.956467\n"
-            "   - Defina \"enviar_localizacao\": true no JSON.\n\n"
+            "   - Se o cliente perguntar sobre onde fica a loja, endereço, localização, como chegar, rota, mapa, localizador ou GPS:\n"
+            "     • Responda apenas com uma mensagem breve, acolhedora e cortês avisando que a localização no mapa está logo abaixo (ex: 'Com certeza! Segue a nossa localização no mapa abaixo. Ficamos à sua disposição e aguardamos sua visita! 📍').\n"
+            "     • NUNCA escreva textos longos nem repita endereço por extenso, CEP ou links no texto da mensagem, pois o sistema enviará automaticamente o mapa com o localizador oficial da loja.\n"
+            "     • Defina \"enviar_localizacao\": true no JSON.\n\n"
             "3. HORÁRIO DE ATENDIMENTO E FUNCIONAMENTO:\n"
             "   - Se o cliente perguntar sobre horários de funcionamento, que horas abre ou fecha, informe com clareza:\n"
             "     ⏰ Segunda a Sexta-feira das 08h00 às 18h00 (Não abrimos aos sábados, domingos e feriados).\n\n"
@@ -566,15 +566,19 @@ class GeminiService:
                 "enviar_localizacao": False
             }
 
-        if had_empty_history:
-            fallback_text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+        # Anti-Loop & Anti-Spam Fallback Shield:
+        # Se o protocolo já foi anunciado ou se já houve mensagens anteriores, NUNCA repete saudação de boas-vindas.
+        if not should_announce_protocol or not had_empty_history:
+            fallback_text = "Recebi sua mensagem! Já estou encaminhando seu atendimento para a nossa equipe dar continuidade. Um momento, por favor!"
+            escalar_apos_falha = True
         else:
-            fallback_text = "Olá! Já recebi suas informações e estou encaminhando para nossa equipe especialista dar continuidade ao seu atendimento. Um momento, por favor!"
+            fallback_text = f"Olá! Seja bem-vindo(a) à {store_name}. Como posso ajudar?"
+            escalar_apos_falha = True  # Escala para humano para não travar o cliente em loop se a IA não puder responder
 
         default_res = {
             "resposta": fallback_text,
             "temperatura": "baixa",
-            "escalar_humano": not had_empty_history,
+            "escalar_humano": escalar_apos_falha,
             "atendente_preferencial": None,
             "transferir_setor": None,
             "nova_memoria": memory_summary or "",
@@ -1432,17 +1436,22 @@ class GeminiService:
             return "NONE"
 
         # 2. Store Location keywords (customer asking where the company/store is, or where to bring machine):
-        is_asking_store_location = any(k in clean_lower for k in [
-            "onde fica", "onde vocês ficam", "onde voces ficam", "qual o endereço", "qual o endereco",
-            "localização da loja", "localizacao da loja", "localização de vocês", "localizacao de vocês",
-            "localização da servweld", "localizacao da servweld", "passa a localização", "passa a localizacao",
-            "manda a localização", "manda a localizacao", "onde levo", "onde posso levar", "onde entrego",
-            "onde posso entregar", "levar a máquina", "levar o equipamento", "como chego aí", "como chegar aí",
-            "como chego na loja", "como chegar na loja", "link do maps", "ponto de referência da loja",
-            "onde vocês estão", "onde voces estao"
-        ]) or (
-            ("localiza" in clean_lower or "endereço" in clean_lower or "endereco" in clean_lower) and
-            any(v in clean_lower for v in ["manda", "envia", "passa", "qual", "onde"])
+        is_asking_store_location = (
+            clean_lower.strip("?.! ") in ["localização", "localizacao", "localizador", "endereço", "endereco", "mapa", "gps", "como chegar", "onde fica", "localizador por favor", "localização por favor"]
+            or any(k in clean_lower for k in [
+                "onde fica", "onde vocês ficam", "onde voces ficam", "qual o endereço", "qual o endereco",
+                "localização da loja", "localizacao da loja", "localização de vocês", "localizacao de vocês",
+                "localização da servweld", "localizacao da servweld", "passa a localização", "passa a localizacao",
+                "manda a localização", "manda a localizacao", "passa o localizador", "manda o localizador",
+                "me passa o localizador", "me manda o localizador", "localizador daí", "localizador dai",
+                "onde levo", "onde posso levar", "onde entrego",
+                "onde posso entregar", "levar a máquina", "levar o equipamento", "como chego aí", "como chegar aí",
+                "como chego na loja", "como chegar na loja", "link do maps", "ponto de referência da loja",
+                "onde vocês estão", "onde voces estao"
+            ]) or (
+                ("localiza" in clean_lower or "localizador" in clean_lower or "endereço" in clean_lower or "endereco" in clean_lower or "mapa" in clean_lower or "gps" in clean_lower) and
+                any(v in clean_lower for v in ["manda", "envia", "passa", "qual", "onde", "compartilha"])
+            )
         )
 
         # 3. Store Working Hours keywords:

@@ -219,6 +219,7 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
       {/* "Todos" button — pill on mobile, card on desktop */}
       <button
         className="dept-bar-btn"
+        title="Todos"
         onClick={() => onSelectDepartment('all')}
         style={desktopCardStyle(selectedDepartmentId === 'all')}
         onMouseEnter={(e) => {
@@ -254,6 +255,7 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
           <button
             key={wn.id}
             className="dept-bar-btn"
+            title={wn.nome_departamento}
             onClick={() => onSelectDepartment(wn.id)}
             style={desktopCardStyle(isSelected)}
             onMouseEnter={(e) => {

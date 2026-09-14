@@ -22,14 +22,24 @@ import {
   triggerSystemNotification,
   requestNotificationPermission
 } from '../utils/badgeHelper';
+import { formatMessageContent } from '../utils/messageFormatter';
 
 interface DashboardProps {
   user: User;
   onLogout: () => void;
 }
-
+ 
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin'>('chats');
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin'>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const t = params.get('tab');
+      if (t === 'admin' || t === 'groups' || t === 'contacts' || t === 'segmentation') {
+        return t as any;
+      }
+    } catch {}
+    return 'chats';
+  });
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const activeConversationIdRef = useRef<number | null>(null);
@@ -708,9 +718,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                 payload.is_group
               );
               const senderName = payload.contact_name || (isGroupMsg ? 'Grupo' : 'Cliente');
-              const preview = payload.conteudo
-                ? (payload.conteudo.length > 60 ? payload.conteudo.slice(0, 60) + '...' : payload.conteudo)
-                : 'Nova mensagem recebida';
+              const rawPreview = formatMessageContent(payload.conteudo, payload.tipo);
+              const preview = rawPreview.length > 70 ? rawPreview.slice(0, 70) + '...' : rawPreview;
 
               triggerSystemNotification(
                 isGroupMsg ? `🟡 ${senderName}` : `🔴 ${senderName}`,
@@ -798,6 +807,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
               return c;
             }));
+          } else if (payload.type === 'CONVERSATIONS_RECONCILED') {
+            fetchConversations();
           }
         } catch (err) {
           console.error('WebSocket parse error:', err);
@@ -983,18 +994,37 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
     setActiveTab('chats');
   };
+
+  const handleStartChatDirect = async (phone: string, name?: string) => {
+    const cleanPhone = phone.replace(/\D/g, '');
+    const wnId = selectedDeptId !== 'all' ? Number(selectedDeptId) : (whatsappNumbers[0]?.id || 0);
+    if (!wnId) {
+      alert('Nenhum departamento ou número de WhatsApp disponível para envio.');
+      return;
+    }
+    try {
+      const conv = await apiFetch('/conversations/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          whatsapp_number_id: wnId,
+          telefone: cleanPhone,
+          nome: name?.trim() || undefined
+        })
+      });
+      handleConversationCreated(conv);
+    } catch (err: any) {
+      alert(err.message || 'Erro ao iniciar conversa');
+    }
+  };
   const [isChatListCollapsed, setIsChatListCollapsed] = useState(false);
 
   const [isMainSidebarCollapsed, setIsMainSidebarCollapsed] = useState(false);
 
   return (
-    <div className="dashboard-layout" style={{ display: 'flex', width: '100%', height: '100dvh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
+    <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100dvh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
       {showNotificationPrompt && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
+        <div className="dashboard-notification-banner" style={{
+          flexShrink: 0,
           backgroundColor: '#0f172a',
           borderBottom: '2px solid #22c55e',
           color: '#fff',
@@ -1083,6 +1113,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         </div>
       )}
 
+      <div style={{ flex: 1, minHeight: 0, width: '100%', display: 'flex', overflow: 'hidden' }}>
       <Sidebar
         user={user}
         activeTab={activeTab}
@@ -1172,7 +1203,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       )}
 
       {activeTab === 'contacts' && (
-        <ContactsPanel />
+        <ContactsPanel onStartChat={handleStartChatDirect} />
       )}
 
       {activeTab === 'segmentation' && (
@@ -1182,6 +1213,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       {activeTab === 'admin' && (
         <AdminPanel initialNumbers={whatsappNumbers} onRefreshNumbers={fetchNumbers} onBack={() => setActiveTab('chats')} />
       )}
+      </div>
 
       {/* Modals */}
       <NewConversationModal
