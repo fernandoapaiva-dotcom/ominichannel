@@ -796,7 +796,7 @@ class EvolutionService:
         }
         client = self.get_client()
         try:
-            response = await client.post(url, json=payload, headers=headers, timeout=20.0)
+            response = await client.post(url, json=payload, headers=headers, timeout=45.0)
             res_data = response.json() if response.content else {}
             logger.info(f"[AUDIO] sendWhatsAppAudio response: {response.status_code} | {str(res_data)[:300]}")
             if response.status_code < 400 or res_data.get("key") or res_data.get("id"):
@@ -815,7 +815,7 @@ class EvolutionService:
                 "fileName": "voice_note.ogg",
                 "ptt": True
             }
-            fb_res = await client.post(fallback_url, json=fallback_payload, headers=headers, timeout=20.0)
+            fb_res = await client.post(fallback_url, json=fallback_payload, headers=headers, timeout=45.0)
             fb_data = fb_res.json() if fb_res.content else {}
             if fb_res.status_code < 400 or fb_data.get("key") or fb_data.get("id"):
                 fb_data["success"] = True
@@ -880,7 +880,12 @@ class EvolutionService:
         }
         client = self.get_client()
         try:
-            response = await client.post(url, json=payload, headers=headers)
+            # Media (especially video) can take Evolution API well past the client's
+            # default 15s timeout to upload and confirm with WhatsApp — a slow-but-real
+            # delivery was being reported back to the attendant as a failed send even
+            # though the message had actually reached the customer. Give media sends
+            # a much longer budget before we give up waiting for the response.
+            response = await client.post(url, json=payload, headers=headers, timeout=90.0)
             res_data = response.json() if response.content else {}
 
             # (Auto-restart automático de socket desativado para prevenir martelamento de conexão na Meta)
@@ -889,7 +894,7 @@ class EvolutionService:
                 alt_number = await self.resolve_canonical_jid(instance_name, str(number), custom_base_url, custom_api_key)
                 if alt_number and alt_number != clean_number:
                     retry_payload = {**payload, "number": self._format_target_number(alt_number)}
-                    retry_res = await client.post(url, json=retry_payload, headers=headers)
+                    retry_res = await client.post(url, json=retry_payload, headers=headers, timeout=90.0)
                     if retry_res.status_code < 400:
                         retry_data = retry_res.json()
                         retry_data["success"] = True
