@@ -5510,7 +5510,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Hidden File Input Pickers for Native OS Integration */}
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
       <input type="file" ref={mediaInputRef} accept="image/*,video/*" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
-      <input type="file" ref={cameraInputRef} accept="image/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
+      <input type="file" ref={cameraInputRef} accept="image/*,video/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
       <input type="file" ref={documentInputRef} accept="*/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,application/pdf" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
 
