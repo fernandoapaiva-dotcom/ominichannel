@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Phone, User, MessageSquare, Search, RefreshCw, Send, ChevronDown, CheckCircle2 } from 'lucide-react';
+import { X, Phone, User, MessageSquare, Search, RefreshCw, Send, ChevronDown, CheckCircle2, Upload } from 'lucide-react';
 import { WhatsAppNumber, Conversation } from '../types';
-import { apiFetch } from '../services/api';
+import { apiFetch, apiUpload } from '../services/api';
 
 interface NewConversationModalProps {
   isOpen: boolean;
@@ -23,6 +23,8 @@ export const NewConversationModal: React.FC<NewConversationModalProps> = ({
   const [syncingAgenda, setSyncingAgenda] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
   const [startingPhone, setStartingPhone] = useState<string | null>(null);
+  const [importingFile, setImportingFile] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
 
   // Optional initial message
   const [showInitialMessageInput, setShowInitialMessageInput] = useState(false);
@@ -82,6 +84,32 @@ export const NewConversationModal: React.FC<NewConversationModalProps> = ({
       setTimeout(() => setSyncFeedback(null), 4000);
     } finally {
       setSyncingAgenda(false);
+    }
+  };
+
+  const handleImportFileClick = () => {
+    importFileInputRef.current?.click();
+  };
+
+  const handleImportFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || importingFile) return;
+
+    try {
+      setImportingFile(true);
+      setSyncFeedback('Importando contatos do arquivo...');
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await apiUpload('/contacts/import-file', formData);
+      setSyncFeedback(res.message || 'Contatos importados com sucesso!');
+      await fetchContactsList(searchQuery);
+      setTimeout(() => setSyncFeedback(null), 5000);
+    } catch (err: any) {
+      setSyncFeedback('Erro ao importar arquivo: ' + (err.message || 'Falha na conexão'));
+      setTimeout(() => setSyncFeedback(null), 5000);
+    } finally {
+      setImportingFile(false);
     }
   };
 
@@ -313,27 +341,57 @@ export const NewConversationModal: React.FC<NewConversationModalProps> = ({
             <span style={{ color: '#94a3b8' }}>
               {contacts.length > 0 ? `${contacts.length} contatos encontrados` : 'Carregando agenda...'}
             </span>
-            <button
-              type="button"
-              onClick={handleSyncAgenda}
-              disabled={syncingAgenda}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--accent-primary)',
-                cursor: syncingAgenda ? 'default' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '5px',
-                fontWeight: '600',
-                padding: '3px 6px',
-                borderRadius: '6px'
-              }}
-              title="Puxar contatos mais recentes salvos no chip do WhatsApp"
-            >
-              <RefreshCw size={12} className={syncingAgenda ? 'animate-spin' : ''} />
-              {syncingAgenda ? 'Sincronizando...' : 'Puxar contatos do telefone'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <input
+                type="file"
+                ref={importFileInputRef}
+                accept=".csv,.vcf,.vcard,text/csv,text/vcard"
+                onChange={handleImportFileSelected}
+                style={{ display: 'none' }}
+              />
+              <button
+                type="button"
+                onClick={handleImportFileClick}
+                disabled={importingFile}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent-primary)',
+                  cursor: importingFile ? 'default' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: '600',
+                  padding: '3px 6px',
+                  borderRadius: '6px'
+                }}
+                title="Importar contatos de um arquivo .csv ou .vcf exportado do seu celular/Google Contatos (nomes exatamente como você salvou, sem depender do WhatsApp)"
+              >
+                <Upload size={12} className={importingFile ? 'animate-spin' : ''} />
+                {importingFile ? 'Importando...' : 'Importar arquivo'}
+              </button>
+              <button
+                type="button"
+                onClick={handleSyncAgenda}
+                disabled={syncingAgenda}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent-primary)',
+                  cursor: syncingAgenda ? 'default' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  fontWeight: '600',
+                  padding: '3px 6px',
+                  borderRadius: '6px'
+                }}
+                title="Puxar contatos mais recentes salvos no chip do WhatsApp"
+              >
+                <RefreshCw size={12} className={syncingAgenda ? 'animate-spin' : ''} />
+                {syncingAgenda ? 'Sincronizando...' : 'Puxar contatos do telefone'}
+              </button>
+            </div>
           </div>
 
           {syncFeedback && (

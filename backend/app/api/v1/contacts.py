@@ -1,5 +1,8 @@
+import csv
+import io
+import re
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from fastapi.responses import Response, RedirectResponse
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,6 +100,153 @@ async def sync_phone_agenda(
         "message": f"{res['created']} novos contatos importados e {res['updated']} contatos atualizados da agenda do WhatsApp!",
         "created": res["created"],
         "updated": res["updated"]
+    }
+
+
+def _parse_vcard_contacts(content: str) -> List[dict]:
+    """
+    Parses a .vcf (vCard) export — the native "export all contacts" format on iPhone,
+    Android and Google Contacts — into {"nome", "telefone"} entries. One entry is emitted
+    per phone number found (a contact with 2 numbers yields 2 entries, both under the same name).
+    """
+    entries: List[dict] = []
+    for block in re.split(r'(?i)END:VCARD', content):
+        if 'BEGIN:VCARD' not in block.upper():
+            continue
+        fn_match = re.search(r'(?im)^FN(?:;[^:]*)?:(.+)$', block)
+        name = fn_match.group(1).strip() if fn_match else None
+        if not name:
+            n_match = re.search(r'(?im)^N(?:;[^:]*)?:(.+)$', block)
+            if n_match:
+                parts = [p.strip() for p in n_match.group(1).split(';') if p.strip()]
+                name = ' '.join(parts) if parts else None
+        tel_matches = re.findall(r'(?im)^TEL(?:;[^:]*)?:(.+)$', block)
+        for tel in tel_matches:
+            phone_digits = re.sub(r'\D', '', tel)
+            if phone_digits:
+                entries.append({"nome": name or phone_digits, "telefone": phone_digits})
+    return entries
+
+
+def _parse_csv_contacts(content: str) -> List[dict]:
+    """
+    Parses a CSV contacts export (e.g. Google Contacts "Export -> Google CSV/Outlook CSV",
+    or a simple spreadsheet with Nome/Telefone columns) into {"nome", "telefone"} entries.
+    Column names are detected flexibly since exports vary a lot between providers.
+    """
+    entries: List[dict] = []
+    reader = csv.DictReader(io.StringIO(content))
+    headers = reader.fieldnames or []
+    if not headers:
+        return entries
+
+    phone_cols = [h for h in headers if h and re.search(r'phone|telefone|celular|whatsapp', h, re.I)]
+    name_col = next((h for h in headers if h and re.match(r'^(name|nome|nome completo|full ?name)$', h.strip(), re.I)), None)
+    first_col = next((h for h in headers if h and re.search(r'first ?name|given ?name|primeiro ?nome', h, re.I)), None)
+    last_col = next((h for h in headers if h and re.search(r'last ?name|family ?name|sobrenome', h, re.I)), None)
+
+    for row in reader:
+        name = (row.get(name_col) or '').strip() if name_col else ''
+        if not name:
+            first = (row.get(first_col) or '').strip() if first_col else ''
+            last = (row.get(last_col) or '').strip() if last_col else ''
+            name = f"{first} {last}".strip()
+
+        seen_in_row = set()
+        for pcol in phone_cols:
+            raw = (row.get(pcol) or '').strip()
+            if not raw:
+                continue
+            digits = re.sub(r'\D', '', raw)
+            if digits and digits not in seen_in_row:
+                seen_in_row.add(digits)
+                entries.append({"nome": name or digits, "telefone": digits})
+
+    return entries
+
+
+@router.post("/import-file")
+async def import_contacts_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Imports contacts (nome + telefone) straight from a file exported from the user's own
+    phone/Google Contacts (.csv or .vcf/vCard) — independent of WhatsApp/Evolution API, so
+    the names saved here are exactly what the user has in their own address book, not the
+    other person's self-set WhatsApp display name (pushName).
+    """
+    filename = (file.filename or '').lower().strip()
+    raw_bytes = await file.read()
+    if len(raw_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Arquivo muito grande (máximo 10MB).")
+
+    try:
+        content = raw_bytes.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        content = raw_bytes.decode('latin-1', errors='ignore')
+
+    is_vcard = filename.endswith('.vcf') or filename.endswith('.vcard') or 'BEGIN:VCARD' in content[:4000].upper()
+    if is_vcard:
+        parsed = _parse_vcard_contacts(content)
+    elif filename.endswith('.csv') or filename.endswith('.txt') or ',' in (content.splitlines()[0] if content.splitlines() else ''):
+        parsed = _parse_csv_contacts(content)
+    else:
+        raise HTTPException(status_code=400, detail="Formato não reconhecido. Envie um arquivo .csv (planilha) ou .vcf (vCard exportado do celular).")
+
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Nenhum contato válido encontrado no arquivo. Confira se ele tem nome e telefone.")
+
+    db_contacts_res = await db.execute(select(Contact).where(Contact.tenant_id == current_user.tenant_id))
+    db_contacts = {c.telefone: c for c in db_contacts_res.scalars().all() if c.telefone}
+
+    created = 0
+    updated = 0
+    skipped = 0
+
+    for entry in parsed:
+        phone = entry["telefone"]
+        name = entry["nome"]
+        if not phone or len(phone) < 8:
+            skipped += 1
+            continue
+
+        c_obj = db_contacts.get(phone)
+        if not c_obj:
+            for p, obj in db_contacts.items():
+                if p and len(p) >= 8 and (phone.endswith(p[-8:]) or p.endswith(phone[-8:])):
+                    c_obj = obj
+                    break
+
+        if c_obj:
+            if name and c_obj.nome != name:
+                c_obj.nome = name
+                extra = dict(c_obj.dados_adicionais or {})
+                # A name the user explicitly imported/saved always wins over WhatsApp's pushName.
+                extra["custom_name_locked"] = True
+                c_obj.dados_adicionais = extra
+                flag_modified(c_obj, "dados_adicionais")
+                updated += 1
+        else:
+            new_c = Contact(
+                tenant_id=current_user.tenant_id,
+                telefone=phone,
+                nome=name or phone,
+                dados_adicionais={"origin": "file_import", "custom_name_locked": True}
+            )
+            db.add(new_c)
+            db_contacts[phone] = new_c
+            created += 1
+
+    await db.commit()
+
+    return {
+        "status": "success",
+        "message": f"{created} novo(s) contato(s) importado(s) e {updated} atualizado(s) a partir do arquivo!",
+        "created": created,
+        "updated": updated,
+        "skipped": skipped
     }
 
 @router.get("/{contact_id}/conversations", response_model=List[ConversationResponse])
