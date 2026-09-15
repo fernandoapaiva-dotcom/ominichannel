@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import asyncio
@@ -279,10 +280,19 @@ async def resolve_and_bind_contact(
         session.add(contact)
         await session.flush()
     else:
-        # Update existing contact if better name or phone resolved
+        # Update existing contact if better name or phone resolved. Never overwrite a name
+        # that already looks real (has letters) with a resolved pushName/LID lookup result —
+        # only replace clearly weak placeholders (missing, "Cliente...", equal to the phone
+        # number, or no letters at all e.g. a formatted phone used as the name).
         if resolved_name and resolved_name not in ["Cliente", "Cliente WhatsApp", clean_digits, real_phone]:
             if not (contact.dados_adicionais or {}).get("custom_name_locked"):
-                if contact.nome in ["Cliente", "Cliente WhatsApp", contact.telefone, clean_digits]:
+                current_name = (contact.nome or "").strip()
+                current_is_weak = (
+                    not current_name or
+                    current_name in ["Cliente", "Cliente WhatsApp", contact.telefone, clean_digits] or
+                    not re.search(r'[A-Za-zÀ-ÿ]', current_name)
+                )
+                if current_is_weak:
                     contact.nome = resolved_name
         if contact.telefone != real_phone and real_phone.startswith("55") and not contact.telefone.startswith("55"):
             contact.telefone = real_phone

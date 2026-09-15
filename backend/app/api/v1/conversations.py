@@ -3279,34 +3279,64 @@ async def get_conversation_participants(
     participants_raw = (group_info or {}).get("participants", [])
     subject = (group_info or {}).get("subject") or (conv.contact.nome if conv.contact else "Grupo WhatsApp")
 
+    # WhatsApp hides the real phone number for privacy-protected members, so Evolution API
+    # only gives us their LID (e.g. "6560527241439@lid") for those — showing that raw LID as
+    # if it were the person's phone number is meaningless. Resolve every LID in this group up
+    # front (concurrently) the same way 1:1 conversations already do, so a member either shows
+    # their real saved name/number, or — if genuinely unresolvable — their real phone number
+    # rather than WhatsApp's internal identifier.
+    from app.services.lid_resolver_service import resolve_lid_info
+    pending_lids = list({
+        p.get("id", "").split("@")[0]
+        for p in participants_raw
+        if "@lid" in str(p.get("id", "")) and not p.get("phoneNumber")
+    })
+    lid_info_map: Dict[str, Any] = {}
+    if pending_lids:
+        results = await asyncio.gather(*[resolve_lid_info(lid) for lid in pending_lids], return_exceptions=True)
+        for lid, info in zip(pending_lids, results):
+            if isinstance(info, dict):
+                lid_info_map[lid] = info
+
     mapped_participants = []
     for p in participants_raw:
         p_raw = p.get("phoneNumber") or p.get("id") or ""
         clean_digits = "".join(filter(str.isdigit, p_raw.split("@")[0]))
         lid_id = p.get("id", "").split("@")[0] if "@lid" in str(p.get("id", "")) else ""
 
-        # Match contact by phone in DB
-        c_stmt = select(Contact).where(
-            Contact.tenant_id == current_user.tenant_id
-        )
-        if len(clean_digits) >= 8:
-            c_stmt = c_stmt.where(Contact.telefone.like(f"%{clean_digits[-8:]}%"))
-        else:
-            c_stmt = c_stmt.where(Contact.telefone == clean_digits)
+        lid_info = lid_info_map.get(lid_id) if lid_id else None
+        real_phone_digits = (lid_info or {}).get("real_phone") or clean_digits
 
-        c_res = await db.execute(c_stmt)
-        matched_contact = c_res.scalars().first()
+        # Match contact by resolved phone (or raw digits if we couldn't resolve), falling
+        # back to a contact we've previously tagged with this exact LID.
+        match_conds = []
+        if len(real_phone_digits) >= 8:
+            match_conds.append(Contact.telefone.like(f"%{real_phone_digits[-8:]}%"))
+        elif real_phone_digits:
+            match_conds.append(Contact.telefone == real_phone_digits)
+        if lid_id:
+            match_conds.append(Contact.dados_adicionais.like(f'%"lid": "{lid_id}"%'))
+
+        matched_contact = None
+        if match_conds:
+            c_stmt = select(Contact).where(Contact.tenant_id == current_user.tenant_id, or_(*match_conds))
+            c_res = await db.execute(c_stmt)
+            matched_contact = c_res.scalars().first()
+
+        display_phone = matched_contact.telefone if matched_contact else real_phone_digits
 
         name = matched_contact.nome if matched_contact and matched_contact.nome else None
+        if not name and lid_info and lid_info.get("name"):
+            name = lid_info["name"]
         if not name:
-            name = f"+{clean_digits}" if clean_digits else (p.get("id") or "Participante")
+            name = f"+{display_phone}" if display_phone else (p.get("id") or "Participante")
 
         mapped_participants.append({
             "id": p.get("id") or clean_digits,
-            "phone": clean_digits,
+            "phone": display_phone or clean_digits,
             "lid": lid_id,
             "name": name,
-            "avatar_url": matched_contact.foto_perfil_url if matched_contact else None,
+            "avatar_url": matched_contact.foto_perfil_url if matched_contact else (lid_info.get("profile_pic") if lid_info else None),
             "is_admin": p.get("admin") in ["admin", "superadmin"]
         })
 

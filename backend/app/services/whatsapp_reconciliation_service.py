@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import uuid
 import base64
 from datetime import datetime
@@ -116,11 +117,24 @@ class WhatsAppReconciliationService:
                     if c_obj:
                         locked = (c_obj.dados_adicionais or {}).get("custom_name_locked", False)
                         has_changed = False
-                        if not locked:
+                        # Never let a synced name overwrite one that already looks real (has
+                        # letters) — only replace clearly weak placeholders (missing, equal to
+                        # the phone number, "Contato ..." fallback, or no letters at all e.g.
+                        # a formatted phone used as the name). Otherwise a good business name
+                        # like "Adalberto Gas Particular" gets silently downgraded to whatever
+                        # short pushName the customer set for themselves on WhatsApp.
+                        current_name = (c_obj.nome or "").strip()
+                        current_is_weak = (
+                            not current_name or
+                            current_name == c_obj.telefone or
+                            current_name.startswith("Contato ") or
+                            not re.search(r'[A-Za-zÀ-ÿ]', current_name)
+                        )
+                        if not locked and current_is_weak:
                             if saved_name and c_obj.nome != saved_name:
                                 c_obj.nome = saved_name
                                 has_changed = True
-                            elif target_name and (not c_obj.nome or c_obj.nome == c_obj.telefone or c_obj.nome.startswith("Contato ")):
+                            elif target_name and c_obj.nome != target_name:
                                 c_obj.nome = target_name
                                 has_changed = True
                         if pic_url and not c_obj.foto_perfil_url:

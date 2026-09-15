@@ -314,7 +314,21 @@ async def receive_evolution_webhook(
                     c_extra = existing_c.dados_adicionais or {}
                     if c_extra.get("is_group") or "@g.us" in str(existing_c.telefone) or "-" in str(existing_c.telefone) or str(existing_c.telefone).startswith("120363"):
                         continue
-                    if not c_extra.get("custom_name_locked") and contact_name and contact_name != clean_digits and contact_name not in ["Cliente", "WhatsApp", "WhatsApp Business"]:
+                    # Only auto-apply the incoming pushName if the CURRENT name is a weak
+                    # placeholder (missing, equal to the phone number, or has no letters at
+                    # all, e.g. "556183603945" or "+55 61 8360-3945"). Without this guard, a
+                    # real business-relevant name we already had (e.g. "Adalberto Gas
+                    # Particular", set from a fuller source or manually) was getting silently
+                    # downgraded to whatever short pushName the customer happens to have set
+                    # for themselves on WhatsApp (e.g. just "Adalberto") every time this
+                    # webhook fired again.
+                    current_name = (existing_c.nome or "").strip()
+                    current_is_weak = (
+                        not current_name or
+                        current_name == clean_digits or
+                        not re.search(r'[A-Za-zÀ-ÿ]', current_name)
+                    )
+                    if not c_extra.get("custom_name_locked") and current_is_weak and contact_name and contact_name != clean_digits and contact_name not in ["Cliente", "WhatsApp", "WhatsApp Business"]:
                         existing_c.nome = contact_name
                     if profile_pic and not existing_c.foto_perfil_url:
                         existing_c.foto_perfil_url = profile_pic
