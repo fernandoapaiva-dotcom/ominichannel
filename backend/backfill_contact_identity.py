@@ -18,8 +18,9 @@ import httpx
 from sqlalchemy import select, update
 
 from app.core.database import AsyncSessionLocal
-from app.models.models import Contact, Conversation, Message
+from app.models.models import Contact, Conversation
 from app.services.backup_service import create_db_snapshot
+from app.services.lid_resolver_service import resolve_lid_info
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_contact_identity")
@@ -93,48 +94,35 @@ async def build_address_book(instances):
     return address_book
 
 
-async def batch_resolve_lids(instances, lid_phones):
+async def batch_resolve_lids(lid_phones):
+    """Resolves LIDs to real phone/name/pic using the same three-tier fallback
+    (direct Postgres -> docker exec psql -> Evolution HTTP findMessages) already
+    proven live against production for the group-mentions fix. Run with bounded
+    concurrency since the slower HTTP fallback tier can be hit for unresolved LIDs."""
     lid_map = {}
-    if not instances or not lid_phones:
+    if not lid_phones:
         return lid_map
-    instance = instances[0]
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        chunk_size = 50
-        for i in range(0, len(lid_phones), chunk_size):
-            chunk = lid_phones[i:i + chunk_size]
+
+    sem = asyncio.Semaphore(15)
+
+    async def _resolve_one(lid):
+        async with sem:
             try:
-                r_num = await client.post(
-                    f"{BASE_URL}/chat/whatsappNumbers/{instance}",
-                    headers=HEADERS,
-                    json={"numbers": chunk},
-                )
-                if r_num.status_code == 200 and isinstance(r_num.json(), list):
-                    for item in r_num.json():
-                        if item.get("exists") and item.get("jid"):
-                            orig = item.get("number") or item.get("id")
-                            j = item.get("jid")
-                            if "@s.whatsapp.net" in j:
-                                real_p = j.split("@")[0].split(":")[0]
-                                if orig and real_p.startswith("55"):
-                                    lid_map[str(orig).strip()] = real_p
+                info = await resolve_lid_info(lid)
+                if info.get("real_phone") or info.get("name") or info.get("profile_pic"):
+                    lid_map[lid] = info
             except Exception as e:
-                logger.warning(f"Erro no lote de resolução de LIDs ({i}-{i+chunk_size}): {e}")
-    logger.info(f"Resolvidos {len(lid_map)}/{len(lid_phones)} LIDs para número real via Evolution API.")
+                logger.debug(f"Erro ao resolver LID {lid}: {e}")
+
+    total = len(lid_phones)
+    for i in range(0, total, 200):
+        chunk = lid_phones[i:i + 200]
+        await asyncio.gather(*[_resolve_one(lid) for lid in chunk])
+        logger.info(f"Progresso da resolução de LIDs: {min(i + 200, total)}/{total}")
+
+    resolved_phones = sum(1 for v in lid_map.values() if v.get("real_phone"))
+    logger.info(f"Resolvidos: {resolved_phones} números reais e {len(lid_map)} registros com algum dado (nome/foto/telefone) de {total} LIDs.")
     return lid_map
-
-
-async def extract_name_from_messages(session, contact_id) -> str:
-    convs = (await session.execute(select(Conversation).where(Conversation.contact_id == contact_id))).scalars().all()
-    for conv in convs:
-        msgs = (await session.execute(select(Message).where(Message.conversation_id == conv.id))).scalars().all()
-        for m in msgs:
-            text = m.conteudo or ""
-            m_name = re.search(r"Ol[aá],\s*([^!\n]+)!", text)
-            if m_name:
-                cand = m_name.group(1).strip()
-                if cand and not cand.isdigit() and not cand.startswith("55") and cand.lower() not in GENERIC_NAMES:
-                    return cand
-    return None
 
 
 async def run(dry_run: bool):
@@ -160,7 +148,7 @@ async def run(dry_run: bool):
 
         lid_contacts = [c for c in contacts if is_lid_phone(str(c.telefone))]
         lid_phones = list({str(c.telefone).strip() for c in lid_contacts})
-        lid_map = await batch_resolve_lids(instances, lid_phones)
+        lid_map = await batch_resolve_lids(lid_phones)
 
         merged_count = 0
         phone_fixed_count = 0
@@ -172,10 +160,11 @@ async def run(dry_run: bool):
                 continue
 
             phone = str(c.telefone).strip()
+            lid_info = lid_map.get(phone) if is_lid_phone(phone) else None
 
-            if is_lid_phone(phone):
-                real_phone = lid_map.get(phone)
-                if real_phone and real_phone != phone:
+            if lid_info and lid_info.get("real_phone") and lid_info["real_phone"].startswith("55"):
+                real_phone = lid_info["real_phone"]
+                if real_phone != phone:
                     existing = (await session.execute(select(Contact).where(
                         Contact.tenant_id == c.tenant_id,
                         Contact.telefone == real_phone,
@@ -200,9 +189,7 @@ async def run(dry_run: bool):
 
             if is_weak_name(c.nome, phone):
                 ab_info = address_book.get(phone)
-                best_name = ab_info.get("name") if ab_info else None
-                if not best_name:
-                    best_name = await extract_name_from_messages(session, c.id)
+                best_name = (ab_info.get("name") if ab_info else None) or (lid_info.get("name") if lid_info else None)
                 if best_name and best_name != c.nome:
                     logger.info(f"[NOME] contato {c.id} ({phone}): '{c.nome}' -> '{best_name}'")
                     if not dry_run:
@@ -210,9 +197,10 @@ async def run(dry_run: bool):
                     name_fixed_count += 1
 
             ab_info = address_book.get(phone)
-            if ab_info and ab_info.get("pic") and not c.foto_perfil_url:
+            best_pic = (ab_info.get("pic") if ab_info else None) or (lid_info.get("profile_pic") if lid_info else None)
+            if best_pic and not c.foto_perfil_url:
                 if not dry_run:
-                    c.foto_perfil_url = ab_info["pic"]
+                    c.foto_perfil_url = best_pic
                 pic_fixed_count += 1
 
         if not dry_run:
