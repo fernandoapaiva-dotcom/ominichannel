@@ -275,6 +275,10 @@ class IntegrationSettingsMaskedResponse(BaseModel):
     last_gdrive_backup_at: Optional[str] = None
     last_gdrive_backup_success: Optional[bool] = None
     last_gdrive_backup_detail: Optional[str] = None
+    last_gdrive_media_backup_at: Optional[str] = None
+    last_gdrive_media_backup_success: Optional[bool] = None
+    last_gdrive_media_backup_detail: Optional[str] = None
+    gdrive_media_files_backed_up: Optional[int] = None
 
 class TestIntegrationRequest(BaseModel):
     integration_type: str # 'gemini' or 'evolution'

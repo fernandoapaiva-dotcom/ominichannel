@@ -92,6 +92,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [gdriveConnecting, setGdriveConnecting] = useState(false);
   const [gdriveTesting, setGdriveTesting] = useState(false);
   const [gdriveBackingUp, setGdriveBackingUp] = useState(false);
+  const [gdriveMediaBackingUp, setGdriveMediaBackingUp] = useState(false);
 
   // Connection Test Badges State
   const [testResult, setTestResult] = useState<{ type: string; success: boolean; message: string } | null>(null);
@@ -986,6 +987,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
       alert(`❌ Erro ao rodar backup: ${err.message}`);
     } finally {
       setGdriveBackingUp(false);
+    }
+  };
+
+  const handleRunMediaBackupNow = async () => {
+    try {
+      setGdriveMediaBackingUp(true);
+      const res = await apiFetch('/settings/gdrive/run-media-backup-now', { method: 'POST' });
+      alert(res.success ? `✅ ${res.message}` : `❌ ${res.message}`);
+      setTimeout(() => { loadSettingsAndAudit(); }, 5000);
+    } catch (err: any) {
+      alert(`❌ Erro ao rodar backup de mídias: ${err.message}`);
+    } finally {
+      setGdriveMediaBackingUp(false);
     }
   };
 
@@ -2497,6 +2511,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', whiteSpace: 'nowrap' }}
                           >
                             <RefreshCw size={14} className={gdriveBackingUp ? 'animate-spin' : ''} /> {gdriveBackingUp ? 'Enviando...' : 'Rodar Backup Agora'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Daily Media Backup Status Card */}
+                      <div style={{ padding: '12px', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: '600', color: 'var(--text-main)' }}>🖼️ Backup Diário de Mídias (Fotos, Vídeos, Áudios, PDFs)</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              Envia os arquivos de mídia recebidos e enviados nas conversas para uma pasta separada no Google Drive. Só envia arquivos novos a cada execução.
+                            </div>
+                            {maskedSettings?.last_gdrive_media_backup_at ? (
+                              <div style={{
+                                fontSize: '12px',
+                                marginTop: '6px',
+                                fontWeight: '600',
+                                color: maskedSettings.last_gdrive_media_backup_success ? '#34d399' : '#f87171'
+                              }}>
+                                {maskedSettings.last_gdrive_media_backup_success ? '● Última verificação: ' : '○ Última tentativa falhou: '}
+                                {new Date(maskedSettings.last_gdrive_media_backup_at).toLocaleString('pt-BR')}
+                                {typeof maskedSettings.gdrive_media_files_backed_up === 'number' && (
+                                  <span style={{ fontWeight: '400', color: 'var(--text-muted)' }}> — {maskedSettings.gdrive_media_files_backed_up} arquivo(s) salvos no total</span>
+                                )}
+                                {maskedSettings.last_gdrive_media_backup_detail && (
+                                  <div style={{ fontWeight: '400', color: 'var(--text-muted)', marginTop: '2px' }}>{maskedSettings.last_gdrive_media_backup_detail}</div>
+                                )}
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: '12px', marginTop: '6px', color: 'var(--text-muted)' }}>
+                                Ainda nenhum backup de mídias foi feito. Clique em "Rodar Backup de Mídias" para iniciar, ou aguarde a execução automática (1x por dia).
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleRunMediaBackupNow}
+                            disabled={gdriveMediaBackingUp || !maskedSettings?.google_drive_connected}
+                            className="btn-secondary"
+                            title={!maskedSettings?.google_drive_connected ? 'Conecte a conta Google primeiro' : undefined}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', whiteSpace: 'nowrap' }}
+                          >
+                            <RefreshCw size={14} className={gdriveMediaBackingUp ? 'animate-spin' : ''} /> {gdriveMediaBackingUp ? 'Iniciando...' : 'Rodar Backup de Mídias'}
                           </button>
                         </div>
                       </div>

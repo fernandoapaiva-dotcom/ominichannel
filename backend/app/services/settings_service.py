@@ -62,12 +62,20 @@ class SettingsService:
         last_backup_at = None
         last_backup_success = None
         last_backup_detail = None
+        last_media_backup_at = None
+        last_media_backup_success = None
+        last_media_backup_detail = None
+        media_files_backed_up = None
         tenant_res = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
         tenant = tenant_res.scalar_one_or_none()
         if tenant and tenant.config_geral:
             last_backup_at = tenant.config_geral.get("last_gdrive_backup_at")
             last_backup_success = tenant.config_geral.get("last_gdrive_backup_success")
             last_backup_detail = tenant.config_geral.get("last_gdrive_backup_detail")
+            last_media_backup_at = tenant.config_geral.get("last_gdrive_media_backup_at")
+            last_media_backup_success = tenant.config_geral.get("last_gdrive_media_backup_success")
+            last_media_backup_detail = tenant.config_geral.get("last_gdrive_media_backup_detail")
+            media_files_backed_up = tenant.config_geral.get("gdrive_media_files_backed_up")
 
         return {
             "gemini_configured": bool(decrypted["gemini_api_key"]),
@@ -82,7 +90,11 @@ class SettingsService:
             "google_client_secret_masked": mask_sensitive_string(decrypted["google_client_secret"]),
             "last_gdrive_backup_at": last_backup_at,
             "last_gdrive_backup_success": last_backup_success,
-            "last_gdrive_backup_detail": last_backup_detail
+            "last_gdrive_backup_detail": last_backup_detail,
+            "last_gdrive_media_backup_at": last_media_backup_at,
+            "last_gdrive_media_backup_success": last_media_backup_success,
+            "last_gdrive_media_backup_detail": last_media_backup_detail,
+            "gdrive_media_files_backed_up": media_files_backed_up
         }
 
     async def save_tenant_integration_settings(

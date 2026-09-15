@@ -329,6 +329,23 @@ async def run_gdrive_backup_now(
     return await run_backup_for_tenant(admin_user.tenant_id, snapshot_path)
 
 
+@router.post("/gdrive/run-media-backup-now")
+async def run_gdrive_media_backup_now(
+    admin_user: User = Depends(get_admin_user),
+):
+    """
+    Kicks off the media (photos/videos/audio/PDF) backup to Drive right away instead of
+    waiting for the daily loop. Runs in the background since a first run can take a while
+    (hundreds of MB uploaded one file at a time) — the admin panel polls the status fields
+    (last_gdrive_media_backup_at/success/detail) to see when it's done.
+    """
+    import asyncio
+    from app.services.daily_backup_drive_service import run_media_backup_for_tenant
+
+    asyncio.create_task(run_media_backup_for_tenant(admin_user.tenant_id))
+    return {"success": True, "message": "Backup de mídias iniciado em segundo plano. Atualize a página em alguns instantes para ver o status."}
+
+
 @router.get("/automations")
 async def get_automations(
     current_user: User = Depends(get_current_user),

@@ -99,6 +99,40 @@ class GDriveBackupService:
             logger.error(f"Erro no backup do Google Drive para conversa {conversation_id}: {e}")
             return False
 
+    def get_or_create_media_folder(
+        self,
+        parent_folder_id: str,
+        client_id: str,
+        refresh_token: str,
+        client_secret: str,
+        folder_name: str = "Midias_WhatsApp",
+    ) -> str:
+        """
+        Finds the tenant's media-backup subfolder inside their configured Drive folder,
+        creating it on first use. Keeps the (many, large) media files separate from the
+        daily .db snapshots and per-conversation JSON exports.
+        """
+        drive_service = self._get_drive_service_from_refresh_token(client_id, client_secret, refresh_token)
+        if not drive_service:
+            raise RuntimeError("Falha ao autenticar no Google Drive com o token salvo (pode ter expirado ou sido revogado).")
+
+        query = (
+            f"'{parent_folder_id}' in parents and name = '{folder_name}' "
+            "and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
+        res = drive_service.files().list(q=query, fields="files(id, name)", pageSize=1).execute()
+        existing = res.get("files", [])
+        if existing:
+            return existing[0]["id"]
+
+        folder_metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_folder_id],
+        }
+        created = drive_service.files().create(body=folder_metadata, fields="id").execute()
+        return created["id"]
+
     def upload_file_to_drive(
         self,
         folder_id: str,
