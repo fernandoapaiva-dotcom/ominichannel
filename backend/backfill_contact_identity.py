@@ -48,6 +48,15 @@ def is_weak_name(nome: str, telefone: str) -> bool:
     return False
 
 
+def is_valid_candidate_name(nome: str) -> bool:
+    """Some WhatsApp pushNames are just punctuation/emoji (e.g. '.', '🙏') — those would be
+    a downgrade versus even the raw phone digits, so require at least 2 real letters."""
+    if not nome:
+        return False
+    letters_only = re.sub(r"[^A-Za-zÀ-ÿ]", "", nome)
+    return len(letters_only) >= 2
+
+
 def is_lid_phone(phone: str) -> bool:
     phone = str(phone).strip()
     return (
@@ -190,7 +199,7 @@ async def run(dry_run: bool):
             if is_weak_name(c.nome, phone):
                 ab_info = address_book.get(phone)
                 best_name = (ab_info.get("name") if ab_info else None) or (lid_info.get("name") if lid_info else None)
-                if best_name and best_name != c.nome:
+                if best_name and best_name != c.nome and is_valid_candidate_name(best_name):
                     logger.info(f"[NOME] contato {c.id} ({phone}): '{c.nome}' -> '{best_name}'")
                     if not dry_run:
                         c.nome = best_name
