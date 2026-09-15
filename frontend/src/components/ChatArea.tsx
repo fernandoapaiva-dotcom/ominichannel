@@ -793,6 +793,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
+  const cameraVideoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -5384,7 +5385,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Galeria / Mídia</span>
             </div>
 
-            {/* 2. Câmera (Opens Camera directly on mobile) */}
+            {/* 2. Câmera - Foto (Opens Camera directly in photo mode on mobile) */}
             <div
               onClick={() => {
                 setShowAttachmentMenu(false);
@@ -5405,7 +5406,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#ec4899', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(236, 72, 153, 0.4)' }}>
                 <Camera size={22} />
               </div>
-              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Câmera</span>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Foto</span>
+            </div>
+
+            {/* 2b. Câmera - Vídeo (Opens Camera directly in video mode on mobile) */}
+            <div
+              onClick={() => {
+                setShowAttachmentMenu(false);
+                cameraVideoInputRef.current?.click();
+              }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '12px 8px',
+                borderRadius: 'var(--radius-md)',
+                backgroundColor: 'rgba(244, 63, 94, 0.12)',
+                border: '1px solid rgba(244, 63, 94, 0.3)',
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ width: '42px', height: '42px', borderRadius: '50%', backgroundColor: '#f43f5e', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(244, 63, 94, 0.4)' }}>
+                <Video size={22} />
+              </div>
+              <span style={{ fontSize: '11px', fontWeight: '600', color: 'var(--text-main)' }}>Vídeo</span>
             </div>
 
             {/* 3. Documento (Opens File Manager for PDF/DOC/etc) */}
@@ -5510,7 +5535,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {/* Hidden File Input Pickers for Native OS Integration */}
       <input type="file" ref={fileInputRef} onChange={handleFileSelect} multiple style={{ display: 'none' }} />
       <input type="file" ref={mediaInputRef} accept="image/*,video/*" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
-      <input type="file" ref={cameraInputRef} accept="image/*,video/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
+      {/* Two separate camera inputs on purpose: mobile browsers only reliably launch the
+          camera directly (instead of falling back to the gallery/file picker) when accept
+          is a single specific type alongside capture — combining "image/*,video/*" makes
+          several Android/iOS browsers open the gallery instead of the camera. */}
+      <input type="file" ref={cameraInputRef} accept="image/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
+      <input type="file" ref={cameraVideoInputRef} accept="video/*" capture="environment" onChange={handleFileSelect} style={{ display: 'none' }} />
       <input type="file" ref={documentInputRef} accept="*/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt,application/pdf" onChange={handleFileSelect} multiple style={{ display: 'none' }} />
 
 
