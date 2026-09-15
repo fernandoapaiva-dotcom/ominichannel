@@ -333,8 +333,10 @@ class WhatsAppReconciliationService:
                                                         continue
                                                     r_dt = self._parse_ts(rm.get("messageTimestamp"))
                                                     r_extra = {}
-                                                    r_doc = (rm.get("message", {}).get("documentMessage") or
-                                                             rm.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
+                                                    rm_payload_safe = rm.get("message") or {}
+                                                    rm_doc_wrapper = rm_payload_safe.get("documentWithCaptionMessage") or {}
+                                                    r_doc = (rm_payload_safe.get("documentMessage") or
+                                                             (rm_doc_wrapper.get("message") or {}).get("documentMessage") or {})
                                                     if r_doc:
                                                         fn = r_doc.get("fileName") or r_doc.get("title")
                                                         if fn:
@@ -426,8 +428,10 @@ class WhatsAppReconciliationService:
                                 extra_dict = {}
                                 if quote_data:
                                     extra_dict["quoted_message"] = quote_data
-                                m_doc = (m.get("message", {}).get("documentMessage") or
-                                         m.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
+                                m_payload_safe = m.get("message") or {}
+                                m_doc_wrapper = m_payload_safe.get("documentWithCaptionMessage") or {}
+                                m_doc = (m_payload_safe.get("documentMessage") or
+                                         (m_doc_wrapper.get("message") or {}).get("documentMessage") or {})
                                 if m_doc:
                                     fn = m_doc.get("fileName") or m_doc.get("title")
                                     if fn:

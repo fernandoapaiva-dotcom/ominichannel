@@ -755,7 +755,14 @@ async def receive_evolution_webhook(
             push_name = None
 
 
-    message_obj = data.get("message", {})
+    # NEVER `data.get("message", {})` here: Evolution/Baileys sends "message": null (not a
+    # missing key) for several common event types - protocol/system messages, polls, group
+    # admin notices - and `.get(key, default)` only falls back to `default` when the key is
+    # absent, not when its stored value is explicitly None. That crashed every `.get()` call
+    # below with AttributeError, aborting this whole webhook request before any DB write -
+    # for a group with frequent non-text events, that meant the conversation never got created
+    # at all, which is why some whole conversations were missing from the system.
+    message_obj = data.get("message") or {}
 
     # "View Once" photos/videos (the circled "1" toggle shown when sending a photo
     # straight from the in-chat camera) wrap the real imageMessage/videoMessage one
@@ -793,11 +800,13 @@ async def receive_evolution_webhook(
                 })
                 return {"status": "success", "event": "reactionMessage", "reaction": emoji_reaction}
 
-    # Extract text, media, or button responses
+    # Extract text, media, or button responses. `.get(x) or {}` (never `.get(x, {})`) because
+    # Evolution/Baileys often stores these sub-keys as explicit null rather than omitting them,
+    # and `.get(x, {})` only falls back to `{}` for a MISSING key, not a present-but-None one.
     btn_response = (
         message_obj.get("buttonsResponseMessage") or
         message_obj.get("templateButtonReplyMessage") or
-        message_obj.get("interactiveResponseMessage", {}).get("nativeFlowResponseMessage", {}) or
+        (message_obj.get("interactiveResponseMessage") or {}).get("nativeFlowResponseMessage") or
         message_obj.get("listResponseMessage")
     )
     btn_id = ""
@@ -817,7 +826,7 @@ async def receive_evolution_webhook(
 
     text_content = (
         message_obj.get("conversation") or
-        message_obj.get("extendedTextMessage", {}).get("text") or
+        (message_obj.get("extendedTextMessage") or {}).get("text") or
         btn_text or
         btn_id or
         ""

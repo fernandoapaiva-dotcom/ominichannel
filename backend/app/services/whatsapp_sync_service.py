@@ -66,7 +66,8 @@ class WhatsAppSyncService:
             return f"{url}|{caption}" if (url and caption) else (url or caption or "[Vídeo]"), MessageType.VIDEO
 
         if "documentMessage" in msg_payload or "documentWithCaptionMessage" in msg_payload:
-            doc = msg_payload.get("documentMessage") or msg_payload.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {})
+            doc_wrapper = msg_payload.get("documentWithCaptionMessage") or {}
+            doc = msg_payload.get("documentMessage") or (doc_wrapper.get("message") or {}).get("documentMessage") or {}
             title = doc.get("fileName") or doc.get("title") or "[Documento]"
             caption = doc.get("caption") or ""
             url = doc.get("url", "")
@@ -100,7 +101,7 @@ class WhatsAppSyncService:
             return f"[CONTATO]|{name}|{phone}|{vcard}", MessageType.TEXTO
 
         if "contactsArrayMessage" in msg_payload:
-            c_arr = msg_payload.get("contactsArrayMessage", {}).get("contacts", [])
+            c_arr = (msg_payload.get("contactsArrayMessage") or {}).get("contacts", [])
             items = []
             for c in c_arr:
                 vcard = c.get("vcard") or ""
@@ -378,7 +379,7 @@ class WhatsAppSyncService:
                             if msgs_res.status_code == 200:
                                 msgs_json = msgs_res.json()
                                 records = (
-                                    msgs_json.get("messages", {}).get("records", [])
+                                    (msgs_json.get("messages") or {}).get("records", [])
                                     if isinstance(msgs_json, dict) and "messages" in msgs_json
                                     else msgs_json.get("records", []) if isinstance(msgs_json, dict)
                                     else msgs_json if isinstance(msgs_json, list)
@@ -439,61 +440,72 @@ class WhatsAppSyncService:
                                         await session.flush()
                                         stats["conversations_synced"] += 1
 
-                                    # Insert messages
+                                    # Insert messages. Each record is processed defensively so one
+                                    # malformed/unexpected record (e.g. a protocol/system message with
+                                    # an explicit "message": null, common in groups) never aborts the
+                                    # whole chat's import - previously a single bad record raised past
+                                    # this loop, skipping session.commit() below and silently discarding
+                                    # the entire conversation + every other message that WAS parseable.
                                     latest_msg_dt = None
                                     for m_obj in records:
-                                        key_obj = m_obj.get("key", {})
-                                        msg_wa_id = key_obj.get("id")
-                                        if not msg_wa_id:
+                                        try:
+                                            key_obj = m_obj.get("key", {})
+                                            msg_wa_id = key_obj.get("id")
+                                            if not msg_wa_id:
+                                                continue
+
+                                            from_me = key_obj.get("fromMe", False)
+                                            remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
+                                            content_text, msg_type = self._parse_message_content(m_obj)
+
+                                            ts_raw = m_obj.get("messageTimestamp")
+                                            msg_dt = datetime.utcnow()
+                                            if ts_raw:
+                                                try:
+                                                    ts_int = int(ts_raw)
+                                                    if ts_int > 1e11:
+                                                        ts_int = ts_int / 1000.0
+                                                    msg_dt = datetime.fromtimestamp(ts_int)
+                                                except Exception:
+                                                    pass
+
+                                            if latest_msg_dt is None or msg_dt > latest_msg_dt:
+                                                latest_msg_dt = msg_dt
+
+                                            existing_msg_stmt = select(Message.id).where(
+                                                Message.conversation_id == conv.id,
+                                                Message.whatsapp_msg_id == msg_wa_id
+                                            )
+                                            existing_res = await session.execute(existing_msg_stmt)
+                                            if existing_res.scalars().first():
+                                                continue
+
+                                            msg_extra = {}
+                                            m_payload_safe = m_obj.get("message") or {}
+                                            doc_wrapper_safe = m_payload_safe.get("documentWithCaptionMessage") or {}
+                                            doc_info = (m_payload_safe.get("documentMessage") or
+                                                        (doc_wrapper_safe.get("message") or {}).get("documentMessage") or {})
+                                            if doc_info:
+                                                fn = doc_info.get("fileName") or doc_info.get("title")
+                                                if fn:
+                                                    msg_extra["original_filename"] = fn
+                                                    msg_extra["file_name"] = fn
+
+                                            db_msg = Message(
+                                                conversation_id=conv.id,
+                                                remetente=remetente,
+                                                conteudo=content_text,
+                                                tipo=msg_type,
+                                                status="delivered",
+                                                whatsapp_msg_id=msg_wa_id,
+                                                dados_adicionais=msg_extra if msg_extra else None,
+                                                timestamp=msg_dt
+                                            )
+                                            session.add(db_msg)
+                                            stats["messages_synced"] += 1
+                                        except Exception as msg_err:
+                                            logger.debug(f"Skipping unparseable message record in chat {jid}: {msg_err}")
                                             continue
-
-                                        from_me = key_obj.get("fromMe", False)
-                                        remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
-                                        content_text, msg_type = self._parse_message_content(m_obj)
-
-                                        ts_raw = m_obj.get("messageTimestamp")
-                                        msg_dt = datetime.utcnow()
-                                        if ts_raw:
-                                            try:
-                                                ts_int = int(ts_raw)
-                                                if ts_int > 1e11:
-                                                    ts_int = ts_int / 1000.0
-                                                msg_dt = datetime.fromtimestamp(ts_int)
-                                            except Exception:
-                                                pass
-
-                                        if latest_msg_dt is None or msg_dt > latest_msg_dt:
-                                            latest_msg_dt = msg_dt
-
-                                        existing_msg_stmt = select(Message.id).where(
-                                            Message.conversation_id == conv.id,
-                                            Message.whatsapp_msg_id == msg_wa_id
-                                        )
-                                        existing_res = await session.execute(existing_msg_stmt)
-                                        if existing_res.scalars().first():
-                                            continue
-
-                                        msg_extra = {}
-                                        doc_info = (m_obj.get("message", {}).get("documentMessage") or
-                                                    m_obj.get("message", {}).get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage", {}))
-                                        if doc_info:
-                                            fn = doc_info.get("fileName") or doc_info.get("title")
-                                            if fn:
-                                                msg_extra["original_filename"] = fn
-                                                msg_extra["file_name"] = fn
-
-                                        db_msg = Message(
-                                            conversation_id=conv.id,
-                                            remetente=remetente,
-                                            conteudo=content_text,
-                                            tipo=msg_type,
-                                            status="delivered",
-                                            whatsapp_msg_id=msg_wa_id,
-                                            dados_adicionais=msg_extra if msg_extra else None,
-                                            timestamp=msg_dt
-                                        )
-                                        session.add(db_msg)
-                                        stats["messages_synced"] += 1
 
                                     if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
                                         conv.ultima_interacao_em = latest_msg_dt
