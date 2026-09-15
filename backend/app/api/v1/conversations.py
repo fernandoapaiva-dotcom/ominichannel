@@ -1493,19 +1493,28 @@ async def send_agent_message(
 
         asyncio.create_task(_async_mark_read())
 
-    # 4. Trigger Smart Automation Engine (OS Handler & Custom Rules) in background
-    from app.services.automation_service import automation_service
-    asyncio.create_task(
-        automation_service.process_and_dispatch_automation(
-            tenant_id=current_user.tenant_id,
-            conversation_id=conv.id,
-            message_text=raw_content,
-            from_me=True,
-            contact_name=conv.contact.nome if conv.contact else "Cliente",
-            instance_name=target_instance_name,
-            recipient_phone=target_phone
+    # 4. Trigger Smart Automation Engine (OS Handler & Custom Rules) in background — never in
+    # groups, so an automated reply (e.g. Pix) never gets posted back into a group chat.
+    _dest_is_group = bool(
+        target_phone and (
+            target_phone.startswith("120363") or
+            "@g.us" in target_phone or
+            len("".join(filter(str.isdigit, target_phone))) > 15
         )
     )
+    if not _dest_is_group:
+        from app.services.automation_service import automation_service
+        asyncio.create_task(
+            automation_service.process_and_dispatch_automation(
+                tenant_id=current_user.tenant_id,
+                conversation_id=conv.id,
+                message_text=raw_content,
+                from_me=True,
+                contact_name=conv.contact.nome if conv.contact else "Cliente",
+                instance_name=target_instance_name,
+                recipient_phone=target_phone
+            )
+        )
 
     return message
 

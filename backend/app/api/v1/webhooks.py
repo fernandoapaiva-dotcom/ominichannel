@@ -1772,19 +1772,23 @@ async def receive_evolution_webhook(
         )
         logger.info(f"[OUTGOING MOBILE SYNC] Mensagem/Foto enviada pelo celular sincronizada na conversa #{conversation.id} ({contact.nome})")
         
-        # Trigger Smart Automation Engine (OS Handler & Custom Rules) for attendant message
-        from app.services.automation_service import automation_service
-        asyncio.create_task(
-            automation_service.process_and_dispatch_automation(
-                tenant_id=tenant_id,
-                conversation_id=conversation.id,
-                message_text=text_content,
-                from_me=True,
-                contact_name=contact.nome if contact else "Cliente",
-                instance_name=instance_name,
-                recipient_phone=contact.telefone if contact else ""
+        # Trigger Smart Automation Engine (OS Handler & Custom Rules) for attendant message.
+        # Never in groups: this path is independent of the group shield further down, so an
+        # attendant message from their own phone into a group could otherwise still trigger
+        # an automated reply (e.g. Pix) posted back into the group.
+        if not is_group:
+            from app.services.automation_service import automation_service
+            asyncio.create_task(
+                automation_service.process_and_dispatch_automation(
+                    tenant_id=tenant_id,
+                    conversation_id=conversation.id,
+                    message_text=text_content,
+                    from_me=True,
+                    contact_name=contact.nome if contact else "Cliente",
+                    instance_name=instance_name,
+                    recipient_phone=contact.telefone if contact else ""
+                )
             )
-        )
         return {"status": "success", "action": "synced_attendant_mobile_message"}
 
     # 4. Save Customer Message with WhatsApp Message ID (status received/unread)
@@ -1918,19 +1922,22 @@ async def receive_evolution_webhook(
         }
     )
 
-    # Trigger Smart Automation Engine for customer incoming message
-    from app.services.automation_service import automation_service
-    asyncio.create_task(
-        automation_service.process_and_dispatch_automation(
-            tenant_id=tenant_id,
-            conversation_id=conversation.id,
-            message_text=text_content,
-            from_me=False,
-            contact_name=contact.nome if contact else "Cliente",
-            instance_name=instance_name,
-            recipient_phone=contact.telefone if contact else ""
+    # Trigger Smart Automation Engine for customer incoming message (never in groups —
+    # this fires independently of the AI/Gemini flow below, so the group shield further
+    # down does NOT cover it; skip it here too or automated replies like Pix leak into groups)
+    if not is_group and not is_internal_company_number and not is_bot_echo:
+        from app.services.automation_service import automation_service
+        asyncio.create_task(
+            automation_service.process_and_dispatch_automation(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                message_text=text_content,
+                from_me=False,
+                contact_name=contact.nome if contact else "Cliente",
+                instance_name=instance_name,
+                recipient_phone=contact.telefone if contact else ""
+            )
         )
-    )
 
     # Internal Number / Bot Echo / Group Shield: Never run AI if sender is another internal phone, bot, or a Group
     if is_group or is_internal_company_number or is_bot_echo:
