@@ -406,20 +406,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   }, []);
 
-  // Automatically ensure full message history is loaded for active conversation
+  // Automatically ensure full message history is loaded for active conversation.
+  // IMPORTANT: this must depend on the active conversation's own message COUNT (a
+  // primitive), never on the whole `conversations` array reference. That array gets a
+  // new reference on every unrelated state change anywhere in the app (the 5s global
+  // poll, a message arriving in a totally different chat, an avatar update...), and a
+  // dependency on the array itself made this effect re-fire — and re-fetch this
+  // conversation's full detail — on every one of those unrelated ticks. For a short/new
+  // conversation (<=5 messages) that meant a burst of redundant GETs landing right around
+  // the moment an agent sent a message, each one re-merging and re-rendering the message
+  // list, which is what made messages look like they flickered/vanished momentarily
+  // instead of just staying put after the instant optimistic update.
   const activeConvIdToLoad = activeConversationId || activeConversation?.id;
   const loadedFullHistoryRef = useRef<Set<number>>(new Set());
+  const activeConvMsgCountForHistory = activeConvIdToLoad
+    ? (conversations.find(c => Number(c.id) === Number(activeConvIdToLoad))?.messages?.length || 0)
+    : 0;
 
   useEffect(() => {
     if (!activeConvIdToLoad) return;
     const cid = Number(activeConvIdToLoad);
-    const conv = conversations.find(c => Number(c.id) === cid);
-    const msgCount = conv?.messages?.length || 0;
-    if (!loadedFullHistoryRef.current.has(cid) || msgCount <= 5) {
+    if (!loadedFullHistoryRef.current.has(cid) || activeConvMsgCountForHistory <= 5) {
       loadedFullHistoryRef.current.add(cid);
       loadActiveConversationDetail(cid);
     }
-  }, [activeConvIdToLoad, conversations, loadActiveConversationDetail]);
+  }, [activeConvIdToLoad, activeConvMsgCountForHistory, loadActiveConversationDetail]);
 
   // Android System Back Button Interceptor for Mobile PWA
   useEffect(() => {
