@@ -110,6 +110,14 @@ export const formatWhatsAppPhone = (phone: string | undefined | null): string =>
     return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
   }
 
+  // A LID (WhatsApp's internal privacy-protected identifier, used when the real phone number
+  // isn't exposed) is a long numeric string with no relation to any real phone number. Slapping
+  // a "+" in front of it (the old behavior here) made it look like a broken/foreign phone number
+  // ("+277287400394923") instead of what it actually is - never format it as if it were callable.
+  if (clean.length >= 14) {
+    return 'Contato do WhatsApp';
+  }
+
   // Se não tem formato padrão brasileiro, exibe como telefone com prefixo +
   return `+${clean}`;
 };
