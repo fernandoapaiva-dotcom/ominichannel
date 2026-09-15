@@ -15,6 +15,18 @@ from app.services.lid_resolver_service import resolve_lid_info, download_and_cac
 logger = logging.getLogger("whatsapp_sync_service")
 
 class WhatsAppSyncService:
+    # WhatsApp protocol/system events that never carry real chat content - reactions are
+    # applied to their target message elsewhere, the rest are pure internal housekeeping.
+    # These must NEVER be saved as a visible chat bubble (e.g. a literal "[reactionMessage]"
+    # text), which is what the old generic fallback below used to do.
+    NON_CONTENT_MESSAGE_TYPES = {
+        "reactionMessage",
+        "protocolMessage",
+        "senderKeyDistributionMessage",
+        "pollUpdateMessage",
+        "messageContextInfo",
+    }
+
     def __init__(self):
         self.default_base_url = settings.EVOLUTION_API_URL.rstrip('/')
         self.default_api_key = settings.EVOLUTION_API_KEY
@@ -131,6 +143,9 @@ class WhatsAppSyncService:
             if map_url:
                 txt += f"\n{map_url}"
             return txt, MessageType.LOCALIZACAO
+
+        if msg_type_str in self.NON_CONTENT_MESSAGE_TYPES or not msg_payload:
+            return None, None
 
         return f"[{msg_type_str}]", MessageType.TEXTO
 
@@ -457,6 +472,8 @@ class WhatsAppSyncService:
                                             from_me = key_obj.get("fromMe", False)
                                             remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
                                             content_text, msg_type = self._parse_message_content(m_obj)
+                                            if content_text is None:
+                                                continue
 
                                             ts_raw = m_obj.get("messageTimestamp")
                                             msg_dt = datetime.utcnow()
