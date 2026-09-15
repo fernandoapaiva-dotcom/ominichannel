@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, 
 from fastapi.responses import Response, RedirectResponse
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, cast, String
+from sqlalchemy import select, func, or_, cast, String, case
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -45,7 +45,15 @@ async def list_contacts(
 
         base_stmt = base_stmt.where(or_(*conds)).order_by(Contact.nome.asc())
     else:
-        base_stmt = base_stmt.order_by(Contact.id.desc())
+        # Without a search term, prioritize contacts that actually have a resolved name
+        # (imported from a file/vCard, saved on the phone's agenda, or set from a real chat)
+        # over the large volume of nameless entries the WhatsApp agenda sync can create for
+        # internal/garbled numbers (LIDs etc. with no pushName) — those "crazy numbers" were
+        # drowning out real contacts when just sorted by most-recently-created. A "name" with
+        # no letters at all (just the raw or "+55 xx xxxx-xxxx"-formatted phone number) isn't
+        # a real name, so it's deprioritized the same as an outright missing one.
+        has_real_name = Contact.nome.op('GLOB')('*[a-zA-Z]*')
+        base_stmt = base_stmt.order_by(case((has_real_name, 0), else_=1).asc(), Contact.nome.asc(), Contact.id.desc())
 
     base_stmt = base_stmt.limit(limit).offset(offset)
     res = await db.execute(base_stmt)
