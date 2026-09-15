@@ -325,30 +325,47 @@ class WhatsAppSyncService:
                     await self._emit_progress(tenant_id, stats)
                     return {"success": True, "stats": stats}
 
-                async with AsyncSessionLocal() as session:
-                    # Fetch all existing contacts once in a single bulk query (0.02s instead of 30s)
-                    c_all_res = await session.execute(select(Contact).where(Contact.tenant_id == tenant_id))
-                    existing_by_phone = {c.telefone: c for c in c_all_res.scalars().all()}
+                existing_by_phone: Dict[str, Any] = {}
+                # Retry on "database is locked": this box runs Evolution API + its Postgres +
+                # this backend on a single small VM, so a bulk contact upsert here can easily
+                # collide with the live backend's own writes. Without a retry, this used to
+                # abort the ENTIRE instance sync (0 conversations, 0 messages) before it ever
+                # reached the actual chat import below - the same pattern already protected
+                # per-chat further down, just missing here.
+                for attempt in range(5):
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            # Fetch all existing contacts once in a single bulk query (0.02s instead of 30s)
+                            c_all_res = await session.execute(select(Contact).where(Contact.tenant_id == tenant_id))
+                            existing_by_phone = {c.telefone: c for c in c_all_res.scalars().all()}
 
-                    # Pre-sync address book names into DB quickly
-                    for phone, ab_info in address_book_map.items():
-                        c_obj = existing_by_phone.get(phone)
-                        if not c_obj:
-                            c_obj = Contact(
-                                tenant_id=tenant_id,
-                                telefone=phone,
-                                nome=ab_info["name"],
-                                foto_perfil_url=ab_info.get("profile_pic")
-                            )
-                            session.add(c_obj)
-                            existing_by_phone[phone] = c_obj
-                            stats["contacts_synced"] += 1
-                        else:
-                            if c_obj.nome != ab_info["name"] and not (c_obj.dados_adicionais or {}).get("custom_name_locked"):
-                                c_obj.nome = ab_info["name"]
-                            if ab_info.get("profile_pic") and not c_obj.foto_perfil_url:
-                                c_obj.foto_perfil_url = ab_info["profile_pic"]
-                    await session.commit()
+                            # Pre-sync address book names into DB quickly
+                            for phone, ab_info in address_book_map.items():
+                                c_obj = existing_by_phone.get(phone)
+                                if not c_obj:
+                                    c_obj = Contact(
+                                        tenant_id=tenant_id,
+                                        telefone=phone,
+                                        nome=ab_info["name"],
+                                        foto_perfil_url=ab_info.get("profile_pic")
+                                    )
+                                    session.add(c_obj)
+                                    existing_by_phone[phone] = c_obj
+                                    stats["contacts_synced"] += 1
+                                else:
+                                    if c_obj.nome != ab_info["name"] and not (c_obj.dados_adicionais or {}).get("custom_name_locked"):
+                                        c_obj.nome = ab_info["name"]
+                                    if ab_info.get("profile_pic") and not c_obj.foto_perfil_url:
+                                        c_obj.foto_perfil_url = ab_info["profile_pic"]
+                            await session.commit()
+                        break
+                    except Exception as ab_db_err:
+                        if "locked" in str(ab_db_err).lower() and attempt < 4:
+                            logger.warning(f"[{instance_name}] Banco travado ao sincronizar agenda (tentativa {attempt + 1}/5), tentando de novo...")
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                            continue
+                        logger.error(f"[{instance_name}] Erro ao pre-sincronizar agenda de contatos: {ab_db_err}")
+                        break
 
                     # Process chats batch by batch
                     for idx, chat in enumerate(chats_list[:total_chats]):
