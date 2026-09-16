@@ -112,7 +112,13 @@ async def batch_resolve_lids(lid_phones):
     if not lid_phones:
         return lid_map
 
-    sem = asyncio.Semaphore(15)
+    # Kept low on purpose: resolve_lid_info's Postgres pool only allows 5 concurrent
+    # connections, and its fallback tier shells out to `docker exec psql` per LID - on
+    # this box (954MB RAM, throttled CPU) running 15 of those at once starved the pool
+    # and blew past the fallback's 2.5s timeout for almost every LID, which is why a
+    # previous run here only resolved 12 of 773 despite most of them having real data
+    # available (confirmed by resolving the same LIDs one at a time - 5/5 succeeded).
+    sem = asyncio.Semaphore(4)
 
     async def _resolve_one(lid):
         async with sem:
