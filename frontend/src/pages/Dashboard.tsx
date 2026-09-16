@@ -104,10 +104,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         name.includes('Servweld/Servsolda')
       );
 
-      // In WhatsApp, the main chats view shows BOTH individual chats and groups!
-      // Only when explicitly navigating to the "groups" tab, filter strictly to groups.
+      // Cada aba mostra apenas o seu tipo: grupos na aba de Grupos, atendimentos
+      // individuais na aba de Conversas. Antes a aba de Conversas listava os dois
+      // juntos (imitando o app do WhatsApp), mas aqui os fluxos sao separados - um
+      // grupo nao e um atendimento de cliente e misturar os dois atrapalha a triagem.
       if (activeTab === 'groups') {
         return isGroup;
+      }
+      if (activeTab === 'chats') {
+        return !isGroup;
       }
       return true;
     });

@@ -1220,6 +1220,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   const [showMentionMenu, setShowMentionMenu] = useState(false);
+  // Nome exibido no rascunho -> telefone real do participante. O menu insere "@Nome"
+  // porque e o que o atendente consegue ler, mas o WhatsApp so registra a marcacao de
+  // verdade quando o texto enviado traz "@<numero>" e o numero vai na lista de
+  // mencionados. Na hora de enviar trocamos um pelo outro usando este mapa.
+  const [mentionPhoneMap, setMentionPhoneMap] = useState<Record<string, string>>({});
 
 
   const handleInsertMention = (mentionTag: string) => {
@@ -1682,6 +1687,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     const quoteTarget = replyingToMessage;
     if (replyingToMessage) {
       setReplyingToMessage(null);
+    }
+
+    // Troca "@Nome" por "@<numero>" antes de enviar: e assim que o WhatsApp registra a
+    // marcacao (o app de quem recebe exibe o nome do contato no lugar do numero). Nomes
+    // maiores primeiro, para que "@Bruno Servsolda" nao seja quebrado por "@Bruno".
+    const mentionNames = Object.keys(mentionPhoneMap).sort((a, b) => b.length - a.length);
+    for (const mName of mentionNames) {
+      if (textToSend.includes(`@${mName}`)) {
+        textToSend = textToSend.split(`@${mName}`).join(`@${mentionPhoneMap[mName]}`);
+      }
     }
 
     setSendError(null);
@@ -6098,6 +6113,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                           const prefix = lastAtIndex !== -1 ? inputText.substring(0, lastAtIndex) : inputText;
                           const nextText = `${prefix}@${p.name} `;
                           setInputText(nextText);
+                          // Prefere o LID: nos grupos desta conta o WhatsApp identifica os
+                          // membros por LID, e a marcacao so "cola" se o texto trouxer esse
+                          // mesmo identificador (foi o que se viu numa marcacao real feita
+                          // pelo celular: "@229196886474975" + mentionedJid "...@lid").
+                          const mentionDigits = (p.lid || p.phone || '').replace(/\D/g, '');
+                          if (p.name && mentionDigits) {
+                            setMentionPhoneMap(prev => ({ ...prev, [p.name]: mentionDigits }));
+                          }
                           setShowMentionMenu(false);
                           if (textareaRef.current) {
                             textareaRef.current.focus();

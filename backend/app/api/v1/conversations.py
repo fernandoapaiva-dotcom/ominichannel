@@ -1274,6 +1274,16 @@ async def send_agent_message(
                     len("".join(filter(str.isdigit, target_phone))) > 15
                 )
             )
+            # A Evolution so preserva o identificador da mencao se ele vier como JID
+            # COMPLETO; digitos soltos ela transforma em "<numero>@s.whatsapp.net". Em
+            # grupos onde o WhatsApp identifica os membros por LID (o caso desta conta),
+            # esse JID nao corresponde a ninguem e a mencao nao marca a pessoa - era por
+            # isso que o "@" saia como texto comum no WhatsApp. Aqui montamos o JID certo.
+            def _to_mention_jid(digits: str) -> str:
+                if len(digits) >= 14 and not digits.startswith("55") and not digits.startswith("120363"):
+                    return f"{digits}@lid"
+                return f"{digits}@s.whatsapp.net"
+
             if is_group_chat and any(k in c_text.lower() for k in ["@todos", "@everyone", "@all"]):
                 try:
                     g_info = await evolution_service.fetch_group_info(
@@ -1282,17 +1292,21 @@ async def send_agent_message(
                     )
                     if g_info and "participants" in g_info:
                         for p in g_info["participants"]:
-                            raw_p = p.get("phoneNumber") or p.get("id") or ""
-                            digits = "".join(filter(str.isdigit, raw_p.split("@")[0]))
-                            if len(digits) >= 8 and digits not in mentioned_list:
-                                mentioned_list.append(digits)
+                            # p["id"] ja e o JID exato que o WhatsApp usa para o membro
+                            raw_id = str(p.get("id") or p.get("phoneNumber") or "")
+                            digits = "".join(filter(str.isdigit, raw_id.split("@")[0]))
+                            if len(digits) < 8:
+                                continue
+                            jid = raw_id if "@" in raw_id else _to_mention_jid(digits)
+                            if jid not in mentioned_list:
+                                mentioned_list.append(jid)
                 except Exception as ex:
                     logger.warning(f"Error resolving @todos participants: {ex}")
 
-            phone_mentions = re.findall(r"@(\d{10,15})", c_text)
-            for pm in phone_mentions:
-                if pm not in mentioned_list:
-                    mentioned_list.append(pm)
+            for pm in re.findall(r"@(\d{8,20})", c_text):
+                jid = _to_mention_jid(pm)
+                if jid not in mentioned_list:
+                    mentioned_list.append(jid)
 
             send_res = await asyncio.wait_for(
                 provider.send_text_message(
