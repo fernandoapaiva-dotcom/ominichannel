@@ -18,7 +18,21 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
     return chunks
 
 class RAGService:
+    """
+    ChromaDB's default embedding function loads a local sentence-transformer model into
+    RAM the moment the client/collection is touched - real weight (dozens of MB) on a
+    server this tight on memory. This service is a module-level singleton imported at app
+    startup (via the RAG router), so eagerly creating the client here meant that cost was
+    paid on every boot even with zero documents in the knowledge base. Init is deferred to
+    the first real call instead, via _ensure_client() at the top of every public method.
+    """
     def __init__(self):
+        self.client = None
+        self.collection = None
+
+    def _ensure_client(self):
+        if self.collection is not None:
+            return
         persist_dir = os.path.join(os.getcwd(), "chroma_data")
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection("tenant_knowledge_base")
@@ -32,6 +46,7 @@ class RAGService:
     ) -> bool:
         """Adds or updates document chunks in the local vector DB for a tenant with scope metadata"""
         try:
+            self._ensure_client()
             meta = metadata or {}
             meta["tenant_id"] = int(tenant_id)
             meta["scope"] = str(meta.get("scope", "geral"))
@@ -80,6 +95,7 @@ class RAGService:
         Includes BOTH Geral (company-wide) knowledge and department-specific knowledge.
         """
         try:
+            self._ensure_client()
             results = self.collection.query(
                 query_texts=[query],
                 n_results=top_k,
@@ -129,6 +145,7 @@ class RAGService:
     async def list_documents(self, tenant_id: int) -> list:
         """Lists all RAG documents index metadata for a tenant"""
         try:
+            self._ensure_client()
             res = self.collection.get(
                 where={"tenant_id": int(tenant_id)},
                 include=["metadatas", "documents"]
@@ -157,6 +174,7 @@ class RAGService:
     async def delete_document(self, tenant_id: int, doc_id: str) -> bool:
         """Deletes a document from ChromaDB vector store"""
         try:
+            self._ensure_client()
             full_id = doc_id if doc_id.startswith(f"t{tenant_id}_") else f"t{tenant_id}_{doc_id}"
             self.collection.delete(ids=[full_id])
             return True
