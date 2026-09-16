@@ -1733,6 +1733,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     }
 
+    // Se o envio anterior travar no servidor por muito tempo (ja aconteceu aqui - uma
+    // requisicao ficou 124s presa por sobrecarga do servidor), o atendente pode achar que
+    // nao foi e reenviar a mesma coisa - as duas acabam saindo, duplicada, pro cliente/grupo
+    // de verdade no WhatsApp. Confere se esse mesmo texto ja foi mandado nesta conversa nos
+    // ultimos 5 minutos e confirma antes de mandar de novo. So se aplica a texto puro (sem
+    // anexo), que foi o caso reportado.
+    if (textToSend && pendingFiles.length === 0) {
+      const stripAgentPrefix = (s: string) => (s || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim();
+      const normalizedToSend = stripAgentPrefix(textToSend);
+      const recentDuplicate = (conversation?.messages || []).find(m => {
+        if (m.remetente !== 'atendente') return false;
+        if (stripAgentPrefix(m.conteudo || '') !== normalizedToSend) return false;
+        const ageMs = Date.now() - normalizeIsoDate(m.timestamp).getTime();
+        return ageMs >= 0 && ageMs < 5 * 60 * 1000;
+      });
+      if (recentDuplicate) {
+        const confirmResend = window.confirm(
+          '⚠️ Você já enviou essa MESMA mensagem há poucos minutos nesta conversa.\n\nSe o envio anterior pareceu travado, ele pode já ter chegado ao destinatário. Enviar de novo mesmo assim?'
+        );
+        if (!confirmResend) return;
+      }
+    }
+
     setSendError(null);
     setIsSending(true);
 
