@@ -25,6 +25,12 @@ class WhatsAppSyncService:
         "senderKeyDistributionMessage",
         "pollUpdateMessage",
         "messageContextInfo",
+        # albumMessage is just a header WhatsApp sends alongside a multi-photo album -
+        # {"expectedImageCount": N, ...}, no image/video data of its own. The real photos
+        # always arrive as their own separate imageMessage entries at the same timestamp
+        # (confirmed against production data), so the header duplicated nothing when
+        # skipped - it was only ever showing as an empty "[albumMessage]" bubble.
+        "albumMessage",
     }
 
     def __init__(self):
