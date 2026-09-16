@@ -78,7 +78,6 @@ export const WORD_REPLACEMENTS: Record<string, string> = {
   'tds': 'todos',
   'blz': 'beleza',
   'vlw': 'valeu',
-  'flw': 'falou',
   'cmg': 'comigo',
   'ctg': 'contigo',
   'pfv': 'por favor',

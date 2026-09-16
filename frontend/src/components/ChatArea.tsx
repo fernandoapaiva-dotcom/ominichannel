@@ -353,33 +353,67 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       return (a.id || 0) - (b.id || 0);
     });
     
-    // Deduplicate messages: by ID, whatsapp_msg_id, or optimistic temporary message (< 0) with matching confirmed message
+    // Deduplicacao em DUAS passagens. Antes era uma so, comparando cada mensagem com as
+    // ja processadas nessa mesma passagem - e isso falhava por dois motivos:
+    //   1. a mensagem otimista as vezes vem ANTES da confirmada na ordenacao por horario
+    //      (usa o relogio do navegador no momento do envio), entao no instante em que ela
+    //      era avaliada a confirmada ainda nao tinha sido processada;
+    //   2. a comparacao era pelo texto do conteudo - funciona para mensagem de texto, mas
+    //      em midia a otimista guarda "blob:..." (preview local) e a confirmada guarda
+    //      "/uploads/xxx.png", que nunca sao iguais.
+    // Resultado: cada foto/video enviado ficava duplicado no mosaico.
+    const cleanOf = (m: Message) =>
+      (m.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/​/g, '');
+    const isMediaMsg = (m: Message) =>
+      ['imagem', 'video', 'audio', 'arquivo'].includes(String(m.tipo)) ||
+      (m.conteudo || '').startsWith('blob:');
+
     const seenIds = new Set<number>();
     const seenWaIds = new Set<string>();
-    const filteredMsgs: Message[] = [];
+    const confirmedMsgs: Message[] = [];
+    const optimisticMsgs: Message[] = [];
 
     for (const msg of rawMsgs) {
       if (msg.id && seenIds.has(msg.id)) continue;
       if (msg.whatsapp_msg_id && seenWaIds.has(msg.whatsapp_msg_id)) continue;
-
-      // Only suppress an optimistic/temporary message (< 0) if a confirmed server message already exists with the same content
-      if (msg.id && msg.id < 0 && msg.remetente === 'atendente') {
-        const cleanContent = (msg.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
-        const msgTime = normalizeIsoDate(msg.timestamp).getTime();
-        const isDuplicateOfServerMsg = filteredMsgs.some(prev => {
-          if (!prev.id || prev.id < 0 || prev.remetente !== 'atendente') return false;
-          const prevTime = normalizeIsoDate(prev.timestamp).getTime();
-          if (Math.abs(msgTime - prevTime) > 60000) return false;
-          const prevClean = (prev.conteudo || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim().replace(/\u200b/g, '');
-          return prevClean === cleanContent;
-        });
-        if (isDuplicateOfServerMsg) continue;
-      }
-
       if (msg.id) seenIds.add(msg.id);
       if (msg.whatsapp_msg_id) seenWaIds.add(msg.whatsapp_msg_id);
-      filteredMsgs.push(msg);
+
+      if (msg.id && msg.id < 0) optimisticMsgs.push(msg);
+      else confirmedMsgs.push(msg);
     }
+
+    // Cada confirmada so pode "absorver" UMA otimista - assim, ao enviar duas fotos
+    // juntas, a segunda nao some por casar com a copia do servidor da primeira.
+    const claimedIds = new Set<number>();
+    const keptOptimistic = optimisticMsgs.filter(msg => {
+      if (msg.remetente !== 'atendente') return true;
+      const msgTime = normalizeIsoDate(msg.timestamp).getTime();
+      const media = isMediaMsg(msg);
+      const content = cleanOf(msg);
+
+      const match = confirmedMsgs.find(prev => {
+        if (!prev.id || prev.id < 0 || prev.remetente !== 'atendente') return false;
+        if (claimedIds.has(prev.id)) return false;
+        if (Math.abs(normalizeIsoDate(prev.timestamp).getTime() - msgTime) > 120000) return false;
+        // Midia casa por tipo (o conteudo e necessariamente diferente entre preview
+        // local e URL final); texto mantem a comparacao exata de conteudo.
+        return media ? (isMediaMsg(prev) && String(prev.tipo) === String(msg.tipo)) : cleanOf(prev) === content;
+      });
+
+      if (match && match.id) {
+        claimedIds.add(match.id);
+        return false;
+      }
+      return true;
+    });
+
+    const filteredMsgs: Message[] = [...confirmedMsgs, ...keptOptimistic].sort((a, b) => {
+      const tA = normalizeIsoDate(a.timestamp).getTime();
+      const tB = normalizeIsoDate(b.timestamp).getTime();
+      if (tA !== tB) return tA - tB;
+      return (a.id || 0) - (b.id || 0);
+    });
 
     const groups: RenderGroup[] = [];
     let i = 0;
