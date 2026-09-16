@@ -36,6 +36,15 @@ export const WORD_REPLACEMENTS: Record<string, string> = {
   // curtas de proposito, entao estes casos ficam listados explicitamente aqui
   'gete': 'gente',
   'genet': 'gente',
+  // "quado" termina em "-ado" igual aos participios, entao o corretor por similaridade
+  // nao pode toca-lo sem arriscar "conversado" e companhia - fica listado aqui
+  'quado': 'quando',
+  'quanmdo': 'quando',
+  'qaundo': 'quando',
+  'quadno': 'quando',
+  'obigado': 'obrigado',
+  'obrigao': 'obrigado',
+  'enviao': 'enviado',
   'mensagen': 'mensagem',
   'mensagens': 'mensagens',
   'homen': 'homem',
@@ -379,6 +388,26 @@ function levenshtein(a: string, b: string): number {
 
 const stripAccents = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
 
+/**
+ * Portuguese builds whole families of valid words from regular endings, and a word formed
+ * this way is very often one letter from another valid form - the participle/gerund pair is
+ * the worst case: "conversado" (foi conversado) is one insertion from "conversando", so the
+ * corrector was rewriting correct sentences. Any word carrying one of these productive
+ * endings is treated as legitimate and never fuzzy-corrected. A real typo that happens to
+ * end this way is simply left alone, which is far cheaper than corrupting the agent's text.
+ */
+const VALID_SUFFIXES = [
+  // Particípios. Esta e a colisao real: inserir um "n" transforma o participio no
+  // gerundio ("conversado" -> "conversando", "enviado" -> "enviando", "marcado" ->
+  // "marcando"), e o gerundio esta no vocabulario. Como as duas formas sao corretas,
+  // qualquer palavra com essa terminacao fica fora da correcao por similaridade.
+  'ado', 'ada', 'ados', 'adas', 'ido', 'ida', 'idos', 'idas'
+];
+
+function hasValidSuffix(bare: string): boolean {
+  return VALID_SUFFIXES.some(sfx => bare.endsWith(stripAccents(sfx)) && bare.length > sfx.length + 1);
+}
+
 const KNOWN_GOOD = new Set<string>([
   ...COMMON_VOCABULARY.map(w => stripAccents(w.toLowerCase())),
   ...Object.values(WORD_REPLACEMENTS).map(w => stripAccents(w.toLowerCase())),
@@ -398,6 +427,7 @@ export function suggestByEditDistance(word: string): string | null {
   // fixes. Short typos are handled by the explicit WORD_REPLACEMENTS list instead.
   if (bare.length < 5 || KNOWN_GOOD.has(bare)) return null;
   if (/\d/.test(word)) return null;
+  if (hasValidSuffix(bare)) return null;
 
   let best: string | null = null;
   let matches = 0;
