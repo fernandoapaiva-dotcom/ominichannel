@@ -1,8 +1,6 @@
 import os
 import logging
 from typing import Optional
-import chromadb
-from chromadb.config import Settings
 
 logger = logging.getLogger("rag_service")
 
@@ -19,12 +17,13 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
 
 class RAGService:
     """
-    ChromaDB's default embedding function loads a local sentence-transformer model into
-    RAM the moment the client/collection is touched - real weight (dozens of MB) on a
-    server this tight on memory. This service is a module-level singleton imported at app
-    startup (via the RAG router), so eagerly creating the client here meant that cost was
-    paid on every boot even with zero documents in the knowledge base. Init is deferred to
-    the first real call instead, via _ensure_client() at the top of every public method.
+    `import chromadb` alone costs ~63MB of RAM (measured on this server - its own
+    dependency tree, before anything is even instantiated), and creating the client loads
+    a local sentence-transformer embedding model on top of that. This service is a
+    module-level singleton imported at app startup (via the RAG router), so both costs
+    used to be paid on every boot even with zero documents in the knowledge base. Both the
+    import and the client creation are deferred to the first real call via
+    _ensure_client(), called at the top of every public method.
     """
     def __init__(self):
         self.client = None
@@ -33,6 +32,7 @@ class RAGService:
     def _ensure_client(self):
         if self.collection is not None:
             return
+        import chromadb
         persist_dir = os.path.join(os.getcwd(), "chroma_data")
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection("tenant_knowledge_base")
