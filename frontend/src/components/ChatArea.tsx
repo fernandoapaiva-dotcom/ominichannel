@@ -480,6 +480,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
+  // Trava sincrona, separada do estado isSending. useState e assincrono/agrupado pelo
+  // React - se handleSend for chamado duas vezes no mesmo instante (o campo tem DOIS
+  // gatilhos independentes: o onSubmit do form e o onKeyDown do Enter), a segunda chamada
+  // pode ler o valor antigo de isSending antes da primeira commitar, e as duas passam.
+  // Confirmado em producao: duas requisicoes de envio completas para o mesmo texto,
+  // cada uma com seu proprio delay anti-bloqueio, viraram duas mensagens reais no
+  // WhatsApp (so uma ficou registrada no banco, porque a deduplicacao por conteudo
+  // uniu as duas). Uma ref atualiza na hora, sem esperar re-render, entao fecha essa
+  // corrida de verdade.
+  const sendLockRef = useRef(false);
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -1697,13 +1707,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSending) return;
+    if (isSending || sendLockRef.current) return;
     if (!inputText.trim() && pendingFiles.length === 0) return;
+    sendLockRef.current = true;
 
     // Validation for unfulfilled placeholder brackets [...]
     const placeholderMatch = inputText.match(/\[(.*?)\]/);
     if (placeholderMatch) {
       alert(`⚠️ Você esqueceu de preencher um campo na mensagem:\n"${placeholderMatch[0]}"\n\nPor favor, substitua ou remova os colchetes antes de enviar ao cliente.`);
+      sendLockRef.current = false;
       return;
     }
 
@@ -1752,7 +1764,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         const confirmResend = window.confirm(
           '⚠️ Você já enviou essa MESMA mensagem há poucos minutos nesta conversa.\n\nSe o envio anterior pareceu travado, ele pode já ter chegado ao destinatário. Enviar de novo mesmo assim?'
         );
-        if (!confirmResend) return;
+        if (!confirmResend) {
+          sendLockRef.current = false;
+          return;
+        }
       }
     }
 
@@ -1867,6 +1882,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       setSendError(err.message || 'Falha ao enviar arquivo ou mensagem.');
     } finally {
       setIsSending(false);
+      sendLockRef.current = false;
     }
   };
 
