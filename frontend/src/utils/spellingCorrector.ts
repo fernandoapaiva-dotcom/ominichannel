@@ -265,6 +265,86 @@ export const WORD_REPLACEMENTS: Record<string, string> = {
 };
 
 /**
+ * Everyday pt-BR words used to catch typos that are NOT in the fixed lists above.
+ * WORD_REPLACEMENTS only knows a closed set of known mistakes, so an ordinary slip like
+ * "gete" (gente) or "obigado" (obrigado) used to pass through untouched. Anything here is
+ * also treated as already-correct, so correct words are never "fixed" into something else.
+ */
+const COMMON_VOCABULARY: string[] = [
+  'gente', 'obrigado', 'obrigada', 'senhor', 'senhora', 'cliente', 'clientes', 'orçamento',
+  'orçamentos', 'pagamento', 'pagamentos', 'entrega', 'entregas', 'produto', 'produtos',
+  'equipamento', 'equipamentos', 'máquina', 'máquinas', 'peça', 'peças', 'serviço', 'serviços',
+  'assistência', 'técnico', 'técnica', 'garantia', 'conserto', 'manutenção', 'visita',
+  'agendar', 'agendamento', 'atendimento', 'mensagem', 'contato', 'telefone', 'endereço',
+  'dinheiro', 'desconto', 'valor', 'valores', 'preço', 'preços', 'prazo', 'pedido', 'pedidos',
+  'nota', 'fiscal', 'boleto', 'transferência', 'comprovante', 'recebido', 'enviado', 'enviar',
+  'receber', 'confirmar', 'confirmado', 'aguardando', 'disponível', 'estoque', 'chegou',
+  'amanhã', 'hoje', 'ontem', 'semana', 'segunda', 'terça', 'quarta', 'quinta', 'sexta',
+  'sábado', 'domingo', 'manhã', 'tarde', 'noite', 'horário', 'agora', 'depois', 'antes',
+  'bom', 'boa', 'certo', 'certa', 'tudo', 'nada', 'muito', 'pouco', 'grande', 'pequeno',
+  'falar', 'conversar', 'verificar', 'resolver', 'precisa', 'preciso', 'poderia', 'consegue',
+  'vamos', 'estamos', 'estou', 'está', 'são', 'tem', 'temos', 'fazer', 'feito', 'combinado',
+  'qualquer', 'coisa', 'favor', 'desculpa', 'desculpe', 'problema', 'problemas', 'solução'
+];
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+const stripAccents = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+const KNOWN_GOOD = new Set<string>([
+  ...COMMON_VOCABULARY.map(w => stripAccents(w.toLowerCase())),
+  ...Object.values(WORD_REPLACEMENTS).map(w => stripAccents(w.toLowerCase())),
+  ...Object.keys(WORD_REPLACEMENTS)
+]);
+
+/**
+ * Last-resort fuzzy match for a word no list recognises: accepts a vocabulary word only when
+ * it is a single edit away AND no other candidate is equally close, so an ambiguous typo is
+ * left alone rather than "corrected" into the wrong word.
+ */
+export function suggestByEditDistance(word: string): string | null {
+  const lower = word.toLowerCase();
+  const bare = stripAccents(lower);
+  if (bare.length < 4 || KNOWN_GOOD.has(bare)) return null;
+  if (/\d/.test(word)) return null;
+
+  let best: string | null = null;
+  let bestScore = 99;
+  let tie = false;
+
+  for (const candidate of COMMON_VOCABULARY) {
+    const dist = levenshtein(bare, stripAccents(candidate.toLowerCase()));
+    if (dist < bestScore) {
+      bestScore = dist;
+      best = candidate;
+      tie = false;
+    } else if (dist === bestScore) {
+      tie = true;
+    }
+  }
+
+  if (bestScore === 1 && !tie && best) return best;
+  return null;
+}
+
+/**
  * Preserves the casing of the original word when applying the replacement.
  * - ALL CAPS: SUBSTUIDOS -> SUBSTITUÍDOS
  * - Title Case: Substituidos -> Substituídos
@@ -306,6 +386,14 @@ export function correctSingleWord(word: string): { corrected: string; wasChanged
     const casedReplacement = preserveCase(coreWord, replacement);
     return {
       corrected: `${leadingPunct}${casedReplacement}${trailingPunct}`,
+      wasChanged: true
+    };
+  }
+
+  const fuzzy = suggestByEditDistance(coreWord);
+  if (fuzzy) {
+    return {
+      corrected: `${leadingPunct}${preserveCase(coreWord, fuzzy)}${trailingPunct}`,
       wasChanged: true
     };
   }
@@ -353,6 +441,14 @@ export function correctFullText(text: string): {
       lastCorrection = { from: match, to: cased };
       return cased;
     }
+
+    const fuzzy = suggestByEditDistance(match);
+    if (fuzzy) {
+      changesCount++;
+      const cased = preserveCase(match, fuzzy);
+      lastCorrection = { from: match, to: cased };
+      return cased;
+    }
     return match;
   });
 
@@ -393,7 +489,7 @@ export function correctLastWordBeforeCursor(
   const [fullMatch, rawWord, trailingDelim] = match;
   const lower = rawWord.toLowerCase();
 
-  const rep = WORD_REPLACEMENTS[lower];
+  const rep = WORD_REPLACEMENTS[lower] || suggestByEditDistance(rawWord);
   if (rep && rep.toLowerCase() !== lower) {
     const casedRep = preserveCase(rawWord, rep);
     const startIndex = cursorPos - fullMatch.length;

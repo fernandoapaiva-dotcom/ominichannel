@@ -1381,6 +1381,26 @@ async def send_agent_message(
         async def _async_dispatch_to_whatsapp():
             try:
                 from app.core.database import AsyncSessionLocal
+
+                # A timeout on the fast dispatch above means "we don't know", NOT "it failed".
+                # Evolution frequently answers slower than the timeout on this server while
+                # still delivering the message - resending blindly then puts TWO identical
+                # messages in the customer's chat (exactly what was reported for group
+                # mentions, where resolving @participants adds extra latency before sending).
+                # When the send did go through, Evolution echoes it back over the webhook
+                # within a couple of seconds and that echo links whatsapp_msg_id onto this
+                # very message row. So: wait for the echo first, and only resend if it never
+                # arrives - a real failure produces no echo.
+                await asyncio.sleep(5.0)
+                async with AsyncSessionLocal() as check_db:
+                    check_msg = (await check_db.execute(select(Message).where(Message.id == msg_id))).scalar_one_or_none()
+                    if check_msg and (check_msg.whatsapp_msg_id or check_msg.status == "sent"):
+                        logger.info(
+                            f"[ANTI-DUPLICATA] Mensagem #{msg_id} ja foi confirmada pelo WhatsApp "
+                            f"(id '{check_msg.whatsapp_msg_id}'); cancelando reenvio."
+                        )
+                        return
+
                 bg_send_res = {"success": False}
                 bg_wa_key_id = None
 
