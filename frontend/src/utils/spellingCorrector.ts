@@ -32,6 +32,21 @@ export const PHRASE_REPLACEMENTS: Record<string, string> = {
 
 // Word-level replacements (normalized lowercase keys)
 export const WORD_REPLACEMENTS: Record<string, string> = {
+  // Typos curtos (4 letras ou menos) - o corretor por similaridade ignora palavras
+  // curtas de proposito, entao estes casos ficam listados explicitamente aqui
+  'gete': 'gente',
+  'genet': 'gente',
+  'oque': 'o que',
+  'msm': 'mesmo',
+  'qdo': 'quando',
+  'qnd': 'quando',
+  'qto': 'quanto',
+  'agr': 'agora',
+  'amnh': 'amanhã',
+  'hj': 'hoje',
+  'blz': 'beleza',
+  'vlw': 'valeu',
+  'flw': 'falou',
   // Common informal abbreviations
   'vc': 'você',
   'vcs': 'vocês',
@@ -271,20 +286,56 @@ export const WORD_REPLACEMENTS: Record<string, string> = {
  * also treated as already-correct, so correct words are never "fixed" into something else.
  */
 const COMMON_VOCABULARY: string[] = [
-  'gente', 'obrigado', 'obrigada', 'senhor', 'senhora', 'cliente', 'clientes', 'orçamento',
-  'orçamentos', 'pagamento', 'pagamentos', 'entrega', 'entregas', 'produto', 'produtos',
-  'equipamento', 'equipamentos', 'máquina', 'máquinas', 'peça', 'peças', 'serviço', 'serviços',
-  'assistência', 'técnico', 'técnica', 'garantia', 'conserto', 'manutenção', 'visita',
-  'agendar', 'agendamento', 'atendimento', 'mensagem', 'contato', 'telefone', 'endereço',
-  'dinheiro', 'desconto', 'valor', 'valores', 'preço', 'preços', 'prazo', 'pedido', 'pedidos',
-  'nota', 'fiscal', 'boleto', 'transferência', 'comprovante', 'recebido', 'enviado', 'enviar',
-  'receber', 'confirmar', 'confirmado', 'aguardando', 'disponível', 'estoque', 'chegou',
-  'amanhã', 'hoje', 'ontem', 'semana', 'segunda', 'terça', 'quarta', 'quinta', 'sexta',
-  'sábado', 'domingo', 'manhã', 'tarde', 'noite', 'horário', 'agora', 'depois', 'antes',
-  'bom', 'boa', 'certo', 'certa', 'tudo', 'nada', 'muito', 'pouco', 'grande', 'pequeno',
-  'falar', 'conversar', 'verificar', 'resolver', 'precisa', 'preciso', 'poderia', 'consegue',
-  'vamos', 'estamos', 'estou', 'está', 'são', 'tem', 'temos', 'fazer', 'feito', 'combinado',
-  'qualquer', 'coisa', 'favor', 'desculpa', 'desculpe', 'problema', 'problemas', 'solução'
+  // Ligação / palavras funcionais (as mais digitadas - e as que mais sofrem typo)
+  'quando', 'quanto', 'quantos', 'quantas', 'porque', 'porquê', 'então', 'também', 'sempre',
+  'nunca', 'ainda', 'mesmo', 'mesma', 'assim', 'apenas', 'depois', 'antes', 'agora', 'aqui',
+  'ali', 'onde', 'como', 'qual', 'quais', 'quem', 'esse', 'essa', 'este', 'esta', 'isso',
+  'aquele', 'aquela', 'aquilo', 'para', 'pelo', 'pela', 'com', 'sem', 'sobre', 'entre',
+  'até', 'desde', 'durante', 'contra', 'muito', 'muita', 'muitos', 'muitas', 'pouco', 'pouca',
+  'todo', 'toda', 'todos', 'todas', 'outro', 'outra', 'outros', 'outras', 'algum', 'alguma',
+  'alguns', 'algumas', 'nenhum', 'nenhuma', 'cada', 'qualquer', 'tudo', 'nada', 'alguém',
+  'ninguém', 'talvez', 'melhor', 'pior', 'maior', 'menor', 'grande', 'pequeno', 'novo', 'nova',
+  'velho', 'primeiro', 'segundo', 'último', 'próximo', 'próxima', 'anterior', 'junto',
+  // Verbos frequentes (varias conjugacoes, que e onde o typo costuma cair)
+  'fazer', 'fazendo', 'feito', 'faço', 'fazemos', 'falar', 'falando', 'falei', 'falou',
+  'conversar', 'conversando', 'conversamos', 'ver', 'vendo', 'vejo', 'vimos', 'viu',
+  'saber', 'sabendo', 'sabe', 'sabemos', 'poder', 'podendo', 'posso', 'pode', 'podemos',
+  'querer', 'quero', 'quer', 'queremos', 'ter', 'tendo', 'tenho', 'temos', 'tinha',
+  'estar', 'estou', 'está', 'estamos', 'estava', 'estão', 'ser', 'sendo', 'sou', 'somos',
+  'ficar', 'ficando', 'fica', 'ficou', 'ficamos', 'chegar', 'chegando', 'chega', 'chegou',
+  'passar', 'passando', 'passou', 'levar', 'levando', 'levou', 'trazer', 'trazendo', 'trouxe',
+  'mandar', 'mandando', 'mandei', 'mandou', 'enviar', 'enviando', 'enviei', 'enviado',
+  'receber', 'recebendo', 'recebi', 'recebido', 'pegar', 'pegando', 'peguei', 'pegou',
+  'olhar', 'olhando', 'verificar', 'verificando', 'verifiquei', 'resolver', 'resolvendo',
+  'resolvido', 'precisar', 'precisa', 'preciso', 'precisamos', 'conseguir', 'consegue',
+  'consigo', 'conseguimos', 'aguardar', 'aguardando', 'esperar', 'esperando', 'espero',
+  'começar', 'começando', 'terminar', 'terminando', 'trabalhar', 'trabalhando', 'comprar',
+  'comprando', 'comprei', 'vender', 'vendendo', 'vendido', 'pagar', 'pagando', 'paguei',
+  'entregar', 'entregando', 'entregue', 'retirar', 'retirando', 'avisar', 'avisando', 'aviso',
+  'confirmar', 'confirmando', 'confirmado', 'marcar', 'marcando', 'agendar', 'agendando',
+  'ajudar', 'ajudando', 'ajuda', 'tentar', 'tentando', 'tentei', 'acabar', 'acabando',
+  'deixar', 'deixando', 'deixei', 'colocar', 'colocando', 'coloquei', 'usar', 'usando',
+  // Atendimento / comercial
+  'cliente', 'clientes', 'orçamento', 'orçamentos', 'pagamento', 'pagamentos', 'entrega',
+  'entregas', 'produto', 'produtos', 'equipamento', 'equipamentos', 'máquina', 'máquinas',
+  'peça', 'peças', 'serviço', 'serviços', 'assistência', 'técnico', 'técnica', 'técnicos',
+  'garantia', 'conserto', 'manutenção', 'visita', 'agendamento', 'atendimento', 'mensagem',
+  'contato', 'telefone', 'endereço', 'dinheiro', 'desconto', 'valor', 'valores', 'preço',
+  'preços', 'prazo', 'pedido', 'pedidos', 'nota', 'fiscal', 'boleto', 'transferência',
+  'comprovante', 'disponível', 'estoque', 'empresa', 'loja', 'oficina', 'material',
+  'materiais', 'modelo', 'marca', 'defeito', 'problema', 'problemas', 'solução', 'reparo',
+  'troca', 'devolução', 'compra', 'venda', 'fatura', 'cobrança', 'parcela', 'parcelado',
+  'cartão', 'crédito', 'débito', 'número', 'código', 'protocolo', 'relatório', 'documento',
+  'solda', 'soldagem', 'cilindro', 'cilindros', 'regulador', 'capacete', 'cabo', 'cabos',
+  // Tempo
+  'amanhã', 'hoje', 'ontem', 'semana', 'semanas', 'segunda', 'terça', 'quarta', 'quinta',
+  'sexta', 'sábado', 'domingo', 'manhã', 'tarde', 'noite', 'horário', 'hora', 'horas',
+  'minuto', 'minutos', 'dia', 'dias', 'mês', 'meses', 'ano', 'anos', 'cedo', 'logo',
+  // Cortesia / conversa
+  'gente', 'obrigado', 'obrigada', 'senhor', 'senhora', 'você', 'vocês', 'favor', 'desculpa',
+  'desculpe', 'combinado', 'certeza', 'claro', 'perfeito', 'ótimo', 'beleza', 'tranquilo',
+  'bom', 'boa', 'certo', 'certa', 'coisa', 'coisas', 'pessoa', 'pessoal', 'equipe',
+  'nome', 'informação', 'informações', 'dúvida', 'dúvidas', 'resposta', 'pergunta'
 ];
 
 function levenshtein(a: string, b: string): number {
@@ -322,7 +373,10 @@ const KNOWN_GOOD = new Set<string>([
 export function suggestByEditDistance(word: string): string | null {
   const lower = word.toLowerCase();
   const bare = stripAccents(lower);
-  if (bare.length < 4 || KNOWN_GOOD.has(bare)) return null;
+  // 5+ letters only: at 4 letters too many legitimate words sit one edit apart
+  // ("caso" vs "cabo", "cabe" vs "cabo"), so fuzzy matching there corrects more than it
+  // fixes. Short typos are handled by the explicit WORD_REPLACEMENTS list instead.
+  if (bare.length < 5 || KNOWN_GOOD.has(bare)) return null;
   if (/\d/.test(word)) return null;
 
   let best: string | null = null;
