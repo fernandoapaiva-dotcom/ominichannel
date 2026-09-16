@@ -1,9 +1,10 @@
 import asyncio
+import glob
 import json
 import logging
 import mimetypes
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -13,10 +14,22 @@ from app.services.backup_service import create_db_snapshot
 from app.services.settings_service import settings_service
 from app.services.gdrive_service import gdrive_service
 
+try:
+    from zoneinfo import ZoneInfo
+    BACKUP_TZ = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    BACKUP_TZ = None
+
 logger = logging.getLogger("daily_backup_drive")
 
 UPLOADS_DIR = os.path.join(os.getcwd(), "uploads")
 MEDIA_MANIFEST_DIR = os.path.join(os.getcwd(), "backups_db")
+DB_SNAPSHOT_DIR = os.path.join(os.getcwd(), "backups_db")
+JSON_EXPORT_DIR = os.path.join(os.getcwd(), "backups_json")
+
+BACKUP_HOUR_LOCAL = 20  # 20h no horário de Brasília, como pedido
+KEEP_LOCAL_DB_SNAPSHOTS = 3  # margem de seguranca mesmo se o upload de um dia falhar
+JSON_EXPORT_RETENTION_DAYS = 30
 
 
 def _media_manifest_path(tenant_id: int) -> str:
@@ -220,6 +233,60 @@ async def run_backup_for_tenant(tenant_id: int, snapshot_path: str) -> dict:
         return {"success": False, "message": message}
 
 
+def _cleanup_after_backup() -> dict:
+    """
+    Roda logo depois do backup diário, liberando espaço local de arquivos que agora tem
+    copia segura no Drive - NUNCA mexe em uploads/ (é de lá que o proprio chat carrega
+    fotos/videos na tela; o Drive e so uma copia de seguranca, nao substitui o
+    armazenamento ao vivo) nem no banco de dados em uso. So remove:
+      - snapshots locais antigos do banco em backups_db/, alem dos KEEP_LOCAL_DB_SNAPSHOTS
+        mais recentes (fica sempre uma margem de seguranca local mesmo que o envio de um
+        dia especifico falhe silenciosamente)
+      - exports JSON por conversa em backups_json/ com mais de JSON_EXPORT_RETENTION_DAYS
+    """
+    freed_bytes = 0
+    removed_count = 0
+
+    try:
+        snaps = sorted(
+            glob.glob(os.path.join(DB_SNAPSHOT_DIR, "omini_channel_snapshot_*.db")),
+            key=os.path.getmtime,
+            reverse=True,
+        )
+        for old_snap in snaps[KEEP_LOCAL_DB_SNAPSHOTS:]:
+            for path in (old_snap, old_snap + "-wal", old_snap + "-shm"):
+                if os.path.exists(path):
+                    freed_bytes += os.path.getsize(path)
+                    os.remove(path)
+                    removed_count += 1
+    except Exception as e:
+        logger.warning(f"[LIMPEZA PÓS-BACKUP] Erro limpando snapshots antigos: {e}")
+
+    try:
+        if os.path.isdir(JSON_EXPORT_DIR):
+            cutoff_ts = (datetime.utcnow() - timedelta(days=JSON_EXPORT_RETENTION_DAYS)).timestamp()
+            for path in glob.glob(os.path.join(JSON_EXPORT_DIR, "*.json")):
+                if os.path.getmtime(path) < cutoff_ts:
+                    freed_bytes += os.path.getsize(path)
+                    os.remove(path)
+                    removed_count += 1
+    except Exception as e:
+        logger.warning(f"[LIMPEZA PÓS-BACKUP] Erro limpando exports antigos: {e}")
+
+    result = {"removed": removed_count, "freed_mb": round(freed_bytes / 1024 / 1024, 1)}
+    if removed_count:
+        logger.info(f"[LIMPEZA PÓS-BACKUP] {removed_count} arquivo(s) removidos, {result['freed_mb']} MB liberados.")
+    return result
+
+
+def _seconds_until_next_run() -> float:
+    now = datetime.now(BACKUP_TZ) if BACKUP_TZ else datetime.utcnow()
+    target = now.replace(hour=BACKUP_HOUR_LOCAL, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
+
+
 async def run_daily_drive_backup():
     """
     Creates one fresh full-database snapshot and uploads it to Google Drive for every
@@ -241,17 +308,32 @@ async def run_daily_drive_backup():
 
 
 async def start_daily_drive_backup_loop(interval_hours: int = 24):
-    logger.info("Google Drive daily system backup loop started.")
-    # Give the app a minute to finish booting before the first attempt.
-    await asyncio.sleep(60)
+    """
+    Roda o backup (banco + midias) todo dia as BACKUP_HOUR_LOCAL (horario de Brasilia),
+    em vez de 24h a partir do boot do processo - do jeito anterior, cada `pm2 restart`
+    (que acontece a cada deploy) reiniciava a contagem, entao o horario real do backup
+    ficava andando sem controle. Logo depois de cada backup, roda a limpeza dos arquivos
+    locais redundantes (ver _cleanup_after_backup).
+    `interval_hours` fica aceito por compatibilidade com a chamada em main.py, mas nao e
+    mais usado - o horario agora e sempre o fixo.
+    """
+    logger.info(f"Google Drive daily system backup loop started - agendado para {BACKUP_HOUR_LOCAL:02d}:00 (America/Sao_Paulo).")
     while True:
+        wait_s = _seconds_until_next_run()
+        logger.info(f"[DAILY DRIVE BACKUP] Próxima execução em {wait_s / 3600:.1f}h.")
+        try:
+            await asyncio.sleep(wait_s)
+        except asyncio.CancelledError:
+            break
         try:
             await run_daily_drive_backup()
+            _cleanup_after_backup()
         except asyncio.CancelledError:
             break
         except Exception as e:
             logger.error(f"Unexpected error in daily Drive backup loop: {e}")
-        try:
-            await asyncio.sleep(interval_hours * 3600)
-        except asyncio.CancelledError:
-            break
+            # Evita loop apertado se algo falhar logo no inicio do dia
+            try:
+                await asyncio.sleep(300)
+            except asyncio.CancelledError:
+                break
