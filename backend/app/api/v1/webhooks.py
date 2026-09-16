@@ -716,8 +716,14 @@ async def receive_evolution_webhook(
 
     raw_phone_candidate = remote_jid.split("@")[0] if "@" in remote_jid else remote_jid
 
-    # Fix LID numbers: resolve to real WhatsApp phone number
+    # Fix LID numbers: resolve to real WhatsApp phone number.
+    # original_lid keeps the internal id even after remote_jid is rewritten to the real
+    # number, so the contact lookup below can find (and upgrade) a contact that was created
+    # earlier under that LID - WhatsApp often only reveals the real number on a later
+    # message, and without this the same person would get a second, duplicate contact.
+    original_lid = ""
     if "@lid" in str(remote_jid).lower() or (len(raw_phone_candidate) >= 14 and not raw_phone_candidate.startswith("55") and not raw_phone_candidate.startswith("120363") and "@g.us" not in str(remote_jid)):
+        original_lid = "".join(filter(str.isdigit, raw_phone_candidate))
         if "@s.whatsapp.net" in str(remote_jid_alt):
             remote_jid = remote_jid_alt
         elif "@s.whatsapp.net" in str(participant_jid):
@@ -1285,12 +1291,16 @@ async def receive_evolution_webhook(
             phone_variants.append(phone_number[:4] + "9" + phone_number[4:])
 
         # Exclude groups from individual phone matching!
+        phone_match = Contact.telefone.in_(phone_variants) | (Contact.telefone.like(f"%{phone_number[-8:]}%") if len(phone_number) >= 8 else False)
+        if original_lid and original_lid != phone_number:
+            phone_match = phone_match | (Contact.telefone == original_lid)
+
         contact_stmt = select(Contact).where(
             Contact.tenant_id == tenant_id,
             Contact.telefone.notlike("%@g.us%"),
             Contact.telefone.notlike("%-%"),
             Contact.telefone.notlike("120363%"),
-            (Contact.telefone.in_(phone_variants) | (Contact.telefone.like(f"%{phone_number[-8:]}%") if len(phone_number) >= 8 else False))
+            phone_match
         )
 
     contact_res = await db.execute(contact_stmt)
@@ -1412,7 +1422,13 @@ async def receive_evolution_webhook(
         else:
             # Upgrade phone if contact had a LID and we now have a real number
             if len(phone_number) in [10, 11, 12, 13] and (len(contact.telefone or "") >= 14 or "lid" in str(contact.telefone)):
+                old_lid = "".join(filter(str.isdigit, str(contact.telefone or "")))
                 contact.telefone = phone_number
+                if old_lid:
+                    extra_c = dict(contact.dados_adicionais or {})
+                    extra_c["lid"] = old_lid
+                    contact.dados_adicionais = extra_c
+                logger.info(f"[LID RESOLVIDO] Contato #{contact.id} atualizado de '{old_lid}' para o número real '{phone_number}'")
         # For individual contacts: update pushName if name is generic, empty, or phone number, OR contains business name
         if not (contact.dados_adicionais or {}).get("custom_name_locked"):
             GENERIC_NAMES = {"cliente", "cliente whatsapp", "cliente whatsapp business", "whatsapp", "whatsapp business"}
