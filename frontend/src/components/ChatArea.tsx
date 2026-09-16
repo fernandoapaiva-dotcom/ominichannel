@@ -7,7 +7,7 @@ import {
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
   Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, Sparkles
 } from 'lucide-react';
-import { correctFullText, correctLastWordBeforeCursor } from '../utils/spellingCorrector';
+import { correctFullText, correctLastWordBeforeCursor, isMisspelled } from '../utils/spellingCorrector';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
@@ -779,6 +779,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const cameraVideoInputRef = useRef<HTMLInputElement>(null);
   const documentInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const spellOverlayRef = useRef<HTMLDivElement>(null);
 
   const extractMediaAndCaption = (raw: string | undefined | null, dadosAdicionais?: any) => {
     if (!raw) return { mediaPath: '', caption: null as string | null, fileName: null as string | null };
@@ -6142,12 +6143,66 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               );
             })()}
             
+            <div style={{ flex: 1, position: 'relative', minWidth: 0, backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+            {/* Camada de destaque: fica ATRAS do textarea e desenha o sublinhado ondulado
+                vermelho sob as palavras que o corretor reconhece como erradas. O textarea
+                nao consegue estilizar palavras isoladas, entao o texto e espelhado aqui
+                com as mesmas metricas (fonte, padding, quebra de linha) e pintado de
+                transparente - so a decoracao aparece. */}
+            <div
+              ref={spellOverlayRef}
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                padding: '10px 14px',
+                border: '1px solid transparent',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '14px',
+                lineHeight: '1.4',
+                fontFamily: 'inherit',
+                color: 'transparent',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflow: 'hidden',
+                pointerEvents: 'none',
+                boxSizing: 'border-box',
+                userSelect: 'none'
+              }}
+            >
+              {autoCorrectEnabled
+                ? inputText.split(/(\s+)/).map((chunk, i) => {
+                    const core = chunk.replace(/^[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+|[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+$/g, '');
+                    if (core && !chunk.startsWith('@') && isMisspelled(core)) {
+                      return (
+                        <span
+                          key={i}
+                          style={{
+                            textDecoration: 'underline wavy #ef4444',
+                            textDecorationSkipInk: 'none',
+                            textUnderlineOffset: '2px'
+                          }}
+                        >
+                          {chunk}
+                        </span>
+                      );
+                    }
+                    return <span key={i}>{chunk}</span>;
+                  })
+                : null}
+              {'\n'}
+            </div>
             <textarea
               ref={textareaRef}
               className="chat-input-textarea"
               rows={1}
               placeholder={isGroupChat ? 'Enviar mensagem no grupo... (@ menciona alguém ou @todos)' : 'Digite sua mensagem... (Cole Ctrl+V imagens/arquivos aqui)'}
               value={inputText}
+              onScroll={(e) => {
+                if (spellOverlayRef.current) {
+                  spellOverlayRef.current.scrollTop = e.currentTarget.scrollTop;
+                }
+              }}
               spellCheck={true}
               lang="pt-BR"
               autoCorrect="on"
@@ -6224,12 +6279,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }
               }}
               style={{
-                flex: 1,
+                position: 'relative',
+                width: '100%',
+                display: 'block',
                 minHeight: '42px',
                 maxHeight: '140px',
                 height: '42px',
                 padding: '10px 14px',
-                backgroundColor: 'var(--bg-secondary)',
+                backgroundColor: 'transparent',
                 border: '1px solid var(--border-color)',
                 borderRadius: 'var(--radius-md)',
                 color: 'var(--text-main)',
@@ -6244,6 +6301,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 wordBreak: 'break-word'
               }}
             />
+            </div>
 
             <AudioRecorder onSendAudio={handleSendAudioMessage} />
 

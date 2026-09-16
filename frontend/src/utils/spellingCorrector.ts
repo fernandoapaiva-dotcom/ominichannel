@@ -36,6 +36,16 @@ export const WORD_REPLACEMENTS: Record<string, string> = {
   // curtas de proposito, entao estes casos ficam listados explicitamente aqui
   'gete': 'gente',
   'genet': 'gente',
+  'mensagen': 'mensagem',
+  'mensagens': 'mensagens',
+  'homen': 'homem',
+  'onten': 'ontem',
+  'alguen': 'alguém',
+  'ninguen': 'ninguém',
+  'tamben': 'também',
+  'bem-vindo': 'bem-vindo',
+  'agendaar': 'agendar',
+  'conversaar': 'conversar',
   'oque': 'o que',
   'msm': 'mesmo',
   'qdo': 'quando',
@@ -335,7 +345,17 @@ const COMMON_VOCABULARY: string[] = [
   'gente', 'obrigado', 'obrigada', 'senhor', 'senhora', 'você', 'vocês', 'favor', 'desculpa',
   'desculpe', 'combinado', 'certeza', 'claro', 'perfeito', 'ótimo', 'beleza', 'tranquilo',
   'bom', 'boa', 'certo', 'certa', 'coisa', 'coisas', 'pessoa', 'pessoal', 'equipe',
-  'nome', 'informação', 'informações', 'dúvida', 'dúvidas', 'resposta', 'pergunta'
+  'nome', 'informação', 'informações', 'dúvida', 'dúvidas', 'resposta', 'pergunta',
+  // Palavras validas que colidem com as acima ao faltar uma letra ("conta" x "contra",
+  // "carta" x "cartão"). Listadas aqui para ficarem protegidas e nunca serem marcadas.
+  'conta', 'contas', 'carta', 'cartas', 'canta', 'ponta', 'pontas', 'porta', 'portas',
+  'pasta', 'festa', 'custa', 'junta', 'manta', 'tinta', 'volta', 'falta', 'planta',
+  'conto', 'ponto', 'pontos', 'posto', 'gosto', 'custo', 'custos', 'visto', 'texto',
+  'carro', 'carros', 'ferro', 'terra', 'serra', 'barra', 'parte', 'partes', 'corte',
+  'sorte', 'norte', 'forte', 'verde', 'tarde', 'grande', 'risco', 'disco', 'bloco',
+  'banco', 'branco', 'campo', 'tempo', 'termo', 'turno', 'forno', 'cidade', 'idade',
+  'verdade', 'vontade', 'calor', 'flor', 'cores', 'lugar', 'lugares', 'ordem', 'saída',
+  'entrada', 'largura', 'altura', 'peso', 'medida', 'medidas', 'tamanho', 'quantidade'
 ];
 
 function levenshtein(a: string, b: string): number {
@@ -380,22 +400,43 @@ export function suggestByEditDistance(word: string): string | null {
   if (/\d/.test(word)) return null;
 
   let best: string | null = null;
-  let bestScore = 99;
-  let tie = false;
+  let matches = 0;
 
   for (const candidate of COMMON_VOCABULARY) {
-    const dist = levenshtein(bare, stripAccents(candidate.toLowerCase()));
-    if (dist < bestScore) {
-      bestScore = dist;
-      best = candidate;
-      tie = false;
-    } else if (dist === bestScore) {
-      tie = true;
-    }
+    const cand = stripAccents(candidate.toLowerCase());
+    if (levenshtein(bare, cand) !== 1) continue;
+
+    // Only two typo shapes are safe to auto-flag:
+    //   1. a missing letter  ("quado" -> "quando", "obigado" -> "obrigado")
+    //   2. a doubled letter  ("agendaar" -> "agendar")
+    // Same-length substitutions and "typed word is longer" cases are rejected, because
+    // that is where valid words collide: "trocar" is one edit from "troca" and "vamos"
+    // one from "temos", and underlining those would flag perfectly correct writing.
+    const isMissingLetter = bare.length === cand.length - 1;
+    const isDoubledLetter =
+      bare.length === cand.length + 1 && /(.)\1/.test(bare) && bare.replace(/(.)\1/, '$1') === cand;
+
+    if (!isMissingLetter && !isDoubledLetter) continue;
+
+    matches++;
+    if (matches > 1) return null; // ambiguous - leave the word alone
+    best = candidate;
   }
 
-  if (bestScore === 1 && !tie && best) return best;
-  return null;
+  return matches === 1 ? best : null;
+}
+
+/**
+ * True when the word is one this engine knows how to fix - used to draw the red wavy
+ * underline under it while typing. Mirrors exactly what correctSingleWord would change,
+ * so the underline never marks a word the corrector would then leave alone.
+ */
+export function isMisspelled(word: string): boolean {
+  if (!word) return false;
+  const lower = word.toLowerCase();
+  const rep = WORD_REPLACEMENTS[lower];
+  if (rep && rep.toLowerCase() !== lower) return true;
+  return suggestByEditDistance(word) !== null;
 }
 
 /**
@@ -534,8 +575,10 @@ export function correctLastWordBeforeCursor(
   const textBefore = text.slice(0, cursorPos);
   const textAfter = text.slice(cursorPos);
 
-  // Find the word right before the cursor (may end with a space or punctuation)
-  const match = textBefore.match(/([a-zA-ZáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)([\s.,!?;:]+)$/);
+  // Find the word right before the cursor. The delimiter is OPTIONAL: this runs from the
+  // textarea's keydown, where the space/punctuation the user just pressed has not been
+  // inserted into the value yet - requiring it here meant the live correction never fired.
+  const match = textBefore.match(/([a-zA-ZáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+)([\s.,!?;:]*)$/);
   if (!match) {
     return { newText: text, newCursor: cursorPos };
   }
