@@ -20,7 +20,7 @@ import { AICopilotModal } from './AICopilotModal';
 import { WhatsAppAudioPlayer } from './WhatsAppAudioPlayer';
 import { AudioRecorder } from './AudioRecorder';
 import { StickyAudioPlayer } from './StickyAudioPlayer';
-import { getCleanDisplayName } from './ChatList';
+import { getCleanDisplayName, formatWhatsAppPhone } from './ChatList';
 import { Conversation, User, Message, CalendarEvent, WhatsAppNumber } from '../types';
 
 interface ChatAreaProps {
@@ -93,27 +93,10 @@ const getMessageDateKey = (timestampStr: string): string => {
   }
 };
 
-export const formatWhatsAppPhone = (phone: string | undefined | null): string => {
-  if (!phone) return '';
-  const str = String(phone);
-  const clean = str.replace(/\D/g, '');
-  if (str.includes('@g.us') || clean.startsWith('120363')) {
-    return 'Grupo';
-  }
-  if (clean.startsWith('55') && clean.length === 12) {
-    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 8)}-${clean.slice(8)}`;
-  }
-  if (clean.startsWith('55') && clean.length === 13) {
-    return `+55 (${clean.slice(2, 4)}) ${clean.slice(4, 9)}-${clean.slice(9)}`;
-  }
-  if (clean.length === 10) {
-    return `(${clean.slice(0, 2)}) ${clean.slice(2, 6)}-${clean.slice(6)}`;
-  }
-  if (clean.length === 11) {
-    return `(${clean.slice(0, 2)}) ${clean.slice(2, 7)}-${clean.slice(7)}`;
-  }
-  return str.replace('@lid', '').replace('@s.whatsapp.net', '');
-};
+// formatWhatsAppPhone lives in ChatList.tsx and is imported above - there used to be a second,
+// separate copy of this exact function here that never got the LID fix (it fell back to
+// showing the raw digit string with no "+"), so the chat header kept showing bare LIDs like
+// "106756076220452" even after the sidebar list was fixed. One shared implementation now.
 
 // Global memory cache for link preview across all components and renders
 const globalLinkPreviewCache = new Map<string, any>();

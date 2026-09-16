@@ -350,8 +350,13 @@ async def receive_evolution_webhook(
     if is_call_event:
         try:
             status_call = str(data.get("status") or "offer").lower()
-            if status_call not in ["offer", "ringing", "missed", "timeout", "reject"]:
-                return {"status": "ignored", "reason": f"Call status '{status_call}' ignored"}
+            # Only log a "missed call" card on an actual negative outcome. "offer"/"ringing" are
+            # just the call starting - not yet an outcome - and "accept" means it was answered.
+            # This used to fire on "offer" alone, so every call got marked as missed the instant
+            # it started ringing, and since "accept" was never handled, answering it never fixed
+            # the card - the customer's call showed as missed even when the agent picked up.
+            if status_call not in ["missed", "timeout", "reject"]:
+                return {"status": "ignored", "reason": f"Call status '{status_call}' is not a missed-call outcome"}
 
             call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
             raw_caller_jid = (
