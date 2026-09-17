@@ -67,9 +67,29 @@ def verify_os_handler_key(x_os_handler_key: str = Header(...)):
         raise HTTPException(status_code=401, detail="Chave de API inválida (X-OS-Handler-Key)")
 
 
-def detect_natureza(norm_text: str) -> Optional[str]:
+def detect_natureza(full_text: str) -> Optional[str]:
+    """
+    Looks for the natureza keyword ONLY in the document's header region (before the
+    "Cliente:"/"Condições Gerais" section starts), never in the full text. The O.S. layout
+    printed here has a boilerplate "Condições Gerais de Serviço" clause that mentions
+    "orçamento" repeatedly REGARDLESS of the document's actual type (garantia, locação...) -
+    scanning the whole PDF would misclassify almost everything as "orcamento" just because
+    that word appears somewhere in the fine print. The natureza badge itself lives in the
+    header, next to "Nº DA OS"/"DATA EMISSÃO", based on the one sample seen so far.
+    """
+    # Plain .lower() (no accent-stripping, no .strip()) so the found index still lines up
+    # with the ORIGINAL full_text for slicing - normalize_text()'s own .strip() would shift
+    # every index if the PDF extraction has any leading whitespace/blank lines.
+    lower_text = full_text.lower()
+    header_end = len(full_text)
+    for marker in ["cliente:", "condições gerais", "condicoes gerais", "prezado"]:
+        idx = lower_text.find(marker)
+        if idx != -1:
+            header_end = min(header_end, idx)
+    header_text = normalize_text(full_text[:header_end])
+
     for status, kws in NATUREZA_KEYWORDS.items():
-        if any(kw in norm_text for kw in kws):
+        if any(kw in header_text for kw in kws):
             return status
     return None
 
@@ -80,12 +100,18 @@ def extract_field(text: str, label: str) -> Optional[str]:
 
 
 def extract_phone(text: str) -> Optional[str]:
-    """Prefers 'Celular:', falls back to 'Telefone:'. Normalizes to digits with country code."""
+    """
+    Prefers 'Celular:', falls back to 'Telefone:'. Normalizes to digits with country code.
+    Uses a phone-shaped character class ([\\d()\\s.-]) rather than "everything up to the next
+    newline" - on the real O.S. layout, 'Telefone:', 'Celular:' and 'Contato:' all sit on the
+    SAME visual row, and PDF text extraction flattens that row into one line, so a greedy
+    to-end-of-line match would swallow the literal word "Contato" right after the digits.
+    """
     for label in ["Celular", "Telefone"]:
-        raw = extract_field(text, label)
-        if not raw:
+        m = re.search(rf"{label}\s*:\s*([\d\(\)\s\.\-]{{7,20}})", text, re.IGNORECASE)
+        if not m:
             continue
-        digits = re.sub(r"\D", "", raw)
+        digits = re.sub(r"\D", "", m.group(1))
         if len(digits) < 8:
             continue
         if not digits.startswith("55") and len(digits) in (10, 11):
@@ -123,8 +149,7 @@ async def ingest_os_pdf(
 
     client_name = extract_field(full_text, "Cliente")
     equipamento = extract_field(full_text, "Equipamento")
-    norm_text = normalize_text(full_text)
-    natureza = detect_natureza(norm_text)
+    natureza = detect_natureza(full_text)
 
     wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.id == settings.ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID)
     whatsapp_number = (await db.execute(wn_stmt)).scalar_one_or_none()
