@@ -11,6 +11,7 @@ interface DepartmentBarProps {
   selectedDepartmentId: number | 'all';
   onSelectDepartment: (id: number | 'all') => void;
   conversations: Conversation[];
+  unreadCounts?: Record<string, number>;
   onOpenCalendar?: () => void;
   calendarSummary?: { today_pending: number; overdue: number; total_pending: number } | null;
   pendingBadgeCount?: number;
@@ -22,6 +23,7 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   selectedDepartmentId,
   onSelectDepartment,
   conversations,
+  unreadCounts,
   onOpenCalendar,
   calendarSummary,
   pendingBadgeCount = 0,
@@ -42,6 +44,13 @@ export const DepartmentBar: React.FC<DepartmentBarProps> = ({
   };
 
   const getUnreadCount = (numberId: number | 'all') => {
+    // Prefer the backend's accurate per-department aggregate (a cheap SQL COUNT covering
+    // EVERY conversation) over deriving it from `conversations`, which is capped for
+    // performance and may not include every department's most recent activity.
+    if (unreadCounts) {
+      const fromServer = unreadCounts[String(numberId)];
+      if (typeof fromServer === 'number') return fromServer;
+    }
     return conversations.filter(c => {
       if (numberId !== 'all' && String(c.whatsapp_number_id) !== String(numberId)) return false;
       const extra = c.dados_adicionais || {};

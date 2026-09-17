@@ -48,6 +48,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   }, [activeConversationId]);
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [selectedDeptId, setSelectedDeptId] = useState<number | 'all'>('all');
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | 'all' | 'nao_lidas'>('all');
   const [isCalendarOpen, setIsCalendarOpen] = useState<boolean>(false);
   const [calendarPrefill, setCalendarPrefill] = useState<any>(null);
@@ -343,6 +344,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     }
   };
 
+  // Per-department unread badge counts, fetched separately from the chat list itself (a
+  // cheap SQL aggregate, not a message-payload query) so the DepartmentBar tabs stay accurate
+  // for EVERY department even though the main conversations list is capped for performance.
+  const fetchUnreadCounts = useCallback(async () => {
+    try {
+      const data = await apiFetch('/conversations/unread_counts');
+      if (data && typeof data === 'object') {
+        setUnreadCounts(data);
+      }
+    } catch (err) {
+      console.debug('Error fetching unread counts:', err);
+    }
+  }, []);
+
   const fetchCalendarSummary = useCallback(async () => {
     try {
       const data = await apiFetch('/calendar/summary');
@@ -520,7 +535,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
     fetchConversations();
     fetchNumbers();
     fetchCalendarSummary();
-  }, [fetchConversations, fetchCalendarSummary]);
+    fetchUnreadCounts();
+  }, [fetchConversations, fetchCalendarSummary, fetchUnreadCounts]);
 
   const [notificationAlert, setNotificationAlert] = useState<string | null>(null);
 
@@ -552,13 +568,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchConversations();
+      fetchUnreadCounts();
       const currentActiveId = activeConversationId || activeConversation?.id;
       if (currentActiveId) {
         loadActiveConversationDetail(Number(currentActiveId));
       }
     }, 5000);
     return () => clearInterval(interval);
-  }, [fetchConversations, activeConversationId, activeConversation?.id, loadActiveConversationDetail]);
+  }, [fetchConversations, fetchUnreadCounts, activeConversationId, activeConversation?.id, loadActiveConversationDetail]);
 
   // Synchronize immediately when user returns to the tab or window regains focus
   useEffect(() => {
@@ -1173,6 +1190,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             selectedDepartmentId={selectedDeptId}
             onSelectDepartment={handleSelectDepartment}
             conversations={displayedConversations}
+            unreadCounts={unreadCounts}
             onOpenCalendar={() => {
               setCalendarPrefill(null);
               setIsCalendarOpen(true);

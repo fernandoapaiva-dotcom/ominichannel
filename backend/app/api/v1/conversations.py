@@ -127,13 +127,34 @@ async def list_conversations(
             if whatsapp_number_id not in accessible_wn_ids:
                 raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
             stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
-        # NOTE: this list is fetched globally (across all departments) and then filtered
-        # client-side per department tab (DepartmentBar unread badges need every department's
-        # conversations loaded at once). A low limit here starves smaller/less-recently-active
-        # departments out of the list entirely once a busier department fills the cap - this was
-        # the root cause of a department showing far fewer chats than it actually has. The real
-        # dataset size (all tenants combined) is in the low thousands, so a generous cap here is cheap.
-        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(2000)
+            # Scoped to a single department: the dataset is small enough (even the busiest
+            # department here is ~1200 conversations) that a high limit is cheap and gives
+            # that department's chat list full parity with WhatsApp's own history/ordering.
+            stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(1500)
+        else:
+            # No department filter: a flat "most recent N overall" limit here used to let one
+            # busy department (e.g. 1226 conversations) silently crowd a quieter one (e.g. 61
+            # of its own 651) out of the list entirely, since ordering was global instead of
+            # per-department. Fixed with a per-department fair-share window: every department
+            # gets its OWN most recent 150 regardless of how active the others are. A flat
+            # limit big enough to cover the full cross-tenant dataset (~2000 rows) measured
+            # ~5s to materialize on this VM - fine once, not fine on a 5s poll loop - so this
+            # keeps the per-request cost bounded while fixing the actual starvation bug.
+            PER_DEPT_CAP = 150
+            window_sql = text("""
+                SELECT id FROM (
+                    SELECT c.id,
+                           ROW_NUMBER() OVER (PARTITION BY c.whatsapp_number_id ORDER BY c.ultima_interacao_em DESC) as rn
+                    FROM conversations c
+                    WHERE c.tenant_id = :tenant_id
+                      AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
+                ) WHERE rn <= :cap
+            """)
+            window_res = await db.execute(window_sql, {"tenant_id": current_user.tenant_id, "cap": PER_DEPT_CAP})
+            fair_share_ids = [r[0] for r in window_res.all()]
+            if not fair_share_ids:
+                return []
+            stmt = stmt.where(Conversation.id.in_(fair_share_ids)).order_by(Conversation.ultima_interacao_em.desc())
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()
@@ -253,6 +274,37 @@ async def list_conversations(
         })
 
     return response_list
+
+@router.get("/unread_counts")
+async def get_unread_counts_by_department(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Lightweight per-department unread-conversation counts, used to badge the DepartmentBar
+    tabs. Deliberately a pure SQL aggregate (no ORM object materialization, no message
+    payload) so every department's count is always accurate even though the main chat list
+    below is capped per-department for performance reasons.
+    """
+    sql = text("""
+        SELECT c.whatsapp_number_id, COUNT(*) as cnt
+        FROM conversations c
+        JOIN whatsapp_numbers wn ON wn.id = c.whatsapp_number_id
+        WHERE wn.tenant_id = :tenant_id
+          AND COALESCE(json_extract(c.dados_adicionais, '$.marked_as_read'), 0) != 1
+          AND COALESCE(json_extract(c.dados_adicionais, '$.pending_dismissed'), 0) != 1
+          AND EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.conversation_id = c.id
+                AND LOWER(m.remetente) = 'cliente'
+                AND LOWER(COALESCE(m.status, '')) != 'read'
+          )
+        GROUP BY c.whatsapp_number_id
+    """)
+    res = await db.execute(sql, {"tenant_id": current_user.tenant_id})
+    counts = {str(row[0]): row[1] for row in res.all()}
+    counts["all"] = sum(counts.values())
+    return counts
 
 class MarkAllReadPayload(BaseModel):
     whatsapp_number_id: Optional[int] = None
