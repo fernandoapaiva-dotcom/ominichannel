@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # WhatsAppNumber.id of the Assistência Técnica department/instance - fixed target for
     # every O.S. PDF ingested (the folder watcher never sends this, it's always the same shop).
     ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID: int = int(os.getenv("ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID", "2"))
+    # WhatsApp group JID for "SERV - SOLICITAÇÃO DE O.S." - where the customer's
+    # approval/rejection of the technician's quote gets announced (fase 2 do OS Handler).
+    SERV_OS_GROUP_JID: str = os.getenv("SERV_OS_GROUP_JID", "120363423806324709@g.us")
 
     class Config:
         env_file = ".env"

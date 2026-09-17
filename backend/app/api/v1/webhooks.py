@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
     ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog,
@@ -197,6 +198,91 @@ async def send_os_pdf_after_confirmation(
         logger.info(f"[OS HANDLER PDF] PDF enviado com sucesso para conversa #{conversation_id}")
     except Exception as err:
         logger.error(f"[OS HANDLER PDF] Erro ao enviar PDF após confirmação: {err}", exc_info=True)
+
+
+async def notify_os_approval_result(
+    tenant_id: int,
+    conversation_id: int,
+    whatsapp_number_id: int,
+    instance_name: Optional[str],
+    os_numero: str,
+    client_name: str,
+    aprovado: bool,
+    pdf_relative_path: str,
+    tecnico_phone: Optional[str]
+):
+    """
+    Fired as a background task once the customer approves/rejects the technician's quote
+    (fase 2 do OS Handler). Announces the result in the "SERV - SOLICITAÇÃO DE O.S." WhatsApp
+    group, and forwards the quote PDF straight to the responsible technician (if one was
+    identified on the document) so they know exactly what was approved.
+    """
+    from app.core.database import AsyncSessionLocal
+    try:
+        status_label = "✅ *APROVADO*" if aprovado else "❌ *RECUSADO*"
+        group_text = (
+            f"📋 *Ordem de Serviço #{os_numero}*\n"
+            f"Cliente: {client_name}\n"
+            f"Status: {status_label} pelo cliente via WhatsApp."
+        )
+        await evolution_service.send_text_message(
+            instance_name=instance_name,
+            number=settings.SERV_OS_GROUP_JID,
+            text=group_text
+        )
+        logger.info(f"[OS HANDLER APROVAÇÃO] Grupo SERV notificado sobre O.S. #{os_numero} ({'aprovado' if aprovado else 'recusado'})")
+
+        if tecnico_phone:
+            abs_path = os.path.join("uploads", pdf_relative_path)
+            if os.path.isfile(abs_path):
+                with open(abs_path, "rb") as f:
+                    file_bytes = f.read()
+                base64_data = base64.b64encode(file_bytes).decode("utf-8")
+                caption = f"{status_label.replace('*', '')} - O.S. #{os_numero} ({client_name})"
+                await evolution_service.send_media_message(
+                    instance_name=instance_name,
+                    number=tecnico_phone,
+                    media_type="document",
+                    mimetype="application/pdf",
+                    media=base64_data,
+                    file_name="Orcamento_OS.pdf",
+                    caption=caption,
+                    skip_anti_ban_pacing=True
+                )
+                logger.info(f"[OS HANDLER APROVAÇÃO] PDF do orçamento enviado ao técnico ({tecnico_phone})")
+            else:
+                logger.warning(f"[OS HANDLER APROVAÇÃO] Arquivo do orçamento não encontrado para reenvio ao técnico: {abs_path}")
+
+        async with AsyncSessionLocal() as db:
+            note_msg = Message(
+                conversation_id=conversation_id,
+                remetente=MessageSender.SISTEMA,
+                conteudo=f"{status_label.replace('*', '')} - Notificação enviada ao grupo SERV - SOLICITAÇÃO DE O.S." + (
+                    " e ao técnico responsável." if tecnico_phone else " (técnico não identificado no documento, avise manualmente)."
+                ),
+                tipo=MessageType.TEXTO,
+                timestamp=datetime.utcnow()
+            )
+            db.add(note_msg)
+            await db.commit()
+            await db.refresh(note_msg)
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number_id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conversation_id,
+                    "id": note_msg.id,
+                    "remetente": MessageSender.SISTEMA.value,
+                    "conteudo": note_msg.conteudo,
+                    "tipo": MessageType.TEXTO.value,
+                    "status": "sent",
+                    "timestamp": note_msg.timestamp.isoformat() + "Z",
+                    "agent_name": "Automação OS"
+                }
+            )
+    except Exception as err:
+        logger.error(f"[OS HANDLER APROVAÇÃO] Erro ao notificar resultado da aprovação: {err}", exc_info=True)
 
 
 @router.post("/evolution")
@@ -2346,6 +2432,10 @@ async def receive_evolution_webhook(
         # conditions before we send them the full PDF (set by the OS Handler PDF ingestion
         # endpoint - see os_handler_ingest.py). Format: "CONFIRM_OS_PDF:<uploads-relative-path>"
         is_pending_os_pdf = (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:")
+        # Check if conversation is waiting for the customer to approve/reject the
+        # technician's quote (fase 2 do OS Handler). Format:
+        # "CONFIRM_OS_APPROVAL:<numero da os>|<uploads-relative-path>|<telefone do tecnico ou vazio>"
+        is_pending_os_approval = (conversation.assunto_atual or "").startswith("CONFIRM_OS_APPROVAL:")
         transfer_executed = False
         ai_output = None
 
@@ -2512,6 +2602,52 @@ async def receive_evolution_webhook(
                     "enviar_pix": False,
                     "escalar_humano": False,
                     "nova_memoria": "Resposta ambígua na confirmação do PDF da O.S.; perguntando de novo."
+                }
+            transfer_executed = True
+        elif is_pending_os_approval:
+            from app.services.automation_service import automation_service
+            marker_body = conversation.assunto_atual.split(":", 1)[1]
+            parts = marker_body.split("|")
+            os_numero = parts[0] if len(parts) > 0 else "?"
+            pdf_rel_path = parts[1] if len(parts) > 1 else ""
+            tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
+
+            classification = automation_service.classify_yes_no_reply(text_content)
+            logger.info(f"[OS HANDLER APROVAÇÃO] Classificação da resposta '{text_content}' para O.S. #{os_numero}: {classification}")
+
+            if classification in ("CONFIRMA", "NEGA"):
+                aprovado = classification == "CONFIRMA"
+                conversation.assunto_atual = "Atendimento Concierge"
+                ai_output = {
+                    "resposta": "Ótimo, muito obrigado pela confirmação! Já estamos providenciando o serviço. 🔧" if aprovado
+                                else "Entendido, agradecemos o retorno! Fico à disposição caso mude de ideia ou tenha dúvidas.",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": f"Cliente {'aprovou' if aprovado else 'recusou'} o orçamento da O.S. #{os_numero}."
+                }
+                asyncio.create_task(
+                    notify_os_approval_result(
+                        tenant_id=tenant_id,
+                        conversation_id=conversation.id,
+                        whatsapp_number_id=whatsapp_number.id,
+                        instance_name=instance_name,
+                        os_numero=os_numero,
+                        client_name=contact.nome or "Cliente",
+                        aprovado=aprovado,
+                        pdf_relative_path=pdf_rel_path,
+                        tecnico_phone=tecnico_phone
+                    )
+                )
+            else:
+                ai_output = {
+                    "resposta": f"Só para eu confirmar: você *aprova* a execução do serviço da O.S. #{os_numero} pelo valor informado no orçamento? Responda *SIM* ou *NÃO*.",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": f"Resposta ambígua na aprovação do orçamento da O.S. #{os_numero}; perguntando de novo."
                 }
             transfer_executed = True
 
