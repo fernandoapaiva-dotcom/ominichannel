@@ -36,6 +36,7 @@ import os
 import re
 import io
 import uuid
+import base64
 import asyncio
 import logging
 import difflib
@@ -351,7 +352,6 @@ async def ingest_os_pdf(
         # Send the quote PDF directly (customer needs to see it to decide)
         abs_path = os.path.join("uploads", saved_rel_path)
         with open(abs_path, "rb") as f:
-            import base64
             b64 = base64.b64encode(f.read()).decode("utf-8")
         send_res = await evolution_service.send_media_message(
             instance_name=instance_name, number=phone, media_type="document",
