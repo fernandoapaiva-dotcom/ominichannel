@@ -1492,15 +1492,20 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                     })
                                     continue
 
-                            # D. If contact has remote/expiring avatar URL (pps.whatsapp.net), cache it locally
-                            if c_pic and c_pic.startswith("http") and not c_pic.startswith("/uploads/avatars/"):
+                            # D. If contact has remote/expiring avatar URL (pps.whatsapp.net), cache it locally.
+                            # WhatsApp CDN links are signed and eventually expire (the stored URL starts 403ing) -
+                            # if the download fails, don't just give up on this contact forever: fall through to
+                            # E below to ask Evolution API for a brand new signed URL instead.
+                            has_stale_remote_pic = bool(c_pic) and c_pic.startswith("http") and not c_pic.startswith("/uploads/avatars/")
+                            if has_stale_remote_pic:
                                 cached = await download_and_cache_avatar_locally(c_id, c_pic)
                                 if cached:
                                     updates.append({"id": c_id, "telefone": c_tel, "nome": c_nome, "foto_perfil_url": cached})
                                     continue
 
-                            # E. Fetch Profile Picture if missing (max 5 per cycle to keep server ultra fast)
-                            if not c_pic and pic_fetches < 5:
+                            # E. Fetch Profile Picture if missing, or if the stored one is a dead/expired remote
+                            # link that just failed to download in D above (max 5 per cycle to keep server ultra fast)
+                            if (not c_pic or has_stale_remote_pic) and pic_fetches < 5:
                                 pic_fetches += 1
                                 for inst in instances:
                                     try:

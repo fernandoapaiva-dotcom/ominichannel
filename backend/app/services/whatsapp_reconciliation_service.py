@@ -83,6 +83,11 @@ class WhatsAppReconciliationService:
 
             created_count = 0
             updated_count = 0
+            # Raw WhatsApp CDN URLs (pps.whatsapp.net) are signed and expire after a while -
+            # storing them directly leaves the avatar broken once the signature lapses. Collect
+            # (contact_id, remote_url) pairs here and download+localize them to /uploads/avatars/
+            # after commit (need real ids, which only exist post-flush/commit).
+            pending_avatar_downloads: List[tuple] = []
             async with AsyncSessionLocal() as db:
                 db_contacts_res = await db.execute(select(Contact).where(Contact.tenant_id == tenant_id))
                 db_contacts = {c.telefone: c for c in db_contacts_res.scalars().all() if c.telefone}
@@ -138,7 +143,7 @@ class WhatsAppReconciliationService:
                                 c_obj.nome = target_name
                                 has_changed = True
                         if pic_url and not c_obj.foto_perfil_url:
-                            c_obj.foto_perfil_url = pic_url
+                            pending_avatar_downloads.append((c_obj.id, pic_url))
                             has_changed = True
 
                         if has_changed:
@@ -149,16 +154,21 @@ class WhatsAppReconciliationService:
                             tenant_id=tenant_id,
                             telefone=clean_phone,
                             nome=target_name or clean_phone,
-                            foto_perfil_url=pic_url,
                             dados_adicionais={"origin": "phone_agenda", "instance": instance_name}
                         )
                         db.add(new_c)
+                        if pic_url:
+                            await db.flush()
+                            pending_avatar_downloads.append((new_c.id, pic_url))
                         db_contacts[clean_phone] = new_c
                         created_count += 1
 
                 if created_count > 0 or updated_count > 0:
                     await db.commit()
                     logger.info(f"[AGENDA SYNC] Instância '{instance_name}': {created_count} criados, {updated_count} atualizados.")
+
+            for c_id, pic_url in pending_avatar_downloads:
+                asyncio.create_task(download_and_cache_avatar_locally(c_id, pic_url))
 
             return {"created": created_count, "updated": updated_count}
         except Exception as e:

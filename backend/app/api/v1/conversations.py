@@ -127,7 +127,13 @@ async def list_conversations(
             if whatsapp_number_id not in accessible_wn_ids:
                 raise HTTPException(status_code=403, detail="Acesso negado a este número de WhatsApp")
             stmt = stmt.where(Conversation.whatsapp_number_id == whatsapp_number_id)
-        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(150)
+        # NOTE: this list is fetched globally (across all departments) and then filtered
+        # client-side per department tab (DepartmentBar unread badges need every department's
+        # conversations loaded at once). A low limit here starves smaller/less-recently-active
+        # departments out of the list entirely once a busier department fills the cap - this was
+        # the root cause of a department showing far fewer chats than it actually has. The real
+        # dataset size (all tenants combined) is in the low thousands, so a generous cap here is cheap.
+        stmt = stmt.order_by(Conversation.ultima_interacao_em.desc()).limit(2000)
 
     result = await db.execute(stmt)
     conversations = result.scalars().all()

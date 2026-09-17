@@ -338,8 +338,13 @@ class WhatsAppSyncService:
                 # abort the ENTIRE instance sync (0 conversations, 0 messages) before it ever
                 # reached the actual chat import below - the same pattern already protected
                 # per-chat further down, just missing here.
+                # Raw WhatsApp CDN URLs (pps.whatsapp.net) are signed and expire - stash
+                # (contact, remote_url) pairs here and download+localize them after commit,
+                # once each contact has a real id, instead of persisting the fragile link.
+                pending_avatar_downloads: List[Any] = []
                 for attempt in range(5):
                     try:
+                        pending_avatar_downloads = []
                         async with AsyncSessionLocal() as session:
                             # Fetch all existing contacts once in a single bulk query (0.02s instead of 30s)
                             c_all_res = await session.execute(select(Contact).where(Contact.tenant_id == tenant_id))
@@ -352,18 +357,21 @@ class WhatsAppSyncService:
                                     c_obj = Contact(
                                         tenant_id=tenant_id,
                                         telefone=phone,
-                                        nome=ab_info["name"],
-                                        foto_perfil_url=ab_info.get("profile_pic")
+                                        nome=ab_info["name"]
                                     )
                                     session.add(c_obj)
                                     existing_by_phone[phone] = c_obj
                                     stats["contacts_synced"] += 1
+                                    if ab_info.get("profile_pic"):
+                                        pending_avatar_downloads.append((c_obj, ab_info["profile_pic"]))
                                 else:
                                     if c_obj.nome != ab_info["name"] and not (c_obj.dados_adicionais or {}).get("custom_name_locked"):
                                         c_obj.nome = ab_info["name"]
                                     if ab_info.get("profile_pic") and not c_obj.foto_perfil_url:
-                                        c_obj.foto_perfil_url = ab_info["profile_pic"]
+                                        pending_avatar_downloads.append((c_obj, ab_info["profile_pic"]))
                             await session.commit()
+                            for c_obj, pic_url in pending_avatar_downloads:
+                                asyncio.create_task(download_and_cache_avatar_locally(c_obj.id, pic_url))
                         break
                     except Exception as ab_db_err:
                         if "locked" in str(ab_db_err).lower() and attempt < 4:

@@ -357,9 +357,13 @@ async def sync_contact_avatar(
     instance_name = conv.whatsapp_number.instancia_evolution_api if (conv and conv.whatsapp_number) else None
 
     from app.services.evolution_service import evolution_service
+    from app.services.lid_resolver_service import download_and_cache_avatar_locally
     pic_url = await evolution_service.fetch_profile_picture_url(instance_name=instance_name, number=contact.telefone)
     if pic_url:
-        contact.foto_perfil_url = pic_url
+        # Download and store locally instead of the raw WhatsApp CDN link - that link is
+        # signed and expires, which is exactly why avatars kept going missing over time.
+        local_pic = await download_and_cache_avatar_locally(contact.id, pic_url)
+        contact.foto_perfil_url = local_pic or pic_url
         await db.commit()
         await db.refresh(contact)
         return {
@@ -398,10 +402,16 @@ async def get_contact_avatar_image(
         instance_name = conv.whatsapp_number.instancia_evolution_api if (conv and conv.whatsapp_number) else None
 
         from app.services.evolution_service import evolution_service
+        from app.services.lid_resolver_service import download_and_cache_avatar_locally
         pic_url = await evolution_service.fetch_profile_picture_url(instance_name=instance_name, number=contact.telefone)
         if pic_url:
+            local_pic = await download_and_cache_avatar_locally(contact.id, pic_url)
+            pic_url = local_pic or pic_url
             contact.foto_perfil_url = pic_url
             await db.commit()
+
+    if pic_url and pic_url.startswith("/uploads/"):
+        return RedirectResponse(url=pic_url)
 
     if pic_url:
         try:
