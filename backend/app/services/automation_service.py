@@ -218,6 +218,18 @@ class AutomationService:
         for eq in sorted_equips:
             if normalize_text(eq) in norm_text:
                 return eq.title(), diag_prices[eq]
+
+        # Fuzzy fallback: the equipment field on the real O.S. PDF had a typo
+        # ("TRASNFORMADOR" instead of "TRANSFORMADOR") that a plain substring scan can't
+        # catch. difflib is stdlib (no new dependency) and a 0.75 cutoff is strict enough to
+        # avoid false positives on a long free-text message (the chat-triggered call site).
+        import difflib
+        norm_equips = {normalize_text(eq): eq for eq in diag_prices.keys()}
+        close = difflib.get_close_matches(norm_text, list(norm_equips.keys()), n=1, cutoff=0.75)
+        if close:
+            eq = norm_equips[close[0]]
+            return eq.title(), diag_prices[eq]
+
         return "Equipamento", 100
 
     @staticmethod
