@@ -66,7 +66,22 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
                 "Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊",
                 "🏭 *Garantia de Fábrica:* Não há cobrança de diagnóstico ou orçamento. Todos os custos são arcados pela fabricante.",
                 "⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado."
+            ],
+            "locacao": [
+                "Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊",
+                "🔑 *Locação de Equipamento:* a devolução deve ocorrer na data combinada. Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional, conforme as Condições Gerais informadas na sua Ordem de Serviço.",
+                "📦 *Caução/Depósito:* condicionado à devolução do equipamento em perfeito estado de funcionamento."
             ]
+        },
+        # Pergunta de confirmação enviada ANTES do PDF completo da O.S. - o cliente precisa
+        # responder (texto livre, interpretado por IA) confirmando que leu a condição mais
+        # importante daquele tipo de O.S. antes de receber o arquivo. Editável na mesma tela
+        # de Automações.
+        "confirmation_prompts": {
+            "orcamento": "⚠️ *Muito importante:* caso o orçamento *NÃO seja aprovado*, será cobrada a taxa de diagnóstico informada acima (R$ {valor_diagnostico}). Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
+            "garantia_loja": "⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
+            "garantia_fabrica": "⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
+            "locacao": "⚠️ Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional sobre a caução. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço."
         }
     },
     "custom_rules": [
@@ -170,34 +185,59 @@ class AutomationService:
             status = "garantia_loja"
         elif "garantia de fabrica" in norm_text or "garantia fabrica" in norm_text:
             status = "garantia_fabrica"
+        elif "status: locacao" in norm_text or "status:locacao" in norm_text or "locacao" in norm_text:
+            status = "locacao"
 
         if not status:
             return None
 
         diag_prices: Dict[str, Any] = os_cfg.get("diagnostic_prices", {})
+        detected_equip, valor_diagnostico = ("Equipamento", 100)
+        if status == "orcamento":
+            detected_equip, valor_diagnostico = AutomationService.resolve_diagnostic_price(norm_text, diag_prices)
+
+        formatted_messages = AutomationService.format_os_templates(
+            status, config, client_name, detected_equip, valor_diagnostico
+        )
+        if not formatted_messages:
+            return None
+
+        return status, formatted_messages
+
+    @staticmethod
+    def resolve_diagnostic_price(text: str, diag_prices: Dict[str, Any]) -> Tuple[str, int]:
+        """
+        Finds the best-matching equipment name (from the diagnostic_prices table) mentioned
+        anywhere in `text` (already normalized or raw - normalize_text is idempotent-safe to
+        re-run), longest name first so e.g. "tocha de corte" wins over "tocha de solda" when
+        only one is actually present. Falls back to a generic R$100 default when nothing matches
+        (equipment not yet cataloged) rather than skipping the message entirely.
+        """
+        norm_text = normalize_text(text)
+        sorted_equips = sorted(diag_prices.keys(), key=lambda x: len(x), reverse=True)
+        for eq in sorted_equips:
+            if normalize_text(eq) in norm_text:
+                return eq.title(), diag_prices[eq]
+        return "Equipamento", 100
+
+    @staticmethod
+    def format_os_templates(
+        status: str,
+        config: Dict[str, Any],
+        client_name: str,
+        detected_equip: str = "Equipamento",
+        valor_diagnostico: int = 100
+    ) -> List[str]:
+        """
+        Pure template-formatting step, shared by the chat-message-triggered match_os_handler()
+        AND the PDF-ingestion flow (which resolves equip/valor itself from the O.S. PDF instead
+        of scanning a chat message's text).
+        """
+        os_cfg = config.get("os_handler", {})
         templates = os_cfg.get("templates", {})
         template_msgs = templates.get(status, [])
         if not template_msgs:
-            return None
-
-        detected_equip = "Equipamento"
-        valor_diagnostico = 100
-
-        if status == "orcamento":
-            sorted_equips = sorted(diag_prices.keys(), key=lambda x: len(x), reverse=True)
-            matched_equip = None
-            for eq in sorted_equips:
-                norm_eq = normalize_text(eq)
-                if norm_eq in norm_text:
-                    matched_equip = eq
-                    break
-            
-            if matched_equip:
-                detected_equip = matched_equip.title()
-                valor_diagnostico = diag_prices[matched_equip]
-            else:
-                detected_equip = "Equipamento"
-                valor_diagnostico = 100
+            return []
 
         saudacao = get_greeting()
         nome_display = client_name or "Cliente"
@@ -213,7 +253,21 @@ class AutomationService:
             )
             formatted_messages.append(msg_str)
 
-        return status, formatted_messages
+        return formatted_messages
+
+    @staticmethod
+    def format_confirmation_prompt(
+        status: str,
+        config: Dict[str, Any],
+        valor_diagnostico: int = 100
+    ) -> Optional[str]:
+        """The 'please confirm you read this' gate message sent before the O.S. PDF itself."""
+        os_cfg = config.get("os_handler", {})
+        prompts = os_cfg.get("confirmation_prompts", {})
+        prompt = prompts.get(status)
+        if not prompt:
+            return None
+        return prompt.replace("{valor_diagnostico}", str(valor_diagnostico))
 
     @staticmethod
     def match_custom_rules(
@@ -270,6 +324,26 @@ class AutomationService:
                     return [formatted]
 
         return None
+
+    @staticmethod
+    def classify_yes_no_reply(text: str) -> str:
+        """
+        Simple keyword-based yes/no classifier for confirmation gates (e.g. "confirme que leu
+        as condições para receber o PDF"). Deliberately keyword-based rather than calling an
+        LLM - matches this module's own established pattern (all of match_os_handler/
+        match_custom_rules already work this way), and doesn't depend on a tenant having a
+        Gemini API key configured. Returns "CONFIRMA", "NEGA" or "AMBIGUA".
+        """
+        norm = normalize_text(text)
+        yes_words = ["sim", "confirmo", "confirmado", "concordo", "aceito", "certo", "correto", "isso", "pode", "ok", "okay", "de acordo", "afirmativo"]
+        no_words = ["nao", "recuso", "negativo", "cancela", "cancelar", "nunca"]
+        has_yes = any(w in norm for w in yes_words)
+        has_no = any(w in norm for w in no_words)
+        if has_yes and not has_no:
+            return "CONFIRMA"
+        if has_no and not has_yes:
+            return "NEGA"
+        return "AMBIGUA"
 
     @classmethod
     async def chat_ai_rule_copilot(

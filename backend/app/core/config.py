@@ -28,6 +28,15 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
 
+    # OS Handler PDF ingestion (external "folder watcher" running on the shop's own PC posts
+    # the Softsystem O.S. PDF here). No user is logged in on that side, so it authenticates
+    # with this shared secret instead of a JWT - set a real random value in production .env
+    # (e.g. `openssl rand -hex 32`), never keep the placeholder default.
+    OS_HANDLER_INGEST_API_KEY: str = os.getenv("OS_HANDLER_INGEST_API_KEY", "CHANGE_ME_OS_HANDLER_KEY")
+    # WhatsAppNumber.id of the Assistência Técnica department/instance - fixed target for
+    # every O.S. PDF ingested (the folder watcher never sends this, it's always the same shop).
+    ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID: int = int(os.getenv("ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID", "2"))
+
     class Config:
         env_file = ".env"
         extra = "ignore"

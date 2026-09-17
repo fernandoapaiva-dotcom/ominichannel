@@ -57,11 +57,12 @@ export const AutomationsSettings: React.FC = () => {
   const [editingEquipVal, setEditingEquipVal] = useState<number | ''>('');
 
   // Templates
-  const [templateTab, setTemplateTab] = useState<'orcamento' | 'garantia_loja' | 'garantia_fabrica'>('orcamento');
+  const [templateTab, setTemplateTab] = useState<'orcamento' | 'garantia_loja' | 'garantia_fabrica' | 'locacao'>('orcamento');
   const [templates, setTemplates] = useState<{
     orcamento: string[];
     garantia_loja: string[];
     garantia_fabrica: string[];
+    locacao: string[];
   }>({
     orcamento: [
       'Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊',
@@ -77,7 +78,26 @@ export const AutomationsSettings: React.FC = () => {
       'Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊',
       '🏭 *Garantia de Fábrica:* Não há cobrança de diagnóstico ou orçamento. Todos os custos são arcados pela fabricante.',
       '⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado.'
+    ],
+    locacao: [
+      'Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊',
+      '🔑 *Locação de Equipamento:* a devolução deve ocorrer na data combinada. Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional, conforme as Condições Gerais informadas na sua Ordem de Serviço.',
+      '📦 *Caução/Depósito:* condicionado à devolução do equipamento em perfeito estado de funcionamento.'
     ]
+  });
+
+  // Confirmation gate sent BEFORE the O.S. PDF itself - the customer must reply confirming
+  // they read this before receiving the file (see backend os_handler_ingest.py).
+  const [confirmationPrompts, setConfirmationPrompts] = useState<{
+    orcamento: string;
+    garantia_loja: string;
+    garantia_fabrica: string;
+    locacao: string;
+  }>({
+    orcamento: '⚠️ *Muito importante:* caso o orçamento *NÃO seja aprovado*, será cobrada a taxa de diagnóstico informada acima (R$ {valor_diagnostico}). Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.',
+    garantia_loja: '⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.',
+    garantia_fabrica: '⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.',
+    locacao: '⚠️ Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional sobre a caução. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.'
   });
 
   // Custom Rules
@@ -151,7 +171,12 @@ export const AutomationsSettings: React.FC = () => {
           setDiagnosticPrices(os.diagnostic_prices);
         }
         if (os.templates) {
-          setTemplates(os.templates);
+          // Merge over the defaults (not replace) so a config saved before "locacao" existed
+          // doesn't leave that tab undefined and crash the render below.
+          setTemplates(prev => ({ ...prev, ...os.templates }));
+        }
+        if (os.confirmation_prompts) {
+          setConfirmationPrompts(prev => ({ ...prev, ...os.confirmation_prompts }));
         }
         if (Array.isArray(data.custom_rules)) {
           setCustomRules(data.custom_rules);
@@ -186,7 +211,8 @@ export const AutomationsSettings: React.FC = () => {
           typing_delay_ms: Math.round(typingDelaySec * 1000),
           keywords,
           diagnostic_prices: diagnosticPrices,
-          templates
+          templates,
+          confirmation_prompts: confirmationPrompts
         },
         custom_rules: customRules,
         ai_fallback_intent: true
@@ -668,6 +694,14 @@ export const AutomationsSettings: React.FC = () => {
               >
                 3. Garantia de Fábrica ({templates.garantia_fabrica.length} msgs)
               </button>
+              <button
+                type="button"
+                onClick={() => setTemplateTab('locacao')}
+                className={templateTab === 'locacao' ? 'btn-primary' : 'btn-secondary'}
+                style={{ fontSize: '11px', padding: '5px 12px' }}
+              >
+                4. Locação ({templates.locacao.length} msgs)
+              </button>
             </div>
 
             {/* Messages in Sequence */}
@@ -732,6 +766,33 @@ export const AutomationsSettings: React.FC = () => {
               >
                 <Plus size={13} /> Adicionar balão na sequência
               </button>
+
+              {/* Confirmation gate sent BEFORE the O.S. PDF - the customer must reply
+                  confirming they read this before receiving the file. */}
+              <div style={{ marginTop: '8px', paddingTop: '12px', borderTop: '1px dashed var(--border-color)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <span style={{ fontSize: '11px', fontWeight: '700', color: '#fbbf24' }}>
+                  📎 Pergunta de confirmação (enviada antes do PDF da O.S.):
+                </span>
+                <textarea
+                  rows={3}
+                  value={confirmationPrompts[templateTab]}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setConfirmationPrompts(prev => ({ ...prev, [templateTab]: val }));
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '8px 10px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-main)',
+                    fontSize: '12px',
+                    fontFamily: 'inherit',
+                    resize: 'vertical'
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>

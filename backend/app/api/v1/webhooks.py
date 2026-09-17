@@ -30,7 +30,7 @@ from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol
 from app.services.distribution_service import distribution_service
 from app.services.business_hours_service import business_hours_service
-from app.api.v1.conversations import generate_bacen_pix_string
+from app.api.v1.conversations import generate_bacen_pix_string, extract_evolution_msg_id
 from app.api.websockets import manager as ws_manager
 from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
 from app.services.whatsapp_sync_service import parse_quoted_context
@@ -123,6 +123,80 @@ async def check_is_authorized_technician_or_admin(db: AsyncSession, tenant_id: i
 
 async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
     return await distribution_service.assign_least_loaded_attendant(db, tenant_id, whatsapp_number_id)
+
+
+async def send_os_pdf_after_confirmation(
+    tenant_id: int,
+    conversation_id: int,
+    whatsapp_number_id: int,
+    instance_name: Optional[str],
+    recipient_phone: str,
+    pdf_relative_path: str
+):
+    """
+    Fired as a background task once the customer confirms they read the O.S. conditions
+    (see the CONFIRM_OS_PDF handling in receive_evolution_webhook). Runs in its own DB
+    session since it's decoupled from the triggering request, same pattern as
+    automation_service.process_and_dispatch_automation.
+    """
+    from app.core.database import AsyncSessionLocal
+    try:
+        abs_path = os.path.join("uploads", pdf_relative_path)
+        if not os.path.isfile(abs_path):
+            logger.error(f"[OS HANDLER PDF] Arquivo não encontrado para envio: {abs_path}")
+            return
+        with open(abs_path, "rb") as f:
+            file_bytes = f.read()
+        base64_data = base64.b64encode(file_bytes).decode("utf-8")
+
+        send_res = await evolution_service.send_media_message(
+            instance_name=instance_name,
+            number=recipient_phone,
+            media_type="document",
+            mimetype="application/pdf",
+            media=base64_data,
+            file_name="Ordem_de_Servico.pdf",
+            skip_anti_ban_pacing=True
+        )
+        wa_msg_id = extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None
+
+        async with AsyncSessionLocal() as db:
+            db_content = f"/uploads/{pdf_relative_path}|Ordem_de_Servico.pdf"
+            saved_msg = Message(
+                conversation_id=conversation_id,
+                remetente=MessageSender.SISTEMA,
+                conteudo=db_content,
+                tipo=MessageType.ARQUIVO,
+                status="sent",
+                whatsapp_msg_id=wa_msg_id,
+                timestamp=datetime.utcnow()
+            )
+            db.add(saved_msg)
+            conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+            conv = (await db.execute(conv_stmt)).scalar_one_or_none()
+            if conv:
+                conv.ultima_interacao_em = datetime.utcnow()
+            await db.commit()
+            await db.refresh(saved_msg)
+
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number_id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conversation_id,
+                    "id": saved_msg.id,
+                    "remetente": MessageSender.SISTEMA.value,
+                    "conteudo": db_content,
+                    "tipo": MessageType.ARQUIVO.value,
+                    "status": "sent",
+                    "timestamp": saved_msg.timestamp.isoformat() + "Z",
+                    "agent_name": "Automação OS"
+                }
+            )
+        logger.info(f"[OS HANDLER PDF] PDF enviado com sucesso para conversa #{conversation_id}")
+    except Exception as err:
+        logger.error(f"[OS HANDLER PDF] Erro ao enviar PDF após confirmação: {err}", exc_info=True)
 
 
 @router.post("/evolution")
@@ -2268,6 +2342,10 @@ async def receive_evolution_webhook(
 
         # Check if conversation was waiting for customer confirmation on sector transfer
         is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
+        # Check if conversation is waiting for the customer to confirm they read the O.S.
+        # conditions before we send them the full PDF (set by the OS Handler PDF ingestion
+        # endpoint - see os_handler_ingest.py). Format: "CONFIRM_OS_PDF:<uploads-relative-path>"
+        is_pending_os_pdf = (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:")
         transfer_executed = False
         ai_output = None
 
@@ -2386,6 +2464,56 @@ async def receive_evolution_webhook(
                     "nova_memoria": "Resposta ambígua na confirmação; solicitando esclarecimento."
                 }
                 transfer_executed = True
+        elif is_pending_os_pdf:
+            from app.services.automation_service import automation_service
+            pending_file_rel_path = conversation.assunto_atual.split(":", 1)[1]
+            classification = automation_service.classify_yes_no_reply(text_content)
+            logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
+
+            if classification == "CONFIRMA":
+                conversation.assunto_atual = "Atendimento Concierge"
+                ai_output = {
+                    "resposta": "Perfeito! Aqui está o PDF completo da sua Ordem de Serviço. 📎",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Cliente confirmou leitura das condições; PDF da O.S. enviado."
+                }
+                # Sent as its own background task (base64+upload of a PDF doesn't fit the
+                # plain-text ai_reply pipeline below) - self-contained, doesn't touch any of
+                # the enviar_pix/enviar_localizacao downstream branches.
+                asyncio.create_task(
+                    send_os_pdf_after_confirmation(
+                        tenant_id=tenant_id,
+                        conversation_id=conversation.id,
+                        whatsapp_number_id=whatsapp_number.id,
+                        instance_name=instance_name,
+                        recipient_phone=phone_number,
+                        pdf_relative_path=pending_file_rel_path
+                    )
+                )
+            elif classification == "NEGA":
+                conversation.assunto_atual = "Atendimento Concierge"
+                ai_output = {
+                    "resposta": "Sem problemas! Fico à disposição para te enviar o PDF completo da sua Ordem de Serviço quando você quiser - só me chamar aqui novamente. 😊",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Cliente optou por não confirmar leitura das condições agora; PDF não enviado."
+                }
+            else:
+                # AMBIGUA -> keep the pending marker, ask again more directly instead of giving up
+                ai_output = {
+                    "resposta": "Só para eu confirmar certinho: você leu a condição informada e posso te enviar o PDF completo da sua Ordem de Serviço agora? Responda *SIM* ou *NÃO*.",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Resposta ambígua na confirmação do PDF da O.S.; perguntando de novo."
+                }
+            transfer_executed = True
 
         if not transfer_executed and not is_tech:
             dept_dicts = [
