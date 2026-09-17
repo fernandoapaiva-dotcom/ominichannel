@@ -39,6 +39,10 @@ frontend/public/downloads/
 .env
 .env.local
 *.pem
+tools/os_folder_watcher/config.json
+tools/os_folder_watcher/watcher.log
+tools/os_folder_watcher/processados/
+tools/os_folder_watcher/erros/
 
 # Temporary scripts
 backend/test_*.py

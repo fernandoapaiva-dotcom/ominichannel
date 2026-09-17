@@ -1,0 +1,8 @@
+{
+  "pasta_abertura": "Z:\\O.S SOFTSYSTEM\\ABERTURA",
+  "pasta_orcamento": "Z:\\O.S SOFTSYSTEM\\ORCAMENTO",
+  "backend_url": "https://ominichannel.duckdns.org",
+  "api_key": "COLOQUE_A_CHAVE_REAL_AQUI",
+  "move_processed_files": true,
+  "timeout_seconds": 60
+}
