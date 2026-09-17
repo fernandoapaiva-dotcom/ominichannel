@@ -15,16 +15,47 @@ Uso:
 import asyncio
 import sys
 import logging
+import httpx
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import AsyncSessionLocal
 from app.models.models import Contact, Conversation, WhatsAppNumber
-from app.services.evolution_service import evolution_service
+from app.services.lid_resolver_service import download_and_cache_avatar_locally
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("backfill_stale_avatars")
 
 DRY_RUN = "--dry-run" in sys.argv
+
+BASE_URL = settings.EVOLUTION_API_URL.rstrip("/")
+HEADERS = {"apikey": settings.EVOLUTION_API_KEY, "Content-Type": "application/json"}
+# This VM is going through a sustained hypervisor-level CPU steal spike (a known Always-Free
+# OCI limitation, unrelated to this script). evolution_service's normal 3s timeout is tuned
+# for live, latency-sensitive request paths and kept failing here even fully sequential with
+# no concurrency at all - re-testing "failed" contacts individually right after always got
+# the real photo back. So this backfill talks to Evolution API directly with a much more
+# patient timeout instead of going through evolution_service's tight one.
+PATIENT_TIMEOUT = httpx.Timeout(20.0)
+
+
+async def patient_fetch_profile_picture_url(client: httpx.AsyncClient, instance_name: str, number: str, all_instances: list) -> "str | None":
+    clean_num = number.split("@")[0].replace("+", "").replace("-", "").replace(" ", "").strip()
+    tried = [instance_name] if instance_name else []
+    for inst in tried + [i for i in all_instances if i and i != instance_name]:
+        try:
+            resp = await client.post(
+                f"{BASE_URL}/chat/fetchProfilePictureUrl/{inst}",
+                headers=HEADERS, json={"number": clean_num}, timeout=PATIENT_TIMEOUT
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                pic = data.get("profilePictureUrl") or data.get("picture") or data.get("url")
+                if pic and isinstance(pic, str) and pic.startswith("http"):
+                    return pic
+        except Exception as e:
+            logger.debug(f"    tentativa em {inst} falhou: {e}")
+    return None
 
 
 async def main():
@@ -61,53 +92,41 @@ async def main():
         logger.info("Dry-run: nenhuma alteração feita.")
         return
 
-    # This VM is hitting a severe, sustained hypervisor-level CPU steal spike right now (a
-    # known Always-Free-tier OCI limitation, unrelated to this script). Under it, even 2
-    # concurrent requests to Evolution API were enough to make almost every one time out -
-    # confirmed by re-testing several "failed" contacts individually right after and getting
-    # a real photo back instantly every time. So: no concurrency at all, one contact fully
-    # done (with its own retries) before the next starts, plus a small pause between contacts
-    # to avoid ever stacking two in-flight requests against an already-strained Evolution API.
     success = 0
     failed = 0
-    RETRIES = 3
     processed = 0
 
-    for c_id, tel, nome in stale_contacts:
-        instance_name = instance_by_contact.get(c_id) or fallback_instance
-        ok = False
-        for attempt in range(RETRIES):
-            try:
-                async with AsyncSessionLocal() as db:
-                    c_obj = await db.get(Contact, c_id)
-                    before = c_obj.foto_perfil_url if c_obj else None
-                await evolution_service.fetch_and_update_contact_avatar(
-                    contact_id=c_id, instance_name=instance_name, phone=tel
-                )
-                async with AsyncSessionLocal() as db:
-                    c_obj = await db.get(Contact, c_id)
-                    after = c_obj.foto_perfil_url if c_obj else None
-                if after and after != before and after.startswith("/uploads/avatars/"):
-                    success += 1
-                    ok = True
-                    logger.info(f"  OK  #{c_id} {nome} -> {after}")
-                    break
-                if attempt < RETRIES - 1:
-                    await asyncio.sleep(2.0 * (attempt + 1))
-                    continue
-            except Exception as e:
-                if attempt < RETRIES - 1:
-                    await asyncio.sleep(2.0 * (attempt + 1))
-                    continue
-                logger.warning(f"  ERRO #{c_id} {nome}: {e}")
-        if not ok:
-            failed += 1
-            logger.info(f"  SEM FOTO  #{c_id} {nome} (privacidade/instancia offline/numero invalido, apos {RETRIES} tentativas)")
+    async with httpx.AsyncClient() as client:
+        try:
+            inst_resp = await client.get(f"{BASE_URL}/instance/fetchInstances", headers=HEADERS, timeout=PATIENT_TIMEOUT)
+            all_instances = [
+                i.get("name") for i in inst_resp.json()
+                if isinstance(i, dict) and i.get("connectionStatus") == "open"
+            ] if inst_resp.status_code == 200 else []
+        except Exception:
+            all_instances = []
+        logger.info(f"Instancias conectadas: {all_instances}")
 
-        processed += 1
-        if processed % 50 == 0:
-            logger.info(f"  ... progresso: {processed}/{len(stale_contacts)} (sucesso={success}, sem_foto={failed})")
-        await asyncio.sleep(0.4)
+        for c_id, tel, nome in stale_contacts:
+            instance_name = instance_by_contact.get(c_id) or fallback_instance
+            pic_url = await patient_fetch_profile_picture_url(client, instance_name, tel, all_instances)
+
+            if pic_url:
+                local_pic = await download_and_cache_avatar_locally(c_id, pic_url)
+                if local_pic:
+                    success += 1
+                    logger.info(f"  OK  #{c_id} {nome} -> {local_pic}")
+                else:
+                    failed += 1
+                    logger.info(f"  ERRO AO BAIXAR  #{c_id} {nome} (achou a URL mas nao conseguiu salvar)")
+            else:
+                failed += 1
+                logger.info(f"  SEM FOTO  #{c_id} {nome} (privacidade ou instancia indisponivel)")
+
+            processed += 1
+            if processed % 50 == 0:
+                logger.info(f"  ... progresso: {processed}/{len(stale_contacts)} (sucesso={success}, sem_foto={failed})")
+            await asyncio.sleep(0.3)
 
     logger.info(f"Concluído. Sucesso: {success} | Sem foto/erro: {failed} | Total: {len(stale_contacts)}")
 
