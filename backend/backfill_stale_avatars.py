@@ -61,48 +61,53 @@ async def main():
         logger.info("Dry-run: nenhuma alteração feita.")
         return
 
-    # This VM occasionally hits severe hypervisor-level CPU steal (a known Always-Free-tier
-    # OCI limitation, unrelated to this script) where even a LOCAL call to Evolution API can
-    # blow past its 3s timeout. A low concurrency + a couple of retries with backoff turns
-    # those transient timeouts into eventual successes instead of permanent false "no photo"
-    # results, without adding meaningful extra load of our own.
-    sem = asyncio.Semaphore(2)
+    # This VM is hitting a severe, sustained hypervisor-level CPU steal spike right now (a
+    # known Always-Free-tier OCI limitation, unrelated to this script). Under it, even 2
+    # concurrent requests to Evolution API were enough to make almost every one time out -
+    # confirmed by re-testing several "failed" contacts individually right after and getting
+    # a real photo back instantly every time. So: no concurrency at all, one contact fully
+    # done (with its own retries) before the next starts, plus a small pause between contacts
+    # to avoid ever stacking two in-flight requests against an already-strained Evolution API.
     success = 0
     failed = 0
     RETRIES = 3
+    processed = 0
 
-    async def process(c_id, tel, nome):
-        nonlocal success, failed
-        async with sem:
-            instance_name = instance_by_contact.get(c_id) or fallback_instance
-            for attempt in range(RETRIES):
-                try:
-                    async with AsyncSessionLocal() as db:
-                        c_obj = await db.get(Contact, c_id)
-                        before = c_obj.foto_perfil_url if c_obj else None
-                    await evolution_service.fetch_and_update_contact_avatar(
-                        contact_id=c_id, instance_name=instance_name, phone=tel
-                    )
-                    async with AsyncSessionLocal() as db:
-                        c_obj = await db.get(Contact, c_id)
-                        after = c_obj.foto_perfil_url if c_obj else None
-                    if after and after != before and after.startswith("/uploads/avatars/"):
-                        success += 1
-                        logger.info(f"  OK  #{c_id} {nome} -> {after}")
-                        break
-                    if attempt < RETRIES - 1:
-                        await asyncio.sleep(2.0 * (attempt + 1))
-                        continue
-                    failed += 1
-                    logger.info(f"  SEM FOTO  #{c_id} {nome} (privacidade/instancia offline/numero invalido, apos {RETRIES} tentativas)")
-                except Exception as e:
-                    if attempt < RETRIES - 1:
-                        await asyncio.sleep(2.0 * (attempt + 1))
-                        continue
-                    failed += 1
-                    logger.warning(f"  ERRO #{c_id} {nome}: {e}")
+    for c_id, tel, nome in stale_contacts:
+        instance_name = instance_by_contact.get(c_id) or fallback_instance
+        ok = False
+        for attempt in range(RETRIES):
+            try:
+                async with AsyncSessionLocal() as db:
+                    c_obj = await db.get(Contact, c_id)
+                    before = c_obj.foto_perfil_url if c_obj else None
+                await evolution_service.fetch_and_update_contact_avatar(
+                    contact_id=c_id, instance_name=instance_name, phone=tel
+                )
+                async with AsyncSessionLocal() as db:
+                    c_obj = await db.get(Contact, c_id)
+                    after = c_obj.foto_perfil_url if c_obj else None
+                if after and after != before and after.startswith("/uploads/avatars/"):
+                    success += 1
+                    ok = True
+                    logger.info(f"  OK  #{c_id} {nome} -> {after}")
+                    break
+                if attempt < RETRIES - 1:
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
+            except Exception as e:
+                if attempt < RETRIES - 1:
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    continue
+                logger.warning(f"  ERRO #{c_id} {nome}: {e}")
+        if not ok:
+            failed += 1
+            logger.info(f"  SEM FOTO  #{c_id} {nome} (privacidade/instancia offline/numero invalido, apos {RETRIES} tentativas)")
 
-    await asyncio.gather(*[process(c_id, tel, nome) for c_id, tel, nome in stale_contacts])
+        processed += 1
+        if processed % 50 == 0:
+            logger.info(f"  ... progresso: {processed}/{len(stale_contacts)} (sucesso={success}, sem_foto={failed})")
+        await asyncio.sleep(0.4)
 
     logger.info(f"Concluído. Sucesso: {success} | Sem foto/erro: {failed} | Total: {len(stale_contacts)}")
 
