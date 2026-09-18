@@ -142,9 +142,49 @@ async def send_os_pdf_after_confirmation(
     """
     from app.core.database import AsyncSessionLocal
     try:
-        abs_path = os.path.join("uploads", pdf_relative_path)
-        if not os.path.isfile(abs_path):
-            logger.error(f"[OS HANDLER PDF] Arquivo não encontrado para envio: {abs_path}")
+        abs_path = os.path.join("uploads", pdf_relative_path) if pdf_relative_path else ""
+        if not pdf_relative_path or not os.path.isfile(abs_path):
+            # The PDF is genuinely optional end-to-end (see os_handler_ingest.py) - but
+            # silently returning here left the customer's confirmation with no reply at
+            # all whenever the file wasn't ready yet, which looked like the system had
+            # simply stopped working. At minimum, re-state the fee condition they just
+            # confirmed reading so nothing about the terms gets lost.
+            logger.warning(f"[OS HANDLER PDF] Arquivo não encontrado ({abs_path!r}) - avisando o cliente sem anexo.")
+            fallback_text = (
+                "Perfeito, recebi sua confirmação! ⚠️ Reforçando: caso o orçamento não seja "
+                "aprovado, será cobrada a taxa de diagnóstico já informada anteriormente nesta "
+                "conversa. O PDF completo da sua Ordem de Serviço será enviado a você em breve."
+            )
+            send_res = await evolution_service.send_text_message(
+                instance_name=instance_name, number=recipient_phone, text=fallback_text
+            )
+            async with AsyncSessionLocal() as db:
+                saved_msg = Message(
+                    conversation_id=conversation_id,
+                    remetente=MessageSender.SISTEMA,
+                    conteudo=fallback_text,
+                    tipo=MessageType.TEXTO,
+                    status="sent",
+                    whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(saved_msg)
+                await db.commit()
+                await db.refresh(saved_msg)
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=whatsapp_number_id,
+                    message_data={
+                        "type": "NEW_MESSAGE",
+                        "conversation_id": conversation_id,
+                        "id": saved_msg.id,
+                        "remetente": MessageSender.SISTEMA.value,
+                        "conteudo": fallback_text,
+                        "tipo": MessageType.TEXTO.value,
+                        "status": "sent",
+                        "timestamp": saved_msg.timestamp.isoformat() + "Z"
+                    }
+                )
             return
         with open(abs_path, "rb") as f:
             file_bytes = f.read()
