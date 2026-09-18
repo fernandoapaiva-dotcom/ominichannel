@@ -1,0 +1,22 @@
+{
+  "backend_url": "https://ominichannel.duckdns.org",
+  "api_key": "COLOQUE_A_CHAVE_REAL_AQUI",
+  "poll_interval_seconds": 20,
+  "pasta_abertura": "\\\\SRV-SERVWELD\\Users\\Administrator\\My Drive\\O.S SOFTSYSTEM\\ABERTURA",
+  "pasta_orcamento": "\\\\SRV-SERVWELD\\Users\\Administrator\\My Drive\\O.S SOFTSYSTEM\\ORCAMENTO",
+  "timeout_seconds": 60,
+  "empresas": {
+    "servweld": {
+      "host": "192.168.15.16",
+      "database": "C:\\Softsystem\\Base\\servsolda.fdb",
+      "user": "SYSDBA",
+      "password": "COLOQUE_A_SENHA_REAL_AQUI"
+    },
+    "centrooeste": {
+      "host": "192.168.15.16",
+      "database": "C:\\Softsystem\\Base\\CENTROOESTE.fdb",
+      "user": "SYSDBA",
+      "password": "COLOQUE_A_SENHA_REAL_AQUI"
+    }
+  }
+}
