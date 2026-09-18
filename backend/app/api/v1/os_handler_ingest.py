@@ -420,14 +420,15 @@ async def dispatch_orcamento_messages(
                 abs_path = os.path.join("uploads", saved_rel_path)
                 with open(abs_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("utf-8")
+                pdf_file_name = build_os_pdf_filename(os_numero, contact_name)
                 send_res = await evolution_service.send_media_message(
                     instance_name=instance_name, number=phone, media_type="document",
-                    mimetype="application/pdf", media=b64, file_name="Orcamento_OS.pdf",
+                    mimetype="application/pdf", media=b64, file_name=pdf_file_name,
                     skip_anti_ban_pacing=True
                 )
                 pdf_msg = Message(
                     conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
-                    conteudo=f"/uploads/{saved_rel_path}|Orcamento_OS.pdf",
+                    conteudo=f"/uploads/{saved_rel_path}|{pdf_file_name}",
                     tipo=MessageType.ARQUIVO, status="sent",
                     whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
                     timestamp=datetime.utcnow()
@@ -449,7 +450,7 @@ async def dispatch_abertura_messages(
     tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
     conversation_id: int, natureza: str, config: dict, contact_name: str,
     detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float,
-    equip_receipt_line: Optional[str] = None
+    equip_receipt_line: Optional[str] = None, codos: str = ""
 ):
     """Background task: sends the fase-1 informative messages + confirmation gate (see docstring above)."""
     from app.core.database import AsyncSessionLocal
@@ -474,7 +475,7 @@ async def dispatch_abertura_messages(
             for msg_content in all_messages:
                 await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
 
-            conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
+            conversation.assunto_atual = f"CONFIRM_OS_PDF:{codos}|{saved_rel_path}"
             await db.commit()
 
         logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' despachada para conversa #{conversation_id} ({phone})")
@@ -559,11 +560,12 @@ async def ingest_os_pdf(
             equipamento, os_cfg.get("diagnostic_prices", {})
         )
     equip_receipt_line = build_equip_receipt_line(natureza, full_text)
+    os_numero = extract_os_numero(full_text) or ""
 
     asyncio.create_task(dispatch_abertura_messages(
         tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
         natureza, config, contact_name, detected_equip, valor_diagnostico, saved_rel_path, delay_sec,
-        equip_receipt_line
+        equip_receipt_line, os_numero
     ))
 
     logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' agendada para envio (conversa #{conversation.id}, {phone})")
@@ -584,8 +586,9 @@ NATUREZA_CODE_MAP = {
     1: "orcamento",
     2: "garantia_fabrica",
     3: "garantia_loja",
+    4: "visita_tecnica",
     5: "locacao",
-    # 4 = "Visita Técnica" não tem template próprio ainda - cai no fallback de
+    # (histórico: 4 = "Visita Técnica" não tinha template próprio antes - caía no fallback de
     # "natureza não reconhecida" (nota manual), como qualquer tipo desconhecido.
 }
 
@@ -603,6 +606,13 @@ EVENTO_ORC_NAO_APROVADO = 16
 # novo. O processo roda como uma única instância (fork_mode, sem workers), então um lock em
 # memória do processo já resolve.
 _os_dispatch_lock = asyncio.Lock()
+
+
+def build_os_pdf_filename(codos, client_name: Optional[str]) -> str:
+    """"<nº da O.S.> - <cliente>.pdf" instead of a generic name, so the file is identifiable
+    once it lands in the customer's own downloads/chat history."""
+    safe_name = re.sub(r'[\\/:*?"<>|]', "", (client_name or "").strip()) or "Cliente"
+    return f"{codos} - {safe_name}.pdf"
 
 
 def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -> dict:
@@ -630,7 +640,8 @@ def mark_os_dispatched(conversation: Conversation, codos: int, flow: str, pdf_se
 
 async def deliver_late_pdf(
     db: AsyncSession, tenant_id: int, whatsapp_number_id: int, instance_name: str,
-    phone: str, conversation: Conversation, codos: int, saved_rel_path: str, pending_prefix: str
+    phone: str, conversation: Conversation, codos: int, saved_rel_path: str, pending_prefix: str,
+    client_name: Optional[str] = None
 ):
     """
     The info+confirmation texts for this O.S. were already sent (by whichever watcher got
@@ -642,7 +653,7 @@ async def deliver_late_pdf(
     """
     if (conversation.assunto_atual or "").startswith(pending_prefix):
         if pending_prefix == "CONFIRM_OS_PDF:":
-            conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
+            conversation.assunto_atual = f"CONFIRM_OS_PDF:{codos}|{saved_rel_path}"
         else:
             parts = conversation.assunto_atual.split(":", 1)[1].split("|")
             os_numero = parts[0] if len(parts) > 0 else str(codos)
@@ -655,11 +666,13 @@ async def deliver_late_pdf(
     with open(abs_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
 
+    pdf_file_name = build_os_pdf_filename(codos, client_name)
+
     async def _try_send():
         return await evolution_service.send_media_message(
             instance_name=instance_name, number=phone, media_type="document",
             mimetype="application/pdf", media=b64,
-            file_name=f"OS_{codos}.pdf", skip_anti_ban_pacing=True
+            file_name=pdf_file_name, skip_anti_ban_pacing=True
         )
 
     # A transient failure here (empty error string from a dropped connection, seen for real
@@ -678,7 +691,7 @@ async def deliver_late_pdf(
 
     pdf_msg = Message(
         conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
-        conteudo=f"/uploads/{saved_rel_path}|OS_{codos}.pdf", tipo=MessageType.ARQUIVO, status="sent",
+        conteudo=f"/uploads/{saved_rel_path}|{pdf_file_name}", tipo=MessageType.ARQUIVO, status="sent",
         whatsapp_msg_id=extract_evolution_msg_id(send_res),
         timestamp=datetime.utcnow()
     )
@@ -736,7 +749,7 @@ async def ingest_db_event_common(
                 if saved_rel_path and not existing.get("pdf_sent"):
                     delivered = await deliver_late_pdf(
                         db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
-                        codos, saved_rel_path, "CONFIRM_OS_PDF:"
+                        codos, saved_rel_path, "CONFIRM_OS_PDF:", contact_name
                     )
                     if not delivered:
                         return {"status": "pdf_delivery_failed", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
@@ -773,7 +786,7 @@ async def ingest_db_event_common(
         asyncio.create_task(dispatch_abertura_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
             natureza, config, contact_name, detected_equip, valor_diagnostico,
-            saved_rel_path or "", delay_sec, equip_receipt_line
+            saved_rel_path or "", delay_sec, equip_receipt_line, str(codos)
         ))
         logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} '{natureza}' agendada (conversa #{conversation.id})")
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
@@ -785,7 +798,7 @@ async def ingest_db_event_common(
                 if saved_rel_path and not existing.get("pdf_sent"):
                     delivered = await deliver_late_pdf(
                         db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
-                        codos, saved_rel_path, "CONFIRM_OS_APPROVAL:"
+                        codos, saved_rel_path, "CONFIRM_OS_APPROVAL:", contact_name
                     )
                     if not delivered:
                         return {"status": "pdf_delivery_failed", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}

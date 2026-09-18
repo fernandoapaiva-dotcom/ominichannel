@@ -126,13 +126,23 @@ async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp
     return await distribution_service.assign_least_loaded_attendant(db, tenant_id, whatsapp_number_id)
 
 
+def _build_os_pdf_filename(os_numero, client_name: Optional[str]) -> str:
+    """"<nº da O.S.> - <cliente>.pdf" - matches os_handler_ingest.build_os_pdf_filename
+    (duplicated rather than imported to avoid a circular import: os_handler_ingest.py already
+    imports from this module)."""
+    safe_name = re.sub(r'[\\/:*?"<>|]', "", (client_name or "").strip()) or "Cliente"
+    return f"{os_numero} - {safe_name}.pdf"
+
+
 async def send_os_pdf_after_confirmation(
     tenant_id: int,
     conversation_id: int,
     whatsapp_number_id: int,
     instance_name: Optional[str],
     recipient_phone: str,
-    pdf_relative_path: str
+    pdf_relative_path: str,
+    os_numero: str = "",
+    client_name: str = ""
 ):
     """
     Fired as a background task once the customer confirms they read the O.S. conditions
@@ -190,19 +200,20 @@ async def send_os_pdf_after_confirmation(
             file_bytes = f.read()
         base64_data = base64.b64encode(file_bytes).decode("utf-8")
 
+        pdf_file_name = _build_os_pdf_filename(os_numero, client_name)
         send_res = await evolution_service.send_media_message(
             instance_name=instance_name,
             number=recipient_phone,
             media_type="document",
             mimetype="application/pdf",
             media=base64_data,
-            file_name="Ordem_de_Servico.pdf",
+            file_name=pdf_file_name,
             skip_anti_ban_pacing=True
         )
         wa_msg_id = extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None
 
         async with AsyncSessionLocal() as db:
-            db_content = f"/uploads/{pdf_relative_path}|Ordem_de_Servico.pdf"
+            db_content = f"/uploads/{pdf_relative_path}|{pdf_file_name}"
             saved_msg = Message(
                 conversation_id=conversation_id,
                 remetente=MessageSender.SISTEMA,
@@ -2049,7 +2060,9 @@ async def receive_evolution_webhook(
         pending_marker = conversation.assunto_atual or ""
         if pending_marker.startswith("CONFIRM_OS_PDF:"):
             from app.services.automation_service import automation_service
-            pending_file_rel_path = pending_marker.split(":", 1)[1]
+            pdf_marker_parts = pending_marker.split(":", 1)[1].split("|", 1)
+            pdf_os_numero = pdf_marker_parts[0] if len(pdf_marker_parts) > 1 else ""
+            pending_file_rel_path = pdf_marker_parts[1] if len(pdf_marker_parts) > 1 else pdf_marker_parts[0]
             classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER PDF] (via mobile sync) Classificação de '{text_content}': {classification}")
             if classification == "CONFIRMA":
@@ -2059,7 +2072,8 @@ async def receive_evolution_webhook(
                     send_os_pdf_after_confirmation(
                         tenant_id=tenant_id, conversation_id=conversation.id,
                         whatsapp_number_id=whatsapp_number.id, instance_name=instance_name,
-                        recipient_phone=contact.telefone, pdf_relative_path=pending_file_rel_path
+                        recipient_phone=contact.telefone, pdf_relative_path=pending_file_rel_path,
+                        os_numero=pdf_os_numero, client_name=contact.nome or ""
                     )
                 )
             elif classification == "NEGA":
@@ -2252,17 +2266,25 @@ async def receive_evolution_webhook(
     if not is_group and (pending_os_marker.startswith("CONFIRM_OS_PDF:") or pending_os_marker.startswith("CONFIRM_OS_APPROVAL:")):
         from app.services.automation_service import automation_service
         classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
+        # Deferred, not fired yet: creating the background task before this ack text is
+        # actually sent let the PDF (its own separate, immediate send) reach the customer
+        # BEFORE this "já vou te enviar..." text - reported directly, confirmed by
+        # timestamps in production. Fire it only after the text below is awaited.
+        deferred_task = None
 
         if pending_os_marker.startswith("CONFIRM_OS_PDF:"):
-            pending_file_rel_path = pending_os_marker.split(":", 1)[1]
+            pdf_marker_parts = pending_os_marker.split(":", 1)[1].split("|", 1)
+            pdf_os_numero = pdf_marker_parts[0] if len(pdf_marker_parts) > 1 else ""
+            pending_file_rel_path = pdf_marker_parts[1] if len(pdf_marker_parts) > 1 else pdf_marker_parts[0]
             logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
             if classification == "CONFIRMA":
                 reply_text = "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
                 conversation.assunto_atual = "Atendimento Concierge"
-                asyncio.create_task(send_os_pdf_after_confirmation(
+                deferred_task = send_os_pdf_after_confirmation(
                     tenant_id=tenant_id, conversation_id=conversation.id, whatsapp_number_id=whatsapp_number.id,
-                    instance_name=instance_name, recipient_phone=phone_number, pdf_relative_path=pending_file_rel_path
-                ))
+                    instance_name=instance_name, recipient_phone=phone_number, pdf_relative_path=pending_file_rel_path,
+                    os_numero=pdf_os_numero, client_name=contact.nome or ""
+                )
             elif classification == "NEGA":
                 reply_text = "Sem problemas! Fico à disposição para te enviar o PDF completo da sua Ordem de Serviço quando você quiser - só me chamar aqui novamente. 😊"
                 conversation.assunto_atual = "Atendimento Concierge"
@@ -2282,16 +2304,18 @@ async def receive_evolution_webhook(
                     else "Entendido, agradecemos o retorno! Fico à disposição caso mude de ideia ou tenha dúvidas."
                 )
                 conversation.assunto_atual = "Atendimento Concierge"
-                asyncio.create_task(notify_os_approval_result(
+                deferred_task = notify_os_approval_result(
                     tenant_id=tenant_id, conversation_id=conversation.id, whatsapp_number_id=whatsapp_number.id,
                     instance_name=instance_name, os_numero=os_numero, client_name=contact.nome or "Cliente",
                     aprovado=aprovado, pdf_relative_path=pdf_rel_path, tecnico_phone=tecnico_phone
-                ))
+                )
             else:
                 reply_text = f"Só para eu confirmar: você *aprova* a execução do serviço da O.S. #{os_numero} pelo valor informado no orçamento? Responda *SIM* ou *NÃO*."
 
         await db.commit()
         send_res = await evolution_service.send_text_message(instance_name=instance_name, number=phone_number, text=reply_text)
+        if deferred_task is not None:
+            asyncio.create_task(deferred_task)
         reply_msg = Message(
             conversation_id=conversation.id, remetente=MessageSender.SISTEMA, conteudo=reply_text,
             tipo=MessageType.TEXTO, status="sent",

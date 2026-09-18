@@ -71,6 +71,12 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
                 "Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊",
                 "🔑 *Locação de Equipamento:* a devolução deve ocorrer na data combinada. Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional, conforme as Condições Gerais informadas na sua Ordem de Serviço.",
                 "📦 *Caução/Depósito:* condicionado à devolução do equipamento em perfeito estado de funcionamento."
+            ],
+            # Rascunho - revisar o texto/valor da taxa de deslocamento (se houver) na tela de Automações.
+            "visita_tecnica": [
+                "Olá, {nome_cliente}! 👋 {saudacao}, tudo bem? 😊",
+                "🔧 *Visita Técnica:* sua Ordem de Serviço foi registrada para atendimento técnico no local. Nossa equipe entrará em contato para agendar o melhor dia e horário.",
+                "📋 *Importante:* qualquer taxa de deslocamento ou serviço será informada previamente pelo técnico responsável, antes da execução."
             ]
         },
         # Pergunta de confirmação enviada ANTES do PDF completo da O.S. - o cliente precisa
@@ -81,7 +87,8 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
             "orcamento": "⚠️ *Muito importante:* caso o orçamento *NÃO seja aprovado*, será cobrada a taxa de diagnóstico informada acima (R$ {valor_diagnostico}). Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
             "garantia_loja": "⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
             "garantia_fabrica": "⚠️ Após 90 dias da liberação para retirada, o equipamento pode ser considerado abandonado e sucateado, conforme as Condições Gerais de Serviço. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
-            "locacao": "⚠️ Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional sobre a caução. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço."
+            "locacao": "⚠️ Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional sobre a caução. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço.",
+            "visita_tecnica": "⚠️ Responda *SIM* confirmando que está ciente das condições da visita técnica para eu te enviar o PDF completo da sua Ordem de Serviço."
         }
     },
     # Avisos de progresso disparados quando o técnico muda o "Tipo de Evento" da O.S. no
