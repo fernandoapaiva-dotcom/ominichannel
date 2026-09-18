@@ -47,6 +47,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 from pypdf import PdfReader
 
 from app.core.config import settings
@@ -595,6 +596,70 @@ EVENTO_ORC_APROVADO = 15
 EVENTO_ORC_NAO_APROVADO = 16
 
 
+def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -> dict:
+    """
+    Two independent watchers can report the same O.S.: the DB watcher reacts the instant the
+    event changes (info texts go out even with no PDF yet, by design - see
+    dispatch_orcamento_messages), and the folder watcher reacts whenever the PDF file itself
+    shows up in the shared folder, whenever that happens to be. Without this, a PDF arriving
+    later would replay the whole info+confirmation sequence a second time.
+    Returns the existing dispatch record for this O.S.+flow, or {} if never dispatched.
+    """
+    os_dispatched = (conversation.dados_adicionais or {}).get("os_dispatched", {})
+    record = os_dispatched.get(str(codos)) or {}
+    return record if record.get("flow") == flow else {}
+
+
+def mark_os_dispatched(conversation: Conversation, codos: int, flow: str, pdf_sent: bool):
+    extra = dict(conversation.dados_adicionais or {})
+    os_dispatched = dict(extra.get("os_dispatched", {}))
+    os_dispatched[str(codos)] = {"flow": flow, "pdf_sent": pdf_sent}
+    extra["os_dispatched"] = os_dispatched
+    conversation.dados_adicionais = extra
+    flag_modified(conversation, "dados_adicionais")
+
+
+async def deliver_late_pdf(
+    db: AsyncSession, tenant_id: int, whatsapp_number_id: int, instance_name: str,
+    phone: str, conversation: Conversation, codos: int, saved_rel_path: str, pending_prefix: str
+):
+    """
+    The info+confirmation texts for this O.S. were already sent (by whichever watcher got
+    there first) - this call is just the PDF showing up in the shared folder afterwards.
+    If the customer hasn't answered the confirmation yet, quietly attach the real path to
+    the pending marker (it goes out the normal way once they reply). Otherwise (already
+    confirmed/declined, or a human took over) send it now as a standalone courtesy follow-up
+    - nothing about the info/fee texts gets repeated either way.
+    """
+    if (conversation.assunto_atual or "").startswith(pending_prefix):
+        if pending_prefix == "CONFIRM_OS_PDF:":
+            conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
+        else:
+            parts = conversation.assunto_atual.split(":", 1)[1].split("|")
+            os_numero = parts[0] if len(parts) > 0 else str(codos)
+            tecnico_phone = parts[2] if len(parts) > 2 else ""
+            conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone}"
+        await db.commit()
+        return
+
+    abs_path = os.path.join("uploads", saved_rel_path)
+    with open(abs_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    send_res = await evolution_service.send_media_message(
+        instance_name=instance_name, number=phone, media_type="document",
+        mimetype="application/pdf", media=b64,
+        file_name=f"OS_{codos}.pdf", skip_anti_ban_pacing=True
+    )
+    pdf_msg = Message(
+        conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
+        conteudo=f"/uploads/{saved_rel_path}|OS_{codos}.pdf", tipo=MessageType.ARQUIVO, status="sent",
+        whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+        timestamp=datetime.utcnow()
+    )
+    db.add(pdf_msg)
+    await db.commit()
+
+
 async def ingest_db_event_common(
     db: AsyncSession,
     cod_tipo_evento: int,
@@ -638,6 +703,19 @@ async def ingest_db_event_common(
     equip_display = " ".join(b for b in [equip_marca, equip_modelo] if b)
 
     if cod_tipo_evento == EVENTO_ENTRADA:
+        existing = check_os_dispatch_state(conversation, codos, "abertura")
+        if existing:
+            if saved_rel_path and not existing.get("pdf_sent"):
+                await deliver_late_pdf(
+                    db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
+                    codos, saved_rel_path, "CONFIRM_OS_PDF:"
+                )
+                mark_os_dispatched(conversation, codos, "abertura", pdf_sent=True)
+                await db.commit()
+                logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
+                return {"status": "pdf_delivered", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
+            return {"status": "already_dispatched", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
+
         natureza = NATUREZA_CODE_MAP.get(natureza_codigo)
         if not natureza:
             await flag_unrecognized_document(
@@ -660,6 +738,8 @@ async def ingest_db_event_common(
             data_str = datetime.now().strftime("%d/%m/%Y")
             equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} referente à *O.S. #{codos}*, {purpose}."
 
+        mark_os_dispatched(conversation, codos, "abertura", pdf_sent=bool(saved_rel_path))
+        await db.commit()
         asyncio.create_task(dispatch_abertura_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
             natureza, config, contact_name, detected_equip, valor_diagnostico,
@@ -669,6 +749,19 @@ async def ingest_db_event_common(
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
+        existing = check_os_dispatch_state(conversation, codos, "orcamento")
+        if existing:
+            if saved_rel_path and not existing.get("pdf_sent"):
+                await deliver_late_pdf(
+                    db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
+                    codos, saved_rel_path, "CONFIRM_OS_APPROVAL:"
+                )
+                mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True)
+                await db.commit()
+                logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
+                return {"status": "pdf_delivered", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
+            return {"status": "already_dispatched", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
+
         # A mudança do evento no Softsystem já dispara o aviso, mesmo sem o PDF do orçamento
         # ainda salvo (isso é um passo manual separado no processo da loja) - o arquivo é
         # enviado quando disponível, mas não é um requisito pra avisar o cliente.
@@ -676,6 +769,8 @@ async def ingest_db_event_common(
             logger.info(f"[OS DB EVENT] O.S. #{codos}: PDF do orçamento ainda não encontrado, avisando o cliente mesmo assim.")
 
         tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
+        mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=bool(saved_rel_path))
+        await db.commit()
         asyncio.create_task(dispatch_orcamento_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
             contact_name, str(codos), saved_rel_path or "", tecnico_phone, delay_sec
