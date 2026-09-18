@@ -235,45 +235,6 @@ async def send_os_pdf_after_confirmation(
                     "agent_name": "Automação OS"
                 }
             )
-
-            # Explain what happens next - otherwise the PDF just lands with no context and
-            # the customer is left wondering what to expect (reported directly: getting only
-            # the file read as confusing).
-            next_steps_text = (
-                "🔧 Em breve, nossos técnicos farão a verificação do equipamento e entraremos "
-                "em contato novamente para enviar o laudo técnico com o orçamento do reparo.\n\n"
-                "🙏 Agradecemos a parceria e a confiança em nossos serviços!"
-            )
-            next_steps_res = await evolution_service.send_text_message(
-                instance_name=instance_name, number=recipient_phone, text=next_steps_text
-            )
-            next_msg = Message(
-                conversation_id=conversation_id,
-                remetente=MessageSender.SISTEMA,
-                conteudo=next_steps_text,
-                tipo=MessageType.TEXTO,
-                status="sent",
-                whatsapp_msg_id=extract_evolution_msg_id(next_steps_res) if isinstance(next_steps_res, dict) else None,
-                timestamp=datetime.utcnow()
-            )
-            db.add(next_msg)
-            await db.commit()
-            await db.refresh(next_msg)
-            await ws_manager.broadcast_to_department(
-                tenant_id=tenant_id,
-                whatsapp_number_id=whatsapp_number_id,
-                message_data={
-                    "type": "NEW_MESSAGE",
-                    "conversation_id": conversation_id,
-                    "id": next_msg.id,
-                    "remetente": MessageSender.SISTEMA.value,
-                    "conteudo": next_steps_text,
-                    "tipo": MessageType.TEXTO.value,
-                    "status": "sent",
-                    "timestamp": next_msg.timestamp.isoformat() + "Z",
-                    "agent_name": "Automação OS"
-                }
-            )
         logger.info(f"[OS HANDLER PDF] PDF enviado com sucesso para conversa #{conversation_id}")
     except Exception as err:
         logger.error(f"[OS HANDLER PDF] Erro ao enviar PDF após confirmação: {err}", exc_info=True)
