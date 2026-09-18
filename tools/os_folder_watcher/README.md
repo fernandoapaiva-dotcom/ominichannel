@@ -2,56 +2,61 @@
 
 Programa que roda no computador da loja, observa as pastas onde o Softsystem salva o
 PDF da Ordem de Serviço, e envia automaticamente para o sistema Ominichannel processar
-(avisos ao cliente + PDF + confirmação de aprovação).
+(avisos ao cliente + PDF + confirmação/aprovação).
 
-## Instalação (uma vez só)
+## Instalação (um clique, por estação)
 
-1. Copie esta pasta inteira (`os_folder_watcher`) para o computador da loja, por exemplo
-   em `C:\OminichannelWatcher\`.
-2. Instale o Python 3 (se ainda não tiver): https://www.python.org/downloads/ - marque a
-   opção **"Add Python to PATH"** durante a instalação.
-3. Abra o Prompt de Comando (cmd) nessa pasta e rode:
+Repita esses passos em **cada computador/estação** onde o Softsystem roda:
+
+1. Copie esta pasta inteira (`os_folder_watcher`) para o computador, por exemplo em
+   `C:\OminichannelWatcher\`.
+2. Confira se o `config.json` já está preenchido com a chave de acesso e os caminhos
+   das pastas (`Z:\O.S SOFTSYSTEM\ABERTURA` e `Z:\O.S SOFTSYSTEM\ORCAMENTO`) - se algum
+   caminho for diferente nessa estação, edite o `config.json` (é só um arquivo de texto).
+3. Clique com o **botão direito** em `install.bat` → **"Executar como administrador"**.
+   (Se instalar sem ser administrador ainda funciona, mas só liga automaticamente para
+   o usuário que instalou - com administrador, liga sozinho para **qualquer operador**
+   que fizer login nessa estação, que é o caso de vocês com mais de um operador.)
+4. O instalador faz tudo sozinho: verifica se tem Python (instala automaticamente se
+   não tiver), cria um ambiente isolado só para este programa, instala o necessário, e
+   deixa configurado para iniciar sozinho a cada login. Já inicia na hora também, sem
+   precisar reiniciar o computador para testar.
+5. Ao final, confira o arquivo `watcher.log` (nesta mesma pasta) - deve aparecer:
    ```
-   pip install watchdog requests
+   Observando [abertura]: Z:\O.S SOFTSYSTEM\ABERTURA
+   Observando [orcamento]: Z:\O.S SOFTSYSTEM\ORCAMENTO
+   Vigia de pasta iniciado.
    ```
-4. O arquivo `config.json` já vem preenchido com a chave de acesso e os caminhos das
-   pastas (`Z:\O.S SOFTSYSTEM\ABERTURA` e `Z:\O.S SOFTSYSTEM\ORCAMENTO`). Só confira se
-   esses caminhos estão certos no computador da loja - se o Softsystem salvar em outro
-   lugar, edite o `config.json` (é só um arquivo de texto).
 
-## Testar manualmente
+Pronto. A partir daí, sempre que alguém abrir/salvar uma O.S. no Softsystem, o PDF é
+enviado automaticamente e o WhatsApp do cliente recebe os avisos certos.
 
-No Prompt de Comando, dentro da pasta:
-```
-python watcher.py
-```
-Deixe rodando e abra/salve uma O.S. de teste no Softsystem - deve aparecer uma linha de
-log dizendo "OK" e a mensagem deve chegar no WhatsApp do número de teste em poucos
-segundos. Pressione Ctrl+C para parar o teste.
+## Testar
 
-## Deixar rodando sempre (Tarefa Agendada do Windows)
+Abra ou alimente uma O.S. de teste no Softsystem normalmente - em poucos segundos deve
+chegar a mensagem no WhatsApp do número de teste, e uma nova linha "OK" deve aparecer em
+`watcher.log`.
 
-Para não precisar abrir isso manualmente todo dia:
+## Desinstalar
 
-1. Abra o **Agendador de Tarefas** do Windows (pesquise "Agendador de Tarefas" no menu Iniciar).
-2. Criar Tarefa Básica → nome "Vigia OS Softsystem".
-3. Disparador: **Ao fazer logon**.
-4. Ação: **Iniciar um programa**.
-   - Programa/script: caminho completo do Python (ex: `C:\Users\SeuUsuario\AppData\Local\Programs\Python\Python312\python.exe`)
-   - Argumentos: `watcher.py`
-   - Iniciar em: caminho da pasta (ex: `C:\OminichannelWatcher`)
-5. Finalizar. Reinicie o computador (ou faça logoff/logon) para testar se inicia sozinho.
+Rode `uninstall.bat` na estação. Isso só desliga o início automático - os arquivos e o
+ambiente Python instalado continuam aí, prontos para reinstalar (`install.bat`) quando
+quiser, sem precisar baixar/instalar tudo de novo.
 
 ## Arquivos processados
 
 Cada PDF processado é movido para uma subpasta `processados` (se deu certo) ou `erros`
-(se algo falhou) dentro da mesma pasta de origem - nada é apagado, então dá pra
-reenviar manualmente se precisar. O log completo fica em `watcher.log`, nesta mesma pasta.
+(se algo falhou) dentro da própria pasta de origem - nada é apagado, então dá pra
+reenviar manualmente se precisar. O log completo fica em `watcher.log`.
 
 ## Em caso de problema
 
-- Confira o arquivo `watcher.log` - toda tentativa (certa ou errada) fica registrada ali.
-- Se aparecer "HTTP 401": a chave de API (`api_key` no config.json) está errada.
-- Se aparecer "HTTP 422 - Telefone do cliente não encontrado": o PDF não tem o campo
+- Confira `watcher.log` - toda tentativa (certa ou errada) fica registrada ali.
+- **"HTTP 401"**: a chave de API (`api_key` no `config.json`) está errada.
+- **"HTTP 422 - Telefone do cliente não encontrado"**: o PDF não tem o campo
   Celular/Telefone preenchido, ou o layout mudou - avise o suporte.
-- Se aparecer erro de conexão: confira se o computador da loja tem internet.
+- **"Pasta não encontrada"**: confira se o `Z:` está mapeado nessa estação e se o
+  caminho no `config.json` está certo.
+- Erro de conexão: confira se a estação tem internet.
+- Se quiser reinstalar do zero: rode `uninstall.bat`, apague a pasta `venv`, e rode
+  `install.bat` de novo.

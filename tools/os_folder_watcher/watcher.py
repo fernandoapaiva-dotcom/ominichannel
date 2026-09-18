@@ -20,6 +20,7 @@ import sys
 import json
 import time
 import shutil
+import socket
 import logging
 from datetime import datetime
 
@@ -28,6 +29,12 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+# Arbitrary fixed local port used purely as a system-wide single-instance lock (not a real
+# server). Binding fails if another watcher is already running - system-wide, not per-user,
+# which matters here: on a shared station, more than one operator can log in over the course
+# of the day and each logon starts the watcher again (see README) - this stops duplicates
+# without needing a Windows service or any special permissions.
+SINGLE_INSTANCE_PORT = 47812
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +45,29 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("os_folder_watcher")
+
+
+def acquire_single_instance_lock() -> socket.socket:
+    """Returns a bound socket (kept open for the process lifetime) or exits if one is already running."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+    except OSError:
+        logger.info("Já existe um vigia de pasta rodando nesta estação - encerrando esta segunda instância.")
+        sys.exit(0)
+    return s
+
+
+def wait_for_folders(folders: list, max_wait_seconds: int = 60) -> None:
+    """
+    On logon, a mapped network drive (Z:) can take a few seconds to become available - the
+    Startup entry can fire before that finishes. Retry instead of failing immediately.
+    """
+    deadline = time.time() + max_wait_seconds
+    while time.time() < deadline:
+        if all(os.path.isdir(f) for f in folders if f):
+            return
+        time.sleep(3)
 
 
 def load_config() -> dict:
@@ -136,7 +166,12 @@ class PdfHandler(FileSystemEventHandler):
 
 
 def main():
+    _lock_socket = acquire_single_instance_lock()  # noqa: F841 - kept alive for process lifetime
+
     config = load_config()
+
+    all_folders = [config.get("pasta_abertura"), config.get("pasta_orcamento")]
+    wait_for_folders(all_folders)
 
     observer = Observer()
     watched_any = False
