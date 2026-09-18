@@ -4401,6 +4401,12 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           const isCustomer = msg.remetente === 'cliente';
           const isAI = msg.remetente === 'ia';
           const isSystem = msg.remetente === 'sistema';
+          // A system message that was actually delivered to WhatsApp (has a status, set only
+          // by the sending paths - see os_handler_ingest.py/automation_service.py) is real
+          // customer-facing content and renders as a normal bubble, not the internal-notice
+          // pill - that pill is reserved for admin-only annotations (protocol open/close,
+          // transfer log, CSAT note, etc.) that never set `status`.
+          const isInternalNotice = isSystem && !msg.status;
           const msgKey = group.type === 'single' 
             ? (msg.id ? `msg_${msg.id}_${idx}` : `msg_${idx}`)
             : `album_${group.messages.map(m => m.id || 0).join('_')}_${idx}`;
@@ -4429,7 +4435,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 </div>
               )}
 
-              {isSystem ? (() => {
+              {isInternalNotice ? (() => {
                 const textContent = typeof msg.conteudo === 'string' ? msg.conteudo : '';
                 const isProtocolClosed = textContent.includes('FINALIZADO') || textContent.includes('ENCERRADO') || textContent.includes('finalizado automaticamente');
                 const isProtocolOpened = textContent.includes('PROTOCOLO FORMAL ABERTO');
