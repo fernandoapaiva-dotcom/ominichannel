@@ -205,9 +205,11 @@ def build_equip_receipt_line(natureza: str, full_text: str) -> Optional[str]:
     modelo = extract_field(full_text, "Modelo")
     equip_bits = " ".join(b for b in [marca, modelo] if b)
     equip_display = f" *{equip_bits}*" if equip_bits else ""
+    os_numero = extract_os_numero(full_text)
+    os_display = f" referente à *O.S. #{os_numero}*" if os_numero else ""
 
     data_str = datetime.now().strftime("%d/%m/%Y")
-    return f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_display} {purpose}."
+    return f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_display}{os_display}, {purpose}."
 
 
 async def resolve_tecnico_phone_by_name(db: AsyncSession, tenant_id: int, tech_name_raw: Optional[str]) -> Optional[str]:
@@ -675,7 +677,7 @@ async def ingest_db_event_common(
         if purpose:
             equip_bits = f" *{equip_display}*" if equip_display else ""
             data_str = datetime.now().strftime("%d/%m/%Y")
-            equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} {purpose}."
+            equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} referente à *O.S. #{codos}*, {purpose}."
 
         asyncio.create_task(dispatch_abertura_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
