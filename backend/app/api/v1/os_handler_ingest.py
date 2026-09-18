@@ -181,6 +181,33 @@ def extract_os_numero(text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+PURPOSE_BY_NATUREZA = {
+    "orcamento": "para avaliação e elaboração do orçamento do reparo",
+    "garantia_loja": "para atendimento em garantia",
+    "garantia_fabrica": "para atendimento em garantia de fábrica",
+}
+
+
+def build_equip_receipt_line(natureza: str, full_text: str) -> Optional[str]:
+    """
+    A softer intro line placed right after the greeting, before the cost/warranty warnings -
+    lets the customer know WHAT was received and WHY before hitting them with fees/terms.
+    Not built for "locacao" (the store is handing equipment TO the customer there, not
+    receiving one from them - "recebemos seu equipamento" wouldn't make sense).
+    """
+    purpose = PURPOSE_BY_NATUREZA.get(natureza)
+    if not purpose:
+        return None
+
+    marca = extract_field(full_text, "Marca")
+    modelo = extract_field(full_text, "Modelo")
+    equip_bits = " ".join(b for b in [marca, modelo] if b)
+    equip_display = f" *{equip_bits}*" if equip_bits else ""
+
+    data_str = datetime.now().strftime("%d/%m/%Y")
+    return f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_display} {purpose}."
+
+
 async def resolve_tecnico_phone(db: AsyncSession, tenant_id: int, full_text: str) -> Optional[str]:
     """
     Best-effort: looks for a 'Técnico:'/'Diagnosticado por:'/'Responsável:' field on the
@@ -398,7 +425,8 @@ async def dispatch_orcamento_messages(
 async def dispatch_abertura_messages(
     tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
     conversation_id: int, natureza: str, config: dict, contact_name: str,
-    detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float
+    detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float,
+    equip_receipt_line: Optional[str] = None
 ):
     """Background task: sends the fase-1 informative messages + confirmation gate (see docstring above)."""
     from app.core.database import AsyncSessionLocal
@@ -409,11 +437,16 @@ async def dispatch_abertura_messages(
                 logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para despachar abertura")
                 return
 
-            info_messages = automation_service.format_os_templates(
+            info_messages = list(automation_service.format_os_templates(
                 natureza, config, contact_name, detected_equip, valor_diagnostico
-            )
+            ))
+            # Insert right after the greeting (index 0), before the cost/warranty details -
+            # a softer "we received your equipment today" line so the diagnostic-fee warning
+            # doesn't land as the very first thing the customer reads.
+            if equip_receipt_line and info_messages:
+                info_messages.insert(1, equip_receipt_line)
             confirmation_prompt = automation_service.format_confirmation_prompt(natureza, config, valor_diagnostico)
-            all_messages = list(info_messages) + ([confirmation_prompt] if confirmation_prompt else [])
+            all_messages = info_messages + ([confirmation_prompt] if confirmation_prompt else [])
 
             for msg_content in all_messages:
                 await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
@@ -502,10 +535,12 @@ async def ingest_os_pdf(
         detected_equip, valor_diagnostico = automation_service.resolve_diagnostic_price(
             equipamento, os_cfg.get("diagnostic_prices", {})
         )
+    equip_receipt_line = build_equip_receipt_line(natureza, full_text)
 
     asyncio.create_task(dispatch_abertura_messages(
         tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
-        natureza, config, contact_name, detected_equip, valor_diagnostico, saved_rel_path, delay_sec
+        natureza, config, contact_name, detected_equip, valor_diagnostico, saved_rel_path, delay_sec,
+        equip_receipt_line
     ))
 
     logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' agendada para envio (conversa #{conversation.id}, {phone})")

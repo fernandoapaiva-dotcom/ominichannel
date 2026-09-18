@@ -195,6 +195,44 @@ async def send_os_pdf_after_confirmation(
                     "agent_name": "Automação OS"
                 }
             )
+
+            # Explain what happens next - otherwise the PDF just lands with no context and
+            # the customer is left wondering what to expect (reported directly: getting only
+            # the file read as confusing).
+            next_steps_text = (
+                "🔧 Em breve, nossos técnicos farão a verificação do equipamento e entraremos "
+                "em contato novamente para enviar o laudo técnico com o orçamento do reparo."
+            )
+            next_steps_res = await evolution_service.send_text_message(
+                instance_name=instance_name, number=recipient_phone, text=next_steps_text
+            )
+            next_msg = Message(
+                conversation_id=conversation_id,
+                remetente=MessageSender.SISTEMA,
+                conteudo=next_steps_text,
+                tipo=MessageType.TEXTO,
+                status="sent",
+                whatsapp_msg_id=extract_evolution_msg_id(next_steps_res) if isinstance(next_steps_res, dict) else None,
+                timestamp=datetime.utcnow()
+            )
+            db.add(next_msg)
+            await db.commit()
+            await db.refresh(next_msg)
+            await ws_manager.broadcast_to_department(
+                tenant_id=tenant_id,
+                whatsapp_number_id=whatsapp_number_id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conversation_id,
+                    "id": next_msg.id,
+                    "remetente": MessageSender.SISTEMA.value,
+                    "conteudo": next_steps_text,
+                    "tipo": MessageType.TEXTO.value,
+                    "status": "sent",
+                    "timestamp": next_msg.timestamp.isoformat() + "Z",
+                    "agent_name": "Automação OS"
+                }
+            )
         logger.info(f"[OS HANDLER PDF] PDF enviado com sucesso para conversa #{conversation_id}")
     except Exception as err:
         logger.error(f"[OS HANDLER PDF] Erro ao enviar PDF após confirmação: {err}", exc_info=True)
@@ -1015,6 +1053,26 @@ async def receive_evolution_webhook(
         "vi a atividade" in cleaned_txt or
         cleaned_txt in ["confirmar", "confirmado", "ok", "1", "visualizado", "visto", "recebido", "sim", "aceito", "aceitar"]
     )
+    if is_view_confirmation and phone_number:
+        # A bare "sim"/"ok"/"1" is a very broad, generic match - it fires for ANY phone with
+        # ANY pending calendar task, regardless of what THIS specific conversation is actually
+        # waiting on. If this conversation has an explicit, more specific pending marker (OS
+        # Handler PDF/approval confirmation, sector-transfer confirmation), that's a much
+        # stronger signal of intent than "some calendar task happens to be pending for this
+        # phone" - honor it instead of hijacking the reply into the task-confirmation flow.
+        # (Found via a real test: a "Sim" meant to confirm reading the O.S. terms got
+        # swallowed here because the same test phone also had a leftover pending task.)
+        guard_stmt = (
+            select(Conversation.assunto_atual)
+            .join(Contact, Conversation.contact_id == Contact.id)
+            .where(Contact.telefone == phone_number)
+            .order_by(Conversation.ultima_interacao_em.desc())
+            .limit(1)
+        )
+        guard_marker = (await db.execute(guard_stmt)).scalar_one_or_none() or ""
+        if guard_marker.startswith(("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")):
+            is_view_confirmation = False
+
     if is_view_confirmation and phone_number:
         event_id = None
         for prefix in ["confirm_view_task_", "confirm_task_"]:
@@ -2563,7 +2621,7 @@ async def receive_evolution_webhook(
             if classification == "CONFIRMA":
                 conversation.assunto_atual = "Atendimento Concierge"
                 ai_output = {
-                    "resposta": "Perfeito! Aqui está o PDF completo da sua Ordem de Serviço. 📎",
+                    "resposta": "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎",
                     "transferir_setor": "NENHUM",
                     "enviar_localizacao": False,
                     "enviar_pix": False,
