@@ -134,14 +134,29 @@ def _build_os_pdf_filename(os_numero, client_name: Optional[str]) -> str:
     return f"{os_numero} - {safe_name}.pdf"
 
 
+def _parse_confirm_os_pdf_marker(marker: str):
+    """
+    "CONFIRM_OS_PDF:<codos1>,<codos2>,...|<path1>,<path2>,..." - matches
+    os_handler_ingest.parse_confirm_os_pdf_marker (duplicated for the same reason as
+    _build_os_pdf_filename above). Returns (codos_list, paths_list).
+    """
+    body = marker.split(":", 1)[1]
+    codos_part, _, paths_part = body.partition("|")
+    codos_list = codos_part.split(",") if codos_part else []
+    paths_list = paths_part.split(",") if paths_part else []
+    while len(paths_list) < len(codos_list):
+        paths_list.append("")
+    return codos_list, paths_list
+
+
 async def send_os_pdf_after_confirmation(
     tenant_id: int,
     conversation_id: int,
     whatsapp_number_id: int,
     instance_name: Optional[str],
     recipient_phone: str,
-    pdf_relative_path: str,
-    os_numero: str = "",
+    pdf_relative_paths,
+    os_numeros=None,
     client_name: str = ""
 ):
     """
@@ -149,17 +164,87 @@ async def send_os_pdf_after_confirmation(
     (see the CONFIRM_OS_PDF handling in receive_evolution_webhook). Runs in its own DB
     session since it's decoupled from the triggering request, same pattern as
     automation_service.process_and_dispatch_automation.
+
+    Accepts a list of (os_numero, path) pairs, not just one: a customer dropping off several
+    pieces of equipment at once gets ONE combined confirmation covering every O.S. opened in
+    that visit (see os_handler_ingest.check_and_extend_entrada_window), so a single "Sim" can
+    need to release several PDFs at once. Callers with just one O.S. pass single-element
+    lists - `pdf_relative_paths` as a plain string is still accepted for backward
+    compatibility with any marker saved before this change.
     """
+    if isinstance(pdf_relative_paths, str):
+        pdf_relative_paths = [pdf_relative_paths]
+    if os_numeros is None or isinstance(os_numeros, str):
+        os_numeros = [os_numeros or ""] * len(pdf_relative_paths)
+    while len(os_numeros) < len(pdf_relative_paths):
+        os_numeros.append("")
+
     from app.core.database import AsyncSessionLocal
     try:
-        abs_path = os.path.join("uploads", pdf_relative_path) if pdf_relative_path else ""
-        if not pdf_relative_path or not os.path.isfile(abs_path):
-            # The PDF is genuinely optional end-to-end (see os_handler_ingest.py) - but
-            # silently returning here left the customer's confirmation with no reply at
-            # all whenever the file wasn't ready yet, which looked like the system had
+        any_sent = False
+        for os_numero, pdf_relative_path in zip(os_numeros, pdf_relative_paths):
+            abs_path = os.path.join("uploads", pdf_relative_path) if pdf_relative_path else ""
+            if not pdf_relative_path or not os.path.isfile(abs_path):
+                continue
+            with open(abs_path, "rb") as f:
+                file_bytes = f.read()
+            base64_data = base64.b64encode(file_bytes).decode("utf-8")
+
+            pdf_file_name = _build_os_pdf_filename(os_numero, client_name)
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name,
+                number=recipient_phone,
+                media_type="document",
+                mimetype="application/pdf",
+                media=base64_data,
+                file_name=pdf_file_name,
+                skip_anti_ban_pacing=True
+            )
+            wa_msg_id = extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None
+
+            async with AsyncSessionLocal() as db:
+                db_content = f"/uploads/{pdf_relative_path}|{pdf_file_name}"
+                saved_msg = Message(
+                    conversation_id=conversation_id,
+                    remetente=MessageSender.SISTEMA,
+                    conteudo=db_content,
+                    tipo=MessageType.ARQUIVO,
+                    status="sent",
+                    whatsapp_msg_id=wa_msg_id,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(saved_msg)
+                conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
+                conv = (await db.execute(conv_stmt)).scalar_one_or_none()
+                if conv:
+                    conv.ultima_interacao_em = datetime.utcnow()
+                await db.commit()
+                await db.refresh(saved_msg)
+
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=whatsapp_number_id,
+                    message_data={
+                        "type": "NEW_MESSAGE",
+                        "conversation_id": conversation_id,
+                        "id": saved_msg.id,
+                        "remetente": MessageSender.SISTEMA.value,
+                        "conteudo": db_content,
+                        "tipo": MessageType.ARQUIVO.value,
+                        "status": "sent",
+                        "timestamp": saved_msg.timestamp.isoformat() + "Z",
+                        "agent_name": "Automação OS"
+                    }
+                )
+            any_sent = True
+
+        if not any_sent:
+            # The PDF(s) are genuinely optional end-to-end (see os_handler_ingest.py) - but
+            # silently returning here left the customer's confirmation with no reply at all
+            # whenever the file(s) weren't ready yet, which looked like the system had
             # simply stopped working. At minimum, re-state the fee condition they just
             # confirmed reading so nothing about the terms gets lost.
-            logger.warning(f"[OS HANDLER PDF] Arquivo não encontrado ({abs_path!r}) - avisando o cliente sem anexo.")
+            logger.warning(f"[OS HANDLER PDF] Nenhum arquivo disponível ainda para conversa #{conversation_id} - avisando o cliente sem anexo.")
             fallback_text = (
                 "Perfeito, recebi sua confirmação! ⚠️ Reforçando: caso o orçamento não seja "
                 "aprovado, será cobrada a taxa de diagnóstico já informada anteriormente nesta "
@@ -196,57 +281,8 @@ async def send_os_pdf_after_confirmation(
                     }
                 )
             return
-        with open(abs_path, "rb") as f:
-            file_bytes = f.read()
-        base64_data = base64.b64encode(file_bytes).decode("utf-8")
 
-        pdf_file_name = _build_os_pdf_filename(os_numero, client_name)
-        send_res = await evolution_service.send_media_message(
-            instance_name=instance_name,
-            number=recipient_phone,
-            media_type="document",
-            mimetype="application/pdf",
-            media=base64_data,
-            file_name=pdf_file_name,
-            skip_anti_ban_pacing=True
-        )
-        wa_msg_id = extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None
-
-        async with AsyncSessionLocal() as db:
-            db_content = f"/uploads/{pdf_relative_path}|{pdf_file_name}"
-            saved_msg = Message(
-                conversation_id=conversation_id,
-                remetente=MessageSender.SISTEMA,
-                conteudo=db_content,
-                tipo=MessageType.ARQUIVO,
-                status="sent",
-                whatsapp_msg_id=wa_msg_id,
-                timestamp=datetime.utcnow()
-            )
-            db.add(saved_msg)
-            conv_stmt = select(Conversation).where(Conversation.id == conversation_id)
-            conv = (await db.execute(conv_stmt)).scalar_one_or_none()
-            if conv:
-                conv.ultima_interacao_em = datetime.utcnow()
-            await db.commit()
-            await db.refresh(saved_msg)
-
-            await ws_manager.broadcast_to_department(
-                tenant_id=tenant_id,
-                whatsapp_number_id=whatsapp_number_id,
-                message_data={
-                    "type": "NEW_MESSAGE",
-                    "conversation_id": conversation_id,
-                    "id": saved_msg.id,
-                    "remetente": MessageSender.SISTEMA.value,
-                    "conteudo": db_content,
-                    "tipo": MessageType.ARQUIVO.value,
-                    "status": "sent",
-                    "timestamp": saved_msg.timestamp.isoformat() + "Z",
-                    "agent_name": "Automação OS"
-                }
-            )
-        logger.info(f"[OS HANDLER PDF] PDF enviado com sucesso para conversa #{conversation_id}")
+        logger.info(f"[OS HANDLER PDF] PDF(s) enviado(s) com sucesso para conversa #{conversation_id}")
     except Exception as err:
         logger.error(f"[OS HANDLER PDF] Erro ao enviar PDF após confirmação: {err}", exc_info=True)
 
@@ -2060,9 +2096,7 @@ async def receive_evolution_webhook(
         pending_marker = conversation.assunto_atual or ""
         if pending_marker.startswith("CONFIRM_OS_PDF:"):
             from app.services.automation_service import automation_service
-            pdf_marker_parts = pending_marker.split(":", 1)[1].split("|", 1)
-            pdf_os_numero = pdf_marker_parts[0] if len(pdf_marker_parts) > 1 else ""
-            pending_file_rel_path = pdf_marker_parts[1] if len(pdf_marker_parts) > 1 else pdf_marker_parts[0]
+            pdf_codos_list, pdf_paths_list = _parse_confirm_os_pdf_marker(pending_marker)
             classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER PDF] (via mobile sync) Classificação de '{text_content}': {classification}")
             if classification == "CONFIRMA":
@@ -2072,8 +2106,8 @@ async def receive_evolution_webhook(
                     send_os_pdf_after_confirmation(
                         tenant_id=tenant_id, conversation_id=conversation.id,
                         whatsapp_number_id=whatsapp_number.id, instance_name=instance_name,
-                        recipient_phone=contact.telefone, pdf_relative_path=pending_file_rel_path,
-                        os_numero=pdf_os_numero, client_name=contact.nome or ""
+                        recipient_phone=contact.telefone, pdf_relative_paths=pdf_paths_list,
+                        os_numeros=pdf_codos_list, client_name=contact.nome or ""
                     )
                 )
             elif classification == "NEGA":
@@ -2273,17 +2307,19 @@ async def receive_evolution_webhook(
         deferred_task = None
 
         if pending_os_marker.startswith("CONFIRM_OS_PDF:"):
-            pdf_marker_parts = pending_os_marker.split(":", 1)[1].split("|", 1)
-            pdf_os_numero = pdf_marker_parts[0] if len(pdf_marker_parts) > 1 else ""
-            pending_file_rel_path = pdf_marker_parts[1] if len(pdf_marker_parts) > 1 else pdf_marker_parts[0]
+            pdf_codos_list, pdf_paths_list = _parse_confirm_os_pdf_marker(pending_os_marker)
             logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
             if classification == "CONFIRMA":
-                reply_text = "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
+                reply_text = (
+                    "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
+                    if len(pdf_codos_list) <= 1 else
+                    "Perfeito! Só um instante, já vou te enviar os PDFs completos das suas Ordens de Serviço. 📎"
+                )
                 conversation.assunto_atual = "Atendimento Concierge"
                 deferred_task = send_os_pdf_after_confirmation(
                     tenant_id=tenant_id, conversation_id=conversation.id, whatsapp_number_id=whatsapp_number.id,
-                    instance_name=instance_name, recipient_phone=phone_number, pdf_relative_path=pending_file_rel_path,
-                    os_numero=pdf_os_numero, client_name=contact.nome or ""
+                    instance_name=instance_name, recipient_phone=phone_number, pdf_relative_paths=pdf_paths_list,
+                    os_numeros=pdf_codos_list, client_name=contact.nome or ""
                 )
             elif classification == "NEGA":
                 reply_text = "Sem problemas! Fico à disposição para te enviar o PDF completo da sua Ordem de Serviço quando você quiser - só me chamar aqui novamente. 😊"

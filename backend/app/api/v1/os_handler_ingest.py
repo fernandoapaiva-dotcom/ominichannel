@@ -37,12 +37,13 @@ import re
 import io
 import json
 import uuid
+import time
 import base64
 import asyncio
 import logging
 import difflib
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,7 +58,7 @@ from app.models.models import (
     WhatsAppNumber, AuthorizedTechnician
 )
 from app.services.lid_resolver_service import resolve_and_bind_contact
-from app.services.automation_service import automation_service, normalize_text
+from app.services.automation_service import automation_service, normalize_text, get_greeting
 from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
 from app.api.websockets import manager as ws_manager
@@ -461,6 +462,15 @@ async def dispatch_abertura_messages(
                 logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para despachar abertura")
                 return
 
+            # Set the pending-confirmation marker BEFORE sending anything, not after - this
+            # whole sequence takes ~70-90s in real time (typing-delay pacing between each
+            # message), and a second O.S. for the same customer can arrive from Softsystem
+            # well within that window (see check_and_extend_entrada_window). Without this,
+            # dispatch_supplementary_entrada_item could find no marker yet to extend and
+            # silently drop that O.S. out of the pending confirmation.
+            conversation.assunto_atual = build_confirm_os_pdf_marker([codos], [saved_rel_path])
+            await db.commit()
+
             info_messages = list(automation_service.format_os_templates(
                 natureza, config, contact_name, detected_equip, valor_diagnostico
             ))
@@ -475,12 +485,67 @@ async def dispatch_abertura_messages(
             for msg_content in all_messages:
                 await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
 
-            conversation.assunto_atual = f"CONFIRM_OS_PDF:{codos}|{saved_rel_path}"
-            await db.commit()
-
         logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' despachada para conversa #{conversation_id} ({phone})")
     except Exception as err:
         logger.error(f"[OS HANDLER INGEST] Erro ao despachar abertura da O.S. ({natureza}): {err}", exc_info=True)
+
+
+async def dispatch_supplementary_entrada_item(
+    tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
+    conversation_id: int, natureza: str, config: dict, contact_name: str,
+    detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float,
+    item_notice_line: str, codos: str, natureza_already_seen: bool
+):
+    """
+    Background task for a second (or later) O.S. opened for the same customer within
+    ENTRADA_WINDOW_SECONDS of the first one (see check_and_extend_entrada_window). The
+    greeting and the "responda SIM" confirmation were already sent for the first item in
+    this window, so this only adds what's genuinely new: a short notice for this specific
+    equipment/O.S., plus - only the first time this natureza shows up in the window - that
+    natureza's own terms (a different natureza can mean genuinely different conditions, e.g.
+    orçamento vs. garantia).
+    """
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = await db.get(Conversation, conversation_id)
+            if not conversation:
+                logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para item suplementar de abertura")
+                return
+
+            messages = [item_notice_line] if item_notice_line else []
+            if not natureza_already_seen:
+                info_messages = automation_service.format_os_templates(
+                    natureza, config, contact_name, detected_equip, valor_diagnostico
+                )
+                # info_messages[0] is always the greeting - already sent for the first item.
+                messages.extend(info_messages[1:])
+
+            for msg_content in messages:
+                await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
+
+            # Extend the still-pending confirmation to also cover this O.S. - one "Sim" from
+            # the customer now answers for every item in the window. The first item's own
+            # marker is set before it sends anything (see dispatch_abertura_messages), but a
+            # couple of retries here is cheap insurance against any leftover race.
+            for attempt in range(3):
+                if (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:"):
+                    codos_list, paths_list = parse_confirm_os_pdf_marker(conversation.assunto_atual)
+                    if str(codos) not in codos_list:
+                        codos_list.append(str(codos))
+                        paths_list.append(saved_rel_path or "")
+                        conversation.assunto_atual = build_confirm_os_pdf_marker(codos_list, paths_list)
+                        await db.commit()
+                    break
+                if attempt < 2:
+                    await asyncio.sleep(2)
+                    await db.refresh(conversation)
+                else:
+                    logger.warning(f"[OS HANDLER INGEST] O.S. #{codos} suplementar: nenhuma confirmação CONFIRM_OS_PDF pendente encontrada para incluir (conversa #{conversation_id})")
+
+        logger.info(f"[OS HANDLER INGEST] Item suplementar da O.S. #{codos} ('{natureza}') incorporado à confirmação pendente (conversa #{conversation_id})")
+    except Exception as err:
+        logger.error(f"[OS HANDLER INGEST] Erro ao despachar item suplementar da O.S. #{codos}: {err}", exc_info=True)
 
 
 @router.post("/ingest", dependencies=[Depends(verify_os_handler_key)])
@@ -607,12 +672,65 @@ EVENTO_ORC_NAO_APROVADO = 16
 # memória do processo já resolve.
 _os_dispatch_lock = asyncio.Lock()
 
+# A customer dropping off several pieces of equipment turns into several separate O.S.'s in
+# Softsystem (confirmed with the shop: each equipment = its own O.S., never grouped under
+# one). Without this, each one independently fires the full greeting + terms + "responda
+# SIM" sequence, so the customer gets the same greeting repeated N times and has to reply
+# SIM once per item. Tracks, per conversation, a short sliding window: the first O.S. still
+# gets the full sequence immediately (an event alone must still trigger a prompt reply -
+# never silently delayed), but any further O.S. for the SAME conversation while the window
+# is open only adds what's actually new (see check_and_extend_entrada_window /
+# dispatch_supplementary_entrada_item) instead of repeating everything. Real attendant
+# workflow is too irregular for a fixed total duration (an attendant can get pulled away
+# mid-batch to help another customer) - each new item slides the window forward instead.
+_open_entrada_windows: Dict[int, Dict[str, Any]] = {}
+ENTRADA_WINDOW_SECONDS = 120
+
+
+def check_and_extend_entrada_window(conversation_id: int, natureza: str):
+    """
+    Returns None if no window was open (fresh visit - caller sends the full sequence and
+    this call has now opened the window). Otherwise returns True if `natureza` was already
+    seen in this window (caller sends only a short per-item notice) or False if it's a new
+    natureza within an already-open window (caller sends that natureza's own terms, but not
+    another greeting or another "responda SIM"). Always slides the window's expiry forward.
+    """
+    now = time.time()
+    window = _open_entrada_windows.get(conversation_id)
+    if not window or window["expires_at"] <= now:
+        _open_entrada_windows[conversation_id] = {"naturezas": {natureza}, "expires_at": now + ENTRADA_WINDOW_SECONDS}
+        return None
+    already_seen = natureza in window["naturezas"]
+    window["naturezas"].add(natureza)
+    window["expires_at"] = now + ENTRADA_WINDOW_SECONDS
+    return already_seen
+
 
 def build_os_pdf_filename(codos, client_name: Optional[str]) -> str:
     """"<nº da O.S.> - <cliente>.pdf" instead of a generic name, so the file is identifiable
     once it lands in the customer's own downloads/chat history."""
     safe_name = re.sub(r'[\\/:*?"<>|]', "", (client_name or "").strip()) or "Cliente"
     return f"{codos} - {safe_name}.pdf"
+
+
+def parse_confirm_os_pdf_marker(marker: str) -> tuple:
+    """
+    "CONFIRM_OS_PDF:<codos1>,<codos2>,...|<path1>,<path2>,..." - a list instead of a single
+    O.S., because a customer dropping off several pieces of equipment at once gets ONE
+    combined confirmation covering every O.S. opened in that same visit (see
+    queue_entrada_for_batch) instead of one "responda SIM" per item.
+    """
+    body = marker.split(":", 1)[1]
+    codos_part, _, paths_part = body.partition("|")
+    codos_list = codos_part.split(",") if codos_part else []
+    paths_list = paths_part.split(",") if paths_part else []
+    while len(paths_list) < len(codos_list):
+        paths_list.append("")
+    return codos_list, paths_list
+
+
+def build_confirm_os_pdf_marker(codos_list: List[str], paths_list: List[str]) -> str:
+    return f"CONFIRM_OS_PDF:{','.join(str(c) for c in codos_list)}|{','.join(paths_list)}"
 
 
 def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -> dict:
@@ -653,7 +771,17 @@ async def deliver_late_pdf(
     """
     if (conversation.assunto_atual or "").startswith(pending_prefix):
         if pending_prefix == "CONFIRM_OS_PDF:":
-            conversation.assunto_atual = f"CONFIRM_OS_PDF:{codos}|{saved_rel_path}"
+            # The pending marker may cover several O.S.'s opened together for the same
+            # customer visit (see queue_entrada_for_batch) - only this one's slot gets
+            # filled in, the others stay exactly as they were.
+            codos_list, paths_list = parse_confirm_os_pdf_marker(conversation.assunto_atual)
+            codos_str = str(codos)
+            if codos_str in codos_list:
+                paths_list[codos_list.index(codos_str)] = saved_rel_path
+            else:
+                codos_list.append(codos_str)
+                paths_list.append(saved_rel_path)
+            conversation.assunto_atual = build_confirm_os_pdf_marker(codos_list, paths_list)
         else:
             parts = conversation.assunto_atual.split(":", 1)[1].split("|")
             os_numero = parts[0] if len(parts) > 0 else str(codos)
@@ -783,12 +911,26 @@ async def ingest_db_event_common(
 
             mark_os_dispatched(conversation, codos, "abertura", pdf_sent=bool(saved_rel_path))
             await db.commit()
-        asyncio.create_task(dispatch_abertura_messages(
-            tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
-            natureza, config, contact_name, detected_equip, valor_diagnostico,
-            saved_rel_path or "", delay_sec, equip_receipt_line, str(codos)
-        ))
-        logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} '{natureza}' agendada (conversa #{conversation.id})")
+            natureza_already_seen = check_and_extend_entrada_window(conversation.id, natureza)
+
+        if natureza_already_seen is None:
+            # Fresh visit for this conversation - full sequence, exactly as before.
+            asyncio.create_task(dispatch_abertura_messages(
+                tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+                natureza, config, contact_name, detected_equip, valor_diagnostico,
+                saved_rel_path or "", delay_sec, equip_receipt_line, str(codos)
+            ))
+            logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} '{natureza}' agendada (conversa #{conversation.id})")
+        else:
+            # Another O.S. for the same customer within ENTRADA_WINDOW_SECONDS of a previous
+            # one - see check_and_extend_entrada_window - only sends what's actually new.
+            item_notice_line = equip_receipt_line or f"📥 Também recebemos sua Ordem de Serviço *#{codos}*."
+            asyncio.create_task(dispatch_supplementary_entrada_item(
+                tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+                natureza, config, contact_name, detected_equip, valor_diagnostico,
+                saved_rel_path or "", delay_sec, item_notice_line, str(codos), natureza_already_seen
+            ))
+            logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} '{natureza}' agrupada como item suplementar (conversa #{conversation.id})")
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
