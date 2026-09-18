@@ -105,11 +105,14 @@ def build_phone(ddd: str, numero: str) -> str:
     return digits
 
 
-def find_expected_pdf(config: dict, tipo: str, codos: int, wait_seconds: int = 20) -> str:
+def find_expected_pdf(config: dict, tipo: str, codos: int, wait_seconds: int = 5) -> str:
     """
     Softsystem salva o PDF nomeado pelo código da O.S. (confirmado: "1933.pdf" para
     CODOS=1933), numa pasta compartilhada entre as duas empresas. Espera um pouco caso o
-    evento tenha disparado um instante antes do Softsystem terminar de salvar o arquivo.
+    evento tenha disparado um instante antes do Softsystem terminar de salvar o arquivo -
+    mas o PDF é só um extra (ver dispatch_orcamento_messages no backend: o aviso ao cliente
+    sai de qualquer forma), então a espera aqui é curta, não vale travar o ciclo por muito
+    tempo à toa quando o arquivo simplesmente ainda não existe.
     """
     folder_key = "pasta_abertura" if tipo == "abertura" else "pasta_orcamento"
     folder = config.get(folder_key)

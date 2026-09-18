@@ -380,12 +380,18 @@ async def dispatch_orcamento_messages(
     tecnico_phone: Optional[str], delay_sec: float
 ):
     """
-    Background task: sends the multi-message orçamento-approval sequence (intro + PDF +
-    approval question). Runs in its own DB session, decoupled from the request that
-    triggered it - the anti-ban typing delays between messages easily add up past a normal
-    HTTP client timeout (confirmed against the real folder watcher: its default 60s timeout
-    was hit even though the send itself succeeded), so the endpoint returns immediately
-    once this is scheduled instead of making the watcher wait for every message to land.
+    Background task: sends the multi-message orçamento-approval sequence (intro [+ PDF when
+    available] + approval question). Runs in its own DB session, decoupled from the request
+    that triggered it - the anti-ban typing delays between messages easily add up past a
+    normal HTTP client timeout (confirmed against the real folder watcher: its default 60s
+    timeout was hit even though the send itself succeeded), so the endpoint returns
+    immediately once this is scheduled instead of making the watcher wait for every message
+    to land.
+
+    O PDF é opcional aqui, não um bloqueio: o pedido explícito da loja é que a MUDANÇA DO
+    EVENTO no Softsystem já dispare o aviso ao cliente, mesmo que o PDF do orçamento ainda
+    não tenha sido gerado/salvo separadamente (esse é um passo manual à parte no processo
+    deles). Quando o arquivo existir (`saved_rel_path` não vazio), ele é enviado também.
     """
     from app.core.database import AsyncSessionLocal
     try:
@@ -395,9 +401,10 @@ async def dispatch_orcamento_messages(
                 logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para despachar orçamento")
                 return
 
+            has_pdf = bool(saved_rel_path)
             intro_msg = (
                 f"Olá, {contact_name or 'Cliente'}! 👋 O diagnóstico da sua Ordem de Serviço "
-                f"#{os_numero} está pronto. Segue o PDF com o orçamento do reparo. 📎"
+                f"#{os_numero} está pronto." + (" Segue o PDF com o orçamento do reparo. 📎" if has_pdf else "")
             )
             approval_prompt = (
                 f"Você *aprova* a execução do serviço pelo valor informado no orçamento? "
@@ -406,23 +413,24 @@ async def dispatch_orcamento_messages(
 
             await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, intro_msg, delay_sec)
 
-            abs_path = os.path.join("uploads", saved_rel_path)
-            with open(abs_path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            send_res = await evolution_service.send_media_message(
-                instance_name=instance_name, number=phone, media_type="document",
-                mimetype="application/pdf", media=b64, file_name="Orcamento_OS.pdf",
-                skip_anti_ban_pacing=True
-            )
-            pdf_msg = Message(
-                conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
-                conteudo=f"/uploads/{saved_rel_path}|Orcamento_OS.pdf",
-                tipo=MessageType.ARQUIVO, status="sent",
-                whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
-                timestamp=datetime.utcnow()
-            )
-            db.add(pdf_msg)
-            await db.commit()
+            if has_pdf:
+                abs_path = os.path.join("uploads", saved_rel_path)
+                with open(abs_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                send_res = await evolution_service.send_media_message(
+                    instance_name=instance_name, number=phone, media_type="document",
+                    mimetype="application/pdf", media=b64, file_name="Orcamento_OS.pdf",
+                    skip_anti_ban_pacing=True
+                )
+                pdf_msg = Message(
+                    conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
+                    conteudo=f"/uploads/{saved_rel_path}|Orcamento_OS.pdf",
+                    tipo=MessageType.ARQUIVO, status="sent",
+                    whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(pdf_msg)
+                await db.commit()
 
             await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, approval_prompt, delay_sec)
 
@@ -659,18 +667,16 @@ async def ingest_db_event_common(
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
+        # A mudança do evento no Softsystem já dispara o aviso, mesmo sem o PDF do orçamento
+        # ainda salvo (isso é um passo manual separado no processo da loja) - o arquivo é
+        # enviado quando disponível, mas não é um requisito pra avisar o cliente.
         if not saved_rel_path:
-            await flag_unrecognized_document(
-                db, tenant_id, whatsapp_number.id, conversation, "",
-                f"📄 Orçamento da O.S. #{codos} pronto para aprovação, mas o PDF ainda não foi "
-                f"encontrado na pasta compartilhada. Verifique e envie manualmente se necessário."
-            )
-            return {"status": "pdf_not_found", "codos": codos, "conversation_id": conversation.id}
+            logger.info(f"[OS DB EVENT] O.S. #{codos}: PDF do orçamento ainda não encontrado, avisando o cliente mesmo assim.")
 
         tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
         asyncio.create_task(dispatch_orcamento_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
-            contact_name, str(codos), saved_rel_path, tecnico_phone, delay_sec
+            contact_name, str(codos), saved_rel_path or "", tecnico_phone, delay_sec
         ))
         logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} agendada (conversa #{conversation.id})")
         return {"status": "queued", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
