@@ -649,24 +649,42 @@ async def deliver_late_pdf(
             tecnico_phone = parts[2] if len(parts) > 2 else ""
             conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone}"
         await db.commit()
-        return
+        return True
 
     abs_path = os.path.join("uploads", saved_rel_path)
     with open(abs_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
-    send_res = await evolution_service.send_media_message(
-        instance_name=instance_name, number=phone, media_type="document",
-        mimetype="application/pdf", media=b64,
-        file_name=f"OS_{codos}.pdf", skip_anti_ban_pacing=True
-    )
+
+    async def _try_send():
+        return await evolution_service.send_media_message(
+            instance_name=instance_name, number=phone, media_type="document",
+            mimetype="application/pdf", media=b64,
+            file_name=f"OS_{codos}.pdf", skip_anti_ban_pacing=True
+        )
+
+    # A transient failure here (empty error string from a dropped connection, seen for real
+    # in production) must never be recorded as a successful send - one retry, then log loudly
+    # if it still fails, since silently marking it "sent" leaves no trail for anyone to notice
+    # the customer never actually got the file.
+    send_res = await _try_send()
+    if not (isinstance(send_res, dict) and send_res.get("success")):
+        logger.warning(f"[OS DB EVENT] Falha ao entregar PDF da O.S. #{codos} de primeira, tentando de novo: {send_res}")
+        send_res = await _try_send()
+
+    success = isinstance(send_res, dict) and send_res.get("success")
+    if not success:
+        logger.error(f"[OS DB EVENT] Falha ao entregar PDF da O.S. #{codos} pro cliente após 2 tentativas: {send_res}")
+        return False
+
     pdf_msg = Message(
         conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
         conteudo=f"/uploads/{saved_rel_path}|OS_{codos}.pdf", tipo=MessageType.ARQUIVO, status="sent",
-        whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+        whatsapp_msg_id=extract_evolution_msg_id(send_res),
         timestamp=datetime.utcnow()
     )
     db.add(pdf_msg)
     await db.commit()
+    return True
 
 
 async def ingest_db_event_common(
@@ -716,10 +734,12 @@ async def ingest_db_event_common(
             existing = check_os_dispatch_state(conversation, codos, "abertura")
             if existing:
                 if saved_rel_path and not existing.get("pdf_sent"):
-                    await deliver_late_pdf(
+                    delivered = await deliver_late_pdf(
                         db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
                         codos, saved_rel_path, "CONFIRM_OS_PDF:"
                     )
+                    if not delivered:
+                        return {"status": "pdf_delivery_failed", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
                     mark_os_dispatched(conversation, codos, "abertura", pdf_sent=True)
                     await db.commit()
                     logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
@@ -763,10 +783,12 @@ async def ingest_db_event_common(
             existing = check_os_dispatch_state(conversation, codos, "orcamento")
             if existing:
                 if saved_rel_path and not existing.get("pdf_sent"):
-                    await deliver_late_pdf(
+                    delivered = await deliver_late_pdf(
                         db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
                         codos, saved_rel_path, "CONFIRM_OS_APPROVAL:"
                     )
+                    if not delivered:
+                        return {"status": "pdf_delivery_failed", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
                     mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True)
                     await db.commit()
                     logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")

@@ -260,7 +260,13 @@ def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str
                 opened_file.close()
 
         if resp.status_code == 200:
-            logger.info(f"OK [{empresa_key}] O.S. #{event['CODOS']} evento {event['CODTIPOEVENTOOS']} -> {resp.json()}")
+            resp_json = resp.json()
+            # HTTP 200 só significa que o backend processou a chamada - "status" no corpo é
+            # que diz se a entrega do PDF de verdade funcionou (ver deliver_late_pdf).
+            if resp_json.get("status") == "pdf_delivery_failed":
+                logger.error(f"FALHA [{empresa_key}] O.S. #{event['CODOS']} evento {event['CODTIPOEVENTOOS']} -> PDF não entregue: {resp_json}")
+                return False
+            logger.info(f"OK [{empresa_key}] O.S. #{event['CODOS']} evento {event['CODTIPOEVENTOOS']} -> {resp_json}")
             return True
         else:
             logger.error(f"FALHA [{empresa_key}] O.S. #{event['CODOS']} evento {event['CODTIPOEVENTOOS']} -> HTTP {resp.status_code}: {resp.text}")
