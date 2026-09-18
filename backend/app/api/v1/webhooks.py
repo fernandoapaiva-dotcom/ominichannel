@@ -1054,15 +1054,17 @@ async def receive_evolution_webhook(
         "vi a atividade" in cleaned_txt or
         cleaned_txt in ["confirmar", "confirmado", "ok", "1", "visualizado", "visto", "recebido", "sim", "aceito", "aceitar"]
     )
-    if is_view_confirmation and phone_number:
-        # A bare "sim"/"ok"/"1" is a very broad, generic match - it fires for ANY phone with
-        # ANY pending calendar task, regardless of what THIS specific conversation is actually
-        # waiting on. If this conversation has an explicit, more specific pending marker (OS
-        # Handler PDF/approval confirmation, sector-transfer confirmation), that's a much
-        # stronger signal of intent than "some calendar task happens to be pending for this
-        # phone" - honor it instead of hijacking the reply into the task-confirmation flow.
-        # (Found via a real test: a "Sim" meant to confirm reading the O.S. terms got
-        # swallowed here because the same test phone also had a leftover pending task.)
+    # A bare "sim"/"não"/"ok"/"1" is a very broad, generic match - it fires for ANY phone with
+    # ANY pending calendar task, regardless of what THIS specific conversation is actually
+    # waiting on. If this conversation has an explicit, more specific pending marker (OS
+    # Handler PDF/approval confirmation, sector-transfer confirmation), that's a much
+    # stronger signal of intent than "some calendar task happens to be pending for this
+    # phone" - honor it instead of hijacking the reply into the task-confirmation/refusal flow.
+    # (Found via real tests: a "Sim" meant to confirm reading the O.S. terms, and later a "Não"
+    # meant to reject an O.S. approval, both got swallowed here because the same test phone
+    # also had a leftover pending calendar task.) Computed once, reused by both checks below.
+    pending_os_or_transfer_marker = ""
+    if phone_number:
         guard_stmt = (
             select(Conversation.assunto_atual)
             .join(Contact, Conversation.contact_id == Contact.id)
@@ -1070,9 +1072,9 @@ async def receive_evolution_webhook(
             .order_by(Conversation.ultima_interacao_em.desc())
             .limit(1)
         )
-        guard_marker = (await db.execute(guard_stmt)).scalar_one_or_none() or ""
-        if guard_marker.startswith(("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")):
-            is_view_confirmation = False
+        pending_os_or_transfer_marker = (await db.execute(guard_stmt)).scalar_one_or_none() or ""
+    if pending_os_or_transfer_marker.startswith(("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")):
+        is_view_confirmation = False
 
     if is_view_confirmation and phone_number:
         event_id = None
@@ -1181,6 +1183,8 @@ async def receive_evolution_webhook(
         "nao posso" in cleaned_txt or
         cleaned_txt in ["não", "nao", "cancelar"]
     )
+    if pending_os_or_transfer_marker.startswith(("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")):
+        is_task_refusal = False
     if is_task_refusal and phone_number:
         ev_stmt = (
             select(CalendarEvent)
