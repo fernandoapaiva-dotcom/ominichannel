@@ -43,6 +43,9 @@ tools/os_folder_watcher/config.json
 tools/os_folder_watcher/watcher.log
 tools/os_folder_watcher/processados/
 tools/os_folder_watcher/erros/
+tools/os_folder_watcher/run_watcher.vbs
+tools/os_folder_watcher/venv/
+tools/os_folder_watcher/__pycache__/
 
 # Temporary scripts
 backend/test_*.py

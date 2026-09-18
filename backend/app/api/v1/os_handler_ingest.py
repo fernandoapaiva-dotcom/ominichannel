@@ -79,6 +79,52 @@ def verify_os_handler_key(x_os_handler_key: str = Header(...)):
         raise HTTPException(status_code=401, detail="Chave de API inválida (X-OS-Handler-Key)")
 
 
+def extract_text_visual_order(reader: PdfReader, y_tolerance: float = 10.0) -> str:
+    """
+    pypdf's plain page.extract_text() returns text in PDF CONTENT-STREAM order, which for
+    this O.S. layout is NOT the visual reading order - confirmed against a real O.S. PDF:
+    ALL field labels ("Cliente:", "Celular:", "Telefone:"...) come out first, then ALL their
+    values come out afterwards in a separate block, with no reliable adjacency between a
+    label and its own value. Every regex in this file (extract_field, extract_phone,
+    extract_os_numero) depends on a label being immediately followed by its value, so this
+    rebuilds actual visual order from each text fragment's (x, y) position instead: group
+    fragments into lines by Y-proximity (label and value sit ~9.6pt apart vertically in the
+    real sample, ordinary distinct lines sit ~11.4pt apart - 10.0 tolerance was verified
+    against the real PDF to merge the former without merging the latter), then sort each
+    line left-to-right by X.
+    """
+    frags = []
+
+    def visitor(text, cm, tm, font_dict, font_size):
+        if text and text.strip():
+            frags.append((tm[5], tm[4], text))
+
+    for page in reader.pages:
+        page.extract_text(visitor_text=visitor)
+
+    frags.sort(key=lambda f: (-f[0], f[1]))
+
+    lines = []
+    current_line = []
+    current_y = None
+    for y, x, text in frags:
+        if current_y is None or abs(y - current_y) <= y_tolerance:
+            current_line.append((x, text))
+            current_y = y if current_y is None else current_y
+        else:
+            lines.append(current_line)
+            current_line = [(x, text)]
+            current_y = y
+    if current_line:
+        lines.append(current_line)
+
+    out_lines = []
+    for line in lines:
+        line.sort(key=lambda t: t[0])
+        out_lines.append(" ".join(t[1] for t in line))
+    return "\n".join(out_lines)
+
+
 def detect_natureza(full_text: str) -> Optional[str]:
     """
     Looks for the natureza keyword ONLY in the document's header region (before the
@@ -303,7 +349,7 @@ async def ingest_os_pdf(
 
     try:
         reader = PdfReader(io.BytesIO(file_bytes))
-        full_text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        full_text = extract_text_visual_order(reader)
     except Exception as e:
         logger.error(f"[OS HANDLER INGEST] Erro ao ler PDF (uploads/{saved_rel_path}): {e}")
         raise HTTPException(status_code=422, detail="Não foi possível ler o conteúdo do PDF")
