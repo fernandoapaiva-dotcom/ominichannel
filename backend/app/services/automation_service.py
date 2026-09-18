@@ -511,13 +511,21 @@ class AutomationService:
 
         try:
             from app.core.database import AsyncSessionLocal
+            from app.core.config import settings
             async with AsyncSessionLocal() as db:
                 config = await cls.get_tenant_automations(db, tenant_id)
                 if not config.get("enabled", True):
                     return
 
-                # 1. Try OS Handler Match
-                os_match = cls.match_os_handler(message_text, config, from_me, contact_name)
+                # 1. Try OS Handler Match — exclusive to the Assistência Técnica instance.
+                # This automation must only ever fire from a real Softsystem O.S. event
+                # (see os_handler_ingest.py), never from arbitrary chat text matched in any
+                # other department. A freight-quote message that happened to contain both
+                # "servweld" and "locacao" once triggered a false positive in Vendas.
+                os_match = None
+                conv_row = await db.get(Conversation, conversation_id)
+                if conv_row and conv_row.whatsapp_number_id == settings.ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID:
+                    os_match = cls.match_os_handler(message_text, config, from_me, contact_name)
                 messages_to_send: List[str] = []
                 delay_ms = config.get("os_handler", {}).get("typing_delay_ms", 2000)
 
