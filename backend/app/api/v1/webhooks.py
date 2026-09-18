@@ -2019,7 +2019,60 @@ async def receive_evolution_webhook(
             }
         )
         logger.info(f"[OUTGOING MOBILE SYNC] Mensagem/Foto enviada pelo celular sincronizada na conversa #{conversation.id} ({contact.nome})")
-        
+
+        # Honor a pending OS Handler confirmation (PDF terms / orçamento approval) even when
+        # the reply arrives via this "attendant's own linked phone" sync path instead of a
+        # genuine inbound customer message. This matters in practice: testing a conversation
+        # by typing directly from the business's own logged-in WhatsApp session (instead of
+        # from the customer's own number) makes Baileys report it as fromMe:true - reported
+        # directly: a "Sim" typed this way was silently dropped because the confirmation
+        # check below only ran on the inbound-customer code path. An attendant relaying a
+        # verbal "sim"/"não" from a customer on a phone call is the same real scenario.
+        pending_marker = conversation.assunto_atual or ""
+        if pending_marker.startswith("CONFIRM_OS_PDF:"):
+            from app.services.automation_service import automation_service
+            pending_file_rel_path = pending_marker.split(":", 1)[1]
+            classification = automation_service.classify_yes_no_reply(text_content)
+            logger.info(f"[OS HANDLER PDF] (via mobile sync) Classificação de '{text_content}': {classification}")
+            if classification == "CONFIRMA":
+                conversation.assunto_atual = "Atendimento Concierge"
+                await db.commit()
+                asyncio.create_task(
+                    send_os_pdf_after_confirmation(
+                        tenant_id=tenant_id, conversation_id=conversation.id,
+                        whatsapp_number_id=whatsapp_number.id, instance_name=instance_name,
+                        recipient_phone=contact.telefone, pdf_relative_path=pending_file_rel_path
+                    )
+                )
+            elif classification == "NEGA":
+                conversation.assunto_atual = "Atendimento Concierge"
+                await db.commit()
+            # AMBIGUA: leave the marker pending, don't send anything new here - the customer's
+            # own next reply (not this synced attendant one) is what should be re-prompted.
+            return {"status": "success", "action": "synced_attendant_mobile_message", "os_handler": "pdf_confirmation_handled"}
+
+        if pending_marker.startswith("CONFIRM_OS_APPROVAL:"):
+            from app.services.automation_service import automation_service
+            parts = pending_marker.split(":", 1)[1].split("|")
+            os_numero = parts[0] if len(parts) > 0 else "?"
+            pdf_rel_path = parts[1] if len(parts) > 1 else ""
+            tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
+            classification = automation_service.classify_yes_no_reply(text_content)
+            logger.info(f"[OS HANDLER APROVAÇÃO] (via mobile sync) Classificação de '{text_content}' para O.S. #{os_numero}: {classification}")
+            if classification in ("CONFIRMA", "NEGA"):
+                aprovado = classification == "CONFIRMA"
+                conversation.assunto_atual = "Atendimento Concierge"
+                await db.commit()
+                asyncio.create_task(
+                    notify_os_approval_result(
+                        tenant_id=tenant_id, conversation_id=conversation.id,
+                        whatsapp_number_id=whatsapp_number.id, instance_name=instance_name,
+                        os_numero=os_numero, client_name=contact.nome or "Cliente",
+                        aprovado=aprovado, pdf_relative_path=pdf_rel_path, tecnico_phone=tecnico_phone
+                    )
+                )
+            return {"status": "success", "action": "synced_attendant_mobile_message", "os_handler": "approval_handled"}
+
         # Trigger Smart Automation Engine (OS Handler & Custom Rules) for attendant message.
         # Never in groups: this path is independent of the group shield further down, so an
         # attendant message from their own phone into a group could otherwise still trigger
