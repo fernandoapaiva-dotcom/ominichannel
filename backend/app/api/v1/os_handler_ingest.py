@@ -872,6 +872,14 @@ async def ingest_db_event_common(
 
     if cod_tipo_evento == EVENTO_ENTRADA:
         async with _os_dispatch_lock:
+            # The lock only serializes execution order - `conversation` was loaded into THIS
+            # request's own session before the lock was even acquired, so without refreshing
+            # here, a request that waited for the lock still sees pre-lock data and wrongly
+            # treats an O.S. another concurrent request just dispatched as brand new. Seen for
+            # real: the DB-event watcher and the folder watcher both reacting to the same
+            # real-world change (event changed + PDF saved close together) produced two
+            # identical, correctly-numbered dispatches instead of being deduplicated.
+            await db.refresh(conversation)
             existing = check_os_dispatch_state(conversation, codos, "abertura")
             if existing:
                 if saved_rel_path and not existing.get("pdf_sent"):
@@ -935,6 +943,9 @@ async def ingest_db_event_common(
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
         async with _os_dispatch_lock:
+            # See the identical comment in the EVENTO_ENTRADA branch above - refresh is
+            # required here too, for the same reason.
+            await db.refresh(conversation)
             existing = check_os_dispatch_state(conversation, codos, "orcamento")
             if existing:
                 if saved_rel_path and not existing.get("pdf_sent"):
