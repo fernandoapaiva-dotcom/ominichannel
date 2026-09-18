@@ -335,6 +335,97 @@ async def flag_unrecognized_document(
     )
 
 
+async def dispatch_orcamento_messages(
+    tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
+    conversation_id: int, contact_name: str, os_numero: str, saved_rel_path: str,
+    tecnico_phone: Optional[str], delay_sec: float
+):
+    """
+    Background task: sends the multi-message orçamento-approval sequence (intro + PDF +
+    approval question). Runs in its own DB session, decoupled from the request that
+    triggered it - the anti-ban typing delays between messages easily add up past a normal
+    HTTP client timeout (confirmed against the real folder watcher: its default 60s timeout
+    was hit even though the send itself succeeded), so the endpoint returns immediately
+    once this is scheduled instead of making the watcher wait for every message to land.
+    """
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = await db.get(Conversation, conversation_id)
+            if not conversation:
+                logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para despachar orçamento")
+                return
+
+            intro_msg = (
+                f"Olá, {contact_name or 'Cliente'}! 👋 O diagnóstico da sua Ordem de Serviço "
+                f"#{os_numero} está pronto. Segue o PDF com o orçamento do reparo. 📎"
+            )
+            approval_prompt = (
+                f"Você *aprova* a execução do serviço pelo valor informado no orçamento? "
+                f"Responda *SIM* para aprovar ou *NÃO* para recusar."
+            )
+
+            await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, intro_msg, delay_sec)
+
+            abs_path = os.path.join("uploads", saved_rel_path)
+            with open(abs_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name, number=phone, media_type="document",
+                mimetype="application/pdf", media=b64, file_name="Orcamento_OS.pdf",
+                skip_anti_ban_pacing=True
+            )
+            pdf_msg = Message(
+                conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
+                conteudo=f"/uploads/{saved_rel_path}|Orcamento_OS.pdf",
+                tipo=MessageType.ARQUIVO, status="sent",
+                whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+                timestamp=datetime.utcnow()
+            )
+            db.add(pdf_msg)
+            await db.commit()
+
+            await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, approval_prompt, delay_sec)
+
+            conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone or ''}"
+            await db.commit()
+
+        logger.info(f"[OS HANDLER INGEST] Orçamento da O.S. #{os_numero} enviado para aprovação (conversa #{conversation_id})")
+    except Exception as err:
+        logger.error(f"[OS HANDLER INGEST] Erro ao despachar orçamento da O.S. #{os_numero}: {err}", exc_info=True)
+
+
+async def dispatch_abertura_messages(
+    tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
+    conversation_id: int, natureza: str, config: dict, contact_name: str,
+    detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float
+):
+    """Background task: sends the fase-1 informative messages + confirmation gate (see docstring above)."""
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = await db.get(Conversation, conversation_id)
+            if not conversation:
+                logger.error(f"[OS HANDLER INGEST] Conversa #{conversation_id} não encontrada para despachar abertura")
+                return
+
+            info_messages = automation_service.format_os_templates(
+                natureza, config, contact_name, detected_equip, valor_diagnostico
+            )
+            confirmation_prompt = automation_service.format_confirmation_prompt(natureza, config, valor_diagnostico)
+            all_messages = list(info_messages) + ([confirmation_prompt] if confirmation_prompt else [])
+
+            for msg_content in all_messages:
+                await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
+
+            conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
+            await db.commit()
+
+        logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' despachada para conversa #{conversation_id} ({phone})")
+    except Exception as err:
+        logger.error(f"[OS HANDLER INGEST] Erro ao despachar abertura da O.S. ({natureza}): {err}", exc_info=True)
+
+
 @router.post("/ingest", dependencies=[Depends(verify_os_handler_key)])
 async def ingest_os_pdf(
     file: UploadFile = File(...),
@@ -371,7 +462,10 @@ async def ingest_os_pdf(
 
     contact = await resolve_and_bind_contact(db, tenant_id, phone, push_name=client_name)
     await db.flush()
+    contact_name = contact.nome  # captured before commit expires ORM attributes (async-unsafe to lazy-load after)
     conversation = await get_or_create_conversation(db, tenant_id, contact.id, whatsapp_number.id)
+    await db.commit()
+    await db.refresh(conversation)
 
     config = await automation_service.get_tenant_automations(db, tenant_id)
     os_cfg = config.get("os_handler", {})
@@ -384,43 +478,13 @@ async def ingest_os_pdf(
         os_numero = extract_os_numero(full_text) or "?"
         tecnico_phone = await resolve_tecnico_phone(db, tenant_id, full_text)
 
-        intro_msg = (
-            f"Olá, {contact.nome or 'Cliente'}! 👋 O diagnóstico da sua Ordem de Serviço "
-            f"#{os_numero} está pronto. Segue o PDF com o orçamento do reparo. 📎"
-        )
-        approval_prompt = (
-            f"Você *aprova* a execução do serviço pelo valor informado no orçamento? "
-            f"Responda *SIM* para aprovar ou *NÃO* para recusar."
-        )
+        asyncio.create_task(dispatch_orcamento_messages(
+            tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+            contact_name, os_numero, saved_rel_path, tecnico_phone, delay_sec
+        ))
 
-        await send_and_log_text(db, tenant_id, whatsapp_number.id, instance_name, phone, conversation, intro_msg, delay_sec)
-
-        # Send the quote PDF directly (customer needs to see it to decide)
-        abs_path = os.path.join("uploads", saved_rel_path)
-        with open(abs_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-        send_res = await evolution_service.send_media_message(
-            instance_name=instance_name, number=phone, media_type="document",
-            mimetype="application/pdf", media=b64, file_name="Orcamento_OS.pdf",
-            skip_anti_ban_pacing=True
-        )
-        pdf_msg = Message(
-            conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
-            conteudo=f"/uploads/{saved_rel_path}|Orcamento_OS.pdf",
-            tipo=MessageType.ARQUIVO, status="sent",
-            whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
-            timestamp=datetime.utcnow()
-        )
-        db.add(pdf_msg)
-        await db.commit()
-
-        await send_and_log_text(db, tenant_id, whatsapp_number.id, instance_name, phone, conversation, approval_prompt, delay_sec)
-
-        conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone or ''}"
-        await db.commit()
-
-        logger.info(f"[OS HANDLER INGEST] Orçamento da O.S. #{os_numero} enviado para aprovação (conversa #{conversation.id})")
-        return {"status": "success", "flow": "orcamento", "os_numero": os_numero, "phone": phone, "conversation_id": conversation.id}
+        logger.info(f"[OS HANDLER INGEST] Orçamento da O.S. #{os_numero} agendado para envio (conversa #{conversation.id})")
+        return {"status": "queued", "flow": "orcamento", "os_numero": os_numero, "phone": phone, "conversation_id": conversation.id}
 
     # FASE 1: abertura da O.S.
     natureza = detect_natureza(full_text)
@@ -439,17 +503,10 @@ async def ingest_os_pdf(
             equipamento, os_cfg.get("diagnostic_prices", {})
         )
 
-    info_messages = automation_service.format_os_templates(
-        natureza, config, contact.nome, detected_equip, valor_diagnostico
-    )
-    confirmation_prompt = automation_service.format_confirmation_prompt(natureza, config, valor_diagnostico)
-    all_messages = list(info_messages) + ([confirmation_prompt] if confirmation_prompt else [])
+    asyncio.create_task(dispatch_abertura_messages(
+        tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+        natureza, config, contact_name, detected_equip, valor_diagnostico, saved_rel_path, delay_sec
+    ))
 
-    for msg_content in all_messages:
-        await send_and_log_text(db, tenant_id, whatsapp_number.id, instance_name, phone, conversation, msg_content, delay_sec)
-
-    conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
-    await db.commit()
-
-    logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' processada para conversa #{conversation.id} ({phone})")
-    return {"status": "success", "flow": "abertura", "natureza": natureza, "phone": phone, "conversation_id": conversation.id}
+    logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' agendada para envio (conversa #{conversation.id}, {phone})")
+    return {"status": "queued", "flow": "abertura", "natureza": natureza, "phone": phone, "conversation_id": conversation.id}
