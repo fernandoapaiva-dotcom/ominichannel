@@ -35,6 +35,7 @@ manual na conversa pro atendente tratar.
 import os
 import re
 import io
+import json
 import uuid
 import base64
 import asyncio
@@ -60,6 +61,7 @@ from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
 from app.api.websockets import manager as ws_manager
 from app.api.v1.conversations import extract_evolution_msg_id
+from app.api.v1.webhooks import notify_os_approval_result
 
 logger = logging.getLogger("os_handler_ingest")
 router = APIRouter(prefix="/os-handler", tags=["OS Handler - Ingestão de PDF"])
@@ -208,18 +210,12 @@ def build_equip_receipt_line(natureza: str, full_text: str) -> Optional[str]:
     return f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_display} {purpose}."
 
 
-async def resolve_tecnico_phone(db: AsyncSession, tenant_id: int, full_text: str) -> Optional[str]:
+async def resolve_tecnico_phone_by_name(db: AsyncSession, tenant_id: int, tech_name_raw: Optional[str]) -> Optional[str]:
     """
-    Best-effort: looks for a 'Técnico:'/'Diagnosticado por:'/'Responsável:' field on the
-    O.S. and fuzzy-matches it against the registered AuthorizedTechnician names for this
-    tenant. Returns None (not an error) if no field or no confident match is found - the
-    approval flow still works without it, it just skips the direct DM to the technician.
+    Fuzzy-matches a technician name string against the registered AuthorizedTechnician
+    table for this tenant. Returns None (not an error) if there's nothing to match or no
+    confident match is found - callers treat this as best-effort, not required.
     """
-    tech_name_raw = None
-    for label in ["Técnico Responsável", "Tecnico Responsavel", "Responsável Técnico", "Responsavel Tecnico", "Técnico", "Tecnico", "Diagnosticado por"]:
-        tech_name_raw = extract_field(full_text, label)
-        if tech_name_raw:
-            break
     if not tech_name_raw:
         return None
 
@@ -241,6 +237,21 @@ async def resolve_tecnico_phone(db: AsyncSession, tenant_id: int, full_text: str
     if close:
         return names[close[0]].telefone
     return None
+
+
+async def resolve_tecnico_phone(db: AsyncSession, tenant_id: int, full_text: str) -> Optional[str]:
+    """
+    PDF-text variant (legacy /ingest endpoint): looks for a 'Técnico:'/'Diagnosticado
+    por:'/'Responsável:' field on the O.S. text, then delegates the actual name matching to
+    resolve_tecnico_phone_by_name(). The new DB-event endpoint gets the technician's name
+    directly from Softsystem's own ORDEMSERVICO.TECNICOATENDIMENTO column instead.
+    """
+    tech_name_raw = None
+    for label in ["Técnico Responsável", "Tecnico Responsavel", "Responsável Técnico", "Responsavel Tecnico", "Técnico", "Tecnico", "Diagnosticado por"]:
+        tech_name_raw = extract_field(full_text, label)
+        if tech_name_raw:
+            break
+    return await resolve_tecnico_phone_by_name(db, tenant_id, tech_name_raw)
 
 
 def save_uploaded_pdf(file_bytes: bytes) -> str:
@@ -333,11 +344,12 @@ async def flag_unrecognized_document(
     db: AsyncSession, tenant_id: int, whatsapp_number_id: int,
     conversation: Conversation, saved_rel_path: str, note: str
 ):
+    has_file = bool(saved_rel_path)
     sys_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.SISTEMA,
-        conteudo=f"/uploads/{saved_rel_path}|Ordem_de_Servico.pdf|{note}",
-        tipo=MessageType.ARQUIVO,
+        conteudo=f"/uploads/{saved_rel_path}|Ordem_de_Servico.pdf|{note}" if has_file else note,
+        tipo=MessageType.ARQUIVO if has_file else MessageType.TEXTO,
         status="sent",
         timestamp=datetime.utcnow()
     )
@@ -354,7 +366,7 @@ async def flag_unrecognized_document(
             "id": sys_msg.id,
             "remetente": MessageSender.SISTEMA.value,
             "conteudo": sys_msg.conteudo,
-            "tipo": MessageType.ARQUIVO.value,
+            "tipo": sys_msg.tipo.value,
             "status": "sent",
             "timestamp": sys_msg.timestamp.isoformat() + "Z",
             "agent_name": "Automação OS"
@@ -545,3 +557,206 @@ async def ingest_os_pdf(
 
     logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' agendada para envio (conversa #{conversation.id}, {phone})")
     return {"status": "queued", "flow": "abertura", "natureza": natureza, "phone": phone, "conversation_id": conversation.id}
+
+
+# ============================================================================
+# Ingestão via banco Firebird do Softsystem (substitui a leitura de PDF acima
+# para quem já está usando o vigia de banco - tools/os_db_watcher/). O PDF
+# continua sendo enviado ao cliente quando disponível, mas TODOS os dados
+# (telefone, natureza, equipamento, técnico) vêm direto das tabelas do
+# Softsystem, lidas pelo vigia (só leitura, nunca escreve no banco deles) -
+# elimina toda a fragilidade de extrair campos de texto de PDF.
+# ============================================================================
+
+# CODTIPOORDEMSERVICO (tabela TIPOORDEMSERVICO do Softsystem) -> chave interna de natureza
+NATUREZA_CODE_MAP = {
+    1: "orcamento",
+    2: "garantia_fabrica",
+    3: "garantia_loja",
+    5: "locacao",
+    # 4 = "Visita Técnica" não tem template próprio ainda - cai no fallback de
+    # "natureza não reconhecida" (nota manual), como qualquer tipo desconhecido.
+}
+
+# CODTIPOEVENTOOS (tabela TIPOEVENTOOS do Softsystem, aba "Eventos" da O.S.)
+EVENTO_ENTRADA = 1
+EVENTO_ORC_AGUARDANDO_APROVACAO = 3
+EVENTO_ORC_APROVADO = 15
+EVENTO_ORC_NAO_APROVADO = 16
+
+
+async def ingest_db_event_common(
+    db: AsyncSession,
+    cod_tipo_evento: int,
+    codos: int,
+    cliente_nome: Optional[str],
+    cliente_telefone: str,
+    natureza_codigo: Optional[int],
+    equip_marca: Optional[str],
+    equip_modelo: Optional[str],
+    equip_descricao: Optional[str],
+    equip_defeito: Optional[str],
+    tecnico_nome: Optional[str],
+    saved_rel_path: Optional[str]
+):
+    phone = re.sub(r"\D", "", cliente_telefone or "")
+    if not phone.startswith("55") and len(phone) in (10, 11):
+        phone = "55" + phone
+    if len(phone) < 12:
+        raise HTTPException(status_code=422, detail=f"Telefone inválido recebido do banco: {cliente_telefone!r}")
+
+    wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.id == settings.ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID)
+    whatsapp_number = (await db.execute(wn_stmt)).scalar_one_or_none()
+    if not whatsapp_number:
+        raise HTTPException(status_code=500, detail="Instância de Assistência Técnica não configurada no servidor")
+
+    tenant_id = whatsapp_number.tenant_id
+    instance_name = whatsapp_number.instancia_evolution_api
+
+    contact = await resolve_and_bind_contact(db, tenant_id, phone, push_name=cliente_nome)
+    await db.flush()
+    contact_name = contact.nome
+    conversation = await get_or_create_conversation(db, tenant_id, contact.id, whatsapp_number.id)
+    await db.commit()
+    await db.refresh(conversation)
+
+    config = await automation_service.get_tenant_automations(db, tenant_id)
+    os_cfg = config.get("os_handler", {})
+    delay_ms = os_cfg.get("typing_delay_ms", 2000)
+    delay_sec = max(0.5, float(delay_ms) / 1000.0)
+
+    equip_display = " ".join(b for b in [equip_marca, equip_modelo] if b)
+
+    if cod_tipo_evento == EVENTO_ENTRADA:
+        natureza = NATUREZA_CODE_MAP.get(natureza_codigo)
+        if not natureza:
+            await flag_unrecognized_document(
+                db, tenant_id, whatsapp_number.id, conversation, saved_rel_path or "",
+                f"📄 Nova O.S. #{codos} recebida do Softsystem, mas a natureza (código {natureza_codigo}) "
+                f"não tem um modelo de mensagem configurado ainda. Verifique manualmente."
+            )
+            return {"status": "unrecognized_natureza", "codos": codos, "phone": phone, "conversation_id": conversation.id}
+
+        detected_equip, valor_diagnostico = ("Equipamento", 100)
+        if natureza == "orcamento" and (equip_descricao or equip_defeito):
+            detected_equip, valor_diagnostico = automation_service.resolve_diagnostic_price(
+                equip_descricao or equip_defeito or "", os_cfg.get("diagnostic_prices", {})
+            )
+
+        purpose = PURPOSE_BY_NATUREZA.get(natureza)
+        equip_receipt_line = None
+        if purpose:
+            equip_bits = f" *{equip_display}*" if equip_display else ""
+            data_str = datetime.now().strftime("%d/%m/%Y")
+            equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} {purpose}."
+
+        asyncio.create_task(dispatch_abertura_messages(
+            tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+            natureza, config, contact_name, detected_equip, valor_diagnostico,
+            saved_rel_path or "", delay_sec, equip_receipt_line
+        ))
+        logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} '{natureza}' agendada (conversa #{conversation.id})")
+        return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
+
+    if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
+        if not saved_rel_path:
+            await flag_unrecognized_document(
+                db, tenant_id, whatsapp_number.id, conversation, "",
+                f"📄 Orçamento da O.S. #{codos} pronto para aprovação, mas o PDF ainda não foi "
+                f"encontrado na pasta compartilhada. Verifique e envie manualmente se necessário."
+            )
+            return {"status": "pdf_not_found", "codos": codos, "conversation_id": conversation.id}
+
+        tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
+        asyncio.create_task(dispatch_orcamento_messages(
+            tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
+            contact_name, str(codos), saved_rel_path, tecnico_phone, delay_sec
+        ))
+        logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} agendada (conversa #{conversation.id})")
+        return {"status": "queued", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
+
+    if cod_tipo_evento in (EVENTO_ORC_APROVADO, EVENTO_ORC_NAO_APROVADO):
+        # O atendente marcou o resultado direto no Softsystem (em vez de - ou além de - o
+        # cliente responder pelo WhatsApp). Só avisa o grupo/técnico, não manda nada pro
+        # cliente aqui (ele já sabe o resultado, foi ele quem informou).
+        aprovado = cod_tipo_evento == EVENTO_ORC_APROVADO
+        tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
+        asyncio.create_task(notify_os_approval_result(
+            tenant_id=tenant_id, conversation_id=conversation.id,
+            whatsapp_number_id=whatsapp_number.id, instance_name=instance_name,
+            os_numero=str(codos), client_name=contact_name or "Cliente",
+            aprovado=aprovado, pdf_relative_path=saved_rel_path or "", tecnico_phone=tecnico_phone
+        ))
+        logger.info(f"[OS DB EVENT] Resultado do orçamento da O.S. #{codos} notificado (aprovado={aprovado})")
+        return {"status": "queued", "flow": "approval_result", "codos": codos, "conversation_id": conversation.id}
+
+    # Qualquer outro tipo de evento: aviso simples de progresso, se houver um configurado.
+    msg = automation_service.format_evento_message(cod_tipo_evento, config, contact_name)
+    if not msg:
+        return {"status": "no_template", "codos": codos, "cod_tipo_evento": cod_tipo_evento, "conversation_id": conversation.id}
+
+    asyncio.create_task(_send_evento_message_background(
+        tenant_id, whatsapp_number.id, instance_name, phone, conversation.id, msg
+    ))
+    logger.info(f"[OS DB EVENT] Evento tipo {cod_tipo_evento} - O.S. #{codos} agendado (conversa #{conversation.id})")
+    return {"status": "queued", "flow": "evento_progresso", "codos": codos, "conversation_id": conversation.id}
+
+
+async def _send_evento_message_background(
+    tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
+    conversation_id: int, msg_content: str
+):
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = await db.get(Conversation, conversation_id)
+            if not conversation:
+                return
+            await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, 0.5)
+    except Exception as err:
+        logger.error(f"[OS DB EVENT] Erro ao enviar aviso de progresso: {err}", exc_info=True)
+
+
+@router.post("/db-event", dependencies=[Depends(verify_os_handler_key)])
+async def ingest_os_db_event(
+    payload: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Recebido do vigia de banco (tools/os_db_watcher/): um evento novo detectado na aba
+    "Eventos" de uma O.S. no Softsystem (leitura direta do Firebird, só leitura). `payload`
+    é uma string JSON com os campos já resolvidos pelo vigia (ver NATUREZA_CODE_MAP e
+    EVENTO_* acima para os códigos esperados); `file`, quando presente, é o PDF da O.S.
+    correspondente encontrado na pasta compartilhada no momento do evento.
+    """
+    try:
+        data = json.loads(payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload não é um JSON válido")
+
+    required = ["cod_tipo_evento", "codos", "cliente_telefone"]
+    missing = [f for f in required if not data.get(f) and data.get(f) != 0]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Campos obrigatórios faltando: {missing}")
+
+    saved_rel_path = None
+    if file is not None:
+        file_bytes = await file.read()
+        if file_bytes:
+            saved_rel_path = save_uploaded_pdf(file_bytes)
+
+    return await ingest_db_event_common(
+        db,
+        cod_tipo_evento=int(data["cod_tipo_evento"]),
+        codos=int(data["codos"]),
+        cliente_nome=data.get("cliente_nome"),
+        cliente_telefone=str(data["cliente_telefone"]),
+        natureza_codigo=data.get("natureza_codigo"),
+        equip_marca=data.get("equip_marca"),
+        equip_modelo=data.get("equip_modelo"),
+        equip_descricao=data.get("equip_descricao"),
+        equip_defeito=data.get("equip_defeito"),
+        tecnico_nome=data.get("tecnico_nome"),
+        saved_rel_path=saved_rel_path
+    )

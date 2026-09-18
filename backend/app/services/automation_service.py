@@ -84,6 +84,25 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
             "locacao": "⚠️ Avarias, peças faltantes ou atraso na devolução podem gerar cobrança adicional sobre a caução. Responda *SIM* confirmando que leu essa condição para eu te enviar o PDF completo da sua Ordem de Serviço."
         }
     },
+    # Avisos de progresso disparados quando o técnico muda o "Tipo de Evento" da O.S. no
+    # Softsystem (aba Eventos). ENTRADA e "ORC ENV/ AGUARD APROVACAO" já são cobertos pelos
+    # fluxos de cima (natureza + aprovação) - aqui ficam os demais estágios do ciclo de vida.
+    # Chave = código do tipo de evento no Softsystem (CODTIPOEVENTOOS), editável na tela de
+    # Automações. {nome_cliente} é o único placeholder suportado aqui.
+    "eventos_os": {
+        "enabled": True,
+        "templates": {
+            "2": "🔍 Olá, {nome_cliente}! Seu equipamento está em *avaliação técnica* no momento.",
+            "4": "🔧 Olá, {nome_cliente}! Seu equipamento entrou em *execução/reparo*.",
+            "6": "✅ Ótima notícia, {nome_cliente}! Seu equipamento já está pronto e *disponível para retirada*.",
+            "7": "🏁 Olá, {nome_cliente}! Seu atendimento foi *finalizado*. Agradecemos a confiança em nossos serviços!",
+            "8": "📦 Olá, {nome_cliente}! Estamos *aguardando a chegada de uma peça* necessária para o reparo do seu equipamento. Assim que chegar, damos continuidade.",
+            "11": "⚠️ Olá, {nome_cliente}! Identificamos que o seu equipamento *não possui conserto viável*. Em breve entraremos em contato com mais detalhes.",
+            "12": "ℹ️ Olá, {nome_cliente}! O reparo do seu equipamento *não foi autorizado*, conforme combinado.",
+            "13": "✅ Olá, {nome_cliente}! Não identificamos nenhum defeito no seu equipamento durante a avaliação.",
+            "14": "⚠️ Olá, {nome_cliente}! Conforme as Condições Gerais e o prazo já decorrido, o seu equipamento foi *desmontado/sucateado*."
+        }
+    },
     "custom_rules": [
         {
             "id": "rule_pix",
@@ -280,6 +299,27 @@ class AutomationService:
         if not prompt:
             return None
         return prompt.replace("{valor_diagnostico}", str(valor_diagnostico))
+
+    @staticmethod
+    def format_evento_message(
+        cod_tipo_evento: int,
+        config: Dict[str, Any],
+        client_name: str
+    ) -> Optional[str]:
+        """
+        Progress-update message for a Softsystem O.S. event (aba Eventos) other than ENTRADA
+        or ORC ENV/AGUARD APROVACAO, which are handled by the natureza/approval flows above.
+        Returns None if this event type has no configured message (e.g. disabled, or a code
+        not in the map) - caller should simply not send anything in that case.
+        """
+        ev_cfg = config.get("eventos_os", {})
+        if not ev_cfg.get("enabled", True):
+            return None
+        templates = ev_cfg.get("templates", {})
+        tmpl = templates.get(str(cod_tipo_evento))
+        if not tmpl:
+            return None
+        return tmpl.replace("{nome_cliente}", client_name or "Cliente")
 
     @staticmethod
     def match_custom_rules(
