@@ -398,6 +398,57 @@ class AutomationService:
         return "AMBIGUA"
 
     @classmethod
+    async def classify_confirmation_intent(cls, db: AsyncSession, tenant_id: int, text: str) -> str:
+        """
+        Real customers don't reliably reply with the literal word "sim"/"não" - a real
+        production reply was "Faça orçamento mi manda" (send the quote to me), which the
+        keyword-only classify_yes_no_reply() above correctly-but-uselessly reports as
+        AMBIGUA. This wraps it: the fast keyword path handles the common exact case for
+        free, and only an AMBIGUA result escalates to the tenant's Gemini model (if
+        configured) to read the actual intent. Falls back to AMBIGUA (never guesses) if no
+        API key is set or the call fails - safer to re-ask than to silently misfire a PDF
+        send or an O.S. approval/rejection.
+        """
+        quick = cls.classify_yes_no_reply(text)
+        if quick != "AMBIGUA":
+            return quick
+
+        try:
+            decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+            api_key = decrypted.get("gemini_api_key")
+            if not api_key:
+                return "AMBIGUA"
+            model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+            client = gemini_service.get_client_for_key(api_key)
+            if not client:
+                return "AMBIGUA"
+
+            res = client.models.generate_content(
+                model=model_name,
+                contents=[{"role": "user", "parts": [{"text": text}]}],
+                config={
+                    "system_instruction": (
+                        "Você classifica a intenção de uma resposta de cliente de WhatsApp a uma "
+                        "pergunta de confirmação (ex.: 'posso te enviar o PDF?', 'você aprova o "
+                        "orçamento?'). O cliente pode responder de forma natural, sem usar as "
+                        "palavras exatas 'sim' ou 'não' (ex.: 'manda ai', 'pode fazer', 'quero "
+                        "cancelar', 'não quero mais'). Responda com EXATAMENTE uma palavra: "
+                        "CONFIRMA (intenção afirmativa/aprovação), NEGA (intenção negativa/recusa) "
+                        "ou AMBIGUA (não é possível saber, é sobre outro assunto, ou é uma pergunta "
+                        "em vez de uma resposta). Nunca responda nada além dessa única palavra."
+                    ),
+                    "temperature": 0.0
+                }
+            )
+            result = (res.text or "").strip().upper()
+            if result in ("CONFIRMA", "NEGA", "AMBIGUA"):
+                return result
+            return "AMBIGUA"
+        except Exception as err:
+            logger.warning(f"classify_confirmation_intent: fallback to AMBIGUA after AI error: {err}")
+            return "AMBIGUA"
+
+    @classmethod
     async def chat_ai_rule_copilot(
         cls,
         db: AsyncSession,

@@ -2037,7 +2037,7 @@ async def receive_evolution_webhook(
         if pending_marker.startswith("CONFIRM_OS_PDF:"):
             from app.services.automation_service import automation_service
             pending_file_rel_path = pending_marker.split(":", 1)[1]
-            classification = automation_service.classify_yes_no_reply(text_content)
+            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER PDF] (via mobile sync) Classificação de '{text_content}': {classification}")
             if classification == "CONFIRMA":
                 conversation.assunto_atual = "Atendimento Concierge"
@@ -2062,7 +2062,7 @@ async def receive_evolution_webhook(
             os_numero = parts[0] if len(parts) > 0 else "?"
             pdf_rel_path = parts[1] if len(parts) > 1 else ""
             tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
-            classification = automation_service.classify_yes_no_reply(text_content)
+            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER APROVAÇÃO] (via mobile sync) Classificação de '{text_content}' para O.S. #{os_numero}: {classification}")
             if classification in ("CONFIRMA", "NEGA"):
                 aprovado = classification == "CONFIRMA"
@@ -2673,7 +2673,7 @@ async def receive_evolution_webhook(
         elif is_pending_os_pdf:
             from app.services.automation_service import automation_service
             pending_file_rel_path = conversation.assunto_atual.split(":", 1)[1]
-            classification = automation_service.classify_yes_no_reply(text_content)
+            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
 
             if classification == "CONFIRMA":
@@ -2728,7 +2728,7 @@ async def receive_evolution_webhook(
             pdf_rel_path = parts[1] if len(parts) > 1 else ""
             tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
 
-            classification = automation_service.classify_yes_no_reply(text_content)
+            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
             logger.info(f"[OS HANDLER APROVAÇÃO] Classificação da resposta '{text_content}' para O.S. #{os_numero}: {classification}")
 
             if classification in ("CONFIRMA", "NEGA"):

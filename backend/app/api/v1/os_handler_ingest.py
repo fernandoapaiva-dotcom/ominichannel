@@ -436,15 +436,6 @@ async def dispatch_orcamento_messages(
 
             await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, approval_prompt, delay_sec)
 
-            try:
-                await evolution_service.send_poll_message(
-                    instance_name=instance_name, number=phone,
-                    question=f"Aprova o orçamento da O.S. #{os_numero}?",
-                    options=["✅ SIM, aprovo", "❌ NÃO aprovo"]
-                )
-            except Exception as poll_err:
-                logger.debug(f"[OS HANDLER INGEST] Enquete de aprovação falhou, texto já cobre: {poll_err}")
-
             conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone or ''}"
             await db.commit()
 
@@ -481,16 +472,6 @@ async def dispatch_abertura_messages(
 
             for msg_content in all_messages:
                 await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
-
-            if confirmation_prompt:
-                try:
-                    await evolution_service.send_poll_message(
-                        instance_name=instance_name, number=phone,
-                        question="Confirma que leu as condições acima?",
-                        options=["✅ SIM, confirmo", "❌ Tenho dúvidas"]
-                    )
-                except Exception as poll_err:
-                    logger.debug(f"[OS HANDLER INGEST] Enquete de confirmação (abertura) falhou, texto já cobre: {poll_err}")
 
             conversation.assunto_atual = f"CONFIRM_OS_PDF:{saved_rel_path}"
             await db.commit()
