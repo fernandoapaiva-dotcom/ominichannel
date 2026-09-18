@@ -2275,6 +2275,76 @@ async def receive_evolution_webhook(
         }
     )
 
+    # OS Handler confirmation (PDF terms / orçamento approval) must be answered regardless of
+    # whether a human attendant is currently assigned to this conversation - it's a
+    # deterministic automation, not conversational AI. The is_pending_os_pdf/is_pending_os_approval
+    # check used to live inside the AI-only block further below, so the "HUMAN SHIELD" (which
+    # silences the AI entirely once an attendant is assigned) was swallowing "Sim"/"Não"
+    # replies without ever sending the PDF - confirmed in production: a real customer's reply
+    # sat there unanswered because their conversation had attendant interaction on it.
+    pending_os_marker = conversation.assunto_atual or ""
+    if not is_group and (pending_os_marker.startswith("CONFIRM_OS_PDF:") or pending_os_marker.startswith("CONFIRM_OS_APPROVAL:")):
+        from app.services.automation_service import automation_service
+        classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
+
+        if pending_os_marker.startswith("CONFIRM_OS_PDF:"):
+            pending_file_rel_path = pending_os_marker.split(":", 1)[1]
+            logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
+            if classification == "CONFIRMA":
+                reply_text = "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
+                conversation.assunto_atual = "Atendimento Concierge"
+                asyncio.create_task(send_os_pdf_after_confirmation(
+                    tenant_id=tenant_id, conversation_id=conversation.id, whatsapp_number_id=whatsapp_number.id,
+                    instance_name=instance_name, recipient_phone=phone_number, pdf_relative_path=pending_file_rel_path
+                ))
+            elif classification == "NEGA":
+                reply_text = "Sem problemas! Fico à disposição para te enviar o PDF completo da sua Ordem de Serviço quando você quiser - só me chamar aqui novamente. 😊"
+                conversation.assunto_atual = "Atendimento Concierge"
+            else:
+                reply_text = "Só para eu confirmar certinho: você leu a condição informada e posso te enviar o PDF completo da sua Ordem de Serviço agora? Responda *SIM* ou *NÃO*."
+        else:
+            marker_body = pending_os_marker.split(":", 1)[1]
+            parts = marker_body.split("|")
+            os_numero = parts[0] if len(parts) > 0 else "?"
+            pdf_rel_path = parts[1] if len(parts) > 1 else ""
+            tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
+            logger.info(f"[OS HANDLER APROVAÇÃO] Classificação da resposta '{text_content}' para O.S. #{os_numero}: {classification}")
+            if classification in ("CONFIRMA", "NEGA"):
+                aprovado = classification == "CONFIRMA"
+                reply_text = (
+                    "Ótimo, muito obrigado pela confirmação! Já estamos providenciando o serviço. 🔧" if aprovado
+                    else "Entendido, agradecemos o retorno! Fico à disposição caso mude de ideia ou tenha dúvidas."
+                )
+                conversation.assunto_atual = "Atendimento Concierge"
+                asyncio.create_task(notify_os_approval_result(
+                    tenant_id=tenant_id, conversation_id=conversation.id, whatsapp_number_id=whatsapp_number.id,
+                    instance_name=instance_name, os_numero=os_numero, client_name=contact.nome or "Cliente",
+                    aprovado=aprovado, pdf_relative_path=pdf_rel_path, tecnico_phone=tecnico_phone
+                ))
+            else:
+                reply_text = f"Só para eu confirmar: você *aprova* a execução do serviço da O.S. #{os_numero} pelo valor informado no orçamento? Responda *SIM* ou *NÃO*."
+
+        await db.commit()
+        send_res = await evolution_service.send_text_message(instance_name=instance_name, number=phone_number, text=reply_text)
+        reply_msg = Message(
+            conversation_id=conversation.id, remetente=MessageSender.SISTEMA, conteudo=reply_text,
+            tipo=MessageType.TEXTO, status="sent",
+            whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+            timestamp=datetime.utcnow()
+        )
+        db.add(reply_msg)
+        await db.commit()
+        await db.refresh(reply_msg)
+        await ws_manager.broadcast_to_department(
+            tenant_id=tenant_id, whatsapp_number_id=whatsapp_number.id,
+            message_data={
+                "type": "NEW_MESSAGE", "conversation_id": conversation.id, "id": reply_msg.id,
+                "remetente": "sistema", "conteudo": reply_text, "tipo": "texto", "status": "sent",
+                "timestamp": reply_msg.timestamp.isoformat() + "Z"
+            }
+        )
+        return {"status": "success", "action": "os_handler_confirmation_processed"}
+
     # Trigger Smart Automation Engine for customer incoming message (never in groups —
     # this fires independently of the AI/Gemini flow below, so the group shield further
     # down does NOT cover it; skip it here too or automated replies like Pix leak into groups)
@@ -2590,15 +2660,9 @@ async def receive_evolution_webhook(
         decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
 
         # Check if conversation was waiting for customer confirmation on sector transfer
+        # (CONFIRM_OS_PDF/CONFIRM_OS_APPROVAL are handled much earlier now, before the
+        # human/AI fork - see the block right after the customer message is saved above)
         is_pending_transfer = (conversation.assunto_atual or "").startswith("CONFIRM_TRANSFER:")
-        # Check if conversation is waiting for the customer to confirm they read the O.S.
-        # conditions before we send them the full PDF (set by the OS Handler PDF ingestion
-        # endpoint - see os_handler_ingest.py). Format: "CONFIRM_OS_PDF:<uploads-relative-path>"
-        is_pending_os_pdf = (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:")
-        # Check if conversation is waiting for the customer to approve/reject the
-        # technician's quote (fase 2 do OS Handler). Format:
-        # "CONFIRM_OS_APPROVAL:<numero da os>|<uploads-relative-path>|<telefone do tecnico ou vazio>"
-        is_pending_os_approval = (conversation.assunto_atual or "").startswith("CONFIRM_OS_APPROVAL:")
         transfer_executed = False
         ai_output = None
 
@@ -2717,102 +2781,6 @@ async def receive_evolution_webhook(
                     "nova_memoria": "Resposta ambígua na confirmação; solicitando esclarecimento."
                 }
                 transfer_executed = True
-        elif is_pending_os_pdf:
-            from app.services.automation_service import automation_service
-            pending_file_rel_path = conversation.assunto_atual.split(":", 1)[1]
-            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
-            logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
-
-            if classification == "CONFIRMA":
-                conversation.assunto_atual = "Atendimento Concierge"
-                ai_output = {
-                    "resposta": "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎",
-                    "transferir_setor": "NENHUM",
-                    "enviar_localizacao": False,
-                    "enviar_pix": False,
-                    "escalar_humano": False,
-                    "nova_memoria": "Cliente confirmou leitura das condições; PDF da O.S. enviado."
-                }
-                # Sent as its own background task (base64+upload of a PDF doesn't fit the
-                # plain-text ai_reply pipeline below) - self-contained, doesn't touch any of
-                # the enviar_pix/enviar_localizacao downstream branches.
-                asyncio.create_task(
-                    send_os_pdf_after_confirmation(
-                        tenant_id=tenant_id,
-                        conversation_id=conversation.id,
-                        whatsapp_number_id=whatsapp_number.id,
-                        instance_name=instance_name,
-                        recipient_phone=phone_number,
-                        pdf_relative_path=pending_file_rel_path
-                    )
-                )
-            elif classification == "NEGA":
-                conversation.assunto_atual = "Atendimento Concierge"
-                ai_output = {
-                    "resposta": "Sem problemas! Fico à disposição para te enviar o PDF completo da sua Ordem de Serviço quando você quiser - só me chamar aqui novamente. 😊",
-                    "transferir_setor": "NENHUM",
-                    "enviar_localizacao": False,
-                    "enviar_pix": False,
-                    "escalar_humano": False,
-                    "nova_memoria": "Cliente optou por não confirmar leitura das condições agora; PDF não enviado."
-                }
-            else:
-                # AMBIGUA -> keep the pending marker, ask again more directly instead of giving up
-                ai_output = {
-                    "resposta": "Só para eu confirmar certinho: você leu a condição informada e posso te enviar o PDF completo da sua Ordem de Serviço agora? Responda *SIM* ou *NÃO*.",
-                    "transferir_setor": "NENHUM",
-                    "enviar_localizacao": False,
-                    "enviar_pix": False,
-                    "escalar_humano": False,
-                    "nova_memoria": "Resposta ambígua na confirmação do PDF da O.S.; perguntando de novo."
-                }
-            transfer_executed = True
-        elif is_pending_os_approval:
-            from app.services.automation_service import automation_service
-            marker_body = conversation.assunto_atual.split(":", 1)[1]
-            parts = marker_body.split("|")
-            os_numero = parts[0] if len(parts) > 0 else "?"
-            pdf_rel_path = parts[1] if len(parts) > 1 else ""
-            tecnico_phone = parts[2] if len(parts) > 2 and parts[2] else None
-
-            classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)
-            logger.info(f"[OS HANDLER APROVAÇÃO] Classificação da resposta '{text_content}' para O.S. #{os_numero}: {classification}")
-
-            if classification in ("CONFIRMA", "NEGA"):
-                aprovado = classification == "CONFIRMA"
-                conversation.assunto_atual = "Atendimento Concierge"
-                ai_output = {
-                    "resposta": "Ótimo, muito obrigado pela confirmação! Já estamos providenciando o serviço. 🔧" if aprovado
-                                else "Entendido, agradecemos o retorno! Fico à disposição caso mude de ideia ou tenha dúvidas.",
-                    "transferir_setor": "NENHUM",
-                    "enviar_localizacao": False,
-                    "enviar_pix": False,
-                    "escalar_humano": False,
-                    "nova_memoria": f"Cliente {'aprovou' if aprovado else 'recusou'} o orçamento da O.S. #{os_numero}."
-                }
-                asyncio.create_task(
-                    notify_os_approval_result(
-                        tenant_id=tenant_id,
-                        conversation_id=conversation.id,
-                        whatsapp_number_id=whatsapp_number.id,
-                        instance_name=instance_name,
-                        os_numero=os_numero,
-                        client_name=contact.nome or "Cliente",
-                        aprovado=aprovado,
-                        pdf_relative_path=pdf_rel_path,
-                        tecnico_phone=tecnico_phone
-                    )
-                )
-            else:
-                ai_output = {
-                    "resposta": f"Só para eu confirmar: você *aprova* a execução do serviço da O.S. #{os_numero} pelo valor informado no orçamento? Responda *SIM* ou *NÃO*.",
-                    "transferir_setor": "NENHUM",
-                    "enviar_localizacao": False,
-                    "enviar_pix": False,
-                    "escalar_humano": False,
-                    "nova_memoria": f"Resposta ambígua na aprovação do orçamento da O.S. #{os_numero}; perguntando de novo."
-                }
-            transfer_executed = True
 
         if not transfer_executed and not is_tech:
             dept_dicts = [
