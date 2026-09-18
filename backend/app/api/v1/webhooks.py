@@ -1105,10 +1105,15 @@ async def receive_evolution_webhook(
     # also had a leftover pending calendar task.) Computed once, reused by both checks below.
     pending_os_or_transfer_marker = ""
     if phone_number:
+        # Exact match on Contact.telefone silently misses whenever the stored number and the
+        # webhook's resolved number differ by the Brazilian mobile "9" prefix (seen for real:
+        # a contact saved as 12 digits while the webhook resolves the full 13-digit number) -
+        # same tolerant suffix match already used for CalendarEvent.employee_phone elsewhere
+        # in this file.
         guard_stmt = (
             select(Conversation.assunto_atual)
             .join(Contact, Conversation.contact_id == Contact.id)
-            .where(Contact.telefone == phone_number)
+            .where(Contact.telefone.like(f"%{phone_number[-8:]}%"))
             .order_by(Conversation.ultima_interacao_em.desc())
             .limit(1)
         )
