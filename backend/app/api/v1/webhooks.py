@@ -1931,7 +1931,14 @@ async def receive_evolution_webhook(
 
         # Check if an attendant message was sent recently (last 60s) with matching text
         clean_text_compare = re.sub(r'^\*👤 [^*]+:\*\n\n?', '', text_content).strip().rstrip('\u200b')
-        recent_cutoff = datetime.utcnow() - timedelta(seconds=60)
+        # 60s was too short in practice - Evolution/Baileys' own "sent from linked device"
+        # sync webhook can arrive several minutes late (observed: 78s and ~9min in
+        # production). A miss here doesn't just show a visible duplicate bubble - it lets
+        # our own outgoing text (e.g. a fee-warning message containing "não") fall through
+        # untagged and get misclassified further down as if the CUSTOMER had just replied
+        # NEGA to a pending OS Handler confirmation. Scoped to this conversation only, so
+        # widening this window doesn't risk matching another customer's message.
+        recent_cutoff = datetime.utcnow() - timedelta(minutes=30)
         # IA/SISTEMA senders are included here too: the dedicated bot-echo shield above only
         # catches known phrase markers (see is_bot_echo), so a freeform AI reply without those
         # markers would otherwise fall through to here, find no match among ATENDENTE-only rows,

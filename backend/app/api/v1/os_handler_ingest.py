@@ -595,6 +595,15 @@ EVENTO_ORC_AGUARDANDO_APROVACAO = 3
 EVENTO_ORC_APROVADO = 15
 EVENTO_ORC_NAO_APROVADO = 16
 
+# Serializa a checagem "já foi despachado?" + a marcação em si (ver check_os_dispatch_state/
+# mark_os_dispatched abaixo). Sem isso, várias chamadas praticamente simultâneas pra mesma
+# O.S. - visto de verdade em produção: sync do Google Drive gerando múltiplos eventos de
+# arquivo quase juntos para o mesmo PDF - todas liam "ainda não despachado" antes de
+# qualquer uma conseguir salvar sua marca, e cada uma disparava a sequência completa de
+# novo. O processo roda como uma única instância (fork_mode, sem workers), então um lock em
+# memória do processo já resolve.
+_os_dispatch_lock = asyncio.Lock()
+
 
 def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -> dict:
     """
@@ -703,43 +712,44 @@ async def ingest_db_event_common(
     equip_display = " ".join(b for b in [equip_marca, equip_modelo] if b)
 
     if cod_tipo_evento == EVENTO_ENTRADA:
-        existing = check_os_dispatch_state(conversation, codos, "abertura")
-        if existing:
-            if saved_rel_path and not existing.get("pdf_sent"):
-                await deliver_late_pdf(
-                    db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
-                    codos, saved_rel_path, "CONFIRM_OS_PDF:"
+        async with _os_dispatch_lock:
+            existing = check_os_dispatch_state(conversation, codos, "abertura")
+            if existing:
+                if saved_rel_path and not existing.get("pdf_sent"):
+                    await deliver_late_pdf(
+                        db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
+                        codos, saved_rel_path, "CONFIRM_OS_PDF:"
+                    )
+                    mark_os_dispatched(conversation, codos, "abertura", pdf_sent=True)
+                    await db.commit()
+                    logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
+                    return {"status": "pdf_delivered", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
+                return {"status": "already_dispatched", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
+
+            natureza = NATUREZA_CODE_MAP.get(natureza_codigo)
+            if not natureza:
+                await flag_unrecognized_document(
+                    db, tenant_id, whatsapp_number.id, conversation, saved_rel_path or "",
+                    f"📄 Nova O.S. #{codos} recebida do Softsystem, mas a natureza (código {natureza_codigo}) "
+                    f"não tem um modelo de mensagem configurado ainda. Verifique manualmente."
                 )
-                mark_os_dispatched(conversation, codos, "abertura", pdf_sent=True)
-                await db.commit()
-                logger.info(f"[OS DB EVENT] ENTRADA - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
-                return {"status": "pdf_delivered", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
-            return {"status": "already_dispatched", "flow": "abertura", "codos": codos, "conversation_id": conversation.id}
+                return {"status": "unrecognized_natureza", "codos": codos, "phone": phone, "conversation_id": conversation.id}
 
-        natureza = NATUREZA_CODE_MAP.get(natureza_codigo)
-        if not natureza:
-            await flag_unrecognized_document(
-                db, tenant_id, whatsapp_number.id, conversation, saved_rel_path or "",
-                f"📄 Nova O.S. #{codos} recebida do Softsystem, mas a natureza (código {natureza_codigo}) "
-                f"não tem um modelo de mensagem configurado ainda. Verifique manualmente."
-            )
-            return {"status": "unrecognized_natureza", "codos": codos, "phone": phone, "conversation_id": conversation.id}
+            detected_equip, valor_diagnostico = ("Equipamento", 100)
+            if natureza == "orcamento" and (equip_descricao or equip_defeito):
+                detected_equip, valor_diagnostico = automation_service.resolve_diagnostic_price(
+                    equip_descricao or equip_defeito or "", os_cfg.get("diagnostic_prices", {})
+                )
 
-        detected_equip, valor_diagnostico = ("Equipamento", 100)
-        if natureza == "orcamento" and (equip_descricao or equip_defeito):
-            detected_equip, valor_diagnostico = automation_service.resolve_diagnostic_price(
-                equip_descricao or equip_defeito or "", os_cfg.get("diagnostic_prices", {})
-            )
+            purpose = PURPOSE_BY_NATUREZA.get(natureza)
+            equip_receipt_line = None
+            if purpose:
+                equip_bits = f" *{equip_display}*" if equip_display else ""
+                data_str = datetime.now().strftime("%d/%m/%Y")
+                equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} referente à *O.S. #{codos}*, {purpose}."
 
-        purpose = PURPOSE_BY_NATUREZA.get(natureza)
-        equip_receipt_line = None
-        if purpose:
-            equip_bits = f" *{equip_display}*" if equip_display else ""
-            data_str = datetime.now().strftime("%d/%m/%Y")
-            equip_receipt_line = f"📥 Hoje, {data_str}, recebemos o seu equipamento{equip_bits} referente à *O.S. #{codos}*, {purpose}."
-
-        mark_os_dispatched(conversation, codos, "abertura", pdf_sent=bool(saved_rel_path))
-        await db.commit()
+            mark_os_dispatched(conversation, codos, "abertura", pdf_sent=bool(saved_rel_path))
+            await db.commit()
         asyncio.create_task(dispatch_abertura_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
             natureza, config, contact_name, detected_equip, valor_diagnostico,
@@ -749,28 +759,29 @@ async def ingest_db_event_common(
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
-        existing = check_os_dispatch_state(conversation, codos, "orcamento")
-        if existing:
-            if saved_rel_path and not existing.get("pdf_sent"):
-                await deliver_late_pdf(
-                    db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
-                    codos, saved_rel_path, "CONFIRM_OS_APPROVAL:"
-                )
-                mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True)
-                await db.commit()
-                logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
-                return {"status": "pdf_delivered", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
-            return {"status": "already_dispatched", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
+        async with _os_dispatch_lock:
+            existing = check_os_dispatch_state(conversation, codos, "orcamento")
+            if existing:
+                if saved_rel_path and not existing.get("pdf_sent"):
+                    await deliver_late_pdf(
+                        db, tenant_id, whatsapp_number.id, instance_name, phone, conversation,
+                        codos, saved_rel_path, "CONFIRM_OS_APPROVAL:"
+                    )
+                    mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True)
+                    await db.commit()
+                    logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
+                    return {"status": "pdf_delivered", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
+                return {"status": "already_dispatched", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
 
-        # A mudança do evento no Softsystem já dispara o aviso, mesmo sem o PDF do orçamento
-        # ainda salvo (isso é um passo manual separado no processo da loja) - o arquivo é
-        # enviado quando disponível, mas não é um requisito pra avisar o cliente.
-        if not saved_rel_path:
-            logger.info(f"[OS DB EVENT] O.S. #{codos}: PDF do orçamento ainda não encontrado, avisando o cliente mesmo assim.")
+            # A mudança do evento no Softsystem já dispara o aviso, mesmo sem o PDF do orçamento
+            # ainda salvo (isso é um passo manual separado no processo da loja) - o arquivo é
+            # enviado quando disponível, mas não é um requisito pra avisar o cliente.
+            if not saved_rel_path:
+                logger.info(f"[OS DB EVENT] O.S. #{codos}: PDF do orçamento ainda não encontrado, avisando o cliente mesmo assim.")
 
-        tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
-        mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=bool(saved_rel_path))
-        await db.commit()
+            tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
+            mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=bool(saved_rel_path))
+            await db.commit()
         asyncio.create_task(dispatch_orcamento_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
             contact_name, str(codos), saved_rel_path or "", tecnico_phone, delay_sec
