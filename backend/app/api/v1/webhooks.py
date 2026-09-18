@@ -201,7 +201,8 @@ async def send_os_pdf_after_confirmation(
             # the file read as confusing).
             next_steps_text = (
                 "🔧 Em breve, nossos técnicos farão a verificação do equipamento e entraremos "
-                "em contato novamente para enviar o laudo técnico com o orçamento do reparo."
+                "em contato novamente para enviar o laudo técnico com o orçamento do reparo.\n\n"
+                "🙏 Agradecemos a parceria e a confiança em nossos serviços!"
             )
             next_steps_res = await evolution_service.send_text_message(
                 instance_name=instance_name, number=recipient_phone, text=next_steps_text
