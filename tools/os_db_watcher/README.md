@@ -60,6 +60,15 @@ de letras vira o nome. **Sem celular no Contato** (vazio, só nome, só fixo), o
 celular/fone do cadastro do cliente, com o nome do cadastro. Para o Contato valer, digite o celular
 dele no campo.
 
+### Quadro de técnicos (aba "Técnicos" do Ominichannel)
+
+O vigia também alimenta o **Quadro de Técnicos**: uma linha por técnico (campo "Técnico 1" da O.S.), uma coluna por estágio
+(Entrada, Avaliação, Orçamento enviado, Aprovado, Execução, Aguardando peça, Aguardando retirada, Sem reparo), com a data de
+entrada de cada O.S. Na primeira execução ele envia os **últimos ~3 meses** das duas empresas; depois manda só o que mudou
+(O.S. alterada ou com evento novo), e o quadro se atualiza sozinho. Regras: **finalizadas não aparecem no quadro** (ficam só na
+auditoria, no detalhe do técnico, exclusivo de administradores) e **O.S. com condição de pagamento preenchida** (já efetivadas)
+não entram. Sempre somente leitura no Softsystem. Há também o **Modo TV** (tela cheia, para a oficina).
+
 ## Regras que o operador precisa seguir
 
 - **PDF de Abertura de OS** (relatório "Ordem de Serviço - Abertura de OS") -> salvar na
