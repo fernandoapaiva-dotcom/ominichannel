@@ -53,14 +53,34 @@ export async function apiUpload(endpoint: string, formData: FormData) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  let response: Response;
-  try {
-    response = await fetch(`${getApiBase()}${endpoint}`, {
-      method: 'POST',
-      headers,
-      body: formData
-    });
-  } catch (err: any) {
+  // Até 3 tentativas para falhas que não chegaram a ser processadas (rede caiu, 502/503 do proxy).
+  // Erro de validação, sessão ou arquivo grande demais não adianta repetir.
+  const RETRY_DELAYS_MS = [0, 1500, 4000];
+  let response: Response | null = null;
+  let lastNetworkError = false;
+  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt++) {
+    if (RETRY_DELAYS_MS[attempt] > 0) {
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+    try {
+      response = await fetch(`${getApiBase()}${endpoint}`, {
+        method: 'POST',
+        headers,
+        body: formData
+      });
+      lastNetworkError = false;
+    } catch (err: any) {
+      response = null;
+      lastNetworkError = true;
+      continue;
+    }
+    if (response.status === 502 || response.status === 503) {
+      continue;
+    }
+    break;
+  }
+
+  if (!response || lastNetworkError) {
     throw new Error(`Falha ao conectar com o servidor backend (${getApiBase()}). Verifique se o servidor está ativo.`);
   }
 
@@ -68,6 +88,10 @@ export async function apiUpload(endpoint: string, formData: FormData) {
     localStorage.removeItem('token');
     window.location.href = '/login';
     throw new Error('Sessão expirada');
+  }
+
+  if (response.status === 413) {
+    throw new Error('Arquivo grande demais para o servidor.');
   }
 
   if (!response.ok) {

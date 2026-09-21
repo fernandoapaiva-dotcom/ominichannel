@@ -1218,8 +1218,71 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
+  // Anexos cujo envio falhou ANTES de chegar ao servidor (ex.: arquivo grande recusado): a mensagem só
+  // existe na tela (id temporário negativo), então "Reenviar" precisa do próprio arquivo, guardado aqui.
+  const failedUploadsRef = useRef<Map<number, { file: File; captionText: string; convId: number; tipo: string; idx: number; nowIso: string }>>(new Map());
+
+  const uploadAttachment = async (
+    file: File, idx: number, tempId: number, localUrl: string, tipo: string,
+    captionText: string, convId: number, nowIso: string
+  ) => {
+    try {
+      const compressed = await compressImageIfNeeded(file);
+      const formData = new FormData();
+      formData.append('file', compressed);
+      if (idx === 0 && captionText) {
+        formData.append('caption', captionText);
+      }
+      const newMsg = await apiUpload(`/conversations/${convId}/media`, formData);
+      failedUploadsRef.current.delete(tempId);
+      if (newMsg && newMsg.id && onOptimisticMessageAdded) {
+        onOptimisticMessageAdded({ ...newMsg, status: newMsg.status || 'sent' }, tempId);
+      }
+      URL.revokeObjectURL(localUrl);
+    } catch (err) {
+      console.error('File upload error:', err);
+      failedUploadsRef.current.set(tempId, { file, captionText, convId, tipo, idx, nowIso });
+      // Keep the local blob preview alive so the failed bubble still shows what
+      // was being sent — only revoke it once the user retries or it's replaced.
+      if (onOptimisticMessageAdded) {
+        onOptimisticMessageAdded({
+          id: tempId,
+          conversation_id: convId,
+          remetente: 'atendente',
+          conteudo: (idx === 0 && captionText) ? `${localUrl}|${captionText}` : localUrl,
+          tipo: tipo as any,
+          timestamp: nowIso,
+          status: 'failed',
+          dados_adicionais: { original_filename: file.name, file_name: file.name }
+        } as unknown as Message, tempId);
+      }
+    }
+  };
+
   const handleRetryMessage = async (msgId: number) => {
     setActiveActionMenuMsgId(null);
+    const failedUpload = failedUploadsRef.current.get(msgId);
+    if (failedUpload) {
+      const localUrl = URL.createObjectURL(failedUpload.file);
+      if (onOptimisticMessageAdded) {
+        onOptimisticMessageAdded({
+          id: msgId,
+          conversation_id: failedUpload.convId,
+          remetente: 'atendente',
+          conteudo: (failedUpload.idx === 0 && failedUpload.captionText) ? `${localUrl}|${failedUpload.captionText}` : localUrl,
+          tipo: failedUpload.tipo as any,
+          timestamp: failedUpload.nowIso,
+          status: 'sending',
+          dados_adicionais: { original_filename: failedUpload.file.name, file_name: failedUpload.file.name }
+        } as unknown as Message, msgId);
+      }
+      await uploadAttachment(
+        failedUpload.file, failedUpload.idx, msgId, localUrl, failedUpload.tipo,
+        failedUpload.captionText, failedUpload.convId, failedUpload.nowIso
+      );
+      if (onStatusToggle) onStatusToggle();
+      return;
+    }
     try {
       await apiFetch(`/conversations/messages/${msgId}/retry`, { method: 'POST' });
       if (onStatusToggle) onStatusToggle();
@@ -1805,37 +1868,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         scrollToBottom('smooth');
         setTimeout(() => scrollToBottom('smooth'), 50);
 
-        await Promise.allSettled(uploadTasks.map(async ({ file, idx, tempId, localUrl, tipo }) => {
-          try {
-            const compressed = await compressImageIfNeeded(file);
-            const formData = new FormData();
-            formData.append('file', compressed);
-            if (idx === 0 && captionText) {
-              formData.append('caption', captionText);
-            }
-            const newMsg = await apiUpload(`/conversations/${convId}/media`, formData);
-            if (newMsg && newMsg.id && onOptimisticMessageAdded) {
-              onOptimisticMessageAdded({ ...newMsg, status: newMsg.status || 'sent' }, tempId);
-            }
-            URL.revokeObjectURL(localUrl);
-          } catch (err) {
-            console.error('File upload error:', err);
-            // Keep the local blob preview alive so the failed bubble still shows what
-            // was being sent — only revoke it once the user retries or it's replaced.
-            if (onOptimisticMessageAdded) {
-              onOptimisticMessageAdded({
-                id: tempId,
-                conversation_id: convId,
-                remetente: 'atendente',
-                conteudo: (idx === 0 && captionText) ? `${localUrl}|${captionText}` : localUrl,
-                tipo: tipo as any,
-                timestamp: nowIso,
-                status: 'failed',
-                dados_adicionais: { original_filename: file.name, file_name: file.name }
-              } as unknown as Message, tempId);
-            }
-          }
-        }));
+        await Promise.allSettled(uploadTasks.map(({ file, idx, tempId, localUrl, tipo }) =>
+          uploadAttachment(file, idx, tempId, localUrl, tipo, captionText, convId as number, nowIso)
+        ));
 
         if (onStatusToggle) onStatusToggle();
         scrollToBottom('smooth');
