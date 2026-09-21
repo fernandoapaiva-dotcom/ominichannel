@@ -28,6 +28,7 @@ A plataforma automatiza a triagem, qualificação, resposta de dúvidas técnica
 
 #### 1. ⚡ **Automações & Gatilhos Inteligentes (OS & Respostas Padrão com IA Copilot)**
 * **🛠️ Handler de Ordem de Serviço (Posto Autorizado):**
+  - _Este gatilho por palavra-chave no chat só age na instância Assistência Técnica. O fluxo automático a partir do Softsystem está descrito na seção 9._
   - Identificação e parsing automático de mensagens de abertura de OS (ex: `status: orcamento`, `status: garantia de loja`, `status: garantia de fabrica`).
   - Reconhece o tipo de equipamento (Inversor, MIG, TIG, Plasma, CNC, Compressor, etc.) e aplica a taxa de diagnóstico configurada.
   - Disparo de sequências encadeadas de mensagens com saudação dinâmica (*Bom dia / Boa tarde*), nome do cliente, taxas, prazos de validade (15 dias), garantias (90 dias) e condições de sucateamento/abandono.
@@ -102,6 +103,42 @@ A plataforma automatiza a triagem, qualificação, resposta de dúvidas técnica
 
 ---
 
+#### 9. 🔧 **Automação de O.S. Integrada ao ERP Softsystem (leitura direta do Firebird)**
+Quando a loja abre ou muda uma O.S. no **Softsystem**, o cliente recebe os avisos certos no WhatsApp
+**sozinho**, sem ninguém abrir o WhatsApp Web. Só atua na instância **Assistência Técnica**.
+
+```
+Softsystem (Firebird) ──┐
+                        ├─► Vigia (PC da loja) ──► POST /api/v1/os-handler/db-event ──► Ominichannel ──► WhatsApp do cliente
+Pastas de PDF (rede) ───┘   tools/os_db_watcher        (chave de API própria)            (backend FastAPI)
+```
+
+* **Gatilho pelo evento do banco:** o vigia consulta o Firebird (**somente leitura**, nunca escreve) a cada 20s e
+  detecta eventos novos na aba "Eventos" da O.S. (Entrada, Orçamento aguardando aprovação, Avaliação, Execução,
+  Aguardando retirada, Finalizada etc.). O aviso sai na hora, mesmo sem PDF.
+* **Gatilho pelo PDF:** ao aparecer um `<nº da O.S>.pdf` na pasta *ABERTURA* ou *ORCAMENTO*, o vigia lê o número
+  pelo nome do arquivo, busca os dados no banco (não lê texto do PDF) e entrega o PDF como complemento.
+* **Confirmação antes do PDF de abertura:** o cliente confirma a leitura das condições (ex.: taxa de diagnóstico
+  se o orçamento não for aprovado) respondendo em texto livre; a resposta é interpretada por palavras-chave e, se
+  ambígua, por IA. Só então o PDF (`<nº da O.S.> - <cliente>.pdf`) é enviado.
+* **Aprovação do orçamento:** o cliente responde Sim/Não; o resultado é avisado no grupo interno *SERV - Solicitação
+  de O.S.* e o PDF vai ao técnico responsável.
+* **Tipos de O.S. com mensagem própria:** Orçamento, Garantia de Loja, Garantia de Fábrica, Locação e Visita Técnica
+  (textos editáveis na tela de Automações). Cada mudança de estágio da O.S. tem um aviso de progresso próprio.
+* **Sem bagunçar a conversa:** nunca repete o aviso da mesma O.S.; vários equipamentos do mesmo cliente abertos em
+  sequência (uma O.S. por equipamento) viram uma sequência só, com **um único "Sim"** liberando todos os PDFs
+  (janela deslizante de 2 min).
+* **Robustez:** a confirmação do cliente funciona mesmo com atendente humano na conversa; o vigia retoma de onde
+  parou se o PC ficar desligado; ao lado do banco, nada do Softsystem é alterado.
+
+📖 Instalação, regras de uso (qual PDF vai em qual pasta) e solução de problemas:
+[`tools/os_db_watcher/README.md`](tools/os_db_watcher/README.md).
+
+> ⚠️ Instale **apenas** o `os_db_watcher`. O antigo `os_folder_watcher` está obsoleto e, rodando junto, duplica
+> todos os avisos.
+
+---
+
 ### 🛠️ Stack Tecnológica & Arquitetura
 
 #### **Backend (Python / FastAPI)**
@@ -125,6 +162,7 @@ A plataforma automatiza a triagem, qualificação, resposta de dúvidas técnica
 #### **Infraestrutura & Integrações**
 * **WhatsApp Engine:** Evolution API v2 (Node.js / Baileys) + Redis + PostgreSQL
 * **Meta Cloud API:** Suporte para API Oficial do WhatsApp Business
+* **Integração ERP Softsystem:** vigia Windows em Python (`firebird-driver` somente leitura + `watchdog`) instalado por `install.bat`, com início automático no login
 * **Containerização:** Docker & Docker Compose
 
 ---
@@ -175,6 +213,14 @@ A plataforma automatiza a triagem, qualificação, resposta de dúvidas técnica
    - Multi-tenant data segregation.
    - Fernet symmetric encryption for sensitive API keys.
    - Full audit logging for administrative actions.
+
+9. **🔧 Softsystem ERP Service Order Automation (direct Firebird read):**
+   - A watcher on the shop PC polls the Softsystem Firebird database (**read-only**, never writes) and the PDF
+     output folders, and pushes each new O.S. event to the backend (`POST /api/v1/os-handler/db-event`).
+   - The customer gets the right WhatsApp notices automatically (intake terms → confirmation → PDF, quote approval,
+     per-stage progress updates). Scoped to the Technical Assistance instance only.
+   - Idempotent per O.S.; several items dropped off together are merged into one message sequence with a single
+     confirmation. Details: [`tools/os_db_watcher/README.md`](tools/os_db_watcher/README.md).
 
 ---
 

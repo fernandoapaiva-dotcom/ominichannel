@@ -1,5 +1,18 @@
 # Vigia de Pasta - O.S. Softsystem
 
+> ## ⛔ OBSOLETO - NÃO INSTALAR
+> Este programa foi **substituído** por [`tools/os_db_watcher/`](../os_db_watcher/README.md),
+> que lê os dados direto do banco Firebird e já vigia as pastas de PDF também.
+>
+> **Nunca rode os dois juntos.** Este aqui lê o texto de dentro do PDF (frágil) e dispara pelo
+> endpoint antigo `/ingest`: com os dois ligados o cliente recebe **tudo em dobro**, e as
+> mensagens saem com "O.S. #?" e PDF chamado "? - Cliente.pdf" quando o texto do PDF não
+> permite achar o número da O.S. (aconteceu em produção). Se este programa já foi instalado
+> em alguma estação, rode o `uninstall.bat` daqui e confirme que a entrada
+> `OminichannelWatcher.vbs` sumiu das pastas de inicialização do Windows.
+>
+> Mantido apenas como referência histórica.
+
 Programa que roda no computador da loja, observa as pastas onde o Softsystem salva o
 PDF da Ordem de Serviço, e envia automaticamente para o sistema Ominichannel processar
 (avisos ao cliente + PDF + confirmação/aprovação).
