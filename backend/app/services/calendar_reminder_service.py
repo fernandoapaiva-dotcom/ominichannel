@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import AsyncSessionLocal
 from app.models.models import CalendarEvent, Message, WhatsAppNumber
 from app.services.evolution_service import evolution_service
+from app.models.models import Contact, Conversation, ConversationStatus, MessageSender, MessageType
 
 logger = logging.getLogger("calendar_reminder_service")
 
@@ -104,11 +105,17 @@ def _location_from_text(text: str) -> Optional[dict]:
     lat, lng = float(m.group(1)), float(m.group(2))
     if abs(lat) > 90 or abs(lng) > 180:
         return None
-    lines = [l.strip().replace("*", "") for l in (text or "").split("\n") if l.strip()]
-    clean = [l for l in lines if not l.startswith("http") and not any(h in l for h in _LOC_HEADER_LINES)]
-    name = clean[0] if clean else ""
-    address = " - ".join(clean[1:]) if len(clean) > 1 else ""
-    return {"latitude": lat, "longitude": lng, "name": name, "address": address}
+    return {"latitude": lat, "longitude": lng, "name": "", "address": ""}
+
+
+_MAPS_URL = re.compile(r"https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|(?:www\.)?google\.[a-z.]{2,6}/maps|maps\.google\.[a-z.]{2,6}|waze\.com/ul|maps\.apple\.com)\S*", re.I)
+
+
+def strip_maps_urls(text: str) -> str:
+    """Tira links do Maps do texto: o mapa vai como pin nativo, e o link geraria uma segunda prévia de mapa."""
+    out = _MAPS_URL.sub("", text or "")
+    out = re.sub(r"[ \t]+\n", "\n", out)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
 async def get_event_location(session, ev: CalendarEvent) -> Optional[dict]:
@@ -128,11 +135,115 @@ async def get_event_location(session, ev: CalendarEvent) -> Optional[dict]:
                     }
                 loc = _location_from_text(msg.conteudo or "")
                 if loc:
+                    lines = [l.strip().replace("*", "") for l in (msg.conteudo or "").split("\n") if l.strip()]
+                    clean = [l for l in lines if not l.startswith("http") and not any(h in l for h in _LOC_HEADER_LINES)]
+                    loc["name"] = clean[0] if clean else ""
+                    loc["address"] = " - ".join(clean[1:]) if len(clean) > 1 else ""
                     return loc
         return _location_from_text(ev.description or "")
     except Exception as e:
         logger.warning(f"Não foi possível obter a localização do evento #{ev.id}: {e}")
         return None
+
+
+async def record_employee_messages(
+    tenant_id: int,
+    instance_name: str,
+    phone: str,
+    employee_name: Optional[str],
+    text: str,
+    location: Optional[dict]
+):
+    """
+    Guarda no chat do sistema o que foi mandado ao funcionário (texto e pin), para o atendente ver
+    na conversa dele. O eco desse envio é descartado pelo webhook (ECHO ESCUDO), então sem isto
+    nada aparecia na tela. Falha aqui nunca atrapalha o aviso, que já saiu.
+    """
+    try:
+        from app.api.websockets import manager as ws_manager
+        from app.services.protocol_service import generate_daily_protocol
+        async with AsyncSessionLocal() as session:
+            wn = (await session.execute(
+                select(WhatsAppNumber).where(
+                    WhatsAppNumber.tenant_id == tenant_id,
+                    WhatsAppNumber.instancia_evolution_api == instance_name
+                )
+            )).scalars().first()
+            if not wn:
+                return
+
+            tail = phone[-8:]
+            contact = (await session.execute(
+                select(Contact).where(
+                    Contact.tenant_id == tenant_id,
+                    Contact.telefone.like(f"%{tail}"),
+                    Contact.telefone.notlike("%@g.us%")
+                )
+            )).scalars().first()
+            if not contact:
+                contact = Contact(tenant_id=tenant_id, telefone=phone, nome=employee_name or phone, dados_adicionais={})
+                session.add(contact)
+                await session.flush()
+
+            conv = (await session.execute(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.contact_id == contact.id,
+                    Conversation.whatsapp_number_id == wn.id
+                ).order_by(Conversation.ultima_interacao_em.desc())
+            )).scalars().first()
+            if not conv:
+                conv = Conversation(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=wn.id,
+                    contact_id=contact.id,
+                    protocol_number=await generate_daily_protocol(session, tenant_id),
+                    status=ConversationStatus.COM_HUMANO,
+                    assunto_atual="Agenda"
+                )
+                session.add(conv)
+                await session.flush()
+
+            now = datetime.utcnow()
+            msgs = [Message(
+                conversation_id=conv.id, remetente=MessageSender.SISTEMA, conteudo=text,
+                tipo=MessageType.TEXTO, status="sent", timestamp=now
+            )]
+            if location:
+                maps_url = f"https://maps.google.com/?q={location['latitude']},{location['longitude']}"
+                loc_lines = ["📍 *LOCALIZAÇÃO ENVIADA*", location.get("name") or "Local do atendimento"]
+                if location.get("address"):
+                    loc_lines.append(location["address"])
+                loc_lines.append(maps_url)
+                msgs.append(Message(
+                    conversation_id=conv.id, remetente=MessageSender.SISTEMA, conteudo="\n".join(loc_lines),
+                    tipo=MessageType.LOCALIZACAO, status="sent", timestamp=now + timedelta(seconds=1)
+                ))
+            for m in msgs:
+                session.add(m)
+            conv.ultima_interacao_em = now
+            await session.commit()
+            for m in msgs:
+                await session.refresh(m)
+
+            for m in msgs:
+                await ws_manager.broadcast_to_department(
+                    tenant_id=tenant_id,
+                    whatsapp_number_id=wn.id,
+                    message_data={
+                        "type": "NEW_MESSAGE",
+                        "conversation_id": conv.id,
+                        "id": m.id,
+                        "remetente": MessageSender.SISTEMA.value,
+                        "conteudo": m.conteudo,
+                        "tipo": m.tipo.value if hasattr(m.tipo, "value") else str(m.tipo),
+                        "status": "sent",
+                        "timestamp": m.timestamp.isoformat() + "Z",
+                        "agent_name": "Agenda"
+                    }
+                )
+    except Exception as e:
+        logger.warning(f"Não foi possível registrar o aviso do funcionário ({phone}) no chat: {e}")
 
 
 async def send_whatsapp_to_employee(
@@ -143,7 +254,9 @@ async def send_whatsapp_to_employee(
     footer: str,
     event_id: Optional[int] = None,
     buttons: Optional[List[dict]] = None,
-    location: Optional[dict] = None
+    location: Optional[dict] = None,
+    tenant_id: Optional[int] = None,
+    employee_name: Optional[str] = None
 ) -> bool:
     try:
         clean_phone = "".join(filter(str.isdigit, employee_phone))
@@ -168,6 +281,7 @@ async def send_whatsapp_to_employee(
 
                 if res_txt and not res_txt.get("error"):
                     logger.info(f"Mensagem de tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
+                    pin_sent = False
                     if location:
                         # Pin do mapa logo abaixo do aviso, pela mesma linha que entregou o texto
                         try:
@@ -179,8 +293,14 @@ async def send_whatsapp_to_employee(
                                 name=location.get("name") or "Local do atendimento",
                                 address=location.get("address") or ""
                             )
+                            pin_sent = True
                         except Exception as loc_err:
                             logger.warning(f"Aviso enviado, mas o pin do mapa falhou para {clean_phone}: {loc_err}")
+                    if tenant_id:
+                        await record_employee_messages(
+                            tenant_id, inst_name, clean_phone, employee_name, full_card,
+                            location if pin_sent else None
+                        )
                     return True
                 else:
                     err_detail = res_txt.get("error") if res_txt else "None"
@@ -236,6 +356,8 @@ async def send_immediate_creation_notification(event_id: int):
             name_list = [n.strip() for n in (ev.employee_name or "").replace(';', ',').replace('/', ',').split(',') if n.strip()]
 
             event_location = await get_event_location(session, ev)
+            # O mapa vai como pin logo abaixo; o link no texto geraria uma segunda prévia de mapa
+            detalhes = strip_maps_urls(ev.description or "") if event_location else (ev.description or "")
 
             sent_any = False
             for idx, raw_phone in enumerate(phone_list):
@@ -247,7 +369,7 @@ async def send_immediate_creation_notification(event_id: int):
                     f"🏷️ *Atividade:* {ev.title}\n"
                     f"⏰ *Data e Hora:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                    f"📝 *Detalhes:* {detalhes or 'Sem observações adicionais.'}"
                 )
                 dept_label = "Servsolda"
                 if ev.whatsapp_instance:
@@ -263,7 +385,7 @@ async def send_immediate_creation_notification(event_id: int):
 
                 footer = f"{dept_label} • Sistema de Tarefas"
 
-                success = await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id, location=event_location)
+                success = await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id, location=event_location, tenant_id=ev.tenant_id, employee_name=emp_name)
                 if success:
                     sent_any = True
                     logger.info(f"Notificação de tarefa enviada para {emp_name} ({raw_phone}) via {ordered_inst_names} - Evento #{ev.id}")
@@ -322,6 +444,8 @@ async def send_event_update_notification(event_id: int):
 
             footer = f"{dept_label} • Gestão de Tarefas"
 
+            detalhes = strip_maps_urls(ev.description or "") if await get_event_location(session, ev) else (ev.description or "")
+
             for idx, raw_phone in enumerate(phone_list):
                 emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
                 title = "📝 ATENÇÃO: ATIVIDADE / COMPROMISSO ALTERADO"
@@ -331,10 +455,10 @@ async def send_event_update_notification(event_id: int):
                     f"🏷️ *Atividade:* {ev.title}\n"
                     f"⏰ *Nova Data e Hora:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}\n\n"
+                    f"📝 *Detalhes:* {detalhes or 'Sem observações adicionais.'}\n\n"
                     f"👉 Por favor, confira os novos detalhes na sua agenda."
                 )
-                await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id)
+                await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id, tenant_id=ev.tenant_id, employee_name=emp_name)
                 logger.info(f"Notificação de atividade alterada enviada para {emp_name} ({raw_phone}) - Evento #{ev.id}")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação de alteração do evento #{event_id}: {e}")
@@ -394,7 +518,7 @@ async def send_event_deletion_notification(event_data: dict):
                 f"👤 *Cliente:* {client_info}\n\n"
                 f"⚠️ Não é mais necessário comparecer ou executar este compromisso."
             )
-            await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer)
+            await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, tenant_id=tenant_id, employee_name=emp_name)
             logger.info(f"Notificação de atividade cancelada enviada para {emp_name} ({raw_phone})")
     except Exception as e:
         logger.error(f"Erro ao enviar notificação de cancelamento do evento: {e}")
@@ -471,6 +595,9 @@ async def check_and_send_calendar_reminders():
                 ev.notified_hours_before = True
                 continue
 
+            event_location = await get_event_location(session, ev)
+            detalhes = strip_maps_urls(ev.description or "") if event_location else (ev.description or "")
+
             sent_any = False
             for idx, raw_phone in enumerate(phone_list):
                 emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
@@ -481,9 +608,9 @@ async def check_and_send_calendar_reminders():
                     f"🏷️ *Compromisso:* {ev.title}\n"
                     f"⏰ *Horário:* {time_str}\n"
                     f"👤 *Cliente:* {client_info}\n"
-                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                    f"📝 *Detalhes:* {detalhes or 'Sem observações adicionais.'}"
                 )
-                if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
+                if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id, location=event_location, tenant_id=ev.tenant_id, employee_name=emp_name):
                     sent_any = True
             if sent_any:
                 ev.notified_hours_before = True

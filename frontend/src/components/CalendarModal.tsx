@@ -203,6 +203,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formReminder, setFormReminder] = useState<number | null>(30);
   const [formContactId, setFormContactId] = useState<number | null>(null);
   const [formConversationId, setFormConversationId] = useState<number | null>(null);
+  const [formMessageId, setFormMessageId] = useState<number | null>(null);
   const [formContactName, setFormContactName] = useState<string | null>(null);
   const [formContactPhone, setFormContactPhone] = useState<string | null>(null);
   
@@ -343,6 +344,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormReminder(prefill?.reminder_minutes ?? 30);
     setFormContactId(prefill?.contact_id || null);
     setFormConversationId(prefill?.conversation_id || null);
+    setFormMessageId(prefill?.message_id || null);
     setFormContactName(prefill?.contact_name || null);
     setFormContactPhone(prefill?.contact_phone || null);
 
@@ -387,6 +389,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormReminder(event.reminder_minutes ?? null);
     setFormContactId(event.contact_id || null);
     setFormConversationId(event.conversation_id || null);
+    setFormMessageId(event.message_id || null);
     setFormContactName(event.contact_name || null);
     setFormContactPhone(event.contact_phone || null);
 
@@ -444,6 +447,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         contact_name: formContactName?.trim() || null,
         contact_phone: formContactPhone?.trim() || null,
         conversation_id: formConversationId,
+        message_id: formMessageId,
         employee_id: formEmployeeId ? Number(formEmployeeId) : null,
         employee_name: formEmployeeName || null,
         employee_phone: formEmployeePhone || null,

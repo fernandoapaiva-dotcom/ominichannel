@@ -2081,6 +2081,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return notes.filter(Boolean).slice(0, 5).map(n => '• ' + n).join(String.fromCharCode(10));
   };
 
+  // Abre o agendamento de visita a partir do pin do cliente. A descrição é curta e sem link do
+  // mapa (o pin segue como mapa nativo no WhatsApp do funcionário; o aviso já traz o cliente).
+  const scheduleVisitFromLocationMessage = (locMsg: any, placeLine: string) => {
+    if (!onOpenScheduleTask || !locMsg) return;
+    const NL = String.fromCharCode(10);
+    const customerName = conversation?.contact?.nome || 'Cliente';
+    const notes = customerNotesForLocation(locMsg);
+    const parts: string[] = [];
+    parts.push('📍 Local da visita: ' + (placeLine || 'ver o pin do mapa enviado pelo cliente'));
+    if (notes) parts.push('📝 Recado do cliente (quem procurar / referências):' + NL + notes);
+    onOpenScheduleTask({
+      title: `Visita técnica - ${customerName}`,
+      description: parts.join(NL + NL),
+      event_type: 'visita_tecnica',
+      contact_id: conversation?.contact_id || conversation?.contact?.id,
+      conversation_id: conversation?.id,
+      message_id: locMsg.id,
+      contact_name: customerName,
+      contact_phone: conversation?.contact?.telefone,
+      start_time: new Date().toISOString(),
+      color: '#10b981',
+      priority: 'media',
+      status: 'pendente'
+    });
+  };
+
   const renderLocationCard = (rawLoc: string, extra?: any, locMsg?: any) => {
     const safeRawLoc = typeof rawLoc === 'string' ? rawLoc : String(rawLoc || '');
 
@@ -2142,29 +2168,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     const googleMapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
     const scheduleVisitAtLocation = () => {
-      if (!onOpenScheduleTask) return;
-      const customerName = conversation?.contact?.nome || 'Cliente';
       const placeLine = [addressText, placeName !== 'Localização do cliente' ? placeName : ''].filter(Boolean).join(' - ');
-      const notes = customerNotesForLocation(locMsg);
-      onOpenScheduleTask({
-        title: `Visita técnica - ${customerName}`,
-        description: `📍 Local da visita (enviado pelo cliente):
-${placeLine ? placeLine + ' ' : ''}${googleMapsUrl}${notes ? String.fromCharCode(10, 10) + '📝 Recado do cliente (quem procurar / referências):' + String.fromCharCode(10) + notes : ''}
-
-👤 Cliente: ${customerName}
-📞 Telefone: ${conversation?.contact?.telefone || ''}
-📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}`,
-        event_type: 'visita_tecnica',
-        contact_id: conversation?.contact_id || conversation?.contact?.id,
-        conversation_id: conversation?.id,
-        message_id: locMsg?.id,
-        contact_name: customerName,
-        contact_phone: conversation?.contact?.telefone,
-        start_time: new Date().toISOString(),
-        color: '#10b981',
-        priority: 'media',
-        status: 'pendente'
-      });
+      scheduleVisitFromLocationMessage(locMsg, placeLine);
     };
     const wazeUrl = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
     const mapBbox = `${lng - 0.004},${lat - 0.0022},${lng + 0.004},${lat + 0.0022}`;
@@ -5178,7 +5183,18 @@ ${placeLine ? placeLine + ' ' : ''}${googleMapsUrl}${notes ? String.fromCharCode
                               ? (cleanText.length > 40 ? cleanText.substring(0, 40) + '...' : cleanText)
                               : `Mensagem ${msg.tipo}`;
 
-                            const locNotes = msg.tipo === 'localizacao' && msg.remetente === 'cliente' ? customerNotesForLocation(msg) : '';
+                            if (msg.tipo === 'localizacao' && msg.remetente === 'cliente') {
+                              const cl = msg.dados_adicionais?.customer_location;
+                              const placeFromMsg = cl
+                                ? [cl.address, cl.name].filter(Boolean).join(' - ')
+                                : String(msg.conteudo || '').split(String.fromCharCode(10))
+                                    .map((l: string) => l.replace(/\*/g, '').trim())
+                                    .filter((l: string) => l && !l.startsWith('http') && !/LOCALIZAÇÃO|Localização Compartilhada/.test(l))
+                                    .join(' - ');
+                              scheduleVisitFromLocationMessage(msg, placeFromMsg);
+                              return;
+                            }
+                            const locNotes = '';
                             onOpenScheduleTask({
                               title: `Atendimento ${customerName} - ${summaryText}`,
                               description: `💬 Mensagem do WhatsApp:\n"${rawMsg}"\n\n👤 Cliente: ${customerName}\n📞 Telefone: ${conversation?.contact?.telefone || ''}\n📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}${locNotes ? String.fromCharCode(10) + String.fromCharCode(10) + '📝 Recado do cliente (quem procurar / referências):' + String.fromCharCode(10) + locNotes : ''}`,
