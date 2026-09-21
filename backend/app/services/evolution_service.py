@@ -407,7 +407,8 @@ class EvolutionService:
         quoted: Optional[Dict[str, Any]] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None,
-        skip_anti_ban_pacing: bool = False
+        skip_anti_ban_pacing: bool = False,
+        pre_send_check=None
     ) -> Dict[str, Any]:
         # Circuit Breaker check for high-probation instances (instancia_vendas)
         if instance_name in ["instancia_vendas"]:
@@ -426,6 +427,15 @@ class EvolutionService:
                 custom_api_key=custom_api_key,
                 skip_anti_ban_pacing=skip_anti_ban_pacing
             )
+
+        # Última chance de desistir: a espera anti-ban acima pode levar dezenas de segundos e o contexto
+        # da mensagem pode ter mudado (ex.: cliente já respondeu o que esta mensagem pedia).
+        if pre_send_check is not None:
+            try:
+                if not await pre_send_check():
+                    return {"success": False, "skipped": True, "error": "envio dispensado"}
+            except Exception as check_err:
+                logger.warning(f"pre_send_check falhou, enviando mesmo assim: {check_err}")
 
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/message/sendText/{instance_name}"

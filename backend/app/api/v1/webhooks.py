@@ -2326,6 +2326,19 @@ async def receive_evolution_webhook(
         if pending_os_marker.startswith("CONFIRM_OS_PDF:"):
             pdf_codos_list, pdf_paths_list = _parse_confirm_os_pdf_marker(pending_os_marker)
             logger.info(f"[OS HANDLER PDF] Classificação da resposta de confirmação '{text_content}': {classification}")
+
+            # A sequência de abertura ainda está saindo (o pedido de "SIM" nem foi enviado): não repetir
+            # "só para confirmar certinho" nem responder por cima. Ver services/os_burst_state.py.
+            from app.services import os_burst_state
+            burst = os_burst_state.get(conversation.id)
+            if burst:
+                if classification == "CONFIRMA" and burst["info_done"]:
+                    burst["skip_prompt"] = True  # já leu todos os termos: o pedido de SIM fica dispensado
+                elif classification != "NEGA":
+                    logger.info(f"[OS HANDLER PDF] Resposta '{text_content}' ignorada: sequência de abertura ainda em andamento (conversa #{conversation.id})")
+                    await db.commit()
+                    return {"status": "success", "action": "os_handler_reply_ignored_burst_in_progress"}
+
             if classification == "CONFIRMA":
                 reply_text = (
                     "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"

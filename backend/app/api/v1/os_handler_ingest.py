@@ -61,6 +61,7 @@ from app.services.lid_resolver_service import resolve_and_bind_contact
 from app.services.automation_service import automation_service, normalize_text, get_greeting
 from app.services.evolution_service import evolution_service
 from app.services.protocol_service import generate_daily_protocol
+from app.services import os_burst_state
 from app.api.websockets import manager as ws_manager
 from app.api.v1.conversations import extract_evolution_msg_id
 from app.api.v1.webhooks import notify_os_approval_result
@@ -304,7 +305,8 @@ async def get_or_create_conversation(db: AsyncSession, tenant_id: int, contact_i
 
 async def send_and_log_text(
     db: AsyncSession, tenant_id: int, whatsapp_number_id: int, instance_name: str,
-    phone: str, conversation: Conversation, msg_content: str, delay_sec: float
+    phone: str, conversation: Conversation, msg_content: str, delay_sec: float,
+    pre_send_check=None
 ):
     try:
         await evolution_service.send_presence(instance_name=instance_name, number=phone, presence="composing")
@@ -312,7 +314,11 @@ async def send_and_log_text(
         logger.debug(f"[OS HANDLER INGEST] Presence typing warning: {e}")
     await asyncio.sleep(delay_sec)
 
-    send_res = await evolution_service.send_text_message(instance_name=instance_name, number=phone, text=msg_content)
+    send_res = await evolution_service.send_text_message(
+        instance_name=instance_name, number=phone, text=msg_content, pre_send_check=pre_send_check
+    )
+    if isinstance(send_res, dict) and send_res.get("skipped"):
+        return  # dispensada na última hora: nada foi enviado, nada a registrar
     saved_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.SISTEMA,
@@ -480,10 +486,35 @@ async def dispatch_abertura_messages(
             if equip_receipt_line and info_messages:
                 info_messages.insert(1, equip_receipt_line)
             confirmation_prompt = automation_service.format_confirmation_prompt(natureza, config, valor_diagnostico)
-            all_messages = info_messages + ([confirmation_prompt] if confirmation_prompt else [])
 
-            for msg_content in all_messages:
-                await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
+            burst = os_burst_state.start(conversation_id)
+            try:
+                for msg_content in info_messages:
+                    await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
+                burst["info_done"] = True
+
+                if confirmation_prompt:
+                    # Só pede o "SIM" se ainda fizer sentido: se o cliente já confirmou depois de receber
+                    # todos os termos (recebeu "Perfeito! ... PDF") ou recusou, o pedido chegaria
+                    # redundante, depois da resposta.
+                    await db.refresh(conversation)
+                    still_pending = (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:")
+                    if burst["skip_prompt"] or not still_pending:
+                        logger.info(f"[OS HANDLER INGEST] Pedido de confirmação dispensado (cliente já respondeu) - conversa #{conversation_id}")
+                    else:
+                        async def _prompt_still_needed() -> bool:
+                            if burst["skip_prompt"]:
+                                return False
+                            async with AsyncSessionLocal() as check_db:
+                                conv_now = await check_db.get(Conversation, conversation_id)
+                                return bool(conv_now and (conv_now.assunto_atual or "").startswith("CONFIRM_OS_PDF:"))
+
+                        await send_and_log_text(
+                            db, tenant_id, whatsapp_number_id, instance_name, phone, conversation,
+                            confirmation_prompt, delay_sec, pre_send_check=_prompt_still_needed
+                        )
+            finally:
+                os_burst_state.finish(conversation_id, burst)
 
         logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' despachada para conversa #{conversation_id} ({phone})")
     except Exception as err:
