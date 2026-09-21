@@ -28,10 +28,26 @@ somente-leitura e conexão sem disparar triggers do banco.
 | ENTRADA                            | Saudação + recebimento do equipamento (com nº da O.S.) + termos do tipo da O.S. + pedido de confirmação. Depois do "Sim", chega o PDF |
 | ORC ENV/ AGUARD APROVACAO          | Aviso de orçamento pronto (+ PDF, se já estiver na pasta) + pergunta de aprovação |
 | ORC ENV/ APROVADO / N APROV        | Avisa o grupo "SERV - Solicitação de O.S." e o técnico responsável (nada pro cliente) |
-| Avaliação, Execução, Aguard. Retirada, Finalizada, Aguard. Peça, Sem Conserto, Não Autorizada, Sem Defeito, Desmch/Sucateado | Aviso simples de progresso (texto editável na tela de Automações do sistema) |
+| Avaliação, Execução, Finalizada, Desmch/Sucateado | Aviso de progresso citando o **equipamento** (marca, modelo, descrição) e o **nº da O.S.** (a Finalizada cita também o tipo da O.S.) |
+| Aguard. Retirada | O texto **se adapta ao evento anterior** da O.S.: serviço concluído, reparo não autorizado, sem defeito ou sem conserto |
+| Sem Conserto | Aviso fixo de "não possui conserto viável" + o **motivo**, escrito pela IA a partir da observação do técnico no Softsystem (ver abaixo) |
+| Aguard. Peça, Não Autorizada, Sem Defeito | Aviso simples de progresso |
 
-Tipos de O.S. com mensagem própria: Orçamento, Garantia de Loja, Garantia de Fábrica,
-Locação de Equipamento e Visita Técnica (textos editáveis em Automações).
+Tipos de O.S. com mensagem própria na abertura: Orçamento, Garantia de Loja, Garantia de
+Fábrica, Locação de Equipamento e Visita Técnica (textos editáveis na tela de Automações).
+
+> Os **avisos de progresso** (tabela acima) ainda **não** aparecem na tela de Automações -
+> hoje só mudam no código (`eventos_os` em `backend/app/services/automation_service.py`),
+> e valem igualmente para todos os tipos de O.S.
+
+### Sem Conserto: como a observação é usada
+
+A observação do técnico no Softsystem é um diário interno (tem CPF de terceiros, nomes,
+"informado ao cliente"...), então **nunca vai crua para o cliente**: números longos são
+removidos, só vira motivo se houver conteúdo técnico, a IA escreve apenas o motivo (a frase
+"não possui conserto viável" é fixa) e qualquer resposta suspeita cai na mensagem genérica,
+sem motivo. **Depende de a chave do Gemini estar válida** nas configurações; sem ela, sai
+sempre a mensagem genérica.
 
 ## Regras que o operador precisa seguir
 
