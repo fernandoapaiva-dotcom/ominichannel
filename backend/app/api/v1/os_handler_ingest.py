@@ -518,6 +518,7 @@ async def dispatch_abertura_messages(
                     return
 
                 if confirmation_prompt:
+                    await wait_for_entrada_to_settle(conversation_id)
                     # Só pede o "SIM" se ainda fizer sentido: se o cliente já confirmou depois de receber
                     # todos os termos (recebeu "Perfeito! ... PDF") ou recusou, o pedido chegaria
                     # redundante, depois da resposta.
@@ -545,7 +546,16 @@ async def dispatch_abertura_messages(
         logger.error(f"[OS HANDLER INGEST] Erro ao despachar abertura da O.S. ({natureza}): {err}", exc_info=True)
 
 
-async def dispatch_supplementary_entrada_item(
+async def dispatch_supplementary_entrada_item(*args, **kwargs):
+    """O chamador já somou 1 em _pending_supplementary[conversa]; aqui sempre desconta ao terminar."""
+    conversation_id = args[4] if len(args) > 4 else kwargs.get("conversation_id")
+    try:
+        await _dispatch_supplementary_entrada_item(*args, **kwargs)
+    finally:
+        _pending_supplementary[conversation_id] = max(0, _pending_supplementary.get(conversation_id, 1) - 1)
+
+
+async def _dispatch_supplementary_entrada_item(
     tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
     conversation_id: int, natureza: str, config: dict, contact_name: str,
     detected_equip: str, valor_diagnostico: int, saved_rel_path: str, delay_sec: float,
@@ -783,12 +793,37 @@ def check_and_extend_entrada_window(conversation_id: int, natureza: str):
     now = time.time()
     window = _open_entrada_windows.get(conversation_id)
     if not window or window["expires_at"] <= now:
-        _open_entrada_windows[conversation_id] = {"naturezas": {natureza}, "expires_at": now + ENTRADA_WINDOW_SECONDS}
+        _open_entrada_windows[conversation_id] = {"naturezas": {natureza}, "expires_at": now + ENTRADA_WINDOW_SECONDS, "last_at": now}
         return None
     already_seen = natureza in window["naturezas"]
     window["naturezas"].add(natureza)
     window["expires_at"] = now + ENTRADA_WINDOW_SECONDS
+    window["last_at"] = now
     return already_seen
+
+
+# Quantas O.S. suplementares (2ª, 3ª... do mesmo atendimento) ainda estão sendo avisadas, por conversa.
+_pending_supplementary: Dict[int, int] = {}
+ENTRADA_SETTLE_SECONDS = 40      # sem O.S. nova por esse tempo = o atendente terminou de abrir as O.S.
+ENTRADA_SETTLE_MAX_WAIT = 120    # teto: nunca segura o pedido de "SIM" por mais que isso
+
+
+async def wait_for_entrada_to_settle(conversation_id: int):
+    """
+    Segura o pedido de "responda SIM" até o atendente parar de abrir O.S. para este cliente (e as
+    linhas das O.S. extras terminarem de sair). Sem isso, a 2ª O.S. chegava DEPOIS do pedido de SIM
+    e o cliente via a confirmação no meio, com um "recebemos o equipamento" solto embaixo dela.
+    Com uma O.S. só, não atrasa nada: a sequência já leva mais que ENTRADA_SETTLE_SECONDS.
+    """
+    waited = 0.0
+    while waited < ENTRADA_SETTLE_MAX_WAIT:
+        window = _open_entrada_windows.get(conversation_id)
+        last_at = window.get("last_at") if window else None
+        quiet = (time.time() - last_at) >= ENTRADA_SETTLE_SECONDS if last_at else True
+        if quiet and _pending_supplementary.get(conversation_id, 0) <= 0:
+            return
+        await asyncio.sleep(2)
+        waited += 2
 
 
 def build_os_pdf_filename(codos, client_name: Optional[str]) -> str:
@@ -964,7 +999,7 @@ async def ingest_db_event_common(
     delay_ms = os_cfg.get("typing_delay_ms", 2000)
     delay_sec = max(0.5, float(delay_ms) / 1000.0)
 
-    equip_display = " ".join(b for b in [equip_marca, equip_modelo] if b)
+    equip_display = " ".join(b for b in [equip_marca, equip_modelo] if b) or (equip_descricao or "")
 
     if cod_tipo_evento == EVENTO_ENTRADA:
         async with _os_dispatch_lock:
@@ -1029,6 +1064,7 @@ async def ingest_db_event_common(
             # Another O.S. for the same customer within ENTRADA_WINDOW_SECONDS of a previous
             # one - see check_and_extend_entrada_window - only sends what's actually new.
             item_notice_line = equip_receipt_line or f"📥 Também recebemos sua Ordem de Serviço *#{codos}*."
+            _pending_supplementary[conversation.id] = _pending_supplementary.get(conversation.id, 0) + 1
             asyncio.create_task(dispatch_supplementary_entrada_item(
                 tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,
                 natureza, config, contact_name, detected_equip, valor_diagnostico,

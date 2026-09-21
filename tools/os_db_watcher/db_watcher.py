@@ -467,6 +467,15 @@ def poll_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state: dict)
             for event in events:
                 loja, codos, cnpj = event["LOJA"], event["CODOS"], event.get("CNPJ")
                 equip = fetch_equipamento(cur, loja, codos, cnpj)
+                if not equip and event["CODTIPOEVENTOOS"] == 1:
+                    # O evento ENTRADA é gravado antes de o atendente lançar o equipamento na O.S. Espera um
+                    # pouco (só leitura) para o aviso já sair com marca/modelo, em vez de "seu equipamento
+                    # referente à O.S." sem dizer qual. Passado o prazo, avisa assim mesmo.
+                    for _ in range(12):
+                        time.sleep(5)
+                        equip = fetch_equipamento(cur, loja, codos, cnpj)
+                        if equip:
+                            break
                 event["_equip_marca"] = equip.get("marca")
                 event["_equip_modelo"] = equip.get("modelo")
                 event["_equip_descricao"] = equip.get("descricao")
