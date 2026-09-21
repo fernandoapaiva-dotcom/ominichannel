@@ -289,6 +289,9 @@ def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str
         "codos": event["CODOS"],
         "cod_tipo_evento": event["CODTIPOEVENTOOS"],
         "cliente_nome": recipient_name,
+        # Razão Social da O.S. - é o nome que vai no arquivo do PDF (o cliente_nome acima pode ser o do
+        # campo Contato, a pessoa que responde pela empresa)
+        "cliente_razao_social": event.get("RAZAOSOCIAL") or event.get("NOMEFANTASIA"),
         "cliente_telefone": phone,
         "natureza_codigo": event.get("CODTIPOORDEMSERVICO"),
         "equip_marca": event.get("_equip_marca"),

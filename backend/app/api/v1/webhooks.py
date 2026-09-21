@@ -134,6 +134,16 @@ def _build_os_pdf_filename(os_numero, client_name: Optional[str]) -> str:
     return f"{os_numero} - {safe_name}.pdf"
 
 
+def os_pdf_client_name(conversation_extra, os_numero, fallback: str) -> str:
+    """
+    Nome no arquivo do PDF: a Razão Social da O.S. (guardada por O.S. em dados_adicionais["os_razao_social"]
+    quando o Softsystem avisa o evento). O nome do contato da conversa pode ser o do campo "Contato" da O.S.
+    (a pessoa que responde pela empresa), que não deve aparecer no arquivo.
+    """
+    mapping = (conversation_extra or {}).get("os_razao_social") or {}
+    return mapping.get(str(os_numero)) or fallback
+
+
 def _parse_confirm_os_pdf_marker(marker: str):
     """
     "CONFIRM_OS_PDF:<codos1>,<codos2>,...|<path1>,<path2>,..." - matches
@@ -181,6 +191,10 @@ async def send_os_pdf_after_confirmation(
 
     from app.core.database import AsyncSessionLocal
     try:
+        async with AsyncSessionLocal() as db_names:
+            conv_for_names = await db_names.get(Conversation, conversation_id)
+            conversation_extra = dict(conv_for_names.dados_adicionais or {}) if conv_for_names else {}
+
         any_sent = False
         for os_numero, pdf_relative_path in zip(os_numeros, pdf_relative_paths):
             abs_path = os.path.join("uploads", pdf_relative_path) if pdf_relative_path else ""
@@ -190,7 +204,7 @@ async def send_os_pdf_after_confirmation(
                 file_bytes = f.read()
             base64_data = base64.b64encode(file_bytes).decode("utf-8")
 
-            pdf_file_name = _build_os_pdf_filename(os_numero, client_name)
+            pdf_file_name = _build_os_pdf_filename(os_numero, os_pdf_client_name(conversation_extra, os_numero, client_name))
             send_res = await evolution_service.send_media_message(
                 instance_name=instance_name,
                 number=recipient_phone,

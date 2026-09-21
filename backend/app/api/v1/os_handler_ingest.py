@@ -64,7 +64,7 @@ from app.services.protocol_service import generate_daily_protocol
 from app.services import os_burst_state
 from app.api.websockets import manager as ws_manager
 from app.api.v1.conversations import extract_evolution_msg_id
-from app.api.v1.webhooks import notify_os_approval_result, send_os_pdf_after_confirmation
+from app.api.v1.webhooks import notify_os_approval_result, send_os_pdf_after_confirmation, os_pdf_client_name
 
 logger = logging.getLogger("os_handler_ingest")
 router = APIRouter(prefix="/os-handler", tags=["OS Handler - Ingestão de PDF"])
@@ -427,7 +427,9 @@ async def dispatch_orcamento_messages(
                 abs_path = os.path.join("uploads", saved_rel_path)
                 with open(abs_path, "rb") as f:
                     b64 = base64.b64encode(f.read()).decode("utf-8")
-                pdf_file_name = build_os_pdf_filename(os_numero, contact_name)
+                pdf_file_name = build_os_pdf_filename(
+                    os_numero, os_pdf_client_name(conversation.dados_adicionais, os_numero, contact_name)
+                )
                 send_res = await evolution_service.send_media_message(
                     instance_name=instance_name, number=phone, media_type="document",
                     mimetype="application/pdf", media=b64, file_name=pdf_file_name,
@@ -867,7 +869,7 @@ async def deliver_late_pdf(
     with open(abs_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    pdf_file_name = build_os_pdf_filename(codos, client_name)
+    pdf_file_name = build_os_pdf_filename(codos, os_pdf_client_name(conversation.dados_adicionais, codos, client_name))
 
     async def _try_send():
         return await evolution_service.send_media_message(
@@ -915,7 +917,8 @@ async def ingest_db_event_common(
     tecnico_nome: Optional[str],
     saved_rel_path: Optional[str],
     obs: Optional[str] = None,
-    eventos_anteriores: Optional[List[int]] = None
+    eventos_anteriores: Optional[List[int]] = None,
+    razao_social: Optional[str] = None
 ):
     phone = re.sub(r"\D", "", cliente_telefone or "")
     if not phone.startswith("55") and len(phone) in (10, 11):
@@ -935,6 +938,14 @@ async def ingest_db_event_common(
     await db.flush()
     contact_name = contact.nome
     conversation = await get_or_create_conversation(db, tenant_id, contact.id, whatsapp_number.id)
+    if razao_social and razao_social.strip():
+        # O PDF sai com a Razão Social da O.S., não com o nome do contato da conversa
+        extra_rs = dict(conversation.dados_adicionais or {})
+        mapping_rs = dict(extra_rs.get("os_razao_social", {}))
+        mapping_rs[str(codos)] = razao_social.strip()
+        extra_rs["os_razao_social"] = mapping_rs
+        conversation.dados_adicionais = extra_rs
+        flag_modified(conversation, "dados_adicionais")
     await db.commit()
     await db.refresh(conversation)
 
@@ -1145,5 +1156,6 @@ async def ingest_os_db_event(
         tecnico_nome=data.get("tecnico_nome"),
         saved_rel_path=saved_rel_path,
         obs=data.get("obs"),
-        eventos_anteriores=[int(c) for c in (data.get("eventos_anteriores") or [])]
+        eventos_anteriores=[int(c) for c in (data.get("eventos_anteriores") or [])],
+        razao_social=data.get("cliente_razao_social")
     )
