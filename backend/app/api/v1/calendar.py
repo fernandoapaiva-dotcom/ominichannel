@@ -262,6 +262,9 @@ async def update_calendar_event(
     if payload.event_type is not None:
         event.event_type = payload.event_type
     if payload.start_time is not None:
+        if event.start_time != payload.start_time:
+            # Novo horário: o lembrete de 1 hora antes precisa valer de novo
+            event.notified_hours_before = False
         event.start_time = payload.start_time
     if payload.end_time is not None:
         event.end_time = payload.end_time

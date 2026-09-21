@@ -457,25 +457,36 @@ async def check_and_send_calendar_reminders():
 
             footer = f"{dept_label} • Sistema de Tarefas"
 
-            # 2. Morning reminder on the day of the event
-            is_same_day = (event_time_brt.date() == now_brt.date())
-            if is_same_day and not ev.notified_day_of:
-                sent_any = False
-                for idx, raw_phone in enumerate(phone_list):
-                    emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
-                    title = "☀️ LEMBRETE: COMPROMISSO HOJE"
-                    description = (
-                        f"Olá, *{emp_name}*! Lembramos que você tem um compromisso agendado para hoje:\n\n"
-                        f"📌 *Tipo:* {type_label}\n"
-                        f"🏷️ *Compromisso:* {ev.title}\n"
-                        f"⏰ *Horário:* {time_str}\n"
-                        f"👤 *Cliente:* {client_info}\n"
-                        f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
-                    )
-                    if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
-                        sent_any = True
-                if sent_any:
-                    ev.notified_day_of = True
+            # Lembrete único, 1 hora antes do compromisso (start_time é guardado em horário de Brasília).
+            # Não há mais lembrete "de manhã no dia". Eventos de dia inteiro não têm hora, então ficam de fora.
+            if ev.all_day or ev.notified_hours_before or not ev.start_time:
+                continue
+            minutes_left = (ev.start_time - now_brt).total_seconds() / 60.0
+            if not (0 < minutes_left <= 60):
+                continue
+
+            # Evento criado já dentro da última hora: o aviso de criação acabou de sair, não repete.
+            created_brt = (ev.criado_em - timedelta(hours=3)) if ev.criado_em else None
+            if created_brt and (ev.start_time - created_brt).total_seconds() <= 3600:
+                ev.notified_hours_before = True
+                continue
+
+            sent_any = False
+            for idx, raw_phone in enumerate(phone_list):
+                emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
+                title = "⏰ LEMBRETE: COMPROMISSO EM 1 HORA"
+                description = (
+                    f"Olá, *{emp_name}*! Lembramos que você tem um compromisso daqui a cerca de 1 hora:\n\n"
+                    f"📌 *Tipo:* {type_label}\n"
+                    f"🏷️ *Compromisso:* {ev.title}\n"
+                    f"⏰ *Horário:* {time_str}\n"
+                    f"👤 *Cliente:* {client_info}\n"
+                    f"📝 *Detalhes:* {ev.description or 'Sem observações adicionais.'}"
+                )
+                if await send_whatsapp_to_employee(inst_list, raw_phone, title, description, footer, event_id=ev.id):
+                    sent_any = True
+            if sent_any:
+                ev.notified_hours_before = True
 
         await session.commit()
 

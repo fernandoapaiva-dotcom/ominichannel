@@ -2054,6 +2054,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   }
 
+  // Textos que o cliente escreveu junto do pin ("procurar o Carlos no almoxarifado", ponto de
+  // referência...): até 10 min depois do pin (ou 2 min antes), parando num novo pin do cliente.
+  // Vão para a descrição do evento e, com ela, para o WhatsApp do funcionário.
+  const customerNotesForLocation = (locMsg: any): string => {
+    if (!locMsg) return '';
+    const all = [...(conversation?.messages || [])].sort(
+      (a: any, b: any) => normalizeIsoDate(a.timestamp).getTime() - normalizeIsoDate(b.timestamp).getTime()
+    );
+    const idx = all.findIndex((m: any) => m.id === locMsg.id);
+    if (idx < 0) return '';
+    const t0 = normalizeIsoDate(locMsg.timestamp).getTime();
+    const notes: string[] = [];
+    for (let i = idx - 1; i >= 0; i--) {
+      const m: any = all[i];
+      if (t0 - normalizeIsoDate(m.timestamp).getTime() > 2 * 60 * 1000) break;
+      if (m.remetente === 'cliente' && m.tipo === 'texto' && m.conteudo) notes.unshift(String(m.conteudo).trim());
+      else if (m.remetente === 'cliente' && m.tipo === 'localizacao') break;
+    }
+    for (let i = idx + 1; i < all.length; i++) {
+      const m: any = all[i];
+      if (normalizeIsoDate(m.timestamp).getTime() - t0 > 10 * 60 * 1000) break;
+      if (m.remetente === 'cliente' && m.tipo === 'localizacao') break;
+      if (m.remetente === 'cliente' && m.tipo === 'texto' && m.conteudo) notes.push(String(m.conteudo).trim());
+    }
+    return notes.filter(Boolean).slice(0, 5).map(n => '• ' + n).join(String.fromCharCode(10));
+  };
+
   const renderLocationCard = (rawLoc: string, extra?: any, locMsg?: any) => {
     const safeRawLoc = typeof rawLoc === 'string' ? rawLoc : String(rawLoc || '');
 
@@ -2118,11 +2145,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       if (!onOpenScheduleTask) return;
       const customerName = conversation?.contact?.nome || 'Cliente';
       const placeLine = [addressText, placeName !== 'Localização do cliente' ? placeName : ''].filter(Boolean).join(' - ');
+      const notes = customerNotesForLocation(locMsg);
       onOpenScheduleTask({
         title: `Visita técnica - ${customerName}`,
         description: `📍 Local da visita (enviado pelo cliente):
-${placeLine}
-${googleMapsUrl}
+${placeLine ? placeLine + ' ' : ''}${googleMapsUrl}${notes ? String.fromCharCode(10, 10) + '📝 Recado do cliente (quem procurar / referências):' + String.fromCharCode(10) + notes : ''}
 
 👤 Cliente: ${customerName}
 📞 Telefone: ${conversation?.contact?.telefone || ''}
@@ -5151,9 +5178,10 @@ ${googleMapsUrl}
                               ? (cleanText.length > 40 ? cleanText.substring(0, 40) + '...' : cleanText)
                               : `Mensagem ${msg.tipo}`;
 
+                            const locNotes = msg.tipo === 'localizacao' && msg.remetente === 'cliente' ? customerNotesForLocation(msg) : '';
                             onOpenScheduleTask({
                               title: `Atendimento ${customerName} - ${summaryText}`,
-                              description: `💬 Mensagem do WhatsApp:\n"${rawMsg}"\n\n👤 Cliente: ${customerName}\n📞 Telefone: ${conversation?.contact?.telefone || ''}\n📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}`,
+                              description: `💬 Mensagem do WhatsApp:\n"${rawMsg}"\n\n👤 Cliente: ${customerName}\n📞 Telefone: ${conversation?.contact?.telefone || ''}\n📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}${locNotes ? String.fromCharCode(10) + String.fromCharCode(10) + '📝 Recado do cliente (quem procurar / referências):' + String.fromCharCode(10) + locNotes : ''}`,
                               contact_id: conversation?.contact_id || conversation?.contact?.id,
                               conversation_id: conversation?.id,
                               message_id: msg.id,
