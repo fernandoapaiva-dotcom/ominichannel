@@ -116,6 +116,55 @@ def build_phone(ddd: str, numero: str) -> str:
     return digits
 
 
+# Número dentro do texto livre do campo "Contato" da O.S.: DDD opcional + 8 ou 9 dígitos,
+# com espaço, ponto ou hífen no meio ("61 9606-0567", "996463103", "33191133").
+_CONTATO_NUM = re.compile(r"(?<!\d)(?:\(?(\d{2})\)?[\s.-]*)?(9?\d{4})[\s.-]?(\d{4})(?!\d)")
+_CONTATO_RUIDO = re.compile(r"\b(E|OU|TEL|CEL|CELULAR|FONE|WHATSAPP|ZAP)\b", re.I)
+
+
+def parse_contato(texto: str, ddd_padrao: str = "61"):
+    """
+    O campo "Contato" da O.S. é texto livre digitado pelo atendente: 'ANDRE 33191133 / 996463103',
+    '61 984276819 - ROSANGELA', 'JAIME', '9'. Devolve (nome, [celulares], [fixos]) - números já
+    com 55+DDD. Celular = 9 dígitos começando em 9 (ou 8 dígitos começando em 6-9, sem o nono
+    dígito antigo, ao qual o 9 é acrescentado). Fixo (33191133) não recebe WhatsApp.
+    """
+    texto = (texto or "").strip()
+    celulares, fixos = [], []
+
+    def _achou(m):
+        ddd, a, b = m.group(1), m.group(2), m.group(3)
+        numero = a + b
+        if len(numero) == 9 and numero[0] != "9":
+            return m.group(0)  # 9 dígitos que não começam com 9 não são telefone
+        if len(numero) == 8 and numero[0] in "6789":
+            numero = "9" + numero
+        completo = "55" + (ddd or ddd_padrao) + numero
+        (celulares if len(numero) == 9 else fixos).append(completo)
+        return " "
+
+    resto = _CONTATO_NUM.sub(_achou, texto)
+    nome = re.sub(r"[^A-Za-zÀ-ÿ ]", " ", resto)
+    nome = _CONTATO_RUIDO.sub(" ", nome)
+    nome = re.sub(r"\s+", " ", nome).strip().title()
+    return nome, celulares, fixos
+
+
+def resolve_recipient(event: dict):
+    """
+    Quem recebe o aviso: se o campo "Contato" da O.S. tem um celular (o responsável que responde
+    pelo cliente, ex. o André de uma empresa/CNPJ), o aviso vai para ele, chamando-o pelo nome.
+    Sem celular no Contato, continua como sempre: celular/fone do cadastro do cliente.
+    Retorna (telefone, nome, origem).
+    """
+    nome_cliente = event.get("RAZAOSOCIAL") or event.get("NOMEFANTASIA")
+    ddd_cliente = re.sub(r"\D", "", str(event.get("DDD") or "")) or "61"
+    nome_contato, celulares, _fixos = parse_contato(event.get("CONTATO"), ddd_cliente)
+    if celulares:
+        return celulares[0], (nome_contato or nome_cliente), "contato"
+    return build_phone(event.get("DDD"), event.get("CELULAR") or event.get("FONE")), nome_cliente, "cadastro"
+
+
 def find_expected_pdf(config: dict, tipo: str, codos: int, wait_seconds: int = 5) -> str:
     """
     Softsystem salva o PDF nomeado pelo código da O.S. (confirmado: "1933.pdf" para
@@ -143,7 +192,7 @@ def fetch_new_events(cur, since_data) -> list:
         cur.execute("""
             SELECT eo.LOJA, eo.CODOS, eo.DATA, eo.CODTIPOEVENTOOS, eo.OBS,
                    os.CODTIPOORDEMSERVICO, os.CNPJ, os.TECNICOATENDIMENTO,
-                   cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE
+                   cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE, os.CONTATO
             FROM EVENTOSORDEMSERVICO eo
             JOIN ORDEMSERVICO os ON os.LOJA = eo.LOJA AND os.CODOS = eo.CODOS
             LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
@@ -155,7 +204,7 @@ def fetch_new_events(cur, since_data) -> list:
         cur.execute("""
             SELECT eo.LOJA, eo.CODOS, eo.DATA, eo.CODTIPOEVENTOOS, eo.OBS,
                    os.CODTIPOORDEMSERVICO, os.CNPJ, os.TECNICOATENDIMENTO,
-                   cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE
+                   cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE, os.CONTATO
             FROM EVENTOSORDEMSERVICO eo
             JOIN ORDEMSERVICO os ON os.LOJA = eo.LOJA AND os.CODOS = eo.CODOS
             LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
@@ -201,7 +250,7 @@ def find_os_by_codos(config: dict, codos: int):
             try:
                 cur.execute("""
                     SELECT os.LOJA, os.CODOS, os.CODTIPOORDEMSERVICO, os.CNPJ, os.TECNICOATENDIMENTO,
-                           cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE
+                           cli.RAZAOSOCIAL, cli.NOMEFANTASIA, cli.DDD, cli.CELULAR, cli.FONE, os.CONTATO
                     FROM ORDEMSERVICO os
                     LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
                     WHERE os.CODOS = ?
@@ -227,7 +276,9 @@ def find_os_by_codos(config: dict, codos: int):
 def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str, pdf_path: str) -> bool:
     url = config["backend_url"].rstrip("/") + "/api/v1/os-handler/db-event"
     headers = {"X-OS-Handler-Key": config["api_key"]}
-    phone = build_phone(event.get("DDD"), event.get("CELULAR") or event.get("FONE"))
+    phone, recipient_name, recipient_source = resolve_recipient(event)
+    if recipient_source == "contato":
+        logger.info(f"[{empresa_key}] O.S. #{event['CODOS']}: aviso vai para o Contato da O.S. ({recipient_name}, {phone}).")
     if not phone:
         logger.warning(f"[{empresa_key}] O.S. #{event['CODOS']}: sem telefone do cliente, não enviado.")
         return True  # não é um erro de rede - não faz sentido re-tentar, só pula
@@ -237,7 +288,7 @@ def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str
         "loja": event["LOJA"],
         "codos": event["CODOS"],
         "cod_tipo_evento": event["CODTIPOEVENTOOS"],
-        "cliente_nome": event.get("RAZAOSOCIAL") or event.get("NOMEFANTASIA"),
+        "cliente_nome": recipient_name,
         "cliente_telefone": phone,
         "natureza_codigo": event.get("CODTIPOORDEMSERVICO"),
         "equip_marca": event.get("_equip_marca"),

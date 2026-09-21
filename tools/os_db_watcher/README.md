@@ -49,6 +49,17 @@ removidos, só vira motivo se houver conteúdo técnico, a IA escreve apenas o m
 sem motivo. **Depende de a chave do Gemini estar válida** nas configurações; sem ela, sai
 sempre a mensagem genérica.
 
+### Para quem o aviso vai: campo "Contato" da O.S.
+
+Se o campo **Contato** da O.S. (o retângulo no topo da tela da O.S.) tiver um **celular**, o aviso vai para ele
+e a mensagem chama a pessoa pelo nome ("Olá, Andre!") - útil quando o cliente é uma empresa/CNPJ e quem
+responde por ela é um responsável. O campo é texto livre, então o vigia entende formatos como
+`ANDRE 33191133 / 996463103`, `61 984276819 - ROSANGELA` ou `PEDRO 9975-3596`: pega o primeiro celular
+(número fixo é ignorado - não recebe WhatsApp; 8 dígitos começando em 9 ganham o 9 extra) e o que sobrar
+de letras vira o nome. **Sem celular no Contato** (vazio, só nome, só fixo), o aviso segue como antes:
+celular/fone do cadastro do cliente, com o nome do cadastro. Para o Contato valer, digite o celular
+dele no campo.
+
 ## Regras que o operador precisa seguir
 
 - **PDF de Abertura de OS** (relatório "Ordem de Serviço - Abertura de OS") -> salvar na
