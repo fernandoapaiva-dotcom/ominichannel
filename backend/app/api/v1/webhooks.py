@@ -321,38 +321,71 @@ async def notify_os_approval_result(
     from app.core.database import AsyncSessionLocal
     try:
         status_label = "✅ *APROVADO*" if aprovado else "❌ *RECUSADO*"
+
+        # Nome do cliente e do arquivo: Razão Social da O.S. (o contato da conversa pode ser a pessoa
+        # que responde pela empresa, ex. "Andre" - vai como "Contato" no texto do grupo)
+        async with AsyncSessionLocal() as db_names:
+            conv_for_names = await db_names.get(Conversation, conversation_id)
+            conversation_extra = dict(conv_for_names.dados_adicionais or {}) if conv_for_names else {}
+        razao_social = os_pdf_client_name(conversation_extra, os_numero, client_name)
+        pdf_file_name = _build_os_pdf_filename(os_numero, razao_social)
+
+        cliente_line = f"Cliente: {razao_social}"
+        if razao_social != client_name and client_name and client_name != "Cliente":
+            cliente_line += f"\nContato: {client_name}"
         group_text = (
             f"📋 *Ordem de Serviço #{os_numero}*\n"
-            f"Cliente: {client_name}\n"
+            f"{cliente_line}\n"
             f"Status: {status_label} pelo cliente via WhatsApp."
         )
-        await evolution_service.send_text_message(
-            instance_name=instance_name,
-            number=settings.SERV_OS_GROUP_JID,
-            text=group_text
-        )
+
+        # O PDF do orçamento vai no grupo (com o resultado como legenda, numa mensagem só) e também
+        # direto pro técnico. Sem o arquivo, o grupo recebe só o texto.
+        base64_data = None
+        abs_path = os.path.join("uploads", pdf_relative_path) if pdf_relative_path else ""
+        if abs_path and os.path.isfile(abs_path):
+            with open(abs_path, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode("utf-8")
+        elif pdf_relative_path:
+            logger.warning(f"[OS HANDLER APROVAÇÃO] Arquivo do orçamento não encontrado: {abs_path}")
+
+        if base64_data:
+            group_res = await evolution_service.send_media_message(
+                instance_name=instance_name,
+                number=settings.SERV_OS_GROUP_JID,
+                media_type="document",
+                mimetype="application/pdf",
+                media=base64_data,
+                file_name=pdf_file_name,
+                caption=group_text,
+                skip_anti_ban_pacing=True
+            )
+            if not (isinstance(group_res, dict) and group_res.get("success")):
+                logger.warning(f"[OS HANDLER APROVAÇÃO] PDF não foi para o grupo ({group_res}) - enviando só o texto")
+                await evolution_service.send_text_message(
+                    instance_name=instance_name, number=settings.SERV_OS_GROUP_JID, text=group_text
+                )
+        else:
+            await evolution_service.send_text_message(
+                instance_name=instance_name,
+                number=settings.SERV_OS_GROUP_JID,
+                text=group_text
+            )
         logger.info(f"[OS HANDLER APROVAÇÃO] Grupo SERV notificado sobre O.S. #{os_numero} ({'aprovado' if aprovado else 'recusado'})")
 
-        if tecnico_phone:
-            abs_path = os.path.join("uploads", pdf_relative_path)
-            if os.path.isfile(abs_path):
-                with open(abs_path, "rb") as f:
-                    file_bytes = f.read()
-                base64_data = base64.b64encode(file_bytes).decode("utf-8")
-                caption = f"{status_label.replace('*', '')} - O.S. #{os_numero} ({client_name})"
-                await evolution_service.send_media_message(
-                    instance_name=instance_name,
-                    number=tecnico_phone,
-                    media_type="document",
-                    mimetype="application/pdf",
-                    media=base64_data,
-                    file_name="Orcamento_OS.pdf",
-                    caption=caption,
-                    skip_anti_ban_pacing=True
-                )
-                logger.info(f"[OS HANDLER APROVAÇÃO] PDF do orçamento enviado ao técnico ({tecnico_phone})")
-            else:
-                logger.warning(f"[OS HANDLER APROVAÇÃO] Arquivo do orçamento não encontrado para reenvio ao técnico: {abs_path}")
+        if tecnico_phone and base64_data:
+            caption = f"{status_label.replace('*', '')} - O.S. #{os_numero} ({razao_social})"
+            await evolution_service.send_media_message(
+                instance_name=instance_name,
+                number=tecnico_phone,
+                media_type="document",
+                mimetype="application/pdf",
+                media=base64_data,
+                file_name=pdf_file_name,
+                caption=caption,
+                skip_anti_ban_pacing=True
+            )
+            logger.info(f"[OS HANDLER APROVAÇÃO] PDF do orçamento enviado ao técnico ({tecnico_phone})")
 
         async with AsyncSessionLocal() as db:
             note_msg = Message(
