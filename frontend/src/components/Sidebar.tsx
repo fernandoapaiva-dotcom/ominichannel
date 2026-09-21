@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download } from 'lucide-react';
 import { User, Conversation } from '../types';
 import { apiFetch } from '../services/api';
 
 interface SidebarProps {
   user: User;
-  activeTab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin';
-  setActiveTab: (tab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin') => void;
+  activeTab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos';
+  setActiveTab: (tab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos') => void;
   onLogout: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -737,6 +737,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <ContactIcon size={18} />
             <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Clientes</span>
+          </button>
+
+          {/* Quadro de técnicos */}
+          <button
+            onClick={() => setActiveTab('tecnicos')}
+            title="Quadro de Técnicos"
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-md)',
+              background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+              color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              border: activeTab === 'tecnicos' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexDirection: 'column',
+              gap: '2px',
+            }}
+          >
+            <LayoutGrid size={18} />
+            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Técnicos</span>
           </button>
 
           {/* Admin */}

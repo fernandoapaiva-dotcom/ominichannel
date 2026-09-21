@@ -23,6 +23,7 @@ from app.api.v1.pix_keys import router as pix_keys_router
 from app.api.v1.technicians import router as technicians_router
 from app.api.v1.calendar import router as calendar_router
 from app.api.v1.os_handler_ingest import router as os_handler_ingest_router
+from app.api.v1.os_board import router as os_board_router
 from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
@@ -148,6 +149,7 @@ app.include_router(pix_keys_router, prefix=settings.API_V1_STR)
 app.include_router(technicians_router, prefix=settings.API_V1_STR)
 app.include_router(calendar_router, prefix=settings.API_V1_STR)
 app.include_router(os_handler_ingest_router, prefix=settings.API_V1_STR)
+app.include_router(os_board_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router)
 
 

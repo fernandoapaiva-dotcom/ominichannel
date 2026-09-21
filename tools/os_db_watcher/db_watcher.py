@@ -27,7 +27,7 @@ import socket
 import shutil
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from firebird.driver import connect, TPB, Isolation, TraAccessMode
@@ -506,6 +506,155 @@ def poll_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state: dict)
         con.close()
 
 
+# ---------------------------------------------------------------------------------------------
+# Quadro de técnicos: espelho das O.S. (técnico, cliente, equipamento, datas, eventos) no Ominichannel.
+# SOMENTE LEITURA no Softsystem. Roda em conexão própria e com try/except: uma falha aqui nunca atrapalha
+# os avisos aos clientes (poll_empresa acima).
+# ---------------------------------------------------------------------------------------------
+BOARD_BACKFILL_DAYS = 92   # a carga inicial traz os últimos ~3 meses (combinado com a loja)
+BOARD_BATCH_SIZE = 200
+
+
+def _board_orders_query(where_sql: str) -> str:
+    return f"""
+        SELECT os.LOJA, os.CODOS, os.CNPJ, os.DATA, os.TECNICOATENDIMENTO, os.TECNICOATENDIMENTO2,
+               os.CODTIPOORDEMSERVICO, os.DATAALTERACAO, cli.RAZAOSOCIAL, cli.NOMEFANTASIA, os.CODCONDPAG
+        FROM ORDEMSERVICO os
+        LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
+        {where_sql}
+    """
+
+
+def _board_equipamentos(cur, keys: set) -> dict:
+    """Primeiro equipamento de cada O.S. -> 'MARCA MODELO (DESCRIÇÃO)'. Uma consulta por faixa de CODOS."""
+    out = {}
+    if not keys:
+        return out
+    codos = sorted({c for _, c in keys})
+    for i in range(0, len(codos), 500):
+        chunk = codos[i:i + 500]
+        marks = ",".join("?" for _ in chunk)
+        cur.execute(f"""
+            SELECT eq.LOJA, eq.CODOS, eq.CODEQUIP, e.MARCA, e.MODELO, e.DESCRICAO
+            FROM EQUIPORDEMSERVICO eq
+            JOIN ORDEMSERVICO os ON os.LOJA = eq.LOJA AND os.CODOS = eq.CODOS
+            LEFT JOIN EQUIPAMENTOS e ON e.CNPJ = os.CNPJ AND e.CODEQUIP = eq.CODEQUIP
+            WHERE eq.CODOS IN ({marks})
+            ORDER BY eq.LOJA, eq.CODOS, eq.CODEQUIP
+        """, tuple(chunk))
+        for loja, codos_, _cod, marca, modelo, desc in cur.fetchall():
+            if (loja, codos_) in out:
+                continue
+            mm = " ".join(p for p in [marca, modelo] if p)
+            out[(loja, codos_)] = f"{mm} ({desc})" if mm and desc else (mm or desc or None)
+    return out
+
+
+def _board_events(cur, keys: set) -> dict:
+    out = {}
+    if not keys:
+        return out
+    codos = sorted({c for _, c in keys})
+    for i in range(0, len(codos), 500):
+        chunk = codos[i:i + 500]
+        marks = ",".join("?" for _ in chunk)
+        cur.execute(f"SELECT LOJA, CODOS, DATA, CODTIPOEVENTOOS FROM EVENTOSORDEMSERVICO WHERE CODOS IN ({marks}) ORDER BY DATA", tuple(chunk))
+        for loja, codos_, data, cod in cur.fetchall():
+            out.setdefault((loja, codos_), []).append((data, cod))
+    return out
+
+
+def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
+    keys = {(r[0], r[1]) for r in order_rows}
+    equips = _board_equipamentos(cur, keys)
+    events = _board_events(cur, keys)
+    orders, evs = [], []
+    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag in order_rows:
+        orders.append({
+            "loja": loja, "codos": codos, "cnpj": cnpj, "cliente": razao or fantasia,
+            "tecnico": tec1, "tecnico2": tec2, "data_entrada": data.isoformat() if data else None,
+            "cod_tipo_os": cod_tipo, "equipamento": equips.get((loja, codos)),
+            # Condição de pagamento preenchida = O.S. já efetivada (venda gerada): sai do quadro
+            "paga": cond_pag is not None,
+        })
+        for ev_data, cod in events.get((loja, codos), []):
+            evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "data": ev_data.isoformat()})
+    return {"empresa": empresa_key, "orders": orders, "events": evs}
+
+
+def _board_post(config: dict, payload: dict) -> bool:
+    url = config["backend_url"].rstrip("/") + "/api/v1/os-board/sync"
+    try:
+        resp = requests.post(url, headers={"X-OS-Handler-Key": config["api_key"]}, json=payload,
+                             timeout=config.get("timeout_seconds", 60))
+        if resp.status_code == 200:
+            return True
+        logger.error(f"[quadro] Servidor recusou o lote ({len(payload['orders'])} O.S.): HTTP {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"[quadro] Erro ao enviar lote ao servidor: {e}")
+    return False
+
+
+def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state: dict):
+    """Carga inicial do histórico (uma vez) e depois só o que mudou (O.S. alteradas ou com evento novo)."""
+    board = state.setdefault(empresa_key, {}).setdefault("board", {})
+    con = db_connect(empresa_cfg)
+    try:
+        tra, cur = read_only_cursor(con)
+        try:
+            # marcos de "agora" lidos ANTES da carga: o que mudar durante ela é pego no ciclo seguinte
+            cur.execute("SELECT MAX(DATAALTERACAO) FROM ORDEMSERVICO")
+            max_alt = cur.fetchone()[0]
+            cur.execute("SELECT MAX(DATA) FROM EVENTOSORDEMSERVICO")
+            max_evt = cur.fetchone()[0]
+
+            if not board.get("backfilled"):
+                backfill_from = datetime.now() - timedelta(days=BOARD_BACKFILL_DAYS)
+                # O.S. já efetivadas (condição de pagamento preenchida) não entram na carga inicial
+                cur.execute(_board_orders_query("WHERE os.DATA >= ? AND os.CODCONDPAG IS NULL ORDER BY os.CODOS"), (backfill_from,))
+                rows = cur.fetchall()
+                logger.info(f"[{empresa_key}] Quadro de técnicos: carga inicial de {len(rows)} O.S. em aberto de pagamento (desde {backfill_from.date()}).")
+                for i in range(0, len(rows), BOARD_BATCH_SIZE):
+                    batch = rows[i:i + BOARD_BATCH_SIZE]
+                    if not _board_post(config, _board_payload(cur, empresa_key, batch)):
+                        logger.warning(f"[{empresa_key}] Quadro: carga inicial interrompida no lote {i // BOARD_BATCH_SIZE + 1}; tenta de novo no próximo ciclo.")
+                        return
+                board["backfilled"] = True
+                board["cursor_alt"] = str(max_alt) if max_alt else None
+                board["cursor_evt"] = str(max_evt) if max_evt else None
+                save_state(state)
+                logger.info(f"[{empresa_key}] Quadro de técnicos: carga inicial concluída.")
+                return
+
+            default_cursor = datetime.now() - timedelta(days=1)
+            cursor_alt = datetime.fromisoformat(board["cursor_alt"]) if board.get("cursor_alt") else default_cursor
+            cursor_evt = datetime.fromisoformat(board["cursor_evt"]) if board.get("cursor_evt") else default_cursor
+            changed = set()
+            cur.execute("SELECT LOJA, CODOS FROM ORDEMSERVICO WHERE DATAALTERACAO > ?", (cursor_alt,))
+            changed.update((r[0], r[1]) for r in cur.fetchall())
+            cur.execute("SELECT LOJA, CODOS FROM EVENTOSORDEMSERVICO WHERE DATA > ?", (cursor_evt,))
+            changed.update((r[0], r[1]) for r in cur.fetchall())
+            if changed:
+                codos = sorted({c for _, c in changed})
+                rows = []
+                for i in range(0, len(codos), 500):
+                    chunk = codos[i:i + 500]
+                    marks = ",".join("?" for _ in chunk)
+                    cur.execute(_board_orders_query(f"WHERE os.CODOS IN ({marks})"), tuple(chunk))
+                    rows.extend(r for r in cur.fetchall() if (r[0], r[1]) in changed)
+                for i in range(0, len(rows), BOARD_BATCH_SIZE):
+                    if not _board_post(config, _board_payload(cur, empresa_key, rows[i:i + BOARD_BATCH_SIZE])):
+                        return  # cursor não avança: reenvia no próximo ciclo
+                logger.info(f"[{empresa_key}] Quadro de técnicos: {len(rows)} O.S. atualizada(s).")
+            board["cursor_alt"] = str(max_alt) if max_alt else board.get("cursor_alt")
+            board["cursor_evt"] = str(max_evt) if max_evt else board.get("cursor_evt")
+            save_state(state)
+        finally:
+            tra.commit()
+    finally:
+        con.close()
+
+
 def main():
     _lock_socket = acquire_single_instance_lock()  # noqa: F841
     config = load_config()
@@ -523,6 +672,10 @@ def main():
                     poll_empresa(config, empresa_key, empresa_cfg, state)
                 except Exception as e:
                     logger.error(f"[{empresa_key}] Erro inesperado no ciclo de consulta: {e}", exc_info=True)
+                try:
+                    sync_board_empresa(config, empresa_key, empresa_cfg, state)
+                except Exception as e:
+                    logger.error(f"[{empresa_key}] Quadro de técnicos: erro no ciclo (não afeta os avisos): {e}", exc_info=True)
             time.sleep(poll_interval)
     finally:
         folder_observer.stop()

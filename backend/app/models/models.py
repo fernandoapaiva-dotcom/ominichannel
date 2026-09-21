@@ -358,3 +358,45 @@ class CalendarEvent(Base):
     whatsapp_number: Mapped[Optional["WhatsAppNumber"]] = relationship("WhatsAppNumber")
 
 
+
+
+# Quadro de técnicos: espelho (só leitura) das O.S. do Softsystem, enviado pelo vigia da loja.
+class OsBoardOrder(Base):
+    __tablename__ = "os_board_orders"
+    __table_args__ = (
+        Index("ux_os_board_orders_key", "tenant_id", "empresa", "loja", "codos", unique=True),
+        Index("ix_os_board_orders_tecnico", "tenant_id", "tecnico"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))            # "servweld" | "centrooeste"
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    cnpj: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    cliente: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tecnico: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    tecnico2: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    data_entrada: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    cod_tipo_os: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    equipamento: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    situacao_evento: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)  # último evento (CODTIPOEVENTOOS)
+    ultimo_evento_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finalizada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    paga: Mapped[bool] = mapped_column(Boolean, default=False)  # condição de pagamento preenchida = já efetivada
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class OsBoardEvent(Base):
+    __tablename__ = "os_board_events"
+    __table_args__ = (
+        Index("ux_os_board_events_key", "tenant_id", "empresa", "loja", "codos", "cod_evento", "data", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    cod_evento: Mapped[int] = mapped_column(Integer)
+    data: Mapped[datetime] = mapped_column(DateTime, index=True)

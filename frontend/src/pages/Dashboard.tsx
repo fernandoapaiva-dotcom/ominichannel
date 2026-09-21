@@ -15,6 +15,7 @@ import { CalendarModal } from '../components/CalendarModal';
 
 import { DepartmentBar } from '../components/DepartmentBar';
 import { MobileBottomNav } from '../components/MobileBottomNav';
+import { TechBoard } from '../components/TechBoard';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
@@ -30,11 +31,11 @@ interface DashboardProps {
 }
  
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin'>(() => {
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos'>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const t = params.get('tab');
-      if (t === 'admin' || t === 'groups' || t === 'contacts' || t === 'segmentation') {
+      if (t === 'admin' || t === 'groups' || t === 'contacts' || t === 'segmentation' || t === 'tecnicos') {
         return t as any;
       }
     } catch {}
@@ -778,6 +779,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               }
               return c;
             }));
+          } else if (payload.type === 'OS_BOARD_UPDATE') {
+            // Quadro de técnicos: uma O.S. mudou de estágio no Softsystem
+            window.dispatchEvent(new CustomEvent('os-board-update'));
           } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {
@@ -1262,6 +1266,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
       {activeTab === 'segmentation' && (
         <SegmentationPanel />
+      )}
+
+      {activeTab === 'tecnicos' && (
+        <TechBoard user={user} onBack={() => setActiveTab('chats')} />
       )}
 
       {activeTab === 'admin' && (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Users, Contact as ContactIcon, Settings } from 'lucide-react';
+import { MessageSquare, Users, Contact as ContactIcon, Settings, LayoutGrid } from 'lucide-react';
 import { User } from '../types';
 
 interface MobileBottomNavProps {
@@ -36,6 +36,12 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       id: 'contacts',
       label: 'Clientes',
       icon: ContactIcon,
+      badge: 0
+    },
+    {
+      id: 'tecnicos',
+      label: 'Técnicos',
+      icon: LayoutGrid,
       badge: 0
     },
     ...(user.role === 'admin' ? [{
