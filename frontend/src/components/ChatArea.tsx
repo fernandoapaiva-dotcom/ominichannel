@@ -2054,12 +2054,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     );
   }
 
-  const renderLocationCard = (rawLoc: string, extra?: any) => {
+  const renderLocationCard = (rawLoc: string, extra?: any, locMsg?: any) => {
     const safeRawLoc = typeof rawLoc === 'string' ? rawLoc : String(rawLoc || '');
 
     // Localização enviada PELO CLIENTE (pin do WhatsApp) - local de visita, não é a da loja
     const customerLoc = extra && typeof extra === 'object' ? extra.customer_location : null;
-    const isCustomerLoc = !!customerLoc || /LOCALIZAÇÃO RECEBIDA DO CLIENTE|Localização Compartilhada pelo Cliente/i.test(safeRawLoc);
+    const sentByCustomer = !locMsg || String(locMsg.remetente || "").toLowerCase() === "cliente";
+    const isCustomerLoc = sentByCustomer && (!!customerLoc || /LOCALIZAÇÃO RECEBIDA DO CLIENTE|Localização Compartilhada pelo Cliente/i.test(safeRawLoc));
 
     // Extract coordinates:
     let lat = -15.820418;
@@ -2129,6 +2130,7 @@ ${googleMapsUrl}
         event_type: 'visita_tecnica',
         contact_id: conversation?.contact_id || conversation?.contact?.id,
         conversation_id: conversation?.id,
+        message_id: locMsg?.id,
         contact_name: customerName,
         contact_phone: conversation?.contact?.telefone,
         start_time: new Date().toISOString(),
@@ -2620,7 +2622,7 @@ ${googleMapsUrl}
         );
 
       case 'localizacao':
-        return renderLocationCard(raw, msg.dados_adicionais);
+        return renderLocationCard(raw, msg.dados_adicionais, msg);
 
       default:
         // WhatsApp Contact Card renderer
@@ -2772,7 +2774,7 @@ ${googleMapsUrl}
           rawText.includes('[liveLocationMessage]')
         );
         if (isLocationText) {
-          return renderLocationCard(rawText, msg.dados_adicionais);
+          return renderLocationCard(rawText, msg.dados_adicionais, msg);
         }
 
         // WhatsApp Call Card Renderer (Mirror of WhatsApp Web)

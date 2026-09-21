@@ -1,12 +1,13 @@
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, List
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
 from app.core.database import AsyncSessionLocal
-from app.models.models import CalendarEvent, WhatsAppNumber
+from app.models.models import CalendarEvent, Message, WhatsAppNumber
 from app.services.evolution_service import evolution_service
 
 logger = logging.getLogger("calendar_reminder_service")
@@ -91,6 +92,49 @@ async def get_candidate_instances_for_event(ev: CalendarEvent, wns: List[WhatsAp
 
     return candidates
 
+_MAPS_COORDS = re.compile(r"[?&]q=(-?\d{1,3}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)")
+_LOC_HEADER_LINES = ("LOCALIZAÇÃO", "Localização Compartilhada", "Localização GPS", "WhatsApp Map", "locationMessage")
+
+
+def _location_from_text(text: str) -> Optional[dict]:
+    """Extrai lat/lng (+ nome/endereço, se houver) de um texto com link do Maps (?q=lat,lng)."""
+    m = _MAPS_COORDS.search(text or "")
+    if not m:
+        return None
+    lat, lng = float(m.group(1)), float(m.group(2))
+    if abs(lat) > 90 or abs(lng) > 180:
+        return None
+    lines = [l.strip().replace("*", "") for l in (text or "").split("\n") if l.strip()]
+    clean = [l for l in lines if not l.startswith("http") and not any(h in l for h in _LOC_HEADER_LINES)]
+    name = clean[0] if clean else ""
+    address = " - ".join(clean[1:]) if len(clean) > 1 else ""
+    return {"latitude": lat, "longitude": lng, "name": name, "address": address}
+
+
+async def get_event_location(session, ev: CalendarEvent) -> Optional[dict]:
+    """
+    Localização ligada ao evento: a da mensagem de onde o compromisso foi agendado (pin que o
+    cliente mandou) ou, se não houver, um link do Maps na descrição do evento.
+    """
+    try:
+        if ev.message_id:
+            msg = (await session.execute(select(Message).where(Message.id == ev.message_id))).scalar_one_or_none()
+            if msg:
+                cl = (msg.dados_adicionais or {}).get("customer_location")
+                if cl and cl.get("latitude") is not None and cl.get("longitude") is not None:
+                    return {
+                        "latitude": float(cl["latitude"]), "longitude": float(cl["longitude"]),
+                        "name": cl.get("name") or "", "address": cl.get("address") or "",
+                    }
+                loc = _location_from_text(msg.conteudo or "")
+                if loc:
+                    return loc
+        return _location_from_text(ev.description or "")
+    except Exception as e:
+        logger.warning(f"Não foi possível obter a localização do evento #{ev.id}: {e}")
+        return None
+
+
 async def send_whatsapp_to_employee(
     instances: List[str],
     employee_phone: str,
@@ -98,7 +142,8 @@ async def send_whatsapp_to_employee(
     description: str,
     footer: str,
     event_id: Optional[int] = None,
-    buttons: Optional[List[dict]] = None
+    buttons: Optional[List[dict]] = None,
+    location: Optional[dict] = None
 ) -> bool:
     try:
         clean_phone = "".join(filter(str.isdigit, employee_phone))
@@ -123,6 +168,19 @@ async def send_whatsapp_to_employee(
 
                 if res_txt and not res_txt.get("error"):
                     logger.info(f"Mensagem de tarefa enviada com sucesso para funcionário ({clean_phone}) via '{inst_name}'")
+                    if location:
+                        # Pin do mapa logo abaixo do aviso, pela mesma linha que entregou o texto
+                        try:
+                            await evolution_service.send_location_message(
+                                instance_name=inst_name,
+                                number=clean_phone,
+                                latitude=location["latitude"],
+                                longitude=location["longitude"],
+                                name=location.get("name") or "Local do atendimento",
+                                address=location.get("address") or ""
+                            )
+                        except Exception as loc_err:
+                            logger.warning(f"Aviso enviado, mas o pin do mapa falhou para {clean_phone}: {loc_err}")
                     return True
                 else:
                     err_detail = res_txt.get("error") if res_txt else "None"
@@ -177,6 +235,8 @@ async def send_immediate_creation_notification(event_id: int):
             phone_list = [p.strip() for p in (ev.employee_phone or "").replace(';', ',').replace('/', ',').split(',') if p.strip()]
             name_list = [n.strip() for n in (ev.employee_name or "").replace(';', ',').replace('/', ',').split(',') if n.strip()]
 
+            event_location = await get_event_location(session, ev)
+
             sent_any = False
             for idx, raw_phone in enumerate(phone_list):
                 emp_name = name_list[idx] if idx < len(name_list) else (name_list[0] if name_list else "Colaborador")
@@ -203,7 +263,7 @@ async def send_immediate_creation_notification(event_id: int):
 
                 footer = f"{dept_label} • Sistema de Tarefas"
 
-                success = await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id)
+                success = await send_whatsapp_to_employee(ordered_inst_names, raw_phone, title, description, footer, event_id=ev.id, location=event_location)
                 if success:
                     sent_any = True
                     logger.info(f"Notificação de tarefa enviada para {emp_name} ({raw_phone}) via {ordered_inst_names} - Evento #{ev.id}")

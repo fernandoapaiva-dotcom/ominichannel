@@ -1383,7 +1383,7 @@ async def receive_evolution_webhook(
 
     # Check location payload
     loc_msg = message_obj.get("locationMessage") or message_obj.get("liveLocationMessage")
-    customer_location_pin = bool(loc_msg)
+    customer_location_pin = bool(loc_msg) and not from_me
     customer_loc_extra: Dict[str, Any] = {}
     if loc_msg:
         msg_type = MessageType.LOCALIZACAO
@@ -1391,9 +1391,9 @@ async def receive_evolution_webhook(
         c_lng = loc_msg.get("degreesLongitude")
         c_name = loc_msg.get("name") or loc_msg.get("address") or "Localização Compartilhada pelo Cliente"
         c_addr = loc_msg.get("address") or ""
-        text_content = f"📍 *LOCALIZAÇÃO RECEBIDA DO CLIENTE*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
+        text_content = f"📍 *LOCALIZAÇÃO {'ENVIADA' if from_me else 'RECEBIDA DO CLIENTE'}*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
         # Estruturado: o painel usa isto para mostrar "Localização do cliente" (e não a da loja) e agendar a visita
-        customer_loc_extra = {
+        customer_loc_extra = {} if from_me else {
             "customer_location": {
                 "latitude": c_lat,
                 "longitude": c_lng,
