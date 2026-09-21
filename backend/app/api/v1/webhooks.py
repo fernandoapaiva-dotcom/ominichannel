@@ -2361,6 +2361,7 @@ async def receive_evolution_webhook(
                     return {"status": "success", "action": "os_handler_reply_ignored_burst_in_progress"}
 
             if classification == "CONFIRMA":
+                os_burst_state.mark_confirmed(conversation.id)
                 reply_text = (
                     "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
                     if len(pdf_codos_list) <= 1 else

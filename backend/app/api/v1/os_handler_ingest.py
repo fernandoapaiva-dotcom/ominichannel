@@ -501,6 +501,7 @@ async def dispatch_abertura_messages(
                     # Libera o PDF agora, sem o pedido de "responda SIM".
                     codos_list, paths_list = parse_confirm_os_pdf_marker(conversation.assunto_atual)
                     conversation.assunto_atual = "Atendimento Concierge"
+                    os_burst_state.mark_confirmed(conversation_id)
                     await db.commit()
                     ack = (
                         "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
@@ -594,6 +595,15 @@ async def dispatch_supplementary_entrada_item(
                 if attempt < 2:
                     await asyncio.sleep(2)
                     await db.refresh(conversation)
+                elif saved_rel_path and os_burst_state.confirmed_recently(conversation_id):
+                    # O cliente já confirmou nesta visita antes desta O.S. entrar no aviso: não há mais nada
+                    # pendente para incluí-la, então o PDF dela sai direto (sem pedir "Sim" de novo).
+                    asyncio.create_task(send_os_pdf_after_confirmation(
+                        tenant_id=tenant_id, conversation_id=conversation_id, whatsapp_number_id=whatsapp_number_id,
+                        instance_name=instance_name, recipient_phone=phone, pdf_relative_paths=[saved_rel_path],
+                        os_numeros=[str(codos)], client_name=contact_name or ""
+                    ))
+                    logger.info(f"[OS HANDLER INGEST] O.S. #{codos} suplementar: cliente já tinha confirmado - PDF enviado direto (conversa #{conversation_id})")
                 else:
                     logger.warning(f"[OS HANDLER INGEST] O.S. #{codos} suplementar: nenhuma confirmação CONFIRM_OS_PDF pendente encontrada para incluir (conversa #{conversation_id})")
 

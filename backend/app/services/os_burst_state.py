@@ -36,6 +36,23 @@ def get(conversation_id: int) -> Optional[dict]:
     return state
 
 
+_CONFIRMED: Dict[int, float] = {}
+
+
+def mark_confirmed(conversation_id: int) -> None:
+    """O cliente acabou de confirmar a leitura das condições (o PDF foi/está sendo liberado)."""
+    _CONFIRMED[conversation_id] = time.time()
+
+
+def confirmed_recently(conversation_id: int, within_seconds: int = 300) -> bool:
+    """
+    Uma O.S. do mesmo atendimento que chega DEPOIS do "Sim" não tem mais confirmação pendente para
+    entrar: como o cliente já confirmou nesta visita, o PDF dela sai direto (senão ficava sem enviar).
+    """
+    ts = _CONFIRMED.get(conversation_id)
+    return bool(ts and (time.time() - ts) <= within_seconds)
+
+
 def finish(conversation_id: int, state: dict) -> None:
     if _STATE.get(conversation_id) is state:
         _STATE.pop(conversation_id, None)
