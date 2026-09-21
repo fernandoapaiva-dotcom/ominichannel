@@ -8,7 +8,7 @@ import {
   Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, CalendarPlus
 } from 'lucide-react';
 import { isMisspelled } from '../utils/spellingCorrector';
-import { apiFetch, apiUpload } from '../services/api';
+import { apiFetch, apiUpload, apiUploadChunked, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
 import { PixModal } from './PixModal';
@@ -1228,12 +1228,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   ) => {
     try {
       const compressed = await compressImageIfNeeded(file);
-      const formData = new FormData();
-      formData.append('file', compressed);
-      if (idx === 0 && captionText) {
-        formData.append('caption', captionText);
+      let newMsg;
+      if (compressed.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+        // Arquivo grande: sobe em partes de 1 MB, cada uma com nova tentativa própria
+        newMsg = await apiUploadChunked(`/conversations/${convId}/media`, compressed, (idx === 0 && captionText) ? captionText : undefined);
+      } else {
+        const formData = new FormData();
+        formData.append('file', compressed);
+        if (idx === 0 && captionText) {
+          formData.append('caption', captionText);
+        }
+        newMsg = await apiUpload(`/conversations/${convId}/media`, formData);
       }
-      const newMsg = await apiUpload(`/conversations/${convId}/media`, formData);
       failedUploadsRef.current.delete(tempId);
       if (newMsg && newMsg.id && onOptimisticMessageAdded) {
         onOptimisticMessageAdded({ ...newMsg, status: newMsg.status || 'sent' }, tempId);

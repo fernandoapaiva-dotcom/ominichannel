@@ -2228,6 +2228,28 @@ async def send_agent_media(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
+    file_bytes = await file.read()
+    return await _send_agent_media_core(
+        conversation_id, file.filename or "", file.content_type or "", file_bytes, caption, current_user, db
+    )
+
+
+# Arquivos maiores que isto vão ao Evolution por URL (ele mesmo baixa) e não como base64 dentro do JSON:
+# um PDF de 6 MB virava um JSON de ~8 MB e o Evolution devolvia 500 / a conexão estourava o tempo.
+MEDIA_BY_URL_THRESHOLD_BYTES = 1_500_000
+MEDIA_CHUNK_ROOT = os.path.join("uploads", "_chunks")
+MEDIA_MAX_BYTES = 100 * 1024 * 1024
+
+
+async def _send_agent_media_core(
+    conversation_id: int,
+    filename: str,
+    content_type: str,
+    file_bytes: bytes,
+    caption: Optional[str],
+    current_user: User,
+    db: AsyncSession
+):
     stmt = (
         select(Conversation)
         .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
@@ -2244,18 +2266,17 @@ async def send_agent_media(
 
     # 1. Save uploaded file to disk
     os.makedirs("uploads", exist_ok=True)
-    file_ext = os.path.splitext(file.filename)[1] or ""
+    file_ext = os.path.splitext(filename)[1] or ""
     unique_filename = f"{uuid.uuid4().hex}{file_ext}"
     file_path = os.path.join("uploads", unique_filename)
 
-    file_bytes = await file.read()
     with open(file_path, "wb") as f:
         f.write(file_bytes)
 
     file_url = f"/uploads/{unique_filename}"
 
     # 2. Determine MessageType and Evolution media_type
-    mimetype = file.content_type or "application/octet-stream"
+    mimetype = content_type or "application/octet-stream"
     if mimetype.startswith("image/"):
         msg_type = MessageType.IMAGEM
         media_type = "image"
@@ -2280,18 +2301,40 @@ async def send_agent_media(
         raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
 
     from app.services.evolution_service import evolution_service
-    send_res = await evolution_service.send_media_message(
-        instance_name=primary_inst,
-        number=conv.contact.telefone,
-        media_type=media_type,
-        mimetype=mimetype,
-        media=base64_data,
-        file_name=file.filename or unique_filename,
-        caption=formatted_caption or "",
-        skip_anti_ban_pacing=True
-    )
 
-    is_success = send_res.get("success", False) or bool(send_res.get("key")) or bool(send_res.get("id")) or send_res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201]
+    def _sent_ok(res: dict) -> bool:
+        return bool(res.get("success", False) or res.get("key") or res.get("id") or res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201])
+
+    send_res = None
+    if len(file_bytes) > MEDIA_BY_URL_THRESHOLD_BYTES:
+        public_base = os.getenv("PUBLIC_BASE_URL", "https://ominichannel.duckdns.org").rstrip("/")
+        send_res = await evolution_service.send_media_message(
+            instance_name=primary_inst,
+            number=conv.contact.telefone,
+            media_type=media_type,
+            mimetype=mimetype,
+            media=f"{public_base}/uploads/{unique_filename}",
+            file_name=filename or unique_filename,
+            caption=formatted_caption or "",
+            skip_anti_ban_pacing=True
+        )
+        if not _sent_ok(send_res):
+            logger.warning(f"[MEDIA] Envio por URL falhou ({send_res.get('error')}); tentando como base64...")
+            send_res = None
+
+    if send_res is None:
+        send_res = await evolution_service.send_media_message(
+            instance_name=primary_inst,
+            number=conv.contact.telefone,
+            media_type=media_type,
+            mimetype=mimetype,
+            media=base64_data,
+            file_name=filename or unique_filename,
+            caption=formatted_caption or "",
+            skip_anti_ban_pacing=True
+        )
+
+    is_success = _sent_ok(send_res)
     if not is_success:
         error_detail = send_res.get("error", "Falha de conexão ao enviar mídia no WhatsApp")
         raise HTTPException(
@@ -2304,7 +2347,7 @@ async def send_agent_media(
     conv.assigned_user_id = current_user.id
     conv.ultima_interacao_em = datetime.utcnow()
 
-    original_fn = file.filename or unique_filename
+    original_fn = filename or unique_filename
     if msg_type == MessageType.ARQUIVO:
         if caption:
             db_content = f"{file_url}|{original_fn}|{caption}"
@@ -2363,6 +2406,102 @@ async def send_agent_media(
     )
 
     return message
+
+_UPLOAD_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _chunk_dir(upload_id: str) -> str:
+    if not _UPLOAD_ID_RE.match(upload_id or ""):
+        raise HTTPException(status_code=400, detail="upload_id inválido")
+    return os.path.join(MEDIA_CHUNK_ROOT, upload_id)
+
+
+@router.post("/{conversation_id}/media/chunk")
+async def upload_media_chunk(
+    conversation_id: int,
+    upload_id: str = Form(...),
+    index: int = Form(...),
+    total: int = Form(...),
+    chunk: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Recebe UMA parte (~1 MB) de um arquivo grande. O navegador manda as partes em pedidos pequenos,
+    cada um com nova tentativa própria, em vez de um POST gigante que estourava o tempo do servidor
+    quando ele estava ocupado. A montagem e o envio ao WhatsApp acontecem em /media/complete.
+    """
+    conv = (await db.execute(
+        select(Conversation.id).where(Conversation.id == conversation_id, Conversation.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+    if index < 0 or total < 1 or index >= total or total > 400:
+        raise HTTPException(status_code=400, detail="Parte inválida")
+
+    data = await chunk.read()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Parte grande demais")
+    directory = _chunk_dir(upload_id)
+    os.makedirs(directory, exist_ok=True)
+    tmp_path = os.path.join(directory, f"{index:05d}.part.tmp")
+    with open(tmp_path, "wb") as f:
+        f.write(data)
+    os.replace(tmp_path, os.path.join(directory, f"{index:05d}.part"))  # reenvio da mesma parte é idempotente
+    return {"ok": True, "index": index, "size": len(data)}
+
+
+class MediaCompleteRequest(BaseModel):
+    upload_id: str
+    total: int
+    filename: str
+    content_type: Optional[str] = None
+    caption: Optional[str] = None
+
+
+@router.post("/{conversation_id}/media/complete", response_model=MessageResponse)
+async def complete_media_upload(
+    conversation_id: int,
+    payload: MediaCompleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Junta as partes recebidas em /media/chunk e envia o arquivo como um anexo normal."""
+    directory = _chunk_dir(payload.upload_id)
+    if not os.path.isdir(directory):
+        raise HTTPException(status_code=400, detail="Nenhuma parte recebida para este envio")
+
+    parts = [os.path.join(directory, f"{i:05d}.part") for i in range(payload.total)]
+    missing = [i for i, part in enumerate(parts) if not os.path.isfile(part)]
+    if missing:
+        raise HTTPException(status_code=409, detail=f"Faltam partes do arquivo: {missing[:10]}")
+
+    buffer = io.BytesIO()
+    for part in parts:
+        with open(part, "rb") as f:
+            buffer.write(f.read())
+        if buffer.tell() > MEDIA_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Arquivo maior que o limite de 100 MB")
+    file_bytes = buffer.getvalue()
+
+    try:
+        message = await _send_agent_media_core(
+            conversation_id, payload.filename, payload.content_type or "", file_bytes, payload.caption, current_user, db
+        )
+    finally:
+        # Limpa as partes deste envio e qualquer resto abandonado há mais de 1 dia
+        import shutil
+        shutil.rmtree(directory, ignore_errors=True)
+        try:
+            cutoff = datetime.utcnow().timestamp() - 86400
+            for name in os.listdir(MEDIA_CHUNK_ROOT):
+                path = os.path.join(MEDIA_CHUNK_ROOT, name)
+                if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                    shutil.rmtree(path, ignore_errors=True)
+        except Exception:
+            pass
+    return message
+
 
 @router.post("/{conversation_id}/transfer")
 async def transfer_conversation(
