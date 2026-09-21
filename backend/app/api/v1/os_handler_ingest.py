@@ -64,7 +64,7 @@ from app.services.protocol_service import generate_daily_protocol
 from app.services import os_burst_state
 from app.api.websockets import manager as ws_manager
 from app.api.v1.conversations import extract_evolution_msg_id
-from app.api.v1.webhooks import notify_os_approval_result
+from app.api.v1.webhooks import notify_os_approval_result, send_os_pdf_after_confirmation
 
 logger = logging.getLogger("os_handler_ingest")
 router = APIRouter(prefix="/os-handler", tags=["OS Handler - Ingestão de PDF"])
@@ -492,6 +492,27 @@ async def dispatch_abertura_messages(
                 for msg_content in info_messages:
                     await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, delay_sec)
                 burst["info_done"] = True
+
+                await db.refresh(conversation)
+                if burst["early_yes"] and (conversation.assunto_atual or "").startswith("CONFIRM_OS_PDF:"):
+                    # O cliente já disse "Sim" enquanto os termos saíam: essa é a confirmação dele (uma só).
+                    # Libera o PDF agora, sem o pedido de "responda SIM".
+                    codos_list, paths_list = parse_confirm_os_pdf_marker(conversation.assunto_atual)
+                    conversation.assunto_atual = "Atendimento Concierge"
+                    await db.commit()
+                    ack = (
+                        "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
+                        if len(codos_list) <= 1 else
+                        "Perfeito! Só um instante, já vou te enviar os PDFs completos das suas Ordens de Serviço. 📎"
+                    )
+                    await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, ack, delay_sec)
+                    asyncio.create_task(send_os_pdf_after_confirmation(
+                        tenant_id=tenant_id, conversation_id=conversation_id, whatsapp_number_id=whatsapp_number_id,
+                        instance_name=instance_name, recipient_phone=phone, pdf_relative_paths=paths_list,
+                        os_numeros=codos_list, client_name=contact_name or ""
+                    ))
+                    logger.info(f"[OS HANDLER INGEST] 'Sim' antecipado honrado: PDF liberado ao fim dos termos - conversa #{conversation_id}")
+                    return
 
                 if confirmation_prompt:
                     # Só pede o "SIM" se ainda fizer sentido: se o cliente já confirmou depois de receber

@@ -9,8 +9,9 @@ recebido "Perfeito! ... o PDF", o pedido de confirmação ("Muito importante..."
 
 Regras (aplicadas em webhooks.py e os_handler_ingest.py):
   - enquanto o pedido de SIM ainda não saiu, resposta ambígua do cliente é ignorada em silêncio;
-  - "Sim" só vale antes do pedido se o cliente já recebeu TODOS os termos (info_done) - aí o pedido
-    fica dispensado (skip_prompt);
+  - um "Sim" claro vale como a confirmação, sempre UMA só: se veio depois dos termos (info_done) o pedido
+    de SIM fica dispensado (skip_prompt); se veio no meio dos termos, é guardado (early_yes) e, assim que
+    o último termo sai, o PDF é liberado sem pedir de novo;
   - "Não" é tratado normalmente e o pedido deixa de ser enviado (a conversa já não está pendente).
 Processo único (pm2 fork_mode), então um dict em memória basta.
 """
@@ -22,7 +23,7 @@ _MAX_AGE_SECONDS = 600  # segurança: estado esquecido (ex.: falha no meio) não
 
 
 def start(conversation_id: int) -> dict:
-    state = {"started_at": time.time(), "info_done": False, "skip_prompt": False}
+    state = {"started_at": time.time(), "info_done": False, "skip_prompt": False, "early_yes": False}
     _STATE[conversation_id] = state
     return state
 

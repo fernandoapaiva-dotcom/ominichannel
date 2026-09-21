@@ -2333,7 +2333,14 @@ async def receive_evolution_webhook(
             burst = os_burst_state.get(conversation.id)
             if burst:
                 if classification == "CONFIRMA" and burst["info_done"]:
-                    burst["skip_prompt"] = True  # já leu todos os termos: o pedido de SIM fica dispensado
+                    burst["skip_prompt"] = True  # já recebeu todos os termos: o pedido de SIM fica dispensado
+                elif classification == "CONFIRMA":
+                    # "Sim" no meio dos termos: vale como a confirmação (uma só, sem pedir de novo). A sequência
+                    # termina de mandar os termos e libera o PDF sozinha (ver dispatch_abertura_messages).
+                    burst["early_yes"] = True
+                    logger.info(f"[OS HANDLER PDF] 'Sim' antecipado guardado - PDF sai ao fim dos termos (conversa #{conversation.id})")
+                    await db.commit()
+                    return {"status": "success", "action": "os_handler_early_confirmation_held"}
                 elif classification != "NEGA":
                     logger.info(f"[OS HANDLER PDF] Resposta '{text_content}' ignorada: sequência de abertura ainda em andamento (conversa #{conversation.id})")
                     await db.commit()
