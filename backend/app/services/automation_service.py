@@ -377,6 +377,8 @@ class AutomationService:
         "informado", "informada", "informar", "cliente", "whatsapp", "zap", "avisado", "aviso",
         "devolvido", "devolver", "retirado", "retirada", "enviado", "enviada", "para", "pelo", "pela",
         "via", "por", "com", "sem", "nao", "vai", "fazer", "servico", "proxima", "carga", "ira",
+        "cpf", "cnpj", "dono", "irmao", "filho", "filha", "esposa", "marido", "funcionario",
+        "motorista", "transportadora", "retirou", "pegou", "buscou", "entregue", "entregou",
     }
 
     @classmethod
