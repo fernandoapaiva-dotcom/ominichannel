@@ -94,20 +94,32 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
     # Avisos de progresso disparados quando o técnico muda o "Tipo de Evento" da O.S. no
     # Softsystem (aba Eventos). ENTRADA e "ORC ENV/ AGUARD APROVACAO" já são cobertos pelos
     # fluxos de cima (natureza + aprovação) - aqui ficam os demais estágios do ciclo de vida.
-    # Chave = código do tipo de evento no Softsystem (CODTIPOEVENTOOS), editável na tela de
-    # Automações. {nome_cliente} é o único placeholder suportado aqui.
+    # Chave = código do tipo de evento no Softsystem (CODTIPOEVENTOOS). Ainda NÃO editável na
+    # tela de Automações (o frontend não conhece este bloco) - hoje só muda aqui, no código.
+    # Placeholders: {nome_cliente}, {equipamento} (marca, modelo e descrição), {os_numero},
+    # {tipo_os}. O evento 6 (Aguardando Retirada) se adapta ao evento anterior da O.S. (ver
+    # "retirada_contextos"); o 11 (Sem Conserto) pode acrescentar {motivo}, lido da observação
+    # do técnico no Softsystem (ver AutomationService.build_evento_message).
     "eventos_os": {
         "enabled": True,
         "templates": {
-            "2": "🔍 Olá, {nome_cliente}! Seu equipamento está em *avaliação técnica* no momento.",
-            "4": "🔧 Olá, {nome_cliente}! Seu equipamento entrou em *execução/reparo*.",
-            "6": "✅ Ótima notícia, {nome_cliente}! Seu equipamento já está pronto e *disponível para retirada*.",
-            "7": "🏁 Olá, {nome_cliente}! Seu atendimento foi *finalizado*. Agradecemos a confiança em nossos serviços!",
+            "2": "🔍 Olá, {nome_cliente}! Seu equipamento {equipamento} referente à *O.S. #{os_numero}* está em *avaliação técnica* no momento.",
+            "4": "🔧 Olá, {nome_cliente}! Seu equipamento {equipamento} referente à *O.S. #{os_numero}* entrou em *execução/reparo*.",
+            "6": "✅ Ótima notícia, {nome_cliente}! Seu equipamento {equipamento} referente à *O.S. #{os_numero}* já está *disponível para retirada*.",
+            "7": "🏁 Olá, {nome_cliente}! A sua *O.S. #{os_numero}* em \"{tipo_os}\", referente ao equipamento {equipamento}, foi *finalizada*. Agradecemos a confiança em nossos serviços!",
             "8": "📦 Olá, {nome_cliente}! Estamos *aguardando a chegada de uma peça* necessária para o reparo do seu equipamento. Assim que chegar, damos continuidade.",
-            "11": "⚠️ Olá, {nome_cliente}! Identificamos que o seu equipamento *não possui conserto viável*. Em breve entraremos em contato com mais detalhes.",
-            "12": "ℹ️ Olá, {nome_cliente}! O reparo do seu equipamento *não foi autorizado*, conforme combinado.",
+            "11": "⚠️ Olá, {nome_cliente}! Após a avaliação técnica, identificamos que o seu equipamento {equipamento} referente à *O.S. #{os_numero}* *não possui conserto viável*.{motivo} Em breve entraremos em contato com mais detalhes.",
+            "12": "ℹ️ Olá, {nome_cliente}! O reparo do seu equipamento *não foi autorizado*, está disponível para retirada.",
             "13": "✅ Olá, {nome_cliente}! Não identificamos nenhum defeito no seu equipamento durante a avaliação.",
-            "14": "⚠️ Olá, {nome_cliente}! Conforme as Condições Gerais e o prazo já decorrido, o seu equipamento foi *desmontado/sucateado*."
+            "14": "⚠️ Olá, {nome_cliente}! Conforme as Condições Gerais e o prazo já decorrido, o seu equipamento {equipamento} referente à *O.S. #{os_numero}* foi *desmontado/sucateado*."
+        },
+        # Evento 6: escolhe o texto pelo evento MAIS RECENTE anterior da O.S. (ver
+        # AutomationService.retirada_contexto). Rascunhos - revisar com o usuário.
+        "retirada_contextos": {
+            "concluido": "✅ Ótima notícia, {nome_cliente}! O serviço do seu equipamento {equipamento} referente à *O.S. #{os_numero}* foi concluído e ele já está *disponível para retirada*.",
+            "nao_autorizado": "ℹ️ Olá, {nome_cliente}! Como o reparo do seu equipamento {equipamento} (*O.S. #{os_numero}*) *não foi autorizado*, ele já está *disponível para retirada*.",
+            "sem_defeito": "✅ Olá, {nome_cliente}! Não identificamos nenhum defeito no seu equipamento {equipamento} (*O.S. #{os_numero}*). Ele já está *disponível para retirada*.",
+            "sem_conserto": "⚠️ Olá, {nome_cliente}! O seu equipamento {equipamento} (*O.S. #{os_numero}*) não possui conserto viável e já está *disponível para retirada*."
         }
     },
     "custom_rules": [
@@ -153,7 +165,38 @@ class AutomationService:
         automations = cfg.get("automations")
         if not automations:
             return DEFAULT_AUTOMATION_CONFIG
-        return automations
+        return AutomationService._with_default_gaps(automations)
+
+    @staticmethod
+    def _with_default_gaps(saved: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Once anyone saves on the Automações screen, `saved` replaces the defaults ENTIRELY - and
+        that screen doesn't know about "eventos_os" (progress notices) nor any natureza added
+        later (e.g. visita_tecnica), so they'd silently stop existing: no progress messages at
+        all. Fills in only what's MISSING, never overrides what was saved (and deliberately
+        doesn't touch lists like diagnostic_prices, where a deleted entry must stay deleted).
+        """
+        import copy
+        merged = copy.deepcopy(saved)
+        default = DEFAULT_AUTOMATION_CONFIG
+
+        if "eventos_os" not in merged:
+            merged["eventos_os"] = copy.deepcopy(default["eventos_os"])
+        else:
+            for chave, valor in default["eventos_os"].items():
+                if isinstance(valor, dict):
+                    destino = merged["eventos_os"].setdefault(chave, {})
+                    for k, v in valor.items():
+                        destino.setdefault(k, v)
+                else:
+                    merged["eventos_os"].setdefault(chave, valor)
+
+        os_cfg = merged.setdefault("os_handler", {})
+        for bloco in ("templates", "confirmation_prompts"):
+            destino = os_cfg.setdefault(bloco, {})
+            for natureza, texto in default["os_handler"][bloco].items():
+                destino.setdefault(natureza, copy.deepcopy(texto))
+        return merged
 
     @staticmethod
     async def save_tenant_automations(db: AsyncSession, tenant_id: int, automations_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -307,26 +350,126 @@ class AutomationService:
             return None
         return prompt.replace("{valor_diagnostico}", str(valor_diagnostico))
 
-    @staticmethod
-    def format_evento_message(
+    # --- Avisos de progresso que se adaptam à O.S. (equipamento, nº, evento anterior, observação) ---
+
+    # Evento anterior da O.S. -> qual variante do "Aguardando Retirada" usar. Percorre do mais
+    # recente pro mais antigo e usa o primeiro que reconhecer.
+    _RETIRADA_POR_EVENTO_ANTERIOR = {
+        12: "nao_autorizado", 16: "nao_autorizado",
+        13: "sem_defeito",
+        11: "sem_conserto",
+        15: "concluido", 4: "concluido",
+    }
+
+    @classmethod
+    def retirada_contexto(cls, eventos_anteriores: List[int]) -> Optional[str]:
+        for cod in eventos_anteriores:
+            variante = cls._RETIRADA_POR_EVENTO_ANTERIOR.get(cod)
+            if variante:
+                return variante
+        return None
+
+    # A observação do técnico no Softsystem é um diário interno, NÃO texto pronto pro cliente:
+    # em dados reais tem CPF de terceiros ("retirado pelo Sr X CPF 255..."), nomes, "INFORMADO AO
+    # CLIENTE", etc. Nunca vai crua pra ele - só passa por aqui.
+    _OBS_NUMERO_LONGO = re.compile(r"\d[\d.\-/]{6,}\d")
+    _OBS_RUIDO = {
+        "informado", "informada", "informar", "cliente", "whatsapp", "zap", "avisado", "aviso",
+        "devolvido", "devolver", "retirado", "retirada", "enviado", "enviada", "para", "pelo", "pela",
+        "via", "por", "com", "sem", "nao", "vai", "fazer", "servico", "proxima", "carga", "ira",
+    }
+
+    @classmethod
+    def limpar_obs_para_ia(cls, obs: Optional[str]) -> str:
+        texto = cls._OBS_NUMERO_LONGO.sub(" ", obs or "")
+        return re.sub(r"\s+", " ", texto).strip()
+
+    @classmethod
+    def obs_tem_conteudo_tecnico(cls, obs_limpa: str) -> bool:
+        palavras = [p for p in re.findall(r"[a-z]{3,}", normalize_text(obs_limpa)) if p not in cls._OBS_RUIDO]
+        return len(palavras) >= 2
+
+    @classmethod
+    async def sem_conserto_motivo(cls, db: AsyncSession, tenant_id: int, obs: Optional[str]) -> str:
+        """
+        Uma ou duas frases explicando POR QUE não tem conserto, escritas pela IA a partir da
+        observação do técnico - ou "" (mensagem genérica, sem motivo) se não houver observação
+        útil, se a IA não estiver disponível ou se a resposta parecer arriscada. A frase fixa
+        "não possui conserto viável" nunca depende da IA; ela só acrescenta o motivo.
+        """
+        obs_limpa = cls.limpar_obs_para_ia(obs)
+        if not cls.obs_tem_conteudo_tecnico(obs_limpa):
+            return ""
+        try:
+            decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+            api_key = decrypted.get("gemini_api_key")
+            client = gemini_service.get_client_for_key(api_key) if api_key else None
+            if not client:
+                return ""
+            res = client.models.generate_content(
+                model=decrypted.get("gemini_model_name") or "gemini-2.5-flash",
+                contents=[{"role": "user", "parts": [{"text": f"Anotação do técnico: {obs_limpa}"}]}],
+                config={
+                    "system_instruction": (
+                        "Você escreve mensagens de WhatsApp em português do Brasil para clientes de uma "
+                        "assistência técnica de equipamentos de solda. O equipamento do cliente NÃO tem "
+                        "conserto viável. Abaixo vem a anotação interna do técnico (pode ter erros, gírias, "
+                        "nomes de pessoas e observações operacionais). Regras: 1) Se a anotação descrever um "
+                        "motivo técnico para não haver conserto, escreva 1 ou 2 frases curtas, educadas e em "
+                        "linguagem simples explicando esse motivo. 2) Use APENAS o que está na anotação; não "
+                        "invente causas, valores, prazos nem promessas. 3) Nunca cite nomes de pessoas, "
+                        "documentos, telefones nem observações operacionais (ex.: 'informado ao cliente', "
+                        "'devolvido para fulano'). 4) Não repita que 'não tem conserto' nem se despeça. "
+                        "5) Se a anotação NÃO trouxer um motivo técnico claro, responda exatamente: SEM_MOTIVO. "
+                        "Responda só com as frases ou com SEM_MOTIVO."
+                    ),
+                    "temperature": 0.2
+                }
+            )
+            texto = (res.text or "").strip().strip('"')
+            if not texto or texto.upper().startswith("SEM_MOTIVO") or len(texto) > 300 or re.search(r"\d{5,}", texto):
+                return ""
+            return " " + texto
+        except Exception as err:
+            logger.warning(f"sem_conserto_motivo: mensagem sem motivo após erro de IA: {err}")
+            return ""
+
+    @classmethod
+    async def build_evento_message(
+        cls,
+        db: AsyncSession,
+        tenant_id: int,
         cod_tipo_evento: int,
         config: Dict[str, Any],
-        client_name: str
+        client_name: str,
+        ctx: Dict[str, str],
+        obs: Optional[str] = None,
+        eventos_anteriores: Optional[List[int]] = None
     ) -> Optional[str]:
         """
-        Progress-update message for a Softsystem O.S. event (aba Eventos) other than ENTRADA
-        or ORC ENV/AGUARD APROVACAO, which are handled by the natureza/approval flows above.
-        Returns None if this event type has no configured message (e.g. disabled, or a code
-        not in the map) - caller should simply not send anything in that case.
+        Aviso de progresso já preenchido com os dados da O.S. (`ctx`: equipamento, os_numero,
+        tipo_os). O evento 6 (Aguardando Retirada) escolhe o texto pelo evento anterior; o 11
+        (Sem Conserto) acrescenta o motivo lido da observação do técnico.
         """
         ev_cfg = config.get("eventos_os", {})
         if not ev_cfg.get("enabled", True):
             return None
-        templates = ev_cfg.get("templates", {})
-        tmpl = templates.get(str(cod_tipo_evento))
+        tmpl = ev_cfg.get("templates", {}).get(str(cod_tipo_evento))
+        if cod_tipo_evento == 6:
+            variante = cls.retirada_contexto(eventos_anteriores or [])
+            tmpl = (ev_cfg.get("retirada_contextos") or {}).get(variante) or tmpl
         if not tmpl:
             return None
-        return tmpl.replace("{nome_cliente}", client_name or "Cliente")
+
+        valores = dict(ctx or {})
+        valores["motivo"] = ""
+        if cod_tipo_evento == 11 and "{motivo}" in tmpl:
+            valores["motivo"] = await cls.sem_conserto_motivo(db, tenant_id, obs)
+
+        texto = tmpl.replace("{nome_cliente}", client_name or "Cliente")
+        for chave, valor in valores.items():
+            texto = texto.replace("{" + chave + "}", valor or "")
+        return re.sub(r"[ \t]{2,}", " ", texto)
 
     @staticmethod
     def match_custom_rules(

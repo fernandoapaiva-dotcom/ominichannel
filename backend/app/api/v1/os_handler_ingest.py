@@ -657,6 +657,27 @@ NATUREZA_CODE_MAP = {
     # "natureza não reconhecida" (nota manual), como qualquer tipo desconhecido.
 }
 
+# Nome do tipo de O.S. como o cliente lê (mesmos nomes da lista "Tipo OS" do Softsystem)
+TIPO_OS_LABEL = {
+    1: "Orçamento",
+    2: "Garantia de Fábrica",
+    3: "Garantia de Loja",
+    4: "Visita Técnica",
+    5: "Equipamento de Locação",
+}
+
+
+def build_equipamento_display(marca: Optional[str], modelo: Optional[str], descricao: Optional[str]) -> str:
+    """"*MARCA MODELO* (DESCRIÇÃO)" - só com o que existir, pros avisos de progresso."""
+    marca_modelo = " ".join(p for p in [marca, modelo] if p)
+    partes = []
+    if marca_modelo:
+        partes.append(f"*{marca_modelo}*")
+    if descricao:
+        partes.append(f"({descricao})")
+    return " ".join(partes)
+
+
 # CODTIPOEVENTOOS (tabela TIPOEVENTOOS do Softsystem, aba "Eventos" da O.S.)
 EVENTO_ENTRADA = 1
 EVENTO_ORC_AGUARDANDO_APROVACAO = 3
@@ -840,7 +861,9 @@ async def ingest_db_event_common(
     equip_descricao: Optional[str],
     equip_defeito: Optional[str],
     tecnico_nome: Optional[str],
-    saved_rel_path: Optional[str]
+    saved_rel_path: Optional[str],
+    obs: Optional[str] = None,
+    eventos_anteriores: Optional[List[int]] = None
 ):
     phone = re.sub(r"\D", "", cliente_telefone or "")
     if not phone.startswith("55") and len(phone) in (10, 11):
@@ -993,7 +1016,15 @@ async def ingest_db_event_common(
         return {"status": "queued", "flow": "approval_result", "codos": codos, "conversation_id": conversation.id}
 
     # Qualquer outro tipo de evento: aviso simples de progresso, se houver um configurado.
-    msg = automation_service.format_evento_message(cod_tipo_evento, config, contact_name)
+    msg = await automation_service.build_evento_message(
+        db, tenant_id, cod_tipo_evento, config, contact_name,
+        ctx={
+            "os_numero": str(codos),
+            "tipo_os": TIPO_OS_LABEL.get(natureza_codigo, ""),
+            "equipamento": build_equipamento_display(equip_marca, equip_modelo, equip_descricao),
+        },
+        obs=obs, eventos_anteriores=eventos_anteriores
+    )
     if not msg:
         return {"status": "no_template", "codos": codos, "cod_tipo_evento": cod_tipo_evento, "conversation_id": conversation.id}
 
@@ -1060,5 +1091,7 @@ async def ingest_os_db_event(
         equip_descricao=data.get("equip_descricao"),
         equip_defeito=data.get("equip_defeito"),
         tecnico_nome=data.get("tecnico_nome"),
-        saved_rel_path=saved_rel_path
+        saved_rel_path=saved_rel_path,
+        obs=data.get("obs"),
+        eventos_anteriores=[int(c) for c in (data.get("eventos_anteriores") or [])]
     )

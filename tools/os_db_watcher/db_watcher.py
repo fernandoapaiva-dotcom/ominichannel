@@ -86,11 +86,16 @@ def save_state(state: dict):
 
 
 def db_connect(empresa_cfg: dict):
+    # WIN1252 explícito: o Softsystem grava texto em ANSI. Com a conexão em UTF8 (padrão do
+    # driver), qualquer linha com acento na observação ("...NÃO VAI FAZER O SERVIÇO") estoura
+    # UnicodeDecodeError - e como o cursor só avança após enviar com sucesso, o vigia ficaria
+    # tentando o mesmo evento pra sempre, travando todos os avisos daquela empresa.
     return connect(
         f"{empresa_cfg['host']}:{empresa_cfg['database']}",
         user=empresa_cfg.get("user", "SYSDBA"),
         password=empresa_cfg["password"],
-        no_db_triggers=True
+        no_db_triggers=True,
+        charset="WIN1252"
     )
 
 
@@ -240,6 +245,11 @@ def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str
         "equip_descricao": event.get("_equip_descricao"),
         "equip_defeito": event.get("_equip_defeito"),
         "tecnico_nome": event.get("TECNICOATENDIMENTO"),
+        # Observação do técnico neste evento (ex.: por que não tem conserto) e os eventos
+        # anteriores da O.S., do mais recente pro mais antigo - o backend adapta o aviso
+        # ("Aguardando Retirada" muda conforme o que aconteceu antes; "Sem Conserto" lê a observação).
+        "obs": event.get("OBS"),
+        "eventos_anteriores": event.get("_eventos_anteriores", []),
     }
 
     try:
@@ -407,6 +417,12 @@ def poll_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state: dict)
                 event["_equip_modelo"] = equip.get("modelo")
                 event["_equip_descricao"] = equip.get("descricao")
                 event["_equip_defeito"] = equip.get("defeito")
+                cur.execute(
+                    "SELECT CODTIPOEVENTOOS FROM EVENTOSORDEMSERVICO "
+                    "WHERE LOJA=? AND CODOS=? AND DATA < ? ORDER BY DATA DESC",
+                    (loja, codos, event["DATA"])
+                )
+                event["_eventos_anteriores"] = [r[0] for r in cur.fetchall()][:10]
 
                 cod_evento = event["CODTIPOEVENTOOS"]
                 pdf_path = ""
