@@ -2294,8 +2294,6 @@ async def _send_agent_media_core(
     agent_name = current_user.nome or "Atendente"
     # Only set a caption if the user actually typed one. Never stamp pure attendant names as file caption!
     formatted_caption = f"*👤 {agent_name}:*\n\n{caption.strip()}" if (caption and caption.strip()) else None
-    base64_data = base64.b64encode(file_bytes).decode('utf-8')
-
     primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
     if not primary_inst:
         raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
@@ -2323,6 +2321,7 @@ async def _send_agent_media_core(
             send_res = None
 
     if send_res is None:
+        base64_data = base64.b64encode(file_bytes).decode('utf-8')
         send_res = await evolution_service.send_media_message(
             instance_name=primary_inst,
             number=conv.contact.telefone,
@@ -2459,6 +2458,83 @@ class MediaCompleteRequest(BaseModel):
     caption: Optional[str] = None
 
 
+async def _dispatch_agent_media_background(
+    message_id: int, conversation_id: int, tenant_id: int, whatsapp_number_id: int,
+    instance_name: str, phone: str, file_path: str, unique_filename: str, filename: str,
+    mimetype: str, media_type: str, caption: str, size_bytes: int
+):
+    """
+    Envia ao WhatsApp o anexo grande já salvo e atualiza a mensagem (sending -> sent/failed) avisando o painel
+    por WebSocket. Fica fora da requisição de propósito: com o servidor ocupado, o envio leva minutos e a
+    requisição estourava (504) mesmo com o arquivo tendo sido entregue.
+    """
+    from app.core.database import AsyncSessionLocal
+    final_status = "failed"
+    wa_msg_id = None
+    try:
+        def _ok(res: dict) -> bool:
+            return bool(res.get("success", False) or res.get("key") or res.get("id") or res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201])
+
+        send_res = None
+        if size_bytes > MEDIA_BY_URL_THRESHOLD_BYTES:
+            public_base = os.getenv("PUBLIC_BASE_URL", "https://ominichannel.duckdns.org").rstrip("/")
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name, number=phone, media_type=media_type, mimetype=mimetype,
+                media=f"{public_base}/uploads/{unique_filename}", file_name=filename or unique_filename,
+                caption=caption, skip_anti_ban_pacing=True
+            )
+            if not _ok(send_res):
+                logger.warning(f"[MEDIA] Envio por URL falhou ({send_res.get('error')}); tentando como base64...")
+                send_res = None
+        if send_res is None:
+            with open(file_path, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode("utf-8")
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name, number=phone, media_type=media_type, mimetype=mimetype,
+                media=base64_data, file_name=filename or unique_filename, caption=caption, skip_anti_ban_pacing=True
+            )
+            base64_data = None
+
+        if _ok(send_res):
+            final_status = "sent"
+            wa_msg_id = extract_evolution_msg_id(send_res)
+            if wa_msg_id:
+                try:
+                    from app.api.v1.webhooks import SEEN_WEBHOOK_KEYS
+                    now_ts = datetime.utcnow().timestamp()
+                    SEEN_WEBHOOK_KEYS[f"{instance_name}_{wa_msg_id}"] = now_ts
+                    SEEN_WEBHOOK_KEYS[wa_msg_id] = now_ts
+                    SEEN_WEBHOOK_KEYS[f"msg_{wa_msg_id}"] = now_ts
+                except Exception:
+                    pass
+        else:
+            logger.error(f"[MEDIA] Falha ao enviar anexo grande da mensagem #{message_id}: {send_res.get('error')}")
+    except Exception as err:
+        logger.error(f"[MEDIA] Erro ao enviar anexo grande da mensagem #{message_id}: {err}", exc_info=True)
+
+    try:
+        async with AsyncSessionLocal() as bg_db:
+            db_msg = (await bg_db.execute(select(Message).where(Message.id == message_id))).scalar_one_or_none()
+            if db_msg:
+                db_msg.status = final_status
+                if wa_msg_id:
+                    db_msg.whatsapp_msg_id = wa_msg_id
+                await bg_db.commit()
+        await ws_manager.broadcast_to_department(
+            tenant_id=tenant_id,
+            whatsapp_number_id=whatsapp_number_id,
+            message_data={
+                "type": "MESSAGE_STATUS_UPDATE",
+                "conversation_id": conversation_id,
+                "id": message_id,
+                "status": final_status,
+                "whatsapp_msg_id": wa_msg_id
+            }
+        )
+    except Exception as err:
+        logger.error(f"[MEDIA] Não foi possível atualizar o status da mensagem #{message_id}: {err}")
+
+
 @router.post("/{conversation_id}/media/complete", response_model=MessageResponse)
 async def complete_media_upload(
     conversation_id: int,
@@ -2466,31 +2542,52 @@ async def complete_media_upload(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Junta as partes recebidas em /media/chunk e envia o arquivo como um anexo normal."""
+    """
+    Junta as partes de /media/chunk num arquivo, registra a mensagem como "enviando" e devolve NA HORA;
+    o envio ao WhatsApp acontece em segundo plano e o painel recebe o resultado (enviado/falhou) por WebSocket.
+    """
+    import shutil
+
+    conv = (await db.execute(
+        select(Conversation)
+        .options(selectinload(Conversation.contact), selectinload(Conversation.whatsapp_number))
+        .where(Conversation.id == conversation_id, Conversation.tenant_id == current_user.tenant_id)
+    )).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+    primary_inst = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else ""
+    if not primary_inst:
+        raise HTTPException(status_code=400, detail="Instância de WhatsApp não configurada para este setor.")
+
     directory = _chunk_dir(payload.upload_id)
     if not os.path.isdir(directory):
         raise HTTPException(status_code=400, detail="Nenhuma parte recebida para este envio")
-
     parts = [os.path.join(directory, f"{i:05d}.part") for i in range(payload.total)]
     missing = [i for i, part in enumerate(parts) if not os.path.isfile(part)]
     if missing:
         raise HTTPException(status_code=409, detail=f"Faltam partes do arquivo: {missing[:10]}")
 
-    buffer = io.BytesIO()
-    for part in parts:
-        with open(part, "rb") as f:
-            buffer.write(f.read())
-        if buffer.tell() > MEDIA_MAX_BYTES:
-            raise HTTPException(status_code=413, detail="Arquivo maior que o limite de 100 MB")
-    file_bytes = buffer.getvalue()
-
+    filename = payload.filename or "arquivo"
+    file_ext = os.path.splitext(filename)[1] or ""
+    unique_filename = f"{uuid.uuid4().hex}{file_ext}"
+    final_path = os.path.join("uploads", unique_filename)
+    size_bytes = 0
     try:
-        message = await _send_agent_media_core(
-            conversation_id, payload.filename, payload.content_type or "", file_bytes, payload.caption, current_user, db
-        )
+        # Monta direto em disco, parte por parte (sem carregar o arquivo inteiro na memória do servidor)
+        with open(final_path, "wb") as out:
+            for part in parts:
+                with open(part, "rb") as fin:
+                    shutil.copyfileobj(fin, out, 1024 * 1024)
+                size_bytes = out.tell()
+                if size_bytes > MEDIA_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Arquivo maior que o limite de 100 MB")
+    except HTTPException:
+        try:
+            os.remove(final_path)
+        except OSError:
+            pass
+        raise
     finally:
-        # Limpa as partes deste envio e qualquer resto abandonado há mais de 1 dia
-        import shutil
         shutil.rmtree(directory, ignore_errors=True)
         try:
             cutoff = datetime.utcnow().timestamp() - 86400
@@ -2500,6 +2597,64 @@ async def complete_media_upload(
                     shutil.rmtree(path, ignore_errors=True)
         except Exception:
             pass
+
+    mimetype = payload.content_type or "application/octet-stream"
+    if mimetype.startswith("image/"):
+        msg_type, media_type = MessageType.IMAGEM, "image"
+    elif mimetype.startswith("video/"):
+        msg_type, media_type = MessageType.VIDEO, "video"
+    elif mimetype.startswith("audio/"):
+        msg_type, media_type = MessageType.AUDIO, "audio"
+    else:
+        msg_type, media_type = MessageType.ARQUIVO, "document"
+
+    caption = payload.caption
+    agent_name = current_user.nome or "Atendente"
+    formatted_caption = f"*👤 {agent_name}:*\n\n{caption.strip()}" if (caption and caption.strip()) else ""
+    file_url = f"/uploads/{unique_filename}"
+    if msg_type == MessageType.ARQUIVO:
+        db_content = f"{file_url}|{filename}|{caption}" if caption else f"{file_url}|{filename}"
+    else:
+        db_content = f"{file_url}|{caption}" if caption else file_url
+
+    conv.status = ConversationStatus.COM_HUMANO
+    conv.assigned_user_id = current_user.id
+    conv.ultima_interacao_em = datetime.utcnow()
+    message = Message(
+        conversation_id=conv.id,
+        remetente=MessageSender.ATENDENTE,
+        conteudo=db_content,
+        tipo=msg_type,
+        status="sending",
+        dados_adicionais={"original_filename": filename, "file_name": filename},
+        timestamp=datetime.utcnow()
+    )
+    db.add(message)
+    await db.commit()
+    await db.refresh(message)
+
+    asyncio.create_task(_dispatch_agent_media_background(
+        message.id, conv.id, current_user.tenant_id, conv.whatsapp_number_id, primary_inst,
+        conv.contact.telefone, final_path, unique_filename, filename, mimetype, media_type,
+        formatted_caption, size_bytes
+    ))
+
+    await ws_manager.broadcast_to_department(
+        tenant_id=current_user.tenant_id,
+        whatsapp_number_id=conv.whatsapp_number_id,
+        message_data={
+            "type": "NEW_MESSAGE",
+            "conversation_id": conv.id,
+            "id": message.id,
+            "remetente": MessageSender.ATENDENTE.value,
+            "conteudo": db_content,
+            "tipo": msg_type.value,
+            "status": "sending",
+            "dados_adicionais": message.dados_adicionais,
+            "timestamp": message.timestamp.isoformat() + "Z",
+            "agent_name": current_user.nome
+        }
+    )
     return message
 
 
