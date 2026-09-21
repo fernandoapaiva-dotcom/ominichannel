@@ -1383,6 +1383,8 @@ async def receive_evolution_webhook(
 
     # Check location payload
     loc_msg = message_obj.get("locationMessage") or message_obj.get("liveLocationMessage")
+    customer_location_pin = bool(loc_msg)
+    customer_loc_extra: Dict[str, Any] = {}
     if loc_msg:
         msg_type = MessageType.LOCALIZACAO
         c_lat = loc_msg.get("degreesLatitude")
@@ -1390,6 +1392,16 @@ async def receive_evolution_webhook(
         c_name = loc_msg.get("name") or loc_msg.get("address") or "Localização Compartilhada pelo Cliente"
         c_addr = loc_msg.get("address") or ""
         text_content = f"📍 *LOCALIZAÇÃO RECEBIDA DO CLIENTE*\n{c_name}\n{c_addr}\nhttps://maps.google.com/?q={c_lat},{c_lng}"
+        # Estruturado: o painel usa isto para mostrar "Localização do cliente" (e não a da loja) e agendar a visita
+        customer_loc_extra = {
+            "customer_location": {
+                "latitude": c_lat,
+                "longitude": c_lng,
+                "name": loc_msg.get("name") or "",
+                "address": c_addr,
+                "maps_url": f"https://maps.google.com/?q={c_lat},{c_lng}",
+            }
+        }
 
     # Check contact / vcard payload
     contact_msg = message_obj.get("contactMessage")
@@ -1439,7 +1451,7 @@ async def receive_evolution_webhook(
         except Exception as err:
             logger.error(f"Failed to fetch media base64 from Evolution API: {err}")
 
-    msg_extra: Dict[str, Any] = {}
+    msg_extra: Dict[str, Any] = dict(customer_loc_extra)
     if img_msg or vid_msg or aud_msg or doc_msg or stk_msg:
         caption = ""
         ext = ""
@@ -2167,6 +2179,11 @@ async def receive_evolution_webhook(
     extra_conv["inactivity_warning_30m_sent"] = False
     extra_conv["inactivity_warning_10m_sent"] = False
     extra_conv["inactivity_warning_5m_sent"] = False
+    if customer_loc_extra:
+        extra_conv["localizacao_cliente"] = {
+            **customer_loc_extra["customer_location"],
+            "recebida_em": datetime.utcnow().isoformat() + "Z",
+        }
     conversation.dados_adicionais = extra_conv
     flag_modified(conversation, "dados_adicionais")
 
@@ -2441,7 +2458,8 @@ async def receive_evolution_webhook(
             store_intent = await gemini_service.classify_store_info_intent(
                 user_message=text_content,
                 tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
-                tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+                tenant_gemini_model_name=dec_sets.get("gemini_model_name"),
+                is_location_pin=customer_location_pin
             )
 
             if store_intent == "STORE_LOCATION":
@@ -2808,6 +2826,45 @@ async def receive_evolution_webhook(
                 }
                 transfer_executed = True
 
+        # Localização: o cliente ENVIOU a dele (pin/link -> local de visita) ou PEDIU a da loja.
+        force_store_location = False
+        if not transfer_executed and not is_tech:
+            loc_intent = await gemini_service.classify_store_info_intent(
+                user_message=text_content,
+                tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                tenant_gemini_model_name=decrypted_settings.get("gemini_model_name"),
+                is_location_pin=customer_location_pin
+            )
+            loc_first_name = contact.nome.strip().split()[0] if (contact and contact.nome and contact.nome.strip().lower() not in ["cliente", "unknown", ""]) else ""
+            loc_greeting = f", {loc_first_name}" if loc_first_name else ""
+
+            if loc_intent == "CUSTOMER_LOCATION":
+                # Nunca responder com a localização da loja: o cliente mandou o local DELE (ex.: para uma visita técnica).
+                logger.info(f"[LOCALIZACAO CLIENTE] Conversa {conversation.id}: cliente enviou a própria localização. Encaminhando ao atendente.")
+                ai_output = {
+                    "resposta": f"Recebi a sua localização{loc_greeting}! 📍 Vou repassar para a nossa equipe verificar o atendimento no local e já te retornamos para combinar a visita.",
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": True,
+                    "nova_memoria": "Cliente enviou a própria localização (endereço para visita/atendimento no local). Não é o endereço da loja."
+                }
+                transfer_executed = True
+            elif loc_intent == "STORE_LOCATION":
+                if len(text_content.split()) <= 12:
+                    ai_output = {
+                        "resposta": f"Com certeza{loc_greeting}! Segue a nossa localização no mapa abaixo. Ficamos à sua disposição e aguardamos sua visita! 📍",
+                        "transferir_setor": "NENHUM",
+                        "enviar_localizacao": True,
+                        "enviar_pix": False,
+                        "escalar_humano": False,
+                        "nova_memoria": "Cliente pediu a localização da loja; enviada."
+                    }
+                    transfer_executed = True
+                else:
+                    # Mensagem longa (pede outras coisas junto): a IA responde o resto, mas o mapa sai garantido.
+                    force_store_location = True
+
         if not transfer_executed and not is_tech:
             dept_dicts = [
                 {
@@ -2963,7 +3020,7 @@ async def receive_evolution_webhook(
 
         ai_reply = ai_output["resposta"]
         transferir_setor = ai_output.get("transferir_setor", "NENHUM")
-        enviar_localizacao = ai_output.get("enviar_localizacao", False)
+        enviar_localizacao = ai_output.get("enviar_localizacao", False) or force_store_location
         enviar_pix = ai_output.get("enviar_pix", False)
         escalar_humano = ai_output.get("escalar_humano", False) if not is_tech else False
         nova_memoria = ai_output.get("nova_memoria", "")

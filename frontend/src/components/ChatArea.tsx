@@ -5,9 +5,9 @@ import {
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
   QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
-  Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, Sparkles
+  Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, CalendarPlus
 } from 'lucide-react';
-import { correctFullText, correctLastWordBeforeCursor, isMisspelled } from '../utils/spellingCorrector';
+import { isMisspelled } from '../utils/spellingCorrector';
 import { apiFetch, apiUpload } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
@@ -465,19 +465,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
     return '';
   });
-  const [autoCorrectEnabled, setAutoCorrectEnabled] = useState<boolean>(() => {
-    const saved = localStorage.getItem('chat_autocorrect_enabled');
-    return saved !== null ? saved === 'true' : true;
-  });
-  const [lastCorrectionNotice, setLastCorrectionNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (lastCorrectionNotice) {
-      const timer = setTimeout(() => setLastCorrectionNotice(null), 3500);
-      return () => clearTimeout(timer);
-    }
-  }, [lastCorrectionNotice]);
-
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
   // Trava sincrona, separada do estado isSending. useState e assincrono/agrupado pelo
@@ -1720,16 +1707,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     let textToSend = inputText.trim();
-    if (autoCorrectEnabled && textToSend) {
-      const fullCorr = correctFullText(textToSend);
-      if (fullCorr.changesCount > 0) {
-        textToSend = fullCorr.text;
-        setInputText(textToSend);
-        if (fullCorr.lastCorrection) {
-          setLastCorrectionNotice(`Corrigido antes de enviar: "${fullCorr.lastCorrection.from}" ➔ "${fullCorr.lastCorrection.to}"`);
-        }
-      }
-    }
     const quoteTarget = replyingToMessage;
     if (replyingToMessage) {
       setReplyingToMessage(null);
@@ -2080,12 +2057,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const renderLocationCard = (rawLoc: string, extra?: any) => {
     const safeRawLoc = typeof rawLoc === 'string' ? rawLoc : String(rawLoc || '');
 
+    // Localização enviada PELO CLIENTE (pin do WhatsApp) - local de visita, não é a da loja
+    const customerLoc = extra && typeof extra === 'object' ? extra.customer_location : null;
+    const isCustomerLoc = !!customerLoc || /LOCALIZAÇÃO RECEBIDA DO CLIENTE|Localização Compartilhada pelo Cliente/i.test(safeRawLoc);
+
     // Extract coordinates:
     let lat = -15.820418;
     let lng = -47.956467;
 
 
-    if (extra && extra.latitude && extra.longitude) {
+    if (customerLoc && customerLoc.latitude != null && customerLoc.longitude != null) {
+      lat = parseFloat(customerLoc.latitude);
+      lng = parseFloat(customerLoc.longitude);
+    } else if (extra && extra.latitude && extra.longitude) {
       lat = parseFloat(extra.latitude);
       lng = parseFloat(extra.longitude);
     } else {
@@ -2103,12 +2087,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
 
     // Extract place name and address from raw text:
-    let placeName = 'Servweld / Servsolda';
-    let addressText = 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226';
+    let placeName = isCustomerLoc ? 'Localização do cliente' : 'Servweld / Servsolda';
+    let addressText = isCustomerLoc ? '' : 'SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226';
     const lines = safeRawLoc.split('\n').map(l => l.trim()).filter(Boolean);
     const cleanLines = lines.filter(l =>
       !l.startsWith('http') &&
       !l.includes('LOCALIZAÇÃO') &&
+      !l.includes('Localização Compartilhada pelo Cliente') &&
       !l.includes('Localização GPS') &&
       !l.includes('WhatsApp Map') &&
       !l.includes('locationMessage') &&
@@ -2122,7 +2107,36 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }
     }
 
+    if (customerLoc) {
+      if (customerLoc.name) placeName = String(customerLoc.name);
+      if (customerLoc.address) addressText = String(customerLoc.address);
+    }
+
     const googleMapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
+    const scheduleVisitAtLocation = () => {
+      if (!onOpenScheduleTask) return;
+      const customerName = conversation?.contact?.nome || 'Cliente';
+      const placeLine = [addressText, placeName !== 'Localização do cliente' ? placeName : ''].filter(Boolean).join(' - ');
+      onOpenScheduleTask({
+        title: `Visita técnica - ${customerName}`,
+        description: `📍 Local da visita (enviado pelo cliente):
+${placeLine}
+${googleMapsUrl}
+
+👤 Cliente: ${customerName}
+📞 Telefone: ${conversation?.contact?.telefone || ''}
+📋 Protocolo: ${conversation?.protocol_number || 'Sem protocolo'}`,
+        event_type: 'visita_tecnica',
+        contact_id: conversation?.contact_id || conversation?.contact?.id,
+        conversation_id: conversation?.id,
+        contact_name: customerName,
+        contact_phone: conversation?.contact?.telefone,
+        start_time: new Date().toISOString(),
+        color: '#10b981',
+        priority: 'media',
+        status: 'pendente'
+      });
+    };
     const wazeUrl = `https://waze.com/ul?ll=${lat},${lng}&navigate=yes`;
     const mapBbox = `${lng - 0.004},${lat - 0.0022},${lng + 0.004},${lat + 0.0022}`;
     const mapIframeUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${mapBbox}&layer=mapnik&marker=${lat},${lng}`;
@@ -2166,7 +2180,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             pointerEvents: 'none'
           }}>
             <MapPin size={13} color="#10b981" />
-            <span>Localização WhatsApp</span>
+            <span>{isCustomerLoc ? 'Localização do cliente' : 'Localização WhatsApp'}</span>
           </div>
         </div>
 
@@ -2175,9 +2189,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <div style={{ fontSize: '13px', fontWeight: '800', color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span>{placeName}</span>
           </div>
-          <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: '1.4' }}>
-            {addressText}
-          </div>
+          {addressText && (
+            <div style={{ fontSize: '12px', color: '#cbd5e1', lineHeight: '1.4' }}>
+              {addressText}
+            </div>
+          )}
 
           {/* GPS Action Buttons */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '6px' }}>
@@ -2233,6 +2249,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <span>Waze GPS</span>
             </a>
           </div>
+
+          {isCustomerLoc && onOpenScheduleTask && (
+            <button
+              type="button"
+              onClick={scheduleVisitAtLocation}
+              style={{
+                marginTop: '2px',
+                padding: '8px 10px',
+                backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                color: '#34d399',
+                border: '1px solid rgba(16, 185, 129, 0.45)',
+                borderRadius: '6px',
+                fontSize: '11px',
+                fontWeight: '700',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '5px'
+              }}
+            >
+              <CalendarPlus size={13} />
+              <span>Agendar visita neste local</span>
+            </button>
+          )}
         </div>
       </div>
     );
@@ -6042,27 +6083,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               </div>
             )}
 
-            {lastCorrectionNotice && (
-              <div style={{
-                margin: '0 20px 6px 20px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '5px 12px',
-                borderRadius: '8px',
-                backgroundColor: 'rgba(56, 189, 248, 0.15)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-                color: '#38bdf8',
-                fontSize: '12px',
-                fontWeight: '600',
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-                animation: 'fadeIn 0.15s ease'
-              }}>
-                <Sparkles size={14} />
-                <span>{lastCorrectionNotice}</span>
-              </div>
-            )}
-
             <form
               onSubmit={handleSend}
               className="chat-input-form"
@@ -6272,26 +6292,24 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 userSelect: 'none'
               }}
             >
-              {autoCorrectEnabled
-                ? inputText.split(/(\s+)/).map((chunk, i) => {
-                    const core = chunk.replace(/^[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+|[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+$/g, '');
-                    if (core && !chunk.startsWith('@') && isMisspelled(core)) {
-                      return (
-                        <span
-                          key={i}
-                          style={{
-                            textDecoration: 'underline wavy #ef4444',
-                            textDecorationSkipInk: 'none',
-                            textUnderlineOffset: '2px'
-                          }}
-                        >
-                          {chunk}
-                        </span>
-                      );
-                    }
-                    return <span key={i}>{chunk}</span>;
-                  })
-                : null}
+              {inputText.split(/(\s+)/).map((chunk, i) => {
+                const core = chunk.replace(/^[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+|[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+$/g, '');
+                if (core && !chunk.startsWith('@') && isMisspelled(core)) {
+                  return (
+                    <span
+                      key={i}
+                      style={{
+                        textDecoration: 'underline wavy #ef4444',
+                        textDecorationSkipInk: 'none',
+                        textUnderlineOffset: '2px'
+                      }}
+                    >
+                      {chunk}
+                    </span>
+                  );
+                }
+                return <span key={i}>{chunk}</span>;
+              })}
               {'\n'}
             </div>
             <textarea
@@ -6307,7 +6325,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               }}
               spellCheck={true}
               lang="pt-BR"
-              autoCorrect="on"
+              autoCorrect="off"
               autoCapitalize="sentences"
               autoComplete="on"
               onPaste={handlePaste}
@@ -6333,28 +6351,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 if (e.key === 'Escape' && showMentionMenu) {
                   setShowMentionMenu(false);
                   return;
-                }
-
-                // Correção ortográfica automática em tempo real ao digitar espaço ou pontuação
-                if (autoCorrectEnabled && (e.key === ' ' || e.key === '.' || e.key === ',' || e.key === '!' || e.key === '?')) {
-                  const target = e.currentTarget;
-                  const cursorPos = target.selectionStart;
-                  const text = target.value;
-                  const res = correctLastWordBeforeCursor(text, cursorPos);
-                  if (res.correctedWord) {
-                    e.preventDefault();
-                    const updatedText = res.newText.slice(0, res.newCursor) + e.key + res.newText.slice(res.newCursor);
-                    setInputText(updatedText);
-                    if (conversation?.id && onSaveDraft) {
-                      onSaveDraft(conversation.id, updatedText);
-                    }
-                    const nextPos = res.newCursor + 1;
-                    setTimeout(() => {
-                      target.selectionStart = target.selectionEnd = nextPos;
-                    }, 0);
-                    setLastCorrectionNotice(`💡 Corrigido: "${res.correctedWord.from}" ➔ "${res.correctedWord.to}"`);
-                    return;
-                  }
                 }
 
                 if (e.key === 'Enter') {
@@ -6406,54 +6402,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
 
             <AudioRecorder onSendAudio={handleSendAudioMessage} />
-
-            {/* Botão de Correção Ortográfica e Indicador */}
-            <button
-              type="button"
-              onClick={() => {
-                if (inputText.trim()) {
-                  const res = correctFullText(inputText);
-                  if (res.changesCount > 0) {
-                    setInputText(res.text);
-                    if (conversation?.id && onSaveDraft) {
-                      onSaveDraft(conversation.id, res.text);
-                    }
-                    setLastCorrectionNotice(`✨ ${res.changesCount} palavra(s) corrigida(s) com sucesso!`);
-                  } else {
-                    setLastCorrectionNotice('✨ Ortografia perfeita: nenhuma palavra incorreta encontrada!');
-                  }
-                } else {
-                  const nextState = !autoCorrectEnabled;
-                  setAutoCorrectEnabled(nextState);
-                  localStorage.setItem('chat_autocorrect_enabled', String(nextState));
-                  setLastCorrectionNotice(nextState ? '✨ Corretor Automático ATIVADO' : '⚠️ Corretor Automático DESATIVADO');
-                }
-              }}
-              className="btn-secondary chat-corretor-btn"
-              style={{
-                height: '42px',
-                padding: '0 12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                color: autoCorrectEnabled ? '#38bdf8' : 'var(--text-muted)',
-                borderColor: autoCorrectEnabled ? 'rgba(56, 189, 248, 0.4)' : 'var(--border-color)',
-                backgroundColor: autoCorrectEnabled ? 'rgba(56, 189, 248, 0.1)' : 'transparent',
-                fontWeight: '600',
-                fontSize: '13px',
-                boxShadow: autoCorrectEnabled ? '0 2px 8px rgba(56, 189, 248, 0.15)' : 'none',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease'
-              }}
-              title={
-                autoCorrectEnabled
-                  ? (inputText.trim() ? "Clique para revisar e corrigir a ortografia do texto agora" : "Corretor Ortográfico Automático Ativo (Clique para desativar)")
-                  : "Corretor Ortográfico Desativado (Clique para ativar)"
-              }
-            >
-              <Sparkles size={16} />
-              <span className="chat-btn-text">{inputText.trim() ? 'Corrigir' : (autoCorrectEnabled ? 'Corretor ON' : 'Corretor OFF')}</span>
-            </button>
 
             <button
               type="button"

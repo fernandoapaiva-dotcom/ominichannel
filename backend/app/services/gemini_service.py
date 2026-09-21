@@ -1403,72 +1403,46 @@ class GeminiService:
         self,
         user_message: str,
         tenant_gemini_api_key: Optional[str] = None,
-        tenant_gemini_model_name: Optional[str] = None
+        tenant_gemini_model_name: Optional[str] = None,
+        is_location_pin: bool = False,
     ) -> str:
         """
-        Classifies whether the user is asking for:
-        1. STORE_LOCATION: Specifically asking where the company/store is located, store address, or location to visit.
-           CRITICAL: If the customer is talking about their OWN location ("minha localização", "estou em Sobradinho",
-           "vou mandar minha localização", "entregam no meu endereço"), this is NOT STORE_LOCATION -> return NONE.
-        2. STORE_HOURS: Asking for the store opening/closing hours or days of operation.
-        3. NONE: Any other question, product inquiry, technical issue, greetings, or customer talking about themselves.
+        Classifica a mensagem do cliente em:
+        - STORE_LOCATION: pediu o endereço/localização da loja.
+        - STORE_HOURS: pediu o horário de funcionamento.
+        - CUSTOMER_LOCATION: ENVIOU a própria localização (pin do WhatsApp ou link do Maps), normalmente
+          para irmos até o local fazer uma visita. Nunca deve ser respondida com a localização da loja.
+        - NONE: qualquer outro assunto (inclui o cliente falando do próprio endereço).
+
+        As regras determinísticas (app.services.location_intent) decidem primeiro; a IA só é consultada
+        como segunda opinião quando as regras não reconheceram nada mas a frase parece falar de local.
         """
+        from app.services import location_intent
+
+        if is_location_pin:
+            return location_intent.CUSTOMER_LOCATION
         if not user_message or not isinstance(user_message, str):
-            return "NONE"
+            return location_intent.NONE
 
         clean_text = user_message.strip()
         if len(clean_text) < 3:
-            return "NONE"
+            return location_intent.NONE
 
-        clean_lower = clean_text.lower()
+        intent, definitive = location_intent.rule_intent(clean_text, is_location_pin)
+        if definitive or intent != location_intent.NONE:
+            return intent
 
-        # 1. Customer talking about their OWN location:
-        is_client_own_location = any(k in clean_lower for k in [
-            "minha localiza", "minha rua", "meu bairro", "minha cidade", "minha casa",
-            "meu endereço", "meu endereco", "estou em", "estou no", "estou na",
-            "sou de", "moro em", "aqui em", "aqui no", "aqui na",
-            "vou mandar minha", "vou te mandar minha", "vou enviar minha", "vou passar minha",
-            "entregam na", "entregam no", "entregam em", "aqui onde", "aqui perto", "manda aqui"
-        ])
-        if is_client_own_location and not any(k in clean_lower for k in [
-            "onde fica a loja", "qual o endereço de vocês", "endereço da servweld", "localização da servweld", "localização da loja"
-        ]):
-            return "NONE"
-
-        # 2. Store Location keywords (customer asking where the company/store is, or where to bring machine):
-        is_asking_store_location = (
-            clean_lower.strip("?.! ") in ["localização", "localizacao", "localizador", "endereço", "endereco", "mapa", "gps", "como chegar", "onde fica", "localizador por favor", "localização por favor"]
-            or any(k in clean_lower for k in [
-                "onde fica", "onde vocês ficam", "onde voces ficam", "qual o endereço", "qual o endereco",
-                "localização da loja", "localizacao da loja", "localização de vocês", "localizacao de vocês",
-                "localização da servweld", "localizacao da servweld", "passa a localização", "passa a localizacao",
-                "manda a localização", "manda a localizacao", "passa o localizador", "manda o localizador",
-                "me passa o localizador", "me manda o localizador", "localizador daí", "localizador dai",
-                "onde levo", "onde posso levar", "onde entrego",
-                "onde posso entregar", "levar a máquina", "levar o equipamento", "como chego aí", "como chegar aí",
-                "como chego na loja", "como chegar na loja", "link do maps", "ponto de referência da loja",
-                "onde vocês estão", "onde voces estao"
-            ]) or (
-                ("localiza" in clean_lower or "localizador" in clean_lower or "endereço" in clean_lower or "endereco" in clean_lower or "mapa" in clean_lower or "gps" in clean_lower) and
-                any(v in clean_lower for v in ["manda", "envia", "passa", "qual", "onde", "compartilha"])
-            )
-        )
-
-        # 3. Store Working Hours keywords:
-        is_asking_store_hours = any(k in clean_lower for k in [
-            "horário de funcionamento", "horario de funcionamento", "horário de atendimento",
-            "horario de atendimento", "horário da loja", "horario da loja", "que horas abre",
-            "que horas abrem", "que horas fecha", "que horas fecham", "até que horas", "ate que horas",
-            "abrem no sábado", "abrem no sabado", "abre no sábado", "abre no sabado", "abre hoje",
-            "abrem hoje", "abrem amanhã", "abre amanhã", "estão abertos", "estao abertos",
-            "qual o horário", "qual o horario", "horário de vocês", "horario de voces"
-        ]) or (
-            any(h in clean_lower for h in ["horário", "horario", "expediente"]) and
-            any(v in clean_lower for v in ["qual", "atendimento", "funcionamento", "loja"])
-        )
-
-        # First evaluate LLM if key is configured and not placeholder
-        if tenant_gemini_api_key and "COLOQUE" not in tenant_gemini_api_key and len(tenant_gemini_api_key) > 25:
+        # Regras não reconheceram: segunda opinião da IA, só se a frase parece falar de local/endereço.
+        hint = location_intent.normalize(clean_text)
+        looks_location_related = any(w in hint for w in (
+            "onde", "aonde", "endereco", "localiza", "mapa", "chegar", "ficam", "fica ", "rua ", "referencia",
+        ))
+        if (
+            looks_location_related
+            and tenant_gemini_api_key
+            and "COLOQUE" not in tenant_gemini_api_key
+            and len(tenant_gemini_api_key) > 25
+        ):
             prompt = (
                 "Você é um classificador de intenções extremamente preciso para uma empresa de equipamentos e assistência técnica.\n"
                 "Analise a mensagem do cliente abaixo e determine se ele está pedindo uma informação institucional da EMPRESA.\n\n"
@@ -1492,19 +1466,13 @@ class GeminiService:
                 )
                 raw_res = (response.text or "").strip().upper()
                 if "STORE_LOCATION" in raw_res:
-                    return "STORE_LOCATION"
+                    return location_intent.STORE_LOCATION
                 elif "STORE_HOURS" in raw_res:
-                    return "STORE_HOURS"
-                return "NONE"
+                    return location_intent.STORE_HOURS
             except Exception as e:
                 logger.warning(f"Error classifying intent with Gemini: {e}")
 
-        # Fallback to high-precision rule engine
-        if is_asking_store_location:
-            return "STORE_LOCATION"
-        if is_asking_store_hours:
-            return "STORE_HOURS"
-        return "NONE"
+        return location_intent.NONE
 
 
 gemini_service = GeminiService()
