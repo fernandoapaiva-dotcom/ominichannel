@@ -115,6 +115,28 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const reloadTimer = useRef<number | null>(null);
   const [stageFilter, setStageFilter] = useState<string>('');
 
+  // Modo TV: carrossel passando por um técnico de cada vez (em vez da grade estática, onde os técnicos
+  // de baixo ficavam escondidos - ninguém rola a tela sozinho de longe). CAROUSEL_MS por técnico.
+  const CAROUSEL_MS = 14000;
+  const [carouselIndex, setCarouselIndex] = useState(0);
+  const techCount = board?.technicians.length || 0;
+  const activeIndex = techCount > 0 ? ((carouselIndex % techCount) + techCount) % techCount : 0;
+  useEffect(() => {
+    if (!tvMode || techCount <= 1) return;
+    const t = window.setTimeout(() => setCarouselIndex(i => i + 1), CAROUSEL_MS);
+    return () => window.clearTimeout(t);
+  }, [tvMode, carouselIndex, techCount]);
+  useEffect(() => { setCarouselIndex(0); }, [empresa, tvMode]);
+  useEffect(() => {
+    if (!tvMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') setCarouselIndex(i => i + 1);
+      if (e.key === 'ArrowLeft') setCarouselIndex(i => i - 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tvMode]);
+
   // Tela estreita (celular/tablet retrato): 8 colunas não cabem de jeito nenhum, então vira uma
   // lista vertical por técnico em vez da grade. O modo TV é sempre um telão largo.
   const [isNarrow, setIsNarrow] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth < 860);
@@ -128,7 +150,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     try {
       const qs = new URLSearchParams();
       if (empresa) qs.set('empresa', empresa);
-      qs.set('cards_per_cell', tvMode ? '8' : '6');
+      qs.set('cards_per_cell', tvMode ? '14' : '6');
       const data = await apiFetch(`/os-board/board?${qs.toString()}`);
       setBoard(data);
       setError(null);
@@ -229,6 +251,12 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           ))}
         </div>
 
+        {tvMode && techCount > 0 && (
+          <div style={{ fontSize: fs(15), fontWeight: 800, color: 'var(--accent-primary)' }}>
+            {titleCase(board!.technicians[activeIndex].name)}
+            <span style={{ color: 'var(--text-muted)', fontWeight: 600, marginLeft: '6px' }}>· técnico {activeIndex + 1} de {techCount}</span>
+          </div>
+        )}
         <div style={{ flex: 1 }} />
         {tvMode && (
           <div style={{ fontSize: fs(26), fontWeight: 800, color: 'var(--text-main)', fontVariantNumeric: 'tabular-nums' }}>
@@ -255,8 +283,19 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: fs(13), marginBottom: '10px' }}>{error}</div>
       )}
 
-      {/* Quadro: grade (desktop/TV) ou lista por técnico (tela estreita) */}
-      {useMobileLayout ? (
+      {/* Quadro: carrossel (TV), lista por técnico (tela estreita) ou grade (desktop) */}
+      {tvMode ? (
+        <TvCarousel
+          board={board}
+          loading={loading}
+          activeIndex={activeIndex}
+          carouselMs={CAROUSEL_MS}
+          carouselKey={carouselIndex}
+          onGoTo={setCarouselIndex}
+          scale={scale}
+          fs={fs}
+        />
+      ) : useMobileLayout ? (
         <MobileBoard
           board={board}
           loading={loading}
@@ -460,6 +499,78 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${8.5 * scale}px`, marginTop: '2px' }}>
         <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{dias === 0 ? 'hoje' : `${dias}d`}</span>
         <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(card.data_entrada)}{showEmpresa ? ` · ${(EMPRESA_LABEL[card.empresa] || card.empresa).slice(0, 4)}` : ''}</span>
+      </div>
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- carrossel (modo TV)
+
+const TvCarousel: React.FC<{
+  board: BoardData | null; loading: boolean; activeIndex: number; carouselMs: number; carouselKey: number;
+  onGoTo: (i: number) => void; scale: number; fs: (px: number) => string;
+}> = ({ board, loading, activeIndex, carouselMs, carouselKey, onGoTo, scale, fs }) => {
+  const stages = board?.stages || [];
+  const tech = board?.technicians[activeIndex];
+
+  if (!board || board.technicians.length === 0) {
+    return (
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: fs(16) }}>
+        {loading ? 'Carregando…' : 'Nenhuma O.S. em aberto neste filtro.'}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))', overflow: 'hidden' }}>
+      {/* Barra de progresso até trocar de técnico - reinicia a animação a cada slide (key) */}
+      <div style={{ height: '3px', background: 'rgba(255,255,255,0.06)', flexShrink: 0 }}>
+        <div key={carouselKey} style={{ height: '100%', background: 'var(--accent-primary)', animation: `tvCarouselProgress ${carouselMs}ms linear forwards` }} />
+      </div>
+      <style>{'@keyframes tvCarouselProgress { from { width: 0% } to { width: 100% } }'}</style>
+
+      <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, 1fr)`, overflow: 'hidden' }}>
+        {stages.map(st => {
+          const cell = tech?.cells[st.key] || { count: 0, cards: [] };
+          return (
+            <div key={st.key} style={{ display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
+              <div
+                title={st.label}
+                style={{
+                  padding: `${9 * scale}px ${8 * scale}px`, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`,
+                  borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'var(--bg-primary, #0b1220)',
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{ fontSize: fs(11), fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.2px', color: 'var(--text-main)', lineHeight: 1.2 }}>{st.label}</div>
+                <div style={{ fontSize: fs(13), fontWeight: 800, color: STAGE_COLORS[st.key] || 'var(--text-muted)', marginTop: '2px' }}>{cell.count}</div>
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: `${6 * scale}px`, display: 'flex', flexDirection: 'column', gap: `${5 * scale}px` }}>
+                {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
+                {cell.count > cell.cards.length && (
+                  <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0' }}>+{cell.count - cell.cards.length} O.S.</div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Pontos de navegação - um por técnico, clicável para pular direto e reiniciar a contagem */}
+      <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', padding: `${8 * scale}px ${10 * scale}px`, borderTop: '1px solid var(--border-color, rgba(255,255,255,0.08))', flexShrink: 0, background: 'var(--bg-primary, #0b1220)' }}>
+        {board.technicians.map((t, i) => (
+          <button
+            key={t.name}
+            onClick={() => onGoTo(i)}
+            title={`${titleCase(t.name)} (${t.total_open} em aberto)`}
+            style={{
+              padding: i === activeIndex ? '4px 10px' : '4px 8px', borderRadius: '999px', fontSize: fs(10), fontWeight: 700, cursor: 'pointer',
+              background: i === activeIndex ? 'rgba(0,230,153,0.18)' : 'transparent',
+              color: i === activeIndex ? 'var(--accent-primary)' : 'var(--text-muted)',
+              border: `1px solid ${i === activeIndex ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.1))'}`,
+            }}
+          >{i === activeIndex ? titleCase(t.name) : i + 1}</button>
+        ))}
       </div>
     </div>
   );
