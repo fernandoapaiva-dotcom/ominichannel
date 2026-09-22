@@ -7,7 +7,7 @@ import {
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
   Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, CalendarPlus
 } from 'lucide-react';
-import { isMisspelled } from '../utils/spellingCorrector';
+import { isMisspelled, WORD_REPLACEMENTS } from '../utils/spellingCorrector';
 import { apiFetch, apiUpload, apiUploadChunked, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
@@ -1317,6 +1317,41 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } catch (err) {
       console.error('Error sending audio message:', err);
     }
+  };
+
+  // Menu customizado de correção ortográfica - o navegador não deixa a página adicionar
+  // sugestões no menu nativo de botão direito, então quando a palavra sob o clique está na
+  // lista de erros conhecidos (spellingCorrector.ts) a gente bloqueia o menu nativo e mostra
+  // o nosso, com a correção certa já pronta pra clicar.
+  const [spellSuggestMenu, setSpellSuggestMenu] = useState<{
+    x: number; y: number; wordStart: number; wordEnd: number; original: string; suggestion: string;
+  } | null>(null);
+
+  const applySpellSuggestion = () => {
+    if (!spellSuggestMenu) return;
+    const { wordStart, wordEnd, original, suggestion } = spellSuggestMenu;
+    // Mantém o padrão de maiúsculas da palavra original (ex.: "Nao" -> "Não", "NAO" -> "NÃO").
+    let corrected = suggestion;
+    if (original === original.toUpperCase() && original !== original.toLowerCase()) {
+      corrected = suggestion.toUpperCase();
+    } else if (original[0] === original[0]?.toUpperCase() && original[0] !== original[0]?.toLowerCase()) {
+      corrected = suggestion.charAt(0).toUpperCase() + suggestion.slice(1);
+    }
+    const newVal = inputText.slice(0, wordStart) + corrected + inputText.slice(wordEnd);
+    setInputText(newVal);
+    if (conversation?.id && onSaveDraft) onSaveDraft(conversation.id, newVal);
+    setSpellSuggestMenu(null);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (ta) {
+        ta.focus();
+        const pos = wordStart + corrected.length;
+        ta.selectionStart = ta.selectionEnd = pos;
+        ta.style.height = 'auto';
+        const nextH = Math.min(ta.scrollHeight, 140);
+        ta.style.height = `${Math.max(nextH, 42)}px`;
+      }
+    });
   };
 
   const [showMentionMenu, setShowMentionMenu] = useState(false);
@@ -6463,6 +6498,38 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   }
                 }
               }}
+              onContextMenu={(e) => {
+                // O navegador não deixa a página inserir sugestões no menu nativo de botão
+                // direito. Quando a palavra sob o clique está na lista de erros conhecidos,
+                // trocamos o menu nativo pelo nosso, já com a correção certa pra clicar.
+                const ta = e.currentTarget;
+                const val = ta.value;
+                const idx = ta.selectionStart ?? 0;
+                const isWordChar = (c: string) => /[\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]/.test(c);
+                let start = idx;
+                let end = idx;
+                while (start > 0 && isWordChar(val[start - 1])) start--;
+                while (end < val.length && isWordChar(val[end])) end++;
+                const original = val.slice(start, end);
+                const suggestion = original ? WORD_REPLACEMENTS[original.toLowerCase()] : undefined;
+                if (suggestion && suggestion.toLowerCase() !== original.toLowerCase()) {
+                  e.preventDefault();
+                  // A caixa de digitar fica colada no rodapé, então o menu quase sempre abre
+                  // perto da borda inferior/direita da tela - ancora pra cima/esquerda nesses
+                  // casos pra nunca ficar cortado fora da área visível.
+                  const menuW = 220;
+                  const menuH = 90;
+                  const openUp = e.clientY + menuH > window.innerHeight;
+                  const openLeft = e.clientX + menuW > window.innerWidth;
+                  setSpellSuggestMenu({
+                    x: openLeft ? Math.max(8, window.innerWidth - menuW - 8) : e.clientX,
+                    y: openUp ? Math.max(8, e.clientY - menuH) : e.clientY,
+                    wordStart: start, wordEnd: end, original, suggestion
+                  });
+                } else {
+                  setSpellSuggestMenu(null);
+                }
+              }}
               style={{
                 position: 'relative',
                 width: '100%',
@@ -6527,6 +6594,83 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
         );
       })()}
+
+      {/* Menu customizado de sugestão de correção ortográfica (substitui o menu nativo do
+          navegador, que a página não tem como preencher com sugestões próprias) */}
+      {spellSuggestMenu && (
+        <>
+          <div
+            onClick={() => setSpellSuggestMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setSpellSuggestMenu(null); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 3999 }}
+          />
+          <div
+            style={{
+              position: 'fixed',
+              top: spellSuggestMenu.y,
+              left: spellSuggestMenu.x,
+              zIndex: 4000,
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+              minWidth: '190px',
+              overflow: 'hidden',
+              fontSize: '13px'
+            }}
+          >
+            <div style={{ padding: '8px 12px', color: 'var(--text-muted)', fontSize: '11px', borderBottom: '1px solid var(--border-color)' }}>
+              Correção ortográfica
+            </div>
+            <button
+              type="button"
+              onClick={applySpellSuggestion}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                padding: '9px 12px',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-main)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontSize: '13px',
+                fontWeight: '600'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0, 230, 153, 0.1)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <Check size={14} color="var(--accent-primary)" />
+              Corrigir para "{spellSuggestMenu.suggestion.charAt(0).toUpperCase() + spellSuggestMenu.suggestion.slice(1)}"
+            </button>
+            <button
+              type="button"
+              onClick={() => setSpellSuggestMenu(null)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                width: '100%',
+                padding: '9px 12px',
+                background: 'transparent',
+                border: 'none',
+                borderTop: '1px solid var(--border-color)',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontSize: '13px'
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <X size={14} />
+              Ignorar
+            </button>
+          </div>
+        </>
+      )}
 
       {/* WebRTC Live Video / Audio Call Modal */}
       {isVideoModalOpen && activeCallUrl && (
