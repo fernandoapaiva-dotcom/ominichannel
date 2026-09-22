@@ -899,8 +899,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={onToggleCollapse}
             style={{
-              width: '36px',
-              height: '36px',
+              width: '44px',
+              height: '44px',
               borderRadius: '50%',
               backgroundColor: 'rgba(0, 230, 153, 0.15)',
               color: 'var(--accent-primary)',
@@ -922,8 +922,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div
           onClick={() => setActiveTab('chats')}
           style={{
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: 'var(--accent-gradient)',
             display: 'flex',
@@ -938,7 +938,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.08)')}
           onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
         >
-          <Bot size={28} />
+          <Bot size={24} />
         </div>
       </div>
 
@@ -949,8 +949,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title="Conversas com Clientes"
           style={{
             position: 'relative',
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'chats' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
             color: activeTab === 'chats' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -991,8 +991,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title="Grupos & Comunidades WhatsApp"
           style={{
             position: 'relative',
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'groups' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
             color: activeTab === 'groups' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1032,8 +1032,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('contacts')}
           title="Histórico de Clientes"
           style={{
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'contacts' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
             color: activeTab === 'contacts' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1052,8 +1052,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('tecnicos')}
           title="Quadro de Técnicos"
           style={{
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
             color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1072,8 +1072,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('segmentation')}
           title="Segmentação & Filtros"
           style={{
-            width: '48px',
-            height: '48px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'segmentation' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
             color: activeTab === 'segmentation' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1092,8 +1092,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={() => setActiveTab('admin')}
             title="Configurações do Sistema"
             style={{
-              width: '48px',
-              height: '48px',
+              width: '44px',
+              height: '44px',
               borderRadius: 'var(--radius-md)',
               background: activeTab === 'admin' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
               color: activeTab === 'admin' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1117,8 +1117,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           download="OminiChannel-Setup.exe"
           title="Baixar Aplicativo OminiChannel para Computador (Windows)"
           style={{
-            width: '40px',
-            height: '40px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: 'rgba(0, 230, 153, 0.12)',
             color: '#00e699',
@@ -1146,8 +1146,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={toggleTheme}
           title={theme === 'dark' ? 'Mudar para Modo Dia (Claro)' : 'Mudar para Modo Noite (Escuro)'}
           style={{
-            width: '40px',
-            height: '40px',
+            width: '44px',
+            height: '44px',
             borderRadius: 'var(--radius-md)',
             background: 'rgba(255, 255, 255, 0.06)',
             color: theme === 'dark' ? '#fbbf24' : '#6366f1',
@@ -1177,8 +1177,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               src={user.foto_perfil_url}
               alt={user.nome}
               style={{
-                width: '42px',
-                height: '42px',
+                width: '44px',
+                height: '44px',
                 borderRadius: '50%',
                 objectFit: 'cover',
                 border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '2px solid var(--accent-primary)',
@@ -1187,8 +1187,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           ) : (
             <div style={{
-              width: '42px',
-              height: '42px',
+              width: '44px',
+              height: '44px',
               borderRadius: '50%',
               background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
               display: 'flex',
