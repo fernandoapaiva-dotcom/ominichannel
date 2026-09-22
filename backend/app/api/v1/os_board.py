@@ -521,11 +521,14 @@ async def get_report_pdf(
     start: Optional[datetime] = Query(None, description="Entrada a partir de (vazio = sem início)"),
     end: Optional[datetime] = Query(None, description="Entrada até (vazio = até hoje)"),
     status: str = Query("todas", description="todas | abertas | finalizadas | efetivadas"),
-    incluir_lista: bool = Query(True, description="Inclui a lista detalhada de O.S. no fim do PDF"),
+    incluir_lista: bool = Query(True, description="Inclui a lista detalhada de O.S. no fim do PDF (só no modo completo)"),
+    modo: str = Query("completo", description="completo (KPIs/financeiro/ranking) | lista (só a lista de O.S., pra entregar pro técnico)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Relatório em PDF: produtividade por técnico/evento, financeiro e forma de pagamento. Só administradores."""
+    """Relatório em PDF: produtividade por técnico/evento, financeiro e forma de pagamento (modo completo),
+    ou só a lista de O.S. do filtro, sem os números de gestão - pra imprimir/entregar pro técnico como
+    lista de tarefas (modo lista). Só administradores."""
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Somente administradores podem emitir relatórios")
 
@@ -580,7 +583,7 @@ async def get_report_pdf(
         if status == "efetivadas" and not _efetivada(o):
             continue
         report_rows.append({
-            "codos": o.codos, "empresa": o.empresa, "cliente": o.cliente,
+            "codos": o.codos, "empresa": o.empresa, "cliente": o.cliente, "equipamento": o.equipamento,
             "tecnico_label": o.tecnico or NO_TECH_LABEL, "tecnico2_label": o.tecnico2 or None,
             "cod_tipo_os": o.cod_tipo_os, "tipo_os": TIPO_OS_LABEL.get(o.cod_tipo_os, None),
             "stage": stage, "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "Entrada"),
@@ -601,11 +604,13 @@ async def get_report_pdf(
         "Período": f"{start_dt.strftime('%d/%m/%Y') if start_dt else 'início'} a {end_dt.strftime('%d/%m/%Y')}",
     }
 
+    modo_norm = "lista" if (modo or "").strip().lower() == "lista" else "completo"
     pdf_bytes = build_os_report_pdf(
         orders=report_rows, stage_labels=REPORT_STAGE_LABELS, event_labels=EVENT_LABELS,
-        filtros=filtros_txt, gerado_em=now, incluir_lista=incluir_lista,
+        filtros=filtros_txt, gerado_em=now, incluir_lista=incluir_lista, modo=modo_norm,
     )
-    filename = f"relatorio-quadro-tecnicos-{now.strftime('%Y%m%d-%H%M')}.pdf"
+    prefixo = "lista-os" if modo_norm == "lista" else "relatorio-quadro-tecnicos"
+    filename = f"{prefixo}-{now.strftime('%Y%m%d-%H%M')}.pdf"
     return Response(
         content=pdf_bytes, media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{filename}"'}

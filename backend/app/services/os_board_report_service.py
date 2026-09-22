@@ -43,6 +43,64 @@ def _fmt_datetime(d: Optional[datetime]) -> str:
     return d.strftime("%d/%m/%Y %H:%M") if d else "—"
 
 
+def _lista_simples_table(rows: List[Dict[str, Any]], doc: SimpleDocTemplate, thead: ParagraphStyle, cell: ParagraphStyle) -> Table:
+    """Uma tabela 'O.S. do técnico' pronta pra entregar - sem valor/forma de pagamento (não é
+    o foco quando o objetivo é só mostrar o que está pendente de trabalho)."""
+    header = [Paragraph(t, thead) for t in ["O.S.", "Cliente", "Equipamento", "Tipo", "Situação", "Entrada", "Dias"]]
+    data = [header]
+    # Mais antiga primeiro - é o que o técnico deveria atacar primeiro, diferente da lista do
+    # relatório completo (mais recente primeiro, que é o jeito natural de auditar/conferir).
+    for o in sorted(rows, key=lambda r: r.get("data_entrada") or datetime.min):
+        dias = (datetime.now() - o["data_entrada"]).days if o.get("data_entrada") else None
+        data.append([
+            str(o["codos"]), Paragraph(o.get("cliente") or "—", cell),
+            Paragraph(o.get("equipamento") or "—", cell), Paragraph(o.get("tipo_os") or "—", cell),
+            Paragraph(o["situacao"], cell), _fmt_date(o.get("data_entrada")),
+            f"{dias}d" if dias is not None else "—",
+        ])
+    col_w = [14 * mm, doc.width * 0.24, doc.width * 0.24, doc.width * 0.16, doc.width * 0.16, 20 * mm, 14 * mm]
+    t = Table(data, colWidths=col_w, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), BRAND_DARK), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"), ("ALIGN", (5, 0), (6, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.3, GREY_LINE), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, ROW_ALT]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    return t
+
+
+def _build_lista_simples(
+    story: List[Any], doc: SimpleDocTemplate, orders: List[Dict[str, Any]], filtros: Dict[str, str],
+    thead: ParagraphStyle, cell: ParagraphStyle, h2: ParagraphStyle, note: ParagraphStyle,
+) -> None:
+    MAX_ROWS = 600
+    truncado = len(orders) > MAX_ROWS
+    listed = orders[:MAX_ROWS]
+
+    # Técnico=Todos (o filtro pedido "geral") agrupa por técnico, senão vira uma lista só (já
+    # está tudo do mesmo técnico, repetir o nome em toda linha não ajuda em nada).
+    agrupar = filtros.get("Técnico", "Todos") == "Todos"
+    if agrupar:
+        por_tecnico: Dict[str, List[Dict[str, Any]]] = {}
+        for o in listed:
+            por_tecnico.setdefault(o["tecnico_label"], []).append(o)
+        for tec in sorted(por_tecnico.keys()):
+            rows = por_tecnico[tec]
+            # Sem KeepTogether aqui: um técnico pode ter dezenas de O.S., o que empurraria a
+            # tabela inteira pra próxima página à toa - repeatRows (na tabela) já resolve.
+            story.append(Paragraph(f"{tec} <font color='#64748b' size=9>({len(rows)} O.S.)</font>", h2))
+            story.append(_lista_simples_table(rows, doc, thead, cell))
+            story.append(Spacer(1, 4))
+    else:
+        story.append(Paragraph(f"{len(listed)}{' de ' + str(len(orders)) if truncado else ''} O.S.", h2))
+        story.append(_lista_simples_table(listed, doc, thead, cell))
+
+    if truncado:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(f"Lista limitada às primeiras {MAX_ROWS} O.S. do filtro ({len(orders)} no total) - restrinja o período ou o filtro pra ver o restante.", note))
+
+
 def build_os_report_pdf(
     *,
     orders: List[Dict[str, Any]],
@@ -51,16 +109,22 @@ def build_os_report_pdf(
     filtros: Dict[str, str],
     gerado_em: datetime,
     incluir_lista: bool = True,
+    modo: str = "completo",
 ) -> bytes:
     """
     `orders` é uma lista de dicts já resolvidos (um por O.S.), com pelo menos:
-    codos, empresa, cliente, tecnico, cod_tipo_os, tipo_os, stage, situacao, data_entrada,
-    finalizada_em, valor_total, forma_pagamento, aberta (bool), efetivada_motivo.
+    codos, empresa, cliente, equipamento, tecnico_label, cod_tipo_os, tipo_os, stage, situacao,
+    data_entrada, finalizada_em, valor_total, forma_pagamento, aberta (bool), efetivada_motivo.
+
+    `modo="completo"`: o relatório de gestão de sempre (KPIs, matriz, financeiro, ranking).
+    `modo="lista"`: só a lista de O.S. do filtro, sem nenhum número de gestão - pensado pra
+    imprimir/entregar pro técnico como lista de tarefas (ex.: "só o que ele tem em Entrada"),
+    quando esses dados de acompanhamento não interessam pra essa finalidade.
     """
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=landscape(A4), topMargin=14 * mm, bottomMargin=12 * mm, leftMargin=14 * mm, rightMargin=14 * mm,
-        title="Relatório do Quadro de Técnicos"
+        title="Lista de O.S." if modo == "lista" else "Relatório do Quadro de Técnicos"
     )
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=styles["Title"], fontSize=17, textColor=BRAND_DARK, spaceAfter=2)
@@ -75,13 +139,18 @@ def build_os_report_pdf(
     story: List[Any] = []
 
     # ---------------------------------------------------------------- cabeçalho
-    story.append(Paragraph("Relatório do Quadro de Técnicos", h1))
+    story.append(Paragraph("Lista de O.S." if modo == "lista" else "Relatório do Quadro de Técnicos", h1))
     story.append(Paragraph("Servweld / Servsolda &amp; Centro-Oeste · Assistência Técnica", sub))
     filtro_linhas = " · ".join(f"<b>{k}:</b> {v}" for k, v in filtros.items())
     story.append(Paragraph(filtro_linhas, sub))
     story.append(Paragraph(f"Gerado em {_fmt_datetime(gerado_em)}", sub))
     story.append(Spacer(1, 6))
     story.append(Table([[""]], colWidths=[doc.width], rowHeights=[1], style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 1, GREY_LINE)])))
+
+    if modo == "lista":
+        _build_lista_simples(story, doc, orders, filtros, thead, cell, h2, note)
+        doc.build(story)
+        return buf.getvalue()
 
     total_os = len(orders)
     finalizadas = [o for o in orders if o["stage"] == "finalizada"]

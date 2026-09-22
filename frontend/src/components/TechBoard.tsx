@@ -476,6 +476,9 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
   const [start, setStart] = useState('');
   const [end, setEnd] = useState(toInputDate(new Date()));
   const [incluirLista, setIncluirLista] = useState(true);
+  // completo = relatório de gestão (KPIs, financeiro, ranking); lista = só as O.S. do filtro,
+  // sem números de acompanhamento - pra imprimir/entregar pro técnico como lista de tarefas.
+  const [modo, setModo] = useState<'completo' | 'lista'>('completo');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -502,7 +505,7 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
     setLoading(true);
     setError(null);
     try {
-      const qs = new URLSearchParams({ tecnico, evento, status, incluir_lista: String(incluirLista) });
+      const qs = new URLSearchParams({ tecnico, evento, status, incluir_lista: String(incluirLista), modo });
       if (empresa) qs.set('empresa', empresa);
       if (start) qs.set('start', `${start}T00:00:00`);
       if (end) qs.set('end', `${end}T23:59:59`);
@@ -537,12 +540,38 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
         <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.1))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>Relatório em PDF</div>
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Produtividade, financeiro e forma de pagamento</div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              {modo === 'lista' ? 'Só a lista de O.S. do filtro, pra entregar' : 'Produtividade, financeiro e forma de pagamento'}
+            </div>
           </div>
           <button onClick={onClose} style={iconBtn}><X size={16} /></button>
         </div>
 
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div>
+            <span style={label}>Tipo de PDF</span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {([
+                { key: 'completo', title: 'Relatório completo', desc: 'KPIs, financeiro, ranking' },
+                { key: 'lista', title: 'Lista simples', desc: 'só as O.S., pra entregar' },
+              ] as const).map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setModo(opt.key)}
+                  style={{
+                    flex: 1, textAlign: 'left', padding: '8px 10px', borderRadius: '9px', cursor: 'pointer',
+                    background: modo === opt.key ? 'rgba(0, 230, 153, 0.14)' : 'var(--bg-secondary, rgba(255,255,255,0.04))',
+                    border: modo === opt.key ? '1px solid rgba(0, 230, 153, 0.45)' : '1px solid var(--border-color, rgba(255,255,255,0.12))',
+                  }}
+                >
+                  <div style={{ fontSize: '12px', fontWeight: 700, color: modo === opt.key ? 'var(--accent-primary)' : 'var(--text-main)' }}>{opt.title}</div>
+                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <span style={label}>Empresa</span>
             <select id="report-empresa" value={empresa} onChange={e => { setEmpresa(e.target.value); setTecnico('todos'); }} style={input}>
@@ -589,10 +618,12 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
             </div>
           </div>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-main)', cursor: 'pointer' }}>
-            <input type="checkbox" checked={incluirLista} onChange={e => setIncluirLista(e.target.checked)} />
-            Incluir lista detalhada de O.S. no fim do PDF
-          </label>
+          {modo === 'completo' && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-main)', cursor: 'pointer' }}>
+              <input type="checkbox" checked={incluirLista} onChange={e => setIncluirLista(e.target.checked)} />
+              Incluir lista detalhada de O.S. no fim do PDF
+            </label>
+          )}
 
           {error && <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '12px' }}>{error}</div>}
 
