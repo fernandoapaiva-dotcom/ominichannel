@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Download, Monitor, RefreshCw, X } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { User } from '../types';
@@ -86,18 +86,15 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const [now, setNow] = useState(new Date());
   const [detailTech, setDetailTech] = useState<string | null>(null);
   const reloadTimer = useRef<number | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [stageFilter, setStageFilter] = useState<string>('');
 
-  // Mede o espaço disponível para as colunas caberem na tela sem precisar rolar de lado
+  // Tela estreita (celular/tablet retrato): 8 colunas não cabem de jeito nenhum, então vira uma
+  // lista vertical por técnico em vez da grade. O modo TV é sempre um telão largo.
+  const [isNarrow, setIsNarrow] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth < 860);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(entries => {
-      for (const entry of entries) setContainerWidth(entry.contentRect.width);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+    const onResize = () => setIsNarrow(window.innerWidth < 860);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const load = useCallback(async () => {
@@ -163,16 +160,12 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
   const stages = board?.stages || [];
   const stagesCount = Math.max(stages.length, 1);
-  // Colunas dimensionadas para caber no espaço disponível (sem rolagem lateral, quando possível); com muitas
-  // colunas numa tela estreita elas param no mínimo legível e a rolagem lateral assume.
-  const techColWidth = tvMode ? 180 : 128;
-  const minStageCol = tvMode ? 150 : 116;
-  const maxStageCol = tvMode ? 260 : 190;
-  const availableForStages = Math.max(0, containerWidth - techColWidth - 2);
-  const fitStageCol = containerWidth > 0 ? availableForStages / stagesCount : minStageCol;
-  const stageColWidth = Math.min(maxStageCol, Math.max(minStageCol, Math.floor(fitStageCol)));
-  const boardTotalWidth = techColWidth + stageColWidth * stagesCount;
-  const gridCols = `${techColWidth}px repeat(${stagesCount}, ${stageColWidth}px)`;
+  const useMobileLayout = isNarrow && !tvMode;
+  // Colunas fixas ocupando 100% da largura disponível (grid com container de largura definida - sem isso,
+  // nomes longos de cliente em uma só linha inflam a largura "natural" das colunas bem além do necessário).
+  const techColWidth = tvMode ? 170 : 118;
+  const minStageCol = tvMode ? 140 : 92;
+  const gridCols = `${techColWidth}px repeat(${stagesCount}, minmax(${minStageCol}px, 1fr))`;
 
   const wrapperStyle: React.CSSProperties = tvMode
     ? { position: 'fixed', inset: 0, zIndex: 20000, background: 'var(--bg-primary, #0b1220)', display: 'flex', flexDirection: 'column', padding: '14px 18px', overflow: 'hidden' }
@@ -235,59 +228,160 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: fs(13), marginBottom: '10px' }}>{error}</div>
       )}
 
-      {/* Quadro */}
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
-        <div style={{ width: `${boardTotalWidth}px`, display: 'grid', gridTemplateColumns: gridCols }}>
-          {/* linha de títulos */}
-          <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
-          {stages.map(st => (
-            <div key={st.key} title={st.label} style={{ ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`, gap: '4px' }}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{st.label}</span>
-              <span style={{ flexShrink: 0, color: STAGE_COLORS[st.key] || 'var(--text-muted)' }}>{board?.totals?.[st.key] ?? 0}</span>
-            </div>
-          ))}
-
-          {board && board.technicians.length === 0 && !loading && (
-            <div style={{ gridColumn: `1 / span ${stages.length + 1}`, padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(14) }}>
-              Nenhuma O.S. em aberto neste filtro.
-            </div>
-          )}
-
-          {(board?.technicians || []).map(tech => (
-            <React.Fragment key={tech.name}>
-              <div
-                onClick={() => { if (isAdmin && !tvMode) setDetailTech(tech.name); }}
-                title={isAdmin && !tvMode ? 'Ver detalhes e auditoria deste técnico' : undefined}
-                style={{
-                  position: 'sticky', left: 0, zIndex: 1, padding: `${7 * scale}px ${9 * scale}px`,
-                  background: 'var(--bg-primary, #0b1220)', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-                  borderRight: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-                  cursor: isAdmin && !tvMode ? 'pointer' : 'default', minWidth: 0,
-                }}
-              >
-                <div style={{ fontSize: fs(13.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
-                <div style={{ fontSize: fs(11), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
+      {/* Quadro: grade (desktop/TV) ou lista por técnico (tela estreita) */}
+      {useMobileLayout ? (
+        <MobileBoard
+          board={board}
+          loading={loading}
+          stageFilter={stageFilter}
+          setStageFilter={setStageFilter}
+          isAdmin={isAdmin}
+          onOpenTech={setDetailTech}
+          showEmpresa={!empresa}
+        />
+      ) : (
+        <div style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: gridCols }}>
+            {/* linha de títulos */}
+            <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
+            {stages.map(st => (
+              <div key={st.key} title={st.label} style={{ ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`, gap: '4px' }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{st.label}</span>
+                <span style={{ flexShrink: 0, color: STAGE_COLORS[st.key] || 'var(--text-muted)' }}>{board?.totals?.[st.key] ?? 0}</span>
               </div>
-              {stages.map(st => {
-                const cell = tech.cells[st.key] || { count: 0, cards: [] };
-                return (
-                  <div key={st.key} style={{ padding: `${5 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${4 * scale}px`, minHeight: `${52 * scale}px`, minWidth: 0 }}>
-                    {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
-                    {cell.count > cell.cards.length && (
-                      <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{cell.count - cell.cards.length} O.S.</div>
-                    )}
-                  </div>
-                );
-              })}
-            </React.Fragment>
-          ))}
+            ))}
+
+            {board && board.technicians.length === 0 && !loading && (
+              <div style={{ gridColumn: `1 / span ${stages.length + 1}`, padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(14) }}>
+                Nenhuma O.S. em aberto neste filtro.
+              </div>
+            )}
+
+            {(board?.technicians || []).map(tech => (
+              <React.Fragment key={tech.name}>
+                <div
+                  onClick={() => { if (isAdmin && !tvMode) setDetailTech(tech.name); }}
+                  title={isAdmin && !tvMode ? 'Ver detalhes e auditoria deste técnico' : undefined}
+                  style={{
+                    position: 'sticky', left: 0, zIndex: 1, padding: `${7 * scale}px ${9 * scale}px`,
+                    background: 'var(--bg-primary, #0b1220)', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                    borderRight: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                    cursor: isAdmin && !tvMode ? 'pointer' : 'default', minWidth: 0,
+                  }}
+                >
+                  <div style={{ fontSize: fs(13.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
+                  <div style={{ fontSize: fs(11), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
+                </div>
+                {stages.map(st => {
+                  const cell = tech.cells[st.key] || { count: 0, cards: [] };
+                  return (
+                    <div key={st.key} style={{ padding: `${5 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${4 * scale}px`, minHeight: `${52 * scale}px`, minWidth: 0 }}>
+                      {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
+                      {cell.count > cell.cards.length && (
+                        <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{cell.count - cell.cards.length} O.S.</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
       {!tvMode && !isAdmin && (
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
           Finalizadas e O.S. já efetivadas não aparecem no quadro. O detalhe por técnico é exclusivo de administradores.
         </div>
       )}
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- lista (tela estreita / celular)
+
+const MobileBoard: React.FC<{
+  board: BoardData | null; loading: boolean; stageFilter: string; setStageFilter: (k: string) => void;
+  isAdmin: boolean; onOpenTech: (name: string) => void; showEmpresa: boolean;
+}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa }) => {
+  const stages = board?.stages || [];
+  const stageKeys = stageFilter ? [stageFilter] : stages.map(s => s.key);
+
+  const rows = (board?.technicians || [])
+    .map(tech => {
+      const items = stageKeys.flatMap(sk => (tech.cells[sk]?.cards || []).map(c => ({ card: c, stageKey: sk })));
+      const shown = stageKeys.reduce((sum, sk) => sum + (tech.cells[sk]?.count || 0), 0);
+      return { tech, items, shown };
+    })
+    .filter(r => r.shown > 0);
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
+      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch' }}>
+        <StageChip label={`Todos · ${board?.total_open ?? 0}`} active={!stageFilter} onClick={() => setStageFilter('')} />
+        {stages.map(st => (
+          <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
+        ))}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {board && rows.length === 0 && !loading && (
+          <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
+        )}
+        {rows.map(({ tech, items, shown }) => (
+          <div key={tech.name} style={{ border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+            <div
+              onClick={() => { if (isAdmin) onOpenTech(tech.name); }}
+              style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-primary, #0b1220)', cursor: isAdmin ? 'pointer' : 'default' }}
+            >
+              <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)' }}>{titleCase(tech.name)}</span>
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 700 }}>{shown} {stageFilter ? 'nesse estágio' : 'em aberto'}</span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {items.map(({ card, stageKey }) => (
+                <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} />
+              ))}
+              {shown > items.length && (
+                <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{shown - items.length} O.S. (abra pelo computador para ver todas)</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const StageChip: React.FC<{ label: string; active: boolean; onClick: () => void; color?: string }> = ({ label, active, onClick, color }) => (
+  <button
+    onClick={onClick}
+    style={{
+      flexShrink: 0, padding: '6px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+      background: active ? (color ? `${color}26` : 'rgba(0,230,153,0.16)') : 'transparent',
+      color: active ? (color || 'var(--accent-primary)') : 'var(--text-muted)',
+      border: `1px solid ${active ? (color || 'rgba(0,230,153,0.4)') : 'var(--border-color, rgba(255,255,255,0.12))'}`,
+      whiteSpace: 'nowrap',
+    }}
+  >{label}</button>
+);
+
+const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: string; showEmpresa: boolean; showStage: boolean }> = ({ card, stageLabel, color, showEmpresa, showStage }) => {
+  const dias = card.dias_no_estagio ?? 0;
+  const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
+  return (
+    <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `3px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+        <span>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
+        <span style={{ flexShrink: 0, fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
+      </div>
+      {card.equipamento && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{card.equipamento}</div>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', marginTop: '2px', flexWrap: 'wrap' }}>
+        <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500 }}>{dias === 0 ? 'hoje no estágio' : `${dias}d no estágio`}</span>
+        <span style={{ display: 'flex', gap: '8px', color: 'var(--text-muted)' }}>
+          {showStage && <span style={{ color: color || 'var(--text-muted)', fontWeight: 700 }}>{stageLabel}</span>}
+          {showEmpresa && <span>{EMPRESA_LABEL[card.empresa] || card.empresa}</span>}
+        </span>
+      </div>
     </div>
   );
 };
