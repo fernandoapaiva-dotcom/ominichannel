@@ -82,14 +82,16 @@ async def lifespan(app: FastAPI):
     logger.info("🛡️ WhatsApp Instance Auto-Heal Watchdog background loop started (30s interval).")
 
     # Quadro de Técnicos: cobrança automática de aprovação de orçamento (2 em 2 dias) e retirada do
-    # equipamento (2 em 2 dias, com contagem regressiva de 90 dias até o descarte).
-    # PAUSADO em 22/09 (22/09/2026): já disparou 36 mensagens reais sozinho, num restart de rotina,
-    # antes do usuário confirmar o primeiro disparo em massa - ver conversa. Só religar depois do
-    # usuário confirmar explicitamente (trocar False por True aqui).
+    # equipamento (2 em 2 dias, com contagem regressiva de 90 dias até o descarte). Roda só entre 8h e
+    # 18h de Brasília e distribui a fila pendente ao longo do horário que resta até as 18h (no máximo
+    # 8 mensagens a cada 10 min) - ver app/services/os_board_followup_service.py.
+    # PAUSADO em 22/09/2026: já disparou 36 mensagens reais sozinho, num restart de rotina, antes do
+    # usuário confirmar o primeiro disparo em massa - ver conversa. Só religar depois do usuário
+    # confirmar explicitamente (trocar False por True aqui).
     OS_BOARD_FOLLOWUP_ENABLED = False
     if OS_BOARD_FOLLOWUP_ENABLED:
-        os_board_followup_task = asyncio.create_task(start_os_board_followup_loop(interval_seconds=3600))
-        logger.info("📋 Quadro de Técnicos: cobrança automática de aprovação/retirada iniciada (1h de intervalo).")
+        os_board_followup_task = asyncio.create_task(start_os_board_followup_loop())
+        logger.info("📋 Quadro de Técnicos: cobrança automática de aprovação/retirada iniciada (ritmo de 8h-18h).")
     else:
         os_board_followup_task = None
         logger.info("📋 Quadro de Técnicos: cobrança automática PAUSADA (aguardando confirmação do usuário).")
