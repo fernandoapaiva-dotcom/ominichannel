@@ -81,10 +81,18 @@ async def lifespan(app: FastAPI):
     watchdog_task = asyncio.create_task(start_whatsapp_watchdog_loop(interval_seconds=30))
     logger.info("🛡️ WhatsApp Instance Auto-Heal Watchdog background loop started (30s interval).")
 
-    # Quadro de Técnicos: cobrança automática de aprovação de orçamento (2 em 2 dias) e retirada
-    # do equipamento (2 em 2 dias, com contagem regressiva de 90 dias até o descarte)
-    os_board_followup_task = asyncio.create_task(start_os_board_followup_loop(interval_seconds=3600))
-    logger.info("📋 Quadro de Técnicos: cobrança automática de aprovação/retirada iniciada (1h de intervalo).")
+    # Quadro de Técnicos: cobrança automática de aprovação de orçamento (2 em 2 dias) e retirada do
+    # equipamento (2 em 2 dias, com contagem regressiva de 90 dias até o descarte).
+    # PAUSADO em 22/09 (22/09/2026): já disparou 36 mensagens reais sozinho, num restart de rotina,
+    # antes do usuário confirmar o primeiro disparo em massa - ver conversa. Só religar depois do
+    # usuário confirmar explicitamente (trocar False por True aqui).
+    OS_BOARD_FOLLOWUP_ENABLED = False
+    if OS_BOARD_FOLLOWUP_ENABLED:
+        os_board_followup_task = asyncio.create_task(start_os_board_followup_loop(interval_seconds=3600))
+        logger.info("📋 Quadro de Técnicos: cobrança automática de aprovação/retirada iniciada (1h de intervalo).")
+    else:
+        os_board_followup_task = None
+        logger.info("📋 Quadro de Técnicos: cobrança automática PAUSADA (aguardando confirmação do usuário).")
 
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation is triggered passively via connection webhooks or manual admin action.
@@ -101,7 +109,8 @@ async def lifespan(app: FastAPI):
     business_hours_task.cancel()
     calendar_reminder_task.cancel()
     watchdog_task.cancel()
-    os_board_followup_task.cancel()
+    if os_board_followup_task:
+        os_board_followup_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")
