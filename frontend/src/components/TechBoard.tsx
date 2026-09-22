@@ -156,7 +156,10 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     try {
       const qs = new URLSearchParams();
       if (empresa) qs.set('empresa', empresa);
-      qs.set('cards_per_cell', tvMode ? '14' : '6');
+      // No modo TV busca bem mais que cabe na tela de uma vez: o carrossel gira as páginas de cada
+      // célula sozinho (ver TvCarousel), então precisa ter tudo em mãos pra isso funcionar sem
+      // depender de mais uma chamada à API a cada página.
+      qs.set('cards_per_cell', tvMode ? '60' : '6');
       const data = await apiFetch(`/os-board/board?${qs.toString()}`);
       setBoard(data);
       setError(null);
@@ -765,6 +768,19 @@ const TvCarousel: React.FC<{
   const stages = board?.stages || [];
   const tech = board?.technicians[activeIndex];
 
+  // Uma célula pode ter mais O.S. do que cabe na tela de uma vez (ex.: "Entrada" com 26) - em vez de
+  // esconder o resto atrás de um botão que ninguém vai clicar de longe, o conteúdo da célula vira
+  // páginas de PAGE_SIZE cartões, trocando sozinho a cada PAGE_ROTATE_MS, então dentro do tempo em
+  // que o técnico fica na tela dá pra ver TODAS as O.S. daquele estágio, não só as primeiras.
+  const PAGE_SIZE = 6;
+  const PAGE_ROTATE_MS = 4500;
+  const [subTick, setSubTick] = useState(0);
+  useEffect(() => { setSubTick(0); }, [carouselKey]);
+  useEffect(() => {
+    const t = window.setInterval(() => setSubTick(s => s + 1), PAGE_ROTATE_MS);
+    return () => window.clearInterval(t);
+  }, []);
+
   if (!board || board.technicians.length === 0) {
     return (
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: fs(16) }}>
@@ -784,6 +800,9 @@ const TvCarousel: React.FC<{
       <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: `repeat(${Math.max(stages.length, 1)}, 1fr)`, overflow: 'hidden' }}>
         {stages.map(st => {
           const cell = tech?.cells[st.key] || { count: 0, cards: [] };
+          const totalPages = Math.max(1, Math.ceil(cell.cards.length / PAGE_SIZE));
+          const page = subTick % totalPages;
+          const visibleCards = cell.cards.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
           return (
             <div key={st.key} style={{ display: 'flex', flexDirection: 'column', minWidth: 0, borderRight: '1px solid var(--border-color, rgba(255,255,255,0.06))' }}>
               <div
@@ -794,11 +813,14 @@ const TvCarousel: React.FC<{
                   flexShrink: 0,
                 }}
               >
-                <div style={{ fontSize: fs(11), fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.2px', color: 'var(--text-main)', lineHeight: 1.2 }}>{st.label}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '4px' }}>
+                  <div style={{ fontSize: fs(11), fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.2px', color: 'var(--text-main)', lineHeight: 1.2 }}>{st.label}</div>
+                  {totalPages > 1 && <div style={{ fontSize: fs(9), fontWeight: 700, color: 'var(--text-muted)', flexShrink: 0 }}>{page + 1}/{totalPages}</div>}
+                </div>
                 <div style={{ fontSize: fs(13), fontWeight: 800, color: STAGE_COLORS[st.key] || 'var(--text-muted)', marginTop: '2px' }}>{cell.count}</div>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: `${6 * scale}px`, display: 'flex', flexDirection: 'column', gap: `${5 * scale}px` }}>
-                {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
+                {visibleCards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
                 {cell.count > cell.cards.length && tech && (
                   <button
                     onClick={() => onOpenCell(tech.name, st.key, st.label)}
@@ -806,6 +828,16 @@ const TvCarousel: React.FC<{
                   >+{cell.count - cell.cards.length} O.S.</button>
                 )}
               </div>
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '3px', padding: `${4 * scale}px 0 ${6 * scale}px` }}>
+                  {Array.from({ length: totalPages }).map((_, i) => (
+                    <span key={i} style={{
+                      width: i === page ? '12px' : '5px', height: '5px', borderRadius: '3px', transition: 'width 0.3s',
+                      background: i === page ? (STAGE_COLORS[st.key] || 'var(--accent-primary)') : 'rgba(255,255,255,0.15)',
+                    }} />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
