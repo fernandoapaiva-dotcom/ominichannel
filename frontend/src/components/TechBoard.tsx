@@ -810,7 +810,7 @@ const TvCarousel: React.FC<{
                 style={{
                   padding: `${9 * scale}px ${8 * scale}px`, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`,
                   borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'var(--bg-primary, #0b1220)',
-                  flexShrink: 0,
+                  flexShrink: 0, minHeight: `${64 * scale}px`, display: 'flex', flexDirection: 'column', justifyContent: 'center',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '4px' }}>
