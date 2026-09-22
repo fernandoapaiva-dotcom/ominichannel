@@ -70,8 +70,17 @@ def _ticks_left_today(now: datetime) -> int:
     return max(1, math.ceil(remaining / CHECK_INTERVAL_SECONDS))
 
 
-async def _dispatch(tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str, contact_name: Optional[str], text: str):
-    """Manda o texto e registra no chat do cliente, reaproveitando o mesmo caminho do OS Handler."""
+async def _dispatch(
+    tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str, contact_name: Optional[str], text: str,
+    pending_marker: Optional[str] = None,
+):
+    """
+    Manda o texto e registra no chat do cliente, reaproveitando o mesmo caminho do OS Handler. Quando
+    `pending_marker` é passado (cobrança de aprovação de orçamento), marca a conversa como aguardando
+    essa resposta (mesmo marcador CONFIRM_OS_APPROVAL: que o fluxo original usa) - sem isso, a
+    resposta *Sim*/*Não* do cliente não tinha para onde ir e podia cair em outro fluxo pendente da
+    mesma conversa (ex.: confirmação de tarefa de agenda), respondendo a pergunta errada.
+    """
     from app.api.v1.os_handler_ingest import get_or_create_conversation, send_and_log_text
     from app.services.lid_resolver_service import resolve_and_bind_contact
 
@@ -79,6 +88,8 @@ async def _dispatch(tenant_id: int, whatsapp_number_id: int, instance_name: str,
         contact = await resolve_and_bind_contact(db, tenant_id, phone, push_name=contact_name)
         await db.flush()
         conversation = await get_or_create_conversation(db, tenant_id, contact.id, whatsapp_number_id)
+        if pending_marker:
+            conversation.assunto_atual = pending_marker
         await db.commit()
         await db.refresh(conversation)
         await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, text, delay_sec=1.5)
@@ -92,14 +103,15 @@ async def _get_whatsapp_number():
 
 
 class _DueItem:
-    __slots__ = ("kind", "row_id", "codos", "telefone", "nome", "dias_restantes", "prioridade")
+    __slots__ = ("kind", "row_id", "codos", "telefone", "nome", "tecnico", "dias_restantes", "prioridade")
 
-    def __init__(self, kind, row_id, codos, telefone, nome, dias_restantes, prioridade):
+    def __init__(self, kind, row_id, codos, telefone, nome, tecnico, dias_restantes, prioridade):
         self.kind = kind  # "orcamento" | "retirada"
         self.row_id = row_id
         self.codos = codos
         self.telefone = telefone
         self.nome = nome
+        self.tecnico = tecnico
         self.dias_restantes = dias_restantes
         self.prioridade = prioridade  # quanto mais no passado, mais prioridade (vai primeiro)
 
@@ -116,7 +128,7 @@ async def _list_due_orcamento(now: datetime, cutoff: datetime, wn: WhatsAppNumbe
         for row in rows:
             last_touch = row.last_nudge_at or row.ultimo_evento_em
             if last_touch and last_touch <= cutoff:
-                due.append(_DueItem("orcamento", row.id, row.codos, row.telefone, row.contato_nome or row.cliente, None, last_touch))
+                due.append(_DueItem("orcamento", row.id, row.codos, row.telefone, row.contato_nome or row.cliente, row.tecnico, None, last_touch))
         return due
 
 
@@ -133,7 +145,7 @@ async def _list_due_retirada(now: datetime, cutoff: datetime, wn: WhatsAppNumber
             entrou_em = row.ultimo_evento_em
             dias_passados = (now - entrou_em).days if entrou_em else 0
             dias_restantes = RETIRADA_PRAZO_DIAS - dias_passados
-            item = _DueItem("retirada", row.id, row.codos, row.telefone, row.contato_nome or row.cliente, dias_restantes, entrou_em or now)
+            item = _DueItem("retirada", row.id, row.codos, row.telefone, row.contato_nome or row.cliente, row.tecnico, dias_restantes, entrou_em or now)
             if dias_restantes <= 0:
                 due_descarte.append(item)
                 continue
@@ -162,8 +174,18 @@ async def _send_item(wn: WhatsAppNumber, item: _DueItem, now: datetime) -> bool:
             f"físico é limitado e as peças usadas têm custo. Se tiver alguma dificuldade pra vir buscar, nos avise "
             f"que a gente vê uma solução juntos! 😊"
         )
+    pending_marker = None
+    if item.kind == "orcamento":
+        from app.api.v1.os_handler_ingest import resolve_tecnico_phone_by_name
+        tecnico_phone = None
+        try:
+            async with AsyncSessionLocal() as db_tec:
+                tecnico_phone = await resolve_tecnico_phone_by_name(db_tec, wn.tenant_id, item.tecnico)
+        except Exception:
+            pass
+        pending_marker = f"CONFIRM_OS_APPROVAL:{item.codos}||{tecnico_phone or ''}"
     try:
-        await _dispatch(wn.tenant_id, wn.id, wn.instancia_evolution_api, phone, item.nome, texto)
+        await _dispatch(wn.tenant_id, wn.id, wn.instancia_evolution_api, phone, item.nome, texto, pending_marker=pending_marker)
         async with AsyncSessionLocal() as db2:
             row = await db2.get(OsBoardOrder, item.row_id)
             if row:
