@@ -1049,6 +1049,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveTab('tecnicos')}
+          title="Quadro de Técnicos"
+          style={{
+            width: '48px',
+            height: '48px',
+            borderRadius: 'var(--radius-md)',
+            background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
+            color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
+            border: activeTab === 'tecnicos' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <LayoutGrid size={22} />
+        </button>
+
+        <button
           onClick={() => setActiveTab('segmentation')}
           title="Segmentação & Filtros"
           style={{
