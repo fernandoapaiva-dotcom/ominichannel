@@ -77,6 +77,7 @@ async def init_db():
             "ALTER TABLE authorized_technicians ADD COLUMN cargo VARCHAR(100);",
             "ALTER TABLE authorized_technicians ADD COLUMN departamento VARCHAR(100);",
             "ALTER TABLE calendar_events ADD COLUMN event_type VARCHAR(50) DEFAULT 'geral';",
+            "ALTER TABLE os_board_orders ADD COLUMN venda_codigo INTEGER;",
             "ALTER TABLE calendar_events ADD COLUMN employee_id INTEGER;",
             "ALTER TABLE calendar_events ADD COLUMN employee_name VARCHAR(150);",
             "ALTER TABLE calendar_events ADD COLUMN employee_phone VARCHAR(50);",
