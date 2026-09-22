@@ -19,6 +19,7 @@ interface BoardCard {
   ultimo_evento_em?: string | null;
   dias_no_estagio?: number | null;
   dias_desde_entrada?: number | null;
+  tipo_os?: string | null;
 }
 interface BoardCell { count: number; cards: BoardCard[] }
 interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
@@ -33,8 +34,8 @@ interface TimelineItem { evento: string; cod: number; data: string }
 interface DetailOrder {
   codos: number; empresa: string; cliente?: string | null; equipamento?: string | null;
   tecnico?: string | null; tecnico2?: string | null; data_entrada?: string | null; situacao: string; stage: string;
-  finalizada_em?: string | null; aberta: boolean; paga: boolean; venda_codigo?: number | null; efetivada_motivo?: string | null;
-  timeline: TimelineItem[];
+  tipo_os?: string | null; finalizada_em?: string | null; aberta: boolean; paga: boolean; venda_codigo?: number | null;
+  efetivada_motivo?: string | null; timeline: TimelineItem[];
 }
 interface DetailData {
   name: string;
@@ -54,6 +55,32 @@ const EMPRESA_LABEL: Record<string, string> = { servweld: 'Servweld', centrooest
 const STAGE_COLORS: Record<string, string> = {
   entrada: '#60a5fa', avaliacao: '#a78bfa', orcamento: '#f59e0b', aprovado: '#34d399',
   execucao: '#00e699', peca: '#f97316', retirada: '#22d3ee', sem_reparo: '#94a3b8', finalizada: '#64748b',
+};
+
+// Tipo de O.S. (natureza): cor e sigla para identificar de relance no cartão - paleta separada da cor de
+// estágio (que já usa a borda esquerda do cartão), então o selo do tipo fica num tom quente/frio diferente.
+const TIPO_OS_STYLE: Record<string, { color: string; short: string }> = {
+  'Orçamento': { color: '#38bdf8', short: 'ORÇ' },
+  'Garantia de Fábrica': { color: '#c084fc', short: 'G.FÁB' },
+  'Garantia de Loja': { color: '#facc15', short: 'G.LOJA' },
+  'Visita Técnica': { color: '#4ade80', short: 'VISITA' },
+  'Equipamento de Locação': { color: '#f472b6', short: 'LOCAÇÃO' },
+};
+const tipoOsStyle = (tipo?: string | null) => (tipo && TIPO_OS_STYLE[tipo]) || { color: '#64748b', short: tipo || '?' };
+
+const TipoOsBadge: React.FC<{ tipo?: string | null; scale?: number }> = ({ tipo, scale = 1 }) => {
+  if (!tipo) return null;
+  const st = tipoOsStyle(tipo);
+  return (
+    <span
+      title={tipo}
+      style={{
+        display: 'inline-block', padding: `${1 * scale}px ${5 * scale}px`, borderRadius: '4px',
+        fontSize: `${9 * scale}px`, fontWeight: 800, lineHeight: 1.5, letterSpacing: '0.2px',
+        background: `${st.color}26`, color: st.color, whiteSpace: 'nowrap',
+      }}
+    >{st.short}</span>
+  );
 };
 
 const fmtDate = (iso?: string | null) => {
@@ -155,7 +182,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     return <TechDetail name={detailTech} empresa={empresa} onBack={() => setDetailTech(null)} />;
   }
 
-  const scale = tvMode ? 1.35 : 1;
+  const scale = tvMode ? 1.1 : 1;
   const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
 
   const stages = board?.stages || [];
@@ -163,8 +190,8 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const useMobileLayout = isNarrow && !tvMode;
   // Colunas fixas ocupando 100% da largura disponível (grid com container de largura definida - sem isso,
   // nomes longos de cliente em uma só linha inflam a largura "natural" das colunas bem além do necessário).
-  const techColWidth = tvMode ? 170 : 118;
-  const minStageCol = tvMode ? 140 : 92;
+  const techColWidth = tvMode ? 132 : 100;
+  const minStageCol = tvMode ? 108 : 82;
   const gridCols = `${techColWidth}px repeat(${stagesCount}, minmax(${minStageCol}px, 1fr))`;
 
   const wrapperStyle: React.CSSProperties = tvMode
@@ -245,9 +272,16 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
             {/* linha de títulos */}
             <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
             {stages.map(st => (
-              <div key={st.key} title={st.label} style={{ ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`, gap: '4px' }}>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{st.label}</span>
-                <span style={{ flexShrink: 0, color: STAGE_COLORS[st.key] || 'var(--text-muted)' }}>{board?.totals?.[st.key] ?? 0}</span>
+              <div
+                key={st.key} title={st.label}
+                style={{
+                  ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`,
+                  flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: '2px',
+                  whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip',
+                }}
+              >
+                <span style={{ lineHeight: 1.15, wordBreak: 'break-word' }}>{st.label}</span>
+                <span style={{ color: STAGE_COLORS[st.key] || 'var(--text-muted)', fontSize: `${11 * scale}px` }}>{board?.totals?.[st.key] ?? 0}</span>
               </div>
             ))}
 
@@ -269,13 +303,13 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
                     cursor: isAdmin && !tvMode ? 'pointer' : 'default', minWidth: 0,
                   }}
                 >
-                  <div style={{ fontSize: fs(13.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
-                  <div style={{ fontSize: fs(11), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
+                  <div style={{ fontSize: fs(12.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
+                  <div style={{ fontSize: fs(10), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
                 </div>
                 {stages.map(st => {
                   const cell = tech.cells[st.key] || { count: 0, cards: [] };
                   return (
-                    <div key={st.key} style={{ padding: `${5 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${4 * scale}px`, minHeight: `${52 * scale}px`, minWidth: 0 }}>
+                    <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
                       {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
                       {cell.count > cell.cards.length && (
                         <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{cell.count - cell.cards.length} O.S.</div>
@@ -370,9 +404,12 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: strin
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
   return (
     <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `3px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
-        <span>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
-        <span style={{ flexShrink: 0, fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
+        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <TipoOsBadge tipo={card.tipo_os} />
+          <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
+        </span>
       </div>
       {card.equipamento && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{card.equipamento}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', marginTop: '2px', flexWrap: 'wrap' }}>
@@ -393,8 +430,8 @@ const iconBtn: React.CSSProperties = {
 };
 
 const headCell = (scale: number): React.CSSProperties => ({
-  padding: `${7 * scale}px ${8 * scale}px`, fontSize: `${10.5 * scale}px`, fontWeight: 800, textTransform: 'uppercase',
-  letterSpacing: '0.3px', color: 'var(--text-main)', background: 'var(--bg-primary, #0b1220)',
+  padding: `${6 * scale}px ${7 * scale}px`, fontSize: `${9.5 * scale}px`, fontWeight: 800, textTransform: 'uppercase',
+  letterSpacing: '0.2px', color: 'var(--text-main)', background: 'var(--bg-primary, #0b1220)',
   borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.12))', display: 'flex', alignItems: 'center',
   overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
 });
@@ -405,24 +442,24 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
   return (
     <div style={{
-      borderRadius: '7px', padding: `${5 * scale}px ${7 * scale}px`, background: 'rgba(255,255,255,0.04)',
+      borderRadius: '6px', padding: `${4 * scale}px ${6 * scale}px`, background: 'rgba(255,255,255,0.04)',
       borderLeft: `3px solid ${aging || color || '#64748b'}`, minWidth: 0, overflow: 'hidden',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${11.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', fontSize: `${10.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)' }}>
         <span>#{card.codos}</span>
-        <span style={{ fontWeight: 600, color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(card.data_entrada)}</span>
+        <TipoOsBadge tipo={card.tipo_os} scale={scale} />
       </div>
-      <div style={{ fontSize: `${10.5 * scale}px`, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.cliente || ''}>
+      <div style={{ fontSize: `${9.5 * scale}px`, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.cliente || ''}>
         {card.cliente ? titleCase(card.cliente) : '—'}
       </div>
       {card.equipamento && (
-        <div style={{ fontSize: `${10 * scale}px`, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.equipamento}>
+        <div style={{ fontSize: `${9 * scale}px`, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.equipamento}>
           {card.equipamento}
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${9.5 * scale}px`, marginTop: '2px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${8.5 * scale}px`, marginTop: '2px' }}>
         <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{dias === 0 ? 'hoje' : `${dias}d`}</span>
-        {showEmpresa && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{(EMPRESA_LABEL[card.empresa] || card.empresa).slice(0, 4)}</span>}
+        <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(card.data_entrada)}{showEmpresa ? ` · ${(EMPRESA_LABEL[card.empresa] || card.empresa).slice(0, 4)}` : ''}</span>
       </div>
     </div>
   );
@@ -467,11 +504,11 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
   const exportCsv = () => {
     if (!data) return;
     const q = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['O.S.', 'Empresa', 'Cliente', 'Equipamento', 'Técnico', 'Técnico 2', 'Entrada', 'Situação', 'Finalizada em', 'Efetivada', 'Venda', 'Linha do tempo']
+    const lines = [['O.S.', 'Empresa', 'Tipo de O.S.', 'Cliente', 'Equipamento', 'Técnico', 'Técnico 2', 'Entrada', 'Situação', 'Finalizada em', 'Efetivada', 'Venda', 'Linha do tempo']
       .map(q).join(';')];
     for (const o of data.orders) {
       lines.push([
-        o.codos, EMPRESA_LABEL[o.empresa] || o.empresa, o.cliente, o.equipamento, o.tecnico, o.tecnico2,
+        o.codos, EMPRESA_LABEL[o.empresa] || o.empresa, o.tipo_os, o.cliente, o.equipamento, o.tecnico, o.tecnico2,
         fmtDateTime(o.data_entrada), o.situacao, fmtDateTime(o.finalizada_em), o.efetivada_motivo ? 'sim' : 'não',
         o.venda_codigo ? `#${o.venda_codigo}` : '',
         o.timeline.map(t => `${t.evento} ${fmtDateTime(t.data)}`).join(' > '),
@@ -537,15 +574,15 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', minWidth: '760px' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              {['O.S.', 'Cliente / Equipamento', 'Entrada', 'Situação', 'Finalizada', 'Linha do tempo'].map(h => (
+              {['O.S.', 'Tipo', 'Cliente / Equipamento', 'Entrada', 'Situação', 'Finalizada', 'Linha do tempo'].map(h => (
                 <th key={h} style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando…</td></tr>}
+            {loading && <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Carregando…</td></tr>}
             {!loading && data && data.orders.length === 0 && (
-              <tr><td colSpan={6} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Nenhuma O.S. neste filtro.</td></tr>
+              <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>Nenhuma O.S. neste filtro.</td></tr>
             )}
             {!loading && data?.orders.map(o => {
               const key = `${o.empresa}-${o.codos}`;
@@ -559,6 +596,7 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
                     <td style={{ padding: '9px 12px', fontWeight: 800, color: 'var(--text-main)' }}>
                       #{o.codos}<div style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{EMPRESA_LABEL[o.empresa] || o.empresa}</div>
                     </td>
+                    <td style={{ padding: '9px 12px' }}><TipoOsBadge tipo={o.tipo_os} /></td>
                     <td style={{ padding: '9px 12px', color: 'var(--text-main)' }}>
                       {o.cliente ? titleCase(o.cliente) : '—'}
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{o.equipamento || ''}</div>
@@ -573,7 +611,7 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
                   </tr>
                   {open && (
                     <tr>
-                      <td colSpan={6} style={{ padding: '6px 12px 14px 40px', background: 'rgba(255,255,255,0.02)' }}>
+                      <td colSpan={7} style={{ padding: '6px 12px 14px 40px', background: 'rgba(255,255,255,0.02)' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                           {o.timeline.map((t, i) => (
                             <span key={i} style={{ padding: '4px 10px', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', fontSize: '11px', color: 'var(--text-main)' }}>

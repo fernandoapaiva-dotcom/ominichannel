@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.models.models import OsBoardOrder, OsBoardEvent, User, UserRole, WhatsAppNumber
-from app.api.v1.os_handler_ingest import verify_os_handler_key
+from app.api.v1.os_handler_ingest import verify_os_handler_key, TIPO_OS_LABEL
 
 logger = logging.getLogger("os_board")
 router = APIRouter(prefix="/os-board", tags=["Quadro de Técnicos"])
@@ -222,6 +222,8 @@ def _card(order: OsBoardOrder, now: datetime) -> Dict[str, Any]:
         "cliente": order.cliente,
         "equipamento": order.equipamento,
         "tecnico2": order.tecnico2,
+        "cod_tipo_os": order.cod_tipo_os,
+        "tipo_os": TIPO_OS_LABEL.get(order.cod_tipo_os, None),
         "data_entrada": _iso(order.data_entrada),
         "ultimo_evento_em": _iso(order.ultimo_evento_em),
         "dias_no_estagio": max(0, (now - ref).days) if ref else None,
@@ -357,6 +359,7 @@ async def get_technician_detail(
             "tecnico": o.tecnico,
             "tecnico2": o.tecnico2,
             "data_entrada": _iso(o.data_entrada),
+            "tipo_os": TIPO_OS_LABEL.get(o.cod_tipo_os, None),
             "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "—"),
             "stage": _stage_of(o),
             "finalizada_em": _iso(o.finalizada_em),
