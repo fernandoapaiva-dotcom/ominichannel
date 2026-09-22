@@ -887,22 +887,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '24px 0',
+      padding: 'clamp(10px, 3vh, 24px) 0',
       justifyContent: 'flex-start',
-      gap: '14px',
+      gap: 'clamp(6px, 1vh, 14px)',
       overflowY: 'auto',
       zIndex: 50,
       boxSizing: 'border-box',
       position: 'relative'
     }}>
       {/* Brand Icon & Collapse Toggle */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(6px, 1vh, 14px)' }}>
         {onToggleCollapse && (
           <button
             onClick={onToggleCollapse}
             style={{
-              width: '44px',
-              height: '44px',
+              width: 'clamp(34px, 4.3vh, 44px)',
+              height: 'clamp(34px, 4.3vh, 44px)',
               borderRadius: 'var(--radius-md)',
               backgroundColor: 'rgba(0, 230, 153, 0.15)',
               color: 'var(--accent-primary)',
@@ -925,8 +925,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div
           onClick={() => setActiveTab('chats')}
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: 'var(--accent-gradient)',
             display: 'flex',
@@ -946,14 +946,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Main Navigation */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 1vh, 14px)' }}>
         <button
           onClick={() => setActiveTab('chats')}
           title="Conversas com Clientes"
           style={{
             position: 'relative',
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'chats' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
             color: activeTab === 'chats' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -994,8 +994,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title="Grupos & Comunidades WhatsApp"
           style={{
             position: 'relative',
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'groups' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
             color: activeTab === 'groups' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1035,8 +1035,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('contacts')}
           title="Histórico de Clientes"
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'contacts' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
             color: activeTab === 'contacts' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1055,8 +1055,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('tecnicos')}
           title="Quadro de Técnicos"
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
             color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1075,8 +1075,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={() => setActiveTab('segmentation')}
           title="Segmentação & Filtros"
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: activeTab === 'segmentation' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
             color: activeTab === 'segmentation' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1095,8 +1095,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={() => setActiveTab('admin')}
             title="Configurações do Sistema"
             style={{
-              width: '44px',
-              height: '44px',
+              width: 'clamp(34px, 4.3vh, 44px)',
+              height: 'clamp(34px, 4.3vh, 44px)',
               borderRadius: 'var(--radius-md)',
               background: activeTab === 'admin' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
               color: activeTab === 'admin' ? 'var(--accent-primary)' : 'var(--text-muted)',
@@ -1113,15 +1113,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </nav>
 
       {/* User Avatar with Badge, Theme Switcher & Logout */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'clamp(6px, 1vh, 14px)' }}>
         {/* Download Desktop App Button */}
         <a
           href="/downloads/OminiChannel-Setup.exe"
           download="OminiChannel-Setup.exe"
           title="Baixar Aplicativo OminiChannel para Computador (Windows)"
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: 'rgba(0, 230, 153, 0.12)',
             color: '#00e699',
@@ -1149,8 +1149,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={toggleTheme}
           title={theme === 'dark' ? 'Mudar para Modo Dia (Claro)' : 'Mudar para Modo Noite (Escuro)'}
           style={{
-            width: '44px',
-            height: '44px',
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
             borderRadius: 'var(--radius-md)',
             background: 'rgba(255, 255, 255, 0.06)',
             color: theme === 'dark' ? '#fbbf24' : '#6366f1',
@@ -1180,8 +1180,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               src={user.foto_perfil_url}
               alt={user.nome}
               style={{
-                width: '44px',
-                height: '44px',
+                width: 'clamp(34px, 4.3vh, 44px)',
+                height: 'clamp(34px, 4.3vh, 44px)',
                 borderRadius: '50%',
                 objectFit: 'cover',
                 border: pendingBadgeCount > 0 ? '2px solid #ef4444' : '2px solid var(--accent-primary)',
@@ -1190,8 +1190,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           ) : (
             <div style={{
-              width: '44px',
-              height: '44px',
+              width: 'clamp(34px, 4.3vh, 44px)',
+              height: 'clamp(34px, 4.3vh, 44px)',
               borderRadius: '50%',
               background: 'linear-gradient(135deg, #00e699 0%, #00b377 100%)',
               display: 'flex',
