@@ -888,13 +888,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       flexDirection: 'column',
       alignItems: 'center',
       padding: '24px 0',
-      justifyContent: 'space-between',
+      justifyContent: 'flex-start',
+      gap: '14px',
+      overflowY: 'auto',
       zIndex: 50,
       boxSizing: 'border-box',
       position: 'relative'
     }}>
       {/* Brand Icon & Collapse Toggle */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
         {onToggleCollapse && (
           <button
             onClick={onToggleCollapse}
@@ -944,7 +946,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Main Navigation */}
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <button
           onClick={() => setActiveTab('chats')}
           title="Conversas com Clientes"
