@@ -317,7 +317,7 @@ def _empresa_filter(empresa: Optional[str]):
 async def get_board(
     empresa: Optional[str] = Query(None, description="servweld | centrooeste | (vazio = as duas)"),
     days_open: int = Query(120, ge=1, le=1500, description="O.S. em aberto com atividade nos últimos N dias"),
-    cards_per_cell: int = Query(6, ge=1, le=50),
+    cards_per_cell: int = Query(6, ge=1, le=120),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
