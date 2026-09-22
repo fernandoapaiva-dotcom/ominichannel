@@ -117,7 +117,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
   // Modo TV: carrossel passando por um técnico de cada vez (em vez da grade estática, onde os técnicos
   // de baixo ficavam escondidos - ninguém rola a tela sozinho de longe). CAROUSEL_MS por técnico.
-  const CAROUSEL_MS = 14000;
+  const CAROUSEL_MS = 60000;
   const [carouselIndex, setCarouselIndex] = useState(0);
   const techCount = board?.technicians.length || 0;
   const activeIndex = techCount > 0 ? ((carouselIndex % techCount) + techCount) % techCount : 0;
@@ -251,12 +251,6 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           ))}
         </div>
 
-        {tvMode && techCount > 0 && (
-          <div style={{ fontSize: fs(15), fontWeight: 800, color: 'var(--accent-primary)' }}>
-            {titleCase(board!.technicians[activeIndex].name)}
-            <span style={{ color: 'var(--text-muted)', fontWeight: 600, marginLeft: '6px' }}>· técnico {activeIndex + 1} de {techCount}</span>
-          </div>
-        )}
         <div style={{ flex: 1 }} />
         {tvMode && (
           <div style={{ fontSize: fs(26), fontWeight: 800, color: 'var(--text-main)', fontVariantNumeric: 'tabular-nums' }}>
@@ -281,6 +275,18 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
       {error && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: fs(13), marginBottom: '10px' }}>{error}</div>
+      )}
+
+      {/* Modo TV: nome do técnico em destaque - é a informação que quem está de longe, na oficina, precisa achar primeiro */}
+      {tvMode && board && techCount > 0 && (
+        <div style={{ textAlign: 'center', margin: '2px 0 14px', flexShrink: 0 }}>
+          <div style={{ fontSize: fs(46), fontWeight: 900, color: 'var(--accent-primary)', letterSpacing: '0.5px', lineHeight: 1.1 }}>
+            {titleCase(board.technicians[activeIndex].name)}
+          </div>
+          <div style={{ fontSize: fs(14), color: 'var(--text-muted)', fontWeight: 700, marginTop: '4px' }}>
+            Técnico {activeIndex + 1} de {techCount} · {board.technicians[activeIndex].total_open} O.S. em aberto
+          </div>
+        </div>
       )}
 
       {/* Quadro: carrossel (TV), lista por técnico (tela estreita) ou grade (desktop) */}
