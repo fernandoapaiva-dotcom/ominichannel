@@ -321,7 +321,14 @@ async def get_board(
         OsBoardOrder.paga.is_(False),
         OsBoardOrder.venda_codigo.is_(None),
         or_(OsBoardOrder.situacao_evento.is_(None), OsBoardOrder.situacao_evento != EVENTO_FINALIZADA),
-        or_(OsBoardOrder.ultimo_evento_em >= since_open, OsBoardOrder.data_entrada >= since_open)
+        # "atividade recente" também conta uma O.S. antiga que foi reaberta/editada no Softsystem agora
+        # (o vigia só re-sincroniza o que muda - ver DATAALTERACAO em sync_board_empresa) - salvar de novo
+        # uma O.S. de mais de 3 meses faz ela reaparecer no quadro, mesmo com entrada/evento antigos.
+        or_(
+            OsBoardOrder.ultimo_evento_em >= since_open,
+            OsBoardOrder.data_entrada >= since_open,
+            OsBoardOrder.atualizado_em >= since_open,
+        )
     ).order_by(OsBoardOrder.data_entrada.desc())
     orders = (await db.execute(stmt)).scalars().all()
 
@@ -377,7 +384,11 @@ async def get_board_cell(
     orders = (await db.execute(select(OsBoardOrder).where(
         OsBoardOrder.tenant_id == current_user.tenant_id, *_empresa_filter(empresa), *tech_filter,
         situacao_condition, OsBoardOrder.paga.is_(False), OsBoardOrder.venda_codigo.is_(None),
-        or_(OsBoardOrder.ultimo_evento_em >= since_open, OsBoardOrder.data_entrada >= since_open),
+        or_(
+            OsBoardOrder.ultimo_evento_em >= since_open,
+            OsBoardOrder.data_entrada >= since_open,
+            OsBoardOrder.atualizado_em >= since_open,
+        ),
     ).order_by(OsBoardOrder.data_entrada.desc()))).scalars().all()
 
     return {"tecnico": tech, "stage": stage, "label": stage_def["label"], "cards": [_card(o, now) for o in orders]}
