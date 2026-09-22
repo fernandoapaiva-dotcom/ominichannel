@@ -77,6 +77,24 @@ class BusinessHoursService:
         )
 
     @staticmethod
+    def get_store_hours_info_message() -> str:
+        """
+        Texto de horário de funcionamento pra responder quando o cliente PERGUNTA o horário (não
+        é o aviso de "fora de expediente" do get_out_of_hours_message, que é pra quando ele manda
+        uma mensagem qualquer fora do horário). Já avisa se a loja está fechada agora - essa
+        mensagem sozinha resolve a pergunta, sem precisar de mais nada.
+        """
+        dentro = BusinessHoursService.is_within_business_hours()
+        aviso = "" if dentro else "🌙 No momento estamos *fora do horário de atendimento* da loja.\n\n"
+        corpo = (
+            "⏰ *Horário de Atendimento Servweld:*\n"
+            "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
+            "• *Sábados, Domingos e Feriados:* Fechado"
+        )
+        complemento = "\n\nEstamos atendendo agora! 😊" if dentro else "\n\nAssim que reabrirmos, te atendemos! 🙏"
+        return f"{aviso}{corpo}{complemento}"
+
+    @staticmethod
     def get_shift_closing_message(customer_name: Optional[str], protocol_number: str) -> str:
         """
         Returns the shift closing and appreciation message sent at 18:00.

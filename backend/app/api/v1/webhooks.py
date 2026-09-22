@@ -2557,6 +2557,10 @@ async def receive_evolution_webhook(
                 client_first_name = contact.nome.strip().split()[0] if (contact and contact.nome and contact.nome.strip().lower() not in ["cliente", "unknown", ""]) else ""
                 greeting_name = f", {client_first_name}" if client_first_name else ""
                 auto_loc_text = f"Com certeza{greeting_name}! Segue a nossa localização no mapa abaixo. Ficamos à sua disposição e aguardamos sua visita! 📍"
+                # Depois da localização, manda o horário de funcionamento em seguida (já avisando se
+                # a loja está fechada agora) - pedido do cliente é "não é só a localização, também
+                # avisa o horário", numa mensagem separada, na ordem certa: local primeiro, horário depois.
+                auto_hours_text = business_hours_service.get_store_hours_info_message()
 
                 target_inst = (whatsapp_number.instancia_evolution_api if whatsapp_number else "") or instance_name
                 if target_inst:
@@ -2574,6 +2578,11 @@ async def receive_evolution_webhook(
                             name="Servweld / Servsolda",
                             address="SOF Sul Quadra 05 Conjunto A Lote 05 Loja 02 - Guará, Brasília - DF, 71215-226"
                         )
+                        await evolution_service.send_text_message(
+                            instance_name=target_inst,
+                            number=phone_number,
+                            text=auto_hours_text
+                        )
                     except Exception as e:
                         logger.warning(f"Error sending auto location reply: {e}")
 
@@ -2587,30 +2596,36 @@ async def receive_evolution_webhook(
                     timestamp=datetime.utcnow()
                 )
                 db.add(loc_msg)
+                hours_followup_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente=MessageSender.IA,
+                    conteudo=auto_hours_text,
+                    tipo=MessageType.TEXTO,
+                    status="delivered",
+                    dados_adicionais={"auto_reply": True, "info_type": "hours"},
+                    timestamp=datetime.utcnow()
+                )
+                db.add(hours_followup_msg)
                 await db.commit()
 
-                await ws_manager.broadcast_to_department(
-                    tenant_id=tenant_id,
-                    whatsapp_number_id=whatsapp_number.id,
-                    message_data={
-                        "type": "NEW_MESSAGE",
-                        "conversation_id": conversation.id,
-                        "id": loc_msg.id,
-                        "remetente": "ia",
-                        "tipo": "texto",
-                        "conteudo": auto_loc_text,
-                        "timestamp": loc_msg.timestamp.isoformat() + "Z"
-                    }
-                )
+                for m in (loc_msg, hours_followup_msg):
+                    await ws_manager.broadcast_to_department(
+                        tenant_id=tenant_id,
+                        whatsapp_number_id=whatsapp_number.id,
+                        message_data={
+                            "type": "NEW_MESSAGE",
+                            "conversation_id": conversation.id,
+                            "id": m.id,
+                            "remetente": "ia",
+                            "tipo": "texto",
+                            "conteudo": m.conteudo,
+                            "timestamp": m.timestamp.isoformat() + "Z"
+                        }
+                    )
                 return {"status": "success", "action": "store_location_sent"}
 
             elif store_intent == "STORE_HOURS":
-                auto_hours_text = (
-                    "⏰ *Horário de Atendimento Servweld:*\n\n"
-                    "• *Segunda a Sexta-feira:* das 08h00 às 18h00 (Horário de Brasília)\n"
-                    "• *Sábados, Domingos e Feriados:* Fechado\n\n"
-                    "Nosso laboratório e loja estão à sua disposição durante todo o horário comercial!"
-                )
+                auto_hours_text = business_hours_service.get_store_hours_info_message()
                 if whatsapp_number and whatsapp_number.instancia_evolution_api:
                     try:
                         await evolution_service.send_text_message(
@@ -2912,6 +2927,7 @@ async def receive_evolution_webhook(
 
         # Localização: o cliente ENVIOU a dele (pin/link -> local de visita) ou PEDIU a da loja.
         force_store_location = False
+        send_hours_followup = False
         if not transfer_executed and not is_tech:
             loc_intent = await gemini_service.classify_store_info_intent(
                 user_message=text_content,
@@ -2945,9 +2961,23 @@ async def receive_evolution_webhook(
                         "nova_memoria": "Cliente pediu a localização da loja; enviada."
                     }
                     transfer_executed = True
+                    # Depois do cartão de localização, manda o horário de funcionamento em seguida
+                    # (já avisando se a loja está fechada agora) - ver despacho mais abaixo.
+                    send_hours_followup = True
                 else:
                     # Mensagem longa (pede outras coisas junto): a IA responde o resto, mas o mapa sai garantido.
                     force_store_location = True
+            elif loc_intent == "STORE_HOURS":
+                # Uma mensagem só resolve: já avisa se a loja está fechada agora, junto do horário.
+                ai_output = {
+                    "resposta": business_hours_service.get_store_hours_info_message(),
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Cliente perguntou o horário de funcionamento; informado."
+                }
+                transfer_executed = True
 
         if not transfer_executed and not is_tech:
             dept_dicts = [
@@ -3462,6 +3492,30 @@ async def receive_evolution_webhook(
                         address=loc_addr
                     )
                     logger.info(f"Successfully sent native location card to {contact.telefone} via instance '{target_inst}'")
+
+                    # Depois da localização, manda o horário de funcionamento em seguida (avisa se
+                    # a loja está fechada agora) - pedido do cliente: "se for a localização, é a
+                    # localização e depois passa o horário". Só dispara se o cartão saiu de verdade.
+                    if send_hours_followup:
+                        hours_text = business_hours_service.get_store_hours_info_message()
+                        await evolution_service.send_text_message(
+                            instance_name=target_inst, number=target_dest, text=hours_text
+                        )
+                        hours_followup_msg = Message(
+                            conversation_id=conversation.id, remetente=MessageSender.IA, conteudo=hours_text,
+                            tipo=MessageType.TEXTO, status="delivered",
+                            dados_adicionais={"auto_reply": True, "info_type": "hours"}, timestamp=datetime.utcnow()
+                        )
+                        db.add(hours_followup_msg)
+                        await db.commit()
+                        await ws_manager.broadcast_to_department(
+                            tenant_id=tenant_id, whatsapp_number_id=whatsapp_number.id,
+                            message_data={
+                                "type": "NEW_MESSAGE", "conversation_id": conversation.id, "id": hours_followup_msg.id,
+                                "remetente": "ia", "tipo": "texto", "conteudo": hours_text,
+                                "timestamp": hours_followup_msg.timestamp.isoformat() + "Z"
+                            }
+                        )
                 except Exception as loc_err:
                     logger.warning(f"Failed to send native location card: {loc_err}")
 
