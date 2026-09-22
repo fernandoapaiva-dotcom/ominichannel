@@ -69,9 +69,17 @@ async def lifespan(app: FastAPI):
     profile_pic_task = asyncio.create_task(start_profile_picture_syncer_loop(interval_seconds=1800))
     logger.info("WhatsApp profile picture automatic syncer background loop started.")
 
-    # Start Business Hours 18:00 Shift Closing Scheduler
-    business_hours_task = asyncio.create_task(start_business_hours_scheduler_loop(check_interval_seconds=30))
-    logger.info("Business hours 18:00 shift closing scheduler loop started.")
+    # Business Hours 18:00 Shift Closing Scheduler - PAUSADO a pedido do usuário em 22/09/2026: a
+    # mensagem de "encerramento de expediente" às 18h não faz sentido enquanto a abertura de
+    # protocolo no início do chat não estiver funcionando (ela finaliza/anuncia um protocolo que
+    # muitas vezes nem foi aberto certo). Retomar quando a abertura de protocolo for corrigida.
+    BUSINESS_HOURS_CLOSING_ENABLED = False
+    if BUSINESS_HOURS_CLOSING_ENABLED:
+        business_hours_task = asyncio.create_task(start_business_hours_scheduler_loop(check_interval_seconds=30))
+        logger.info("Business hours 18:00 shift closing scheduler loop started.")
+    else:
+        business_hours_task = None
+        logger.info("Business hours 18:00 shift closing scheduler PAUSADO (aguardando correção da abertura de protocolo).")
 
     # Start Calendar WhatsApp reminders loop
     calendar_reminder_task = asyncio.create_task(start_calendar_reminder_loop(interval_seconds=60))
@@ -106,7 +114,8 @@ async def lifespan(app: FastAPI):
     drive_backup_task.cancel()
     inactivity_task.cancel()
     profile_pic_task.cancel()
-    business_hours_task.cancel()
+    if business_hours_task:
+        business_hours_task.cancel()
     calendar_reminder_task.cancel()
     watchdog_task.cancel()
     if os_board_followup_task:
