@@ -528,9 +528,11 @@ async def get_report_pdf(
 ):
     """Relatório em PDF: produtividade por técnico/evento, financeiro e forma de pagamento (modo completo),
     ou só a lista de O.S. do filtro, sem os números de gestão - pra imprimir/entregar pro técnico como
-    lista de tarefas (modo lista). Só administradores."""
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(status_code=403, detail="Somente administradores podem emitir relatórios")
+    lista de tarefas (modo lista). O modo completo (números financeiros/ranking) continua só pra
+    administradores; a lista simples (sem nada financeiro) qualquer atendente pode gerar."""
+    modo_norm = "lista" if (modo or "").strip().lower() == "lista" else "completo"
+    if modo_norm == "completo" and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Somente administradores podem emitir o relatório completo")
 
     from app.services.os_board_report_service import build_os_report_pdf
 
@@ -604,7 +606,6 @@ async def get_report_pdf(
         "Período": f"{start_dt.strftime('%d/%m/%Y') if start_dt else 'início'} a {end_dt.strftime('%d/%m/%Y')}",
     }
 
-    modo_norm = "lista" if (modo or "").strip().lower() == "lista" else "completo"
     pdf_bytes = build_os_report_pdf(
         orders=report_rows, stage_labels=REPORT_STAGE_LABELS, event_labels=EVENT_LABELS,
         filtros=filtros_txt, gerado_em=now, incluir_lista=incluir_lista, modo=modo_norm,

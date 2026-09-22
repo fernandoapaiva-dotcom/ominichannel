@@ -272,11 +272,11 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         {!tvMode && (
           <>
             <button onClick={() => { setLoading(true); load(); }} title="Atualizar agora" style={iconBtn}><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /></button>
-            {isAdmin && (
-              <button onClick={() => setReportOpen(true)} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
-                <FileText size={15} /> Relatórios
-              </button>
-            )}
+            {/* A lista simples (sem números financeiros) qualquer atendente pode gerar - só o
+                relatório completo com KPIs/financeiro/ranking é exclusivo de admin (ver ReportPanel). */}
+            <button onClick={() => setReportOpen(true)} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
+              <FileText size={15} /> {isAdmin ? 'Relatórios' : 'Lista de O.S.'}
+            </button>
             <button onClick={enterTv} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
               <Monitor size={15} /> Modo TV
             </button>
@@ -404,7 +404,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       )}
 
       {reportOpen && (
-        <ReportPanel stages={stages} defaultEmpresa={empresa} onClose={() => setReportOpen(false)} />
+        <ReportPanel stages={stages} defaultEmpresa={empresa} isAdmin={isAdmin} onClose={() => setReportOpen(false)} />
       )}
     </div>
   );
@@ -467,7 +467,7 @@ const REPORT_STATUS_OPTIONS = [
   { key: 'efetivadas', label: 'Efetivadas (venda/pagamento)' },
 ];
 
-const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultEmpresa: string; onClose: () => void }> = ({ stages, defaultEmpresa, onClose }) => {
+const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultEmpresa: string; isAdmin: boolean; onClose: () => void }> = ({ stages, defaultEmpresa, isAdmin, onClose }) => {
   const [empresa, setEmpresa] = useState(defaultEmpresa);
   const [tecnico, setTecnico] = useState('todos');
   const [tecnicos, setTecnicos] = useState<string[]>([]);
@@ -476,9 +476,10 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
   const [start, setStart] = useState('');
   const [end, setEnd] = useState(toInputDate(new Date()));
   const [incluirLista, setIncluirLista] = useState(true);
-  // completo = relatório de gestão (KPIs, financeiro, ranking); lista = só as O.S. do filtro,
-  // sem números de acompanhamento - pra imprimir/entregar pro técnico como lista de tarefas.
-  const [modo, setModo] = useState<'completo' | 'lista'>('completo');
+  // completo = relatório de gestão (KPIs, financeiro, ranking), só admin; lista = só as O.S. do
+  // filtro, sem números de acompanhamento - pra imprimir/entregar pro técnico, qualquer atendente
+  // pode gerar. Quem não é admin nem vê a opção completo (o backend também bloqueia).
+  const [modo, setModo] = useState<'completo' | 'lista'>(isAdmin ? 'completo' : 'lista');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -548,29 +549,37 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
         </div>
 
         <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div>
-            <span style={label}>Tipo de PDF</span>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {([
-                { key: 'completo', title: 'Relatório completo', desc: 'KPIs, financeiro, ranking' },
-                { key: 'lista', title: 'Lista simples', desc: 'só as O.S., pra entregar' },
-              ] as const).map(opt => (
-                <button
-                  key={opt.key}
-                  type="button"
-                  onClick={() => setModo(opt.key)}
-                  style={{
-                    flex: 1, textAlign: 'left', padding: '8px 10px', borderRadius: '9px', cursor: 'pointer',
-                    background: modo === opt.key ? 'rgba(0, 230, 153, 0.14)' : 'var(--bg-secondary, rgba(255,255,255,0.04))',
-                    border: modo === opt.key ? '1px solid rgba(0, 230, 153, 0.45)' : '1px solid var(--border-color, rgba(255,255,255,0.12))',
-                  }}
-                >
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: modo === opt.key ? 'var(--accent-primary)' : 'var(--text-main)' }}>{opt.title}</div>
-                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{opt.desc}</div>
-                </button>
-              ))}
+          {isAdmin ? (
+            <div>
+              <span style={label}>Tipo de PDF</span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {([
+                  { key: 'completo', title: 'Relatório completo', desc: 'KPIs, financeiro, ranking' },
+                  { key: 'lista', title: 'Lista simples', desc: 'só as O.S., pra entregar' },
+                ] as const).map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setModo(opt.key)}
+                    style={{
+                      flex: 1, textAlign: 'left', padding: '8px 10px', borderRadius: '9px', cursor: 'pointer',
+                      background: modo === opt.key ? 'rgba(0, 230, 153, 0.14)' : 'var(--bg-secondary, rgba(255,255,255,0.04))',
+                      border: modo === opt.key ? '1px solid rgba(0, 230, 153, 0.45)' : '1px solid var(--border-color, rgba(255,255,255,0.12))',
+                    }}
+                  >
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: modo === opt.key ? 'var(--accent-primary)' : 'var(--text-main)' }}>{opt.title}</div>
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : (
+            // Atendente só tem a lista simples - o relatório completo (financeiro/ranking) é
+            // exclusivo de admin, então nem faz sentido mostrar a escolha.
+            <div style={{ padding: '8px 10px', borderRadius: '9px', background: 'rgba(0, 230, 153, 0.08)', border: '1px solid rgba(0, 230, 153, 0.25)', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+              Lista simples de O.S. (sem dados financeiros) - pra ver, imprimir ou entregar pro técnico.
+            </div>
+          )}
 
           <div>
             <span style={label}>Empresa</span>
