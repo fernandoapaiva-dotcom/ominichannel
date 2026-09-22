@@ -1,0 +1,3 @@
+Lista de palavras pt-BR (top 150k por frequência) derivada de:
+hermitdave/FrequencyWords (https://github.com/hermitdave/FrequencyWords)
+Licença MIT - Copyright (c) 2016 Hermit Dave

@@ -7,7 +7,7 @@ import {
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
   Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, CalendarPlus
 } from 'lucide-react';
-import { isMisspelled, WORD_REPLACEMENTS } from '../utils/spellingCorrector';
+import { getSpellIssue, preloadSpellDictionary } from '../utils/spellDictionary';
 import { apiFetch, apiUpload, apiUploadChunked, CHUNKED_UPLOAD_THRESHOLD_BYTES } from '../services/api';
 import { LocationPickerModal } from './LocationPickerModal';
 import { ContactPickerModal } from './ContactPickerModal';
@@ -465,6 +465,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
     return '';
   });
+  // Começa a baixar o dicionário pt-BR (~1,3MB comprimido) assim que a tela de conversa
+  // monta, em segundo plano, pra já estar pronto quando o atendente começar a digitar.
+  useEffect(() => {
+    preloadSpellDictionary();
+  }, []);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [isSending, setIsSending] = useState(false);
   // Trava sincrona, separada do estado isSending. useState e assincrono/agrupado pelo
@@ -6416,7 +6421,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             >
               {inputText.split(/(\s+)/).map((chunk, i) => {
                 const core = chunk.replace(/^[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+|[^\wáàâãéèêíïóôõöúçñÁÀÂÃÉÈÊÍÏÓÔÕÖÚÇÑ]+$/g, '');
-                if (core && !chunk.startsWith('@') && isMisspelled(core)) {
+                if (core && !chunk.startsWith('@') && getSpellIssue(core).flagged) {
                   return (
                     <span
                       key={i}
@@ -6511,7 +6516,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 while (start > 0 && isWordChar(val[start - 1])) start--;
                 while (end < val.length && isWordChar(val[end])) end++;
                 const original = val.slice(start, end);
-                const suggestion = original ? WORD_REPLACEMENTS[original.toLowerCase()] : undefined;
+                const issue = original ? getSpellIssue(original) : { flagged: false as const };
+                const suggestion = issue.flagged ? issue.suggestion : undefined;
                 if (suggestion && suggestion.toLowerCase() !== original.toLowerCase()) {
                   e.preventDefault();
                   // A caixa de digitar fica colada no rodapé, então o menu quase sempre abre
