@@ -92,9 +92,38 @@ function knownEdits1(word: string): Set<string> {
   return result;
 }
 
+/** Todas as variações cruas a 1 edição (sem checar se são conhecidas) - usado como ponte pra
+ * a busca de distância 2. Precisa gerar os 4 tipos de edição (apagar/trocar/trocar posição/
+ * inserir), senão erros como "cofaternização" (faltam DUAS letras diferentes, "n" e "r") nunca
+ * encontram "confraternização": só apagar/transpor não alcança um typo que precisa de inserção. */
+function rawEdits1(word: string): string[] {
+  const result: string[] = [];
+  const splits: Array<[string, string]> = [];
+  for (let i = 0; i <= word.length; i++) splits.push([word.slice(0, i), word.slice(i)]);
+  for (const [l, r] of splits) {
+    if (r.length > 0) result.push(l + r.slice(1));
+    if (r.length > 1) result.push(l + r[1] + r[0] + r.slice(2));
+    if (r.length > 0) for (const c of ALPHABET) result.push(l + c + r.slice(1));
+    for (const c of ALPHABET) result.push(l + c + r);
+  }
+  return result;
+}
+
+// Busca de distância 2 é bem mais cara (testamos: ~500ms pra uma palavra de 14 letras) -
+// guardamos o resultado por palavra pra nunca refazer a mesma conta duas vezes na mesma sessão.
+const deepSuggestCache = new Map<string, string | undefined>();
+
 /** Consulta só a lista de palavras (não a curada de WORD_REPLACEMENTS - isso é feito por quem
- * chama esta função antes, em getSpellIssue). Retorna undefined enquanto ainda não carregou. */
-export function checkWordAgainstDictionary(word: string): { misspelled: boolean; suggestion?: string } | undefined {
+ * chama esta função antes, em getSpellIssue). Retorna undefined enquanto ainda não carregou.
+ *
+ * `deep`: também tenta achar sugestão a 2 edições de distância quando a de 1 não encontra nada
+ * (~500ms no pior caso) - só vale a pena numa ação pontual do usuário (menu de botão direito),
+ * nunca a cada tecla digitada (por isso o sublinhado, que recalcula a cada tecla, usa deep=false
+ * e só sinaliza "está errado" sem gastar tempo achando a sugestão perfeita). */
+export function checkWordAgainstDictionary(
+  word: string,
+  options: { deep?: boolean } = {}
+): { misspelled: boolean; suggestion?: string } | undefined {
   if (!wordSet) return undefined;
   if (!word || word.length < 3) return { misspelled: false };
   if (!PURE_WORD_RE.test(word)) return { misspelled: false };
@@ -108,29 +137,25 @@ export function checkWordAgainstDictionary(word: string): { misspelled: boolean;
   if (isKnown(lower)) return { misspelled: false };
 
   const candidates = knownEdits1(lower);
-  if (candidates.size === 0) {
-    // Tenta a 2 edições de distância só se a 1 não achou nada (typo maior, ex. "concorente"
-    // vs "concorrente" já cai na distância 1, mas casos piores precisam de mais alcance).
-    for (const c1 of knownEdits1FromUnknown(lower)) {
-      for (const cand of knownEdits1(c1)) candidates.add(cand);
-    }
+  if (candidates.size > 0) {
+    const best = [...candidates].sort((a, b) => Math.abs(a.length - lower.length) - Math.abs(b.length - lower.length))[0];
+    return { misspelled: true, suggestion: best };
   }
-  if (candidates.size === 0) return { misspelled: true };
-  // Prefere a sugestão mais curta/próxima do tamanho original (heurística simples de qualidade).
-  const best = [...candidates].sort((a, b) => Math.abs(a.length - lower.length) - Math.abs(b.length - lower.length))[0];
-  return { misspelled: true, suggestion: best };
-}
 
-/** Variações a 1 edição sem checar se são conhecidas - usado só como ponte pra distância 2. */
-function knownEdits1FromUnknown(word: string): string[] {
-  const result: string[] = [];
-  const splits: Array<[string, string]> = [];
-  for (let i = 0; i <= word.length; i++) splits.push([word.slice(0, i), word.slice(i)]);
-  for (const [l, r] of splits) {
-    if (r.length > 0) result.push(l + r.slice(1));
-    if (r.length > 1) result.push(l + r[1] + r[0] + r.slice(2));
+  if (!options.deep) return { misspelled: true };
+
+  if (deepSuggestCache.has(lower)) {
+    return { misspelled: true, suggestion: deepSuggestCache.get(lower) };
   }
-  return result;
+  const deepCandidates = new Set<string>();
+  for (const bridge of new Set(rawEdits1(lower))) {
+    for (const cand of knownEdits1(bridge)) deepCandidates.add(cand);
+  }
+  const best = deepCandidates.size > 0
+    ? [...deepCandidates].sort((a, b) => Math.abs(a.length - lower.length) - Math.abs(b.length - lower.length))[0]
+    : undefined;
+  deepSuggestCache.set(lower, best);
+  return { misspelled: true, suggestion: best };
 }
 
 /**
@@ -139,13 +164,13 @@ function knownEdits1FromUnknown(word: string): string[] {
  * dicionário formal), depois a lista de palavras pt-BR pra pegar qualquer outro erro de
  * digitação. É o que a caixa de digitar (sublinhado) e o menu de botão direito usam.
  */
-export function getSpellIssue(word: string): { flagged: boolean; suggestion?: string } {
+export function getSpellIssue(word: string, options: { deep?: boolean } = {}): { flagged: boolean; suggestion?: string } {
   if (!word) return { flagged: false };
   const curated = WORD_REPLACEMENTS[word.toLowerCase()];
   if (curated && curated.toLowerCase() !== word.toLowerCase()) {
     return { flagged: true, suggestion: curated };
   }
-  const fromDict = checkWordAgainstDictionary(word);
+  const fromDict = checkWordAgainstDictionary(word, options);
   if (fromDict?.misspelled) {
     return { flagged: true, suggestion: fromDict.suggestion };
   }

@@ -6516,7 +6516,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 while (start > 0 && isWordChar(val[start - 1])) start--;
                 while (end < val.length && isWordChar(val[end])) end++;
                 const original = val.slice(start, end);
-                const issue = original ? getSpellIssue(original) : { flagged: false as const };
+                // deep:true aqui pq é uma ação pontual de clique (pode gastar até ~500ms num
+                // typo grave) - bem diferente do sublinhado, que roda a cada tecla e por isso
+                // usa a checagem rápida (deep:false, o padrão) lá na renderização do overlay.
+                const issue = original ? getSpellIssue(original, { deep: true }) : { flagged: false as const };
                 const suggestion = issue.flagged ? issue.suggestion : undefined;
                 if (suggestion && suggestion.toLowerCase() !== original.toLowerCase()) {
                   e.preventDefault();
