@@ -637,8 +637,8 @@ export const ChatList: React.FC<ChatListProps> = ({
     }}>
       {/* Header & Search */}
       <div className="chatlist-header" style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', rowGap: '8px', marginBottom: '10px' }}>
+          <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '17px', fontWeight: '700', display: 'flex', alignItems: 'center', gap: '6px', margin: 0, whiteSpace: 'nowrap' }}>
             {activeTab === 'groups' ? (
               <>
                 <Users size={18} color="var(--accent-primary)" /> Grupos do WhatsApp
@@ -648,7 +648,7 @@ export const ChatList: React.FC<ChatListProps> = ({
             )}
           </h2>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: '6px' }}>
             <button
               onClick={() => setStatusFilter(statusFilter === 'nao_lidas' ? 'all' : 'nao_lidas')}
               style={{
