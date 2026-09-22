@@ -581,7 +581,7 @@ async def get_report_pdf(
             continue
         report_rows.append({
             "codos": o.codos, "empresa": o.empresa, "cliente": o.cliente,
-            "tecnico_label": o.tecnico or NO_TECH_LABEL,
+            "tecnico_label": o.tecnico or NO_TECH_LABEL, "tecnico2_label": o.tecnico2 or None,
             "cod_tipo_os": o.cod_tipo_os, "tipo_os": TIPO_OS_LABEL.get(o.cod_tipo_os, None),
             "stage": stage, "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "Entrada"),
             "data_entrada": o.data_entrada, "finalizada_em": o.finalizada_em,
