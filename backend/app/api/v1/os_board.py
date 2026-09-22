@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select, delete, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +65,11 @@ EVENT_LABELS = {
 _CODE_TO_STAGE = {code: st["key"] for st in BOARD_STAGES for code in st["codes"]}
 NO_TECH_LABEL = "SEM TÉCNICO"
 RETIRADA_PRAZO_DIAS = 90
+EMPRESA_LABEL_PT = {"servweld": "Servweld", "centrooeste": "Centro-Oeste"}
+
+
+def titleCase_pt(s: str) -> str:
+    return s.lower().title() if s else s
 
 
 def now_brt() -> datetime:
@@ -93,6 +99,8 @@ class BoardOrderIn(BaseModel):
     venda_codigo: Optional[int] = None
     telefone: Optional[str] = None
     contato_nome: Optional[str] = None
+    valor_total: Optional[float] = None
+    forma_pagamento: Optional[str] = None
 
 
 class BoardEventIn(BaseModel):
@@ -165,6 +173,8 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
             row.telefone = _clean(o.telefone, 20)
         if o.contato_nome:
             row.contato_nome = _clean(o.contato_nome, 120)
+        row.valor_total = o.valor_total
+        row.forma_pagamento = _clean(o.forma_pagamento, 60)
         row.atualizado_em = now
 
     # ---- eventos (só insere os que ainda não existem)
@@ -496,3 +506,107 @@ async def list_technicians(
         select(OsBoardOrder.tecnico).where(OsBoardOrder.tenant_id == current_user.tenant_id, *_empresa_filter(empresa)).distinct()
     )).all()
     return sorted({r[0] for r in rows if r[0]})
+
+
+# Estágios do relatório: os mesmos do quadro + Finalizada (que o quadro ao vivo esconde, mas o
+# relatório precisa mostrar, já que "finalizadas" é um dos números pedidos).
+REPORT_STAGE_LABELS: Dict[str, str] = {**{s["key"]: s["label"] for s in BOARD_STAGES}, "finalizada": "Finalizada"}
+
+
+@router.get("/report.pdf")
+async def get_report_pdf(
+    tecnico: Optional[str] = Query(None, description="Nome do técnico, ou vazio/'todos' para todos"),
+    evento: Optional[str] = Query(None, description="Chave do estágio (ver stages[].key), ou vazio/'todos' para todos"),
+    empresa: Optional[str] = None,
+    start: Optional[datetime] = Query(None, description="Entrada a partir de (vazio = sem início)"),
+    end: Optional[datetime] = Query(None, description="Entrada até (vazio = até hoje)"),
+    status: str = Query("todas", description="todas | abertas | finalizadas | efetivadas"),
+    incluir_lista: bool = Query(True, description="Inclui a lista detalhada de O.S. no fim do PDF"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Relatório em PDF: produtividade por técnico/evento, financeiro e forma de pagamento. Só administradores."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Somente administradores podem emitir relatórios")
+
+    from app.services.os_board_report_service import build_os_report_pdf
+
+    tech = (tecnico or "").strip().upper()
+    ev = (evento or "").strip().lower()
+    if ev and ev != "todos" and ev not in REPORT_STAGE_LABELS:
+        raise HTTPException(status_code=422, detail="Estágio inválido")
+
+    now = now_brt()
+    end_dt = end or now
+    start_dt = start  # sem piso por padrão: o relatório é sobre um universo de O.S., não só "recentes"
+
+    filters = [OsBoardOrder.tenant_id == current_user.tenant_id, *_empresa_filter(empresa)]
+    if tech and tech != "TODOS":
+        filters.append(OsBoardOrder.tecnico.is_(None) if tech == NO_TECH_LABEL else or_(OsBoardOrder.tecnico == tech, OsBoardOrder.tecnico2 == tech))
+    if start_dt:
+        filters.append(OsBoardOrder.data_entrada >= start_dt)
+    filters.append(OsBoardOrder.data_entrada <= end_dt)
+
+    rows = (await db.execute(select(OsBoardOrder).where(*filters).order_by(OsBoardOrder.data_entrada.desc()))).scalars().all()
+
+    # Decisão do orçamento na HISTÓRIA da O.S. (chegou a ser aprovada/recusada em algum momento), separado
+    # do estágio ATUAL - uma O.S. aprovada e já finalizada não deve sumir da taxa de aprovação.
+    codos_list = sorted({o.codos for o in rows})
+    decisao_por_codos: Dict[int, str] = {}
+    for i in range(0, len(codos_list), 500):
+        chunk = codos_list[i:i + 500]
+        ev_rows = (await db.execute(select(OsBoardEvent.codos, OsBoardEvent.cod_evento).where(
+            OsBoardEvent.tenant_id == current_user.tenant_id, OsBoardEvent.codos.in_(chunk),
+            OsBoardEvent.cod_evento.in_([EVENTO_APROVADO, EVENTO_NAO_APROVADO])
+        ).order_by(OsBoardEvent.data.asc()))).all()
+        for codos_, cod in ev_rows:
+            decisao_por_codos[codos_] = "aprovado" if cod == EVENTO_APROVADO else "nao_aprovado"
+
+    def row_stage(o: OsBoardOrder) -> str:
+        if o.situacao_evento == EVENTO_FINALIZADA:
+            return "finalizada"
+        return _CODE_TO_STAGE.get(o.situacao_evento or 1, "entrada")
+
+    report_rows = []
+    for o in rows:
+        stage = row_stage(o)
+        if ev and ev != "todos" and stage != ev:
+            continue
+        is_open = o.situacao_evento != EVENTO_FINALIZADA and not _efetivada(o)
+        if status == "abertas" and not is_open:
+            continue
+        if status == "finalizadas" and stage != "finalizada":
+            continue
+        if status == "efetivadas" and not _efetivada(o):
+            continue
+        report_rows.append({
+            "codos": o.codos, "empresa": o.empresa, "cliente": o.cliente,
+            "tecnico_label": o.tecnico or NO_TECH_LABEL,
+            "cod_tipo_os": o.cod_tipo_os, "tipo_os": TIPO_OS_LABEL.get(o.cod_tipo_os, None),
+            "stage": stage, "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "Entrada"),
+            "data_entrada": o.data_entrada, "finalizada_em": o.finalizada_em,
+            "aberta": is_open, "efetivada_motivo": _efetivada_motivo(o),
+            "valor_total": o.valor_total, "forma_pagamento": o.forma_pagamento,
+            "decisao": decisao_por_codos.get(o.codos),
+        })
+
+    if not report_rows:
+        raise HTTPException(status_code=404, detail="Nenhuma O.S. encontrada para esses filtros")
+
+    filtros_txt = {
+        "Empresa": EMPRESA_LABEL_PT.get(empresa, "Todas") if empresa else "Todas",
+        "Técnico": titleCase_pt(tech) if tech and tech != "TODOS" else "Todos",
+        "Evento": REPORT_STAGE_LABELS.get(ev, "Todos") if ev and ev != "todos" else "Todos",
+        "Status": {"todas": "Todas", "abertas": "Em aberto", "finalizadas": "Finalizadas", "efetivadas": "Efetivadas"}.get(status, status),
+        "Período": f"{start_dt.strftime('%d/%m/%Y') if start_dt else 'início'} a {end_dt.strftime('%d/%m/%Y')}",
+    }
+
+    pdf_bytes = build_os_report_pdf(
+        orders=report_rows, stage_labels=REPORT_STAGE_LABELS, event_labels=EVENT_LABELS,
+        filtros=filtros_txt, gerado_em=now, incluir_lista=incluir_lista,
+    )
+    filename = f"relatorio-quadro-tecnicos-{now.strftime('%Y%m%d-%H%M')}.pdf"
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )

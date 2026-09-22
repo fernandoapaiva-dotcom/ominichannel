@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, Monitor, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, Download, FileText, Monitor, RefreshCw, X } from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { User } from '../types';
 
@@ -149,6 +149,9 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   // "+N O.S." de uma célula do quadro: abre com a lista completa (sem o limite de cartões por célula)
   const [cellModal, setCellModal] = useState<{ tecnico: string; label: string; stage: string } | null>(null);
 
+  // Relatório em PDF (só admin)
+  const [reportOpen, setReportOpen] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
@@ -266,6 +269,11 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         {!tvMode && (
           <>
             <button onClick={() => { setLoading(true); load(); }} title="Atualizar agora" style={iconBtn}><RefreshCw size={15} className={loading ? 'animate-spin' : ''} /></button>
+            {isAdmin && (
+              <button onClick={() => setReportOpen(true)} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
+                <FileText size={15} /> Relatórios
+              </button>
+            )}
             <button onClick={enterTv} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
               <Monitor size={15} /> Modo TV
             </button>
@@ -391,6 +399,10 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onClose={() => setCellModal(null)}
         />
       )}
+
+      {reportOpen && (
+        <ReportPanel stages={stages} defaultEmpresa={empresa} onClose={() => setReportOpen(false)} />
+      )}
     </div>
   );
 };
@@ -437,6 +449,164 @@ const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empre
           {cards && cards.map(card => (
             <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} />
           ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- relatório em PDF (admin)
+
+const REPORT_STATUS_OPTIONS = [
+  { key: 'todas', label: 'Todas' },
+  { key: 'abertas', label: 'Em aberto' },
+  { key: 'finalizadas', label: 'Finalizadas' },
+  { key: 'efetivadas', label: 'Efetivadas (venda/pagamento)' },
+];
+
+const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultEmpresa: string; onClose: () => void }> = ({ stages, defaultEmpresa, onClose }) => {
+  const [empresa, setEmpresa] = useState(defaultEmpresa);
+  const [tecnico, setTecnico] = useState('todos');
+  const [tecnicos, setTecnicos] = useState<string[]>([]);
+  const [evento, setEvento] = useState('todos');
+  const [status, setStatus] = useState('todas');
+  const [start, setStart] = useState('');
+  const [end, setEnd] = useState(toInputDate(new Date()));
+  const [incluirLista, setIncluirLista] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams();
+        if (empresa) qs.set('empresa', empresa);
+        const data = await apiFetch(`/os-board/technicians?${qs.toString()}`);
+        if (!cancelled) setTecnicos(data || []);
+      } catch { /* lista de técnicos é só conveniência do filtro - falha aqui não impede gerar o relatório */ }
+    })();
+    return () => { cancelled = true; };
+  }, [empresa]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const gerarPdf = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const qs = new URLSearchParams({ tecnico, evento, status, incluir_lista: String(incluirLista) });
+      if (empresa) qs.set('empresa', empresa);
+      if (start) qs.set('start', `${start}T00:00:00`);
+      if (end) qs.set('end', `${end}T23:59:59`);
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/v1/os-board/report.pdf?${qs.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `Não foi possível gerar o relatório (HTTP ${response.status}).`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível gerar o relatório.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const input: React.CSSProperties = {
+    padding: '7px 9px', borderRadius: '8px', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)',
+    border: '1px solid var(--border-color, rgba(255,255,255,0.12))', fontSize: '12.5px', width: '100%',
+  };
+  const label: React.CSSProperties = { fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', display: 'block' };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '480px', maxHeight: '88vh', overflowY: 'auto', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', borderRadius: '12px' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.1))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>Relatório em PDF</div>
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>Produtividade, financeiro e forma de pagamento</div>
+          </div>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div>
+            <span style={label}>Empresa</span>
+            <select id="report-empresa" value={empresa} onChange={e => { setEmpresa(e.target.value); setTecnico('todos'); }} style={input}>
+              <option value="">Todas</option>
+              <option value="servweld">Servweld</option>
+              <option value="centrooeste">Centro-Oeste</option>
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ flex: 1 }}>
+              <span style={label}>Técnico</span>
+              <select id="report-tecnico" value={tecnico} onChange={e => setTecnico(e.target.value)} style={input}>
+                <option value="todos">Todos os técnicos</option>
+                {tecnicos.map(t => <option key={t} value={t}>{titleCase(t)}</option>)}
+                <option value="SEM TÉCNICO">Sem técnico</option>
+              </select>
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={label}>Evento</span>
+              <select id="report-evento" value={evento} onChange={e => setEvento(e.target.value)} style={input}>
+                <option value="todos">Todos os eventos</option>
+                {stages.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
+                <option value="finalizada">Finalizada</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <span style={label}>Status</span>
+            <select id="report-status" value={status} onChange={e => setStatus(e.target.value)} style={input}>
+              {REPORT_STATUS_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <div style={{ flex: 1 }}>
+              <span style={label}>Entrada de</span>
+              <input id="report-start" type="date" value={start} onChange={e => setStart(e.target.value)} style={input} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <span style={label}>até</span>
+              <input id="report-end" type="date" value={end} onChange={e => setEnd(e.target.value)} style={input} />
+            </div>
+          </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', color: 'var(--text-main)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={incluirLista} onChange={e => setIncluirLista(e.target.checked)} />
+            Incluir lista detalhada de O.S. no fim do PDF
+          </label>
+
+          {error && <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '12px' }}>{error}</div>}
+
+          <button
+            onClick={gerarPdf}
+            disabled={loading}
+            style={{
+              marginTop: '4px', padding: '10px', borderRadius: '9px', background: 'var(--accent-primary, #00e699)', color: '#04140f',
+              fontWeight: 800, fontSize: '13px', border: 'none', cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
+            }}
+          >
+            <FileText size={15} /> {loading ? 'Gerando…' : 'Gerar PDF'}
+          </button>
+          <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', textAlign: 'center' }}>
+            O valor de cada O.S. é a soma dos itens lançados no Softsystem - referência para acompanhamento, não substitui o fechamento contábil oficial.
+          </div>
         </div>
       </div>
     </div>

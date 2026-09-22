@@ -81,6 +81,8 @@ async def init_db():
             "ALTER TABLE os_board_orders ADD COLUMN telefone VARCHAR(20);",
             "ALTER TABLE os_board_orders ADD COLUMN contato_nome VARCHAR(120);",
             "ALTER TABLE os_board_orders ADD COLUMN last_nudge_at DATETIME;",
+            "ALTER TABLE os_board_orders ADD COLUMN valor_total FLOAT;",
+            "ALTER TABLE os_board_orders ADD COLUMN forma_pagamento VARCHAR(60);",
             "ALTER TABLE calendar_events ADD COLUMN employee_id INTEGER;",
             "ALTER TABLE calendar_events ADD COLUMN employee_name VARCHAR(150);",
             "ALTER TABLE calendar_events ADD COLUMN employee_phone VARCHAR(50);",

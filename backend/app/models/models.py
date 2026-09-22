@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from sqlalchemy import (
-    String, Text, Integer, ForeignKey, DateTime, Boolean, Enum, JSON, Table, Column, Index
+    String, Text, Integer, ForeignKey, DateTime, Boolean, Enum, JSON, Table, Column, Index, Float
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
@@ -388,6 +388,8 @@ class OsBoardOrder(Base):
     telefone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # quem recebe o acompanhamento (Contato da O.S., senão cadastro)
     contato_nome: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)  # nome pra saudação (pode diferir de "cliente", que é a Razão Social)
     last_nudge_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # última cobrança automática (aprovação/retirada) da etapa atual
+    valor_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # soma dos itens da O.S. (ITENSORDEMSERVICO) - referência, não é o fechamento contábil oficial
+    forma_pagamento: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)  # CONDPAG.DESCRICAO
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

@@ -519,11 +519,33 @@ def _board_orders_query(where_sql: str) -> str:
     return f"""
         SELECT os.LOJA, os.CODOS, os.CNPJ, os.DATA, os.TECNICOATENDIMENTO, os.TECNICOATENDIMENTO2,
                os.CODTIPOORDEMSERVICO, os.DATAALTERACAO, cli.RAZAOSOCIAL, cli.NOMEFANTASIA, os.CODCONDPAG,
-               os.CODORCAMENTO, os.CONTATO, cli.DDD, cli.CELULAR, cli.FONE
+               os.CODORCAMENTO, os.CONTATO, cli.DDD, cli.CELULAR, cli.FONE, cp.DESCRICAO
         FROM ORDEMSERVICO os
         LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
+        LEFT JOIN CONDPAG cp ON cp.CODCONDPAG = os.CODCONDPAG
         {where_sql}
     """
+
+
+def _board_valores(cur, keys: set) -> dict:
+    """Valor de cada O.S. = soma dos itens (ITENSORDEMSERVICO.QUANTIDADE * PRECO) - é uma referência pra
+    acompanhamento no quadro, não substitui o fechamento contábil oficial (não considera descontos/impostos)."""
+    out = {}
+    if not keys:
+        return out
+    codos = sorted({c for _, c in keys})
+    for i in range(0, len(codos), 500):
+        chunk = codos[i:i + 500]
+        marks = ",".join("?" for _ in chunk)
+        cur.execute(f"""
+            SELECT LOJA, CODOS, SUM(QUANTIDADE * PRECO)
+            FROM ITENSORDEMSERVICO
+            WHERE CODOS IN ({marks})
+            GROUP BY LOJA, CODOS
+        """, tuple(chunk))
+        for loja, codos_, total in cur.fetchall():
+            out[(loja, codos_)] = float(total) if total is not None else None
+    return out
 
 
 def _board_equipamentos(cur, keys: set) -> dict:
@@ -569,8 +591,9 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
     keys = {(r[0], r[1]) for r in order_rows}
     equips = _board_equipamentos(cur, keys)
     events = _board_events(cur, keys)
+    valores = _board_valores(cur, keys)
     orders, evs = [], []
-    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo, contato, ddd, celular, fone in order_rows:
+    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo, contato, ddd, celular, fone, forma_pag in order_rows:
         # Mesma regra do aviso de abertura: celular do campo Contato da O.S., senão o do cadastro do
         # cliente - é quem recebe a cobrança automática de aprovação/retirada (ver os_board_followup_service).
         telefone, contato_nome, _origem = resolve_recipient({
@@ -585,6 +608,8 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
             # gerada ("Ver Venda N" na tela da O.S., devolvida ao cliente)
             "paga": cond_pag is not None,
             "venda_codigo": venda_codigo,
+            "valor_total": valores.get((loja, codos)),
+            "forma_pagamento": forma_pag,
         })
         for ev_data, cod in events.get((loja, codos), []):
             evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "data": ev_data.isoformat()})
