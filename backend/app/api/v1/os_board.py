@@ -36,15 +36,25 @@ router = APIRouter(prefix="/os-board", tags=["Quadro de Técnicos"])
 EVENTO_FINALIZADA = 7
 
 # Colunas do quadro, na ordem do fluxo da O.S. Cada coluna agrupa códigos de CODTIPOEVENTOOS do Softsystem.
+# "aprovado"/"nao_aprovado" e "descarte" também recebem eventos gravados pelo PRÓPRIO backend (ver
+# record_board_event), não só pelo vigia - respectivamente quando o cliente responde no WhatsApp, e
+# quando o prazo de 90 dias de "Aguardando retirada" se esgota (ver os_board_followup_service).
+EVENTO_APROVADO = 15
+EVENTO_NAO_APROVADO = 16
+EVENTO_DESCARTE = 14
+EVENTO_ORCAMENTO_ENVIADO = 3
+EVENTO_RETIRADA = 6
 BOARD_STAGES: List[Dict[str, Any]] = [
     {"key": "entrada", "label": "Entrada", "codes": [1]},
     {"key": "avaliacao", "label": "Avaliação", "codes": [2]},
-    {"key": "orcamento", "label": "Orçamento enviado", "codes": [3]},
-    {"key": "aprovado", "label": "Aprovado", "codes": [15]},
+    {"key": "orcamento", "label": "Orçamento enviado", "codes": [EVENTO_ORCAMENTO_ENVIADO]},
+    {"key": "aprovado", "label": "Aprovado", "codes": [EVENTO_APROVADO]},
+    {"key": "nao_aprovado", "label": "Não aprovado", "codes": [EVENTO_NAO_APROVADO]},
     {"key": "execucao", "label": "Execução", "codes": [4]},
     {"key": "peca", "label": "Aguardando peça", "codes": [8]},
-    {"key": "retirada", "label": "Aguardando retirada", "codes": [6]},
-    {"key": "sem_reparo", "label": "Sem reparo", "codes": [11, 12, 13, 14, 16]},
+    {"key": "retirada", "label": "Aguardando retirada", "codes": [EVENTO_RETIRADA]},
+    {"key": "sem_reparo", "label": "Sem reparo", "codes": [11, 12, 13]},
+    {"key": "descarte", "label": "Desmanche e Descarte", "codes": [EVENTO_DESCARTE]},
 ]
 EVENT_LABELS = {
     1: "Entrada", 2: "Avaliação", 3: "Orçamento enviado", 4: "Execução", 6: "Aguardando retirada",
@@ -53,6 +63,18 @@ EVENT_LABELS = {
 }
 _CODE_TO_STAGE = {code: st["key"] for st in BOARD_STAGES for code in st["codes"]}
 NO_TECH_LABEL = "SEM TÉCNICO"
+RETIRADA_PRAZO_DIAS = 90
+
+
+def now_brt() -> datetime:
+    """
+    'Agora' no horário de Brasília, sem fuso (naive) - para comparar com os horários que vêm do
+    Softsystem (relógio do computador da loja, sempre Brasília). O servidor roda em UTC, então
+    datetime.now() do processo NÃO é Brasília - teria de ser convertido, e datetime.utcnow() já é
+    UTC por definição, então só falta subtrair as 3 horas (mesma convenção usada em
+    calendar_reminder_service.py para o mesmo motivo).
+    """
+    return datetime.utcnow() - timedelta(hours=3)
 
 
 # ---------------------------------------------------------------- ingestão (vigia da loja)
@@ -69,6 +91,8 @@ class BoardOrderIn(BaseModel):
     equipamento: Optional[str] = None
     paga: bool = False
     venda_codigo: Optional[int] = None
+    telefone: Optional[str] = None
+    contato_nome: Optional[str] = None
 
 
 class BoardEventIn(BaseModel):
@@ -137,6 +161,10 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
         row.equipamento = _clean(o.equipamento, 255)
         row.paga = bool(o.paga)
         row.venda_codigo = o.venda_codigo
+        if o.telefone:
+            row.telefone = _clean(o.telefone, 20)
+        if o.contato_nome:
+            row.contato_nome = _clean(o.contato_nome, 120)
         row.atualizado_em = now
 
     # ---- eventos (só insere os que ainda não existem)
@@ -177,7 +205,10 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
                 finalizada[k] = data
     for k, row in existing_orders.items():
         if k in latest:
-            row.situacao_evento, row.ultimo_evento_em = latest[k]
+            novo_evento, novo_quando = latest[k]
+            if novo_evento != row.situacao_evento:
+                row.last_nudge_at = None  # etapa mudou - a contagem de 2 em 2 dias da cobrança recomeça
+            row.situacao_evento, row.ultimo_evento_em = novo_evento, novo_quando
         row.finalizada_em = finalizada.get(k)
     await db.commit()
 
@@ -188,6 +219,43 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
         except Exception as err:
             logger.debug(f"[OS BOARD] broadcast falhou: {err}")
     return {"status": "ok", "orders": len(payload.orders), "events": new_events}
+
+
+async def record_board_event(db: AsyncSession, tenant_id: int, codos: int, cod_evento: int, when: Optional[datetime] = None) -> bool:
+    """
+    Grava, DIRETO do backend (sem passar pelo vigia/Softsystem), um evento que o próprio sistema decidiu:
+    aprovação/recusa do orçamento respondida no WhatsApp (webhooks.py) e descarte automático por prazo
+    vencido (os_board_followup_service). Atualiza o espelho na hora, em vez de esperar alguém lançar o
+    mesmo evento no Softsystem depois - é só o card do quadro mudando de coluna; não escreve nada real
+    no Softsystem. Localiza a O.S. por tenant+codos (pode achar mais de uma linha só em teoria, se algum
+    dia um código de O.S. colidir entre as duas empresas). Não faz nada se a O.S. não estiver no espelho.
+    """
+    when = when or now_brt()
+    rows = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos
+    ))).scalars().all()
+    if not rows:
+        return False
+    for row in rows:
+        exists = (await db.execute(select(OsBoardEvent.id).where(
+            OsBoardEvent.tenant_id == tenant_id, OsBoardEvent.empresa == row.empresa, OsBoardEvent.loja == row.loja,
+            OsBoardEvent.codos == codos, OsBoardEvent.cod_evento == cod_evento, OsBoardEvent.data == when
+        ))).scalar_one_or_none()
+        if not exists:
+            db.add(OsBoardEvent(tenant_id=tenant_id, empresa=row.empresa, loja=row.loja, codos=codos, cod_evento=cod_evento, data=when))
+        if cod_evento != row.situacao_evento:
+            row.last_nudge_at = None
+        row.situacao_evento = cod_evento
+        row.ultimo_evento_em = when
+        if cod_evento == EVENTO_FINALIZADA:
+            row.finalizada_em = when
+        row.atualizado_em = datetime.utcnow()
+    await db.commit()
+    try:
+        await ws_manager.broadcast_to_tenant(tenant_id, {"type": "OS_BOARD_UPDATE", "empresa": rows[0].empresa})
+    except Exception as err:
+        logger.debug(f"[OS BOARD] broadcast falhou: {err}")
+    return True
 
 
 # ---------------------------------------------------------------- leitura (painel)
@@ -244,7 +312,7 @@ async def get_board(
     db: AsyncSession = Depends(get_db)
 ):
     """Quadro geral: uma linha por técnico, uma coluna por estágio. Aberto a todos os usuários."""
-    now = datetime.now()  # os horários do Softsystem são de Brasília (relógio da máquina)
+    now = now_brt()
     since_open = now - timedelta(days=days_open)
 
     stmt = select(OsBoardOrder).where(
@@ -284,6 +352,37 @@ async def get_board(
     }
 
 
+@router.get("/cell")
+async def get_board_cell(
+    tecnico: str = Query(..., description="Nome do técnico como está no Softsystem, ou 'SEM TÉCNICO'"),
+    stage: str = Query(..., description="Chave do estágio (ver GET /board -> stages[].key)"),
+    empresa: Optional[str] = None,
+    days_open: int = Query(120, ge=1, le=1500, description="Mesmo filtro de atividade recente do quadro geral"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Lista completa de uma célula do quadro (técnico x estágio) - abre com o botão '+N O.S.' do cartão."""
+    stage_def = next((s for s in BOARD_STAGES if s["key"] == stage), None)
+    if not stage_def:
+        raise HTTPException(status_code=422, detail="Estágio inválido")
+    tech = tecnico.strip().upper()
+    tech_filter = [OsBoardOrder.tecnico.is_(None)] if tech == NO_TECH_LABEL else [OsBoardOrder.tecnico == tech]
+
+    situacao_condition = OsBoardOrder.situacao_evento.in_(stage_def["codes"])
+    if 1 in stage_def["codes"]:  # "Entrada": situacao_evento ainda nulo (nenhum evento chegou) também conta
+        situacao_condition = or_(situacao_condition, OsBoardOrder.situacao_evento.is_(None))
+
+    now = now_brt()
+    since_open = now - timedelta(days=days_open)
+    orders = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == current_user.tenant_id, *_empresa_filter(empresa), *tech_filter,
+        situacao_condition, OsBoardOrder.paga.is_(False), OsBoardOrder.venda_codigo.is_(None),
+        or_(OsBoardOrder.ultimo_evento_em >= since_open, OsBoardOrder.data_entrada >= since_open),
+    ).order_by(OsBoardOrder.data_entrada.desc()))).scalars().all()
+
+    return {"tecnico": tech, "stage": stage, "label": stage_def["label"], "cards": [_card(o, now) for o in orders]}
+
+
 @router.get("/technician")
 async def get_technician_detail(
     name: str = Query(..., description="Nome do técnico como está no Softsystem (ex.: JUNIOR)"),
@@ -299,7 +398,7 @@ async def get_technician_detail(
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Somente administradores podem ver o detalhe por técnico")
     tech = name.strip().upper()
-    end_dt = end or datetime.now()
+    end_dt = end or now_brt()
     start_dt = start or (end_dt - timedelta(days=30))
 
     tech_filter = (

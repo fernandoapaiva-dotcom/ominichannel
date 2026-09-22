@@ -53,8 +53,8 @@ const EMPRESA_LABEL: Record<string, string> = { servweld: 'Servweld', centrooest
 
 // Cor de cada coluna (barra do topo do cartão): do início do fluxo até a retirada
 const STAGE_COLORS: Record<string, string> = {
-  entrada: '#60a5fa', avaliacao: '#a78bfa', orcamento: '#f59e0b', aprovado: '#34d399',
-  execucao: '#00e699', peca: '#f97316', retirada: '#22d3ee', sem_reparo: '#94a3b8', finalizada: '#64748b',
+  entrada: '#60a5fa', avaliacao: '#a78bfa', orcamento: '#f59e0b', aprovado: '#34d399', nao_aprovado: '#ef4444',
+  execucao: '#00e699', peca: '#f97316', retirada: '#22d3ee', sem_reparo: '#94a3b8', descarte: '#fb7185', finalizada: '#64748b',
 };
 
 // Tipo de O.S. (natureza): cor e sigla para identificar de relance no cartão - paleta separada da cor de
@@ -145,6 +145,9 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // "+N O.S." de uma célula do quadro: abre com a lista completa (sem o limite de cartões por célula)
+  const [cellModal, setCellModal] = useState<{ tecnico: string; label: string; stage: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -300,6 +303,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onGoTo={setCarouselIndex}
           scale={scale}
           fs={fs}
+          onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
         />
       ) : useMobileLayout ? (
         <MobileBoard
@@ -310,6 +314,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           isAdmin={isAdmin}
           onOpenTech={setDetailTech}
           showEmpresa={!empresa}
+          onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
         />
       ) : (
         <div style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
@@ -357,7 +362,10 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
                     <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
                       {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
                       {cell.count > cell.cards.length && (
-                        <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{cell.count - cell.cards.length} O.S.</div>
+                        <button
+                          onClick={() => setCellModal({ tecnico: tech.name, stage: st.key, label: st.label })}
+                          style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--accent-primary)', textAlign: 'center', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.25)', borderRadius: '6px', padding: '3px 0', cursor: 'pointer' }}
+                        >+{cell.count - cell.cards.length} O.S.</button>
                       )}
                     </div>
                   );
@@ -372,6 +380,65 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           Finalizadas e O.S. já efetivadas não aparecem no quadro. O detalhe por técnico é exclusivo de administradores.
         </div>
       )}
+
+      {cellModal && (
+        <CellModal
+          tecnico={cellModal.tecnico}
+          stage={cellModal.stage}
+          label={cellModal.label}
+          empresa={empresa}
+          showEmpresa={!empresa}
+          onClose={() => setCellModal(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empresa: string; showEmpresa: boolean; onClose: () => void }> = ({ tecnico, stage, label, empresa, showEmpresa, onClose }) => {
+  const [cards, setCards] = useState<BoardCard[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const qs = new URLSearchParams({ tecnico, stage });
+        if (empresa) qs.set('empresa', empresa);
+        const data = await apiFetch(`/os-board/cell?${qs.toString()}`);
+        if (!cancelled) setCards(data.cards || []);
+      } catch (err: any) {
+        if (!cancelled) setError(err?.message || 'Não foi possível carregar a lista.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tecnico, stage, empresa]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '560px', maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.1))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>{titleCase(tecnico)}</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{label} · {cards ? cards.length : '…'} O.S.</div>
+          </div>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {error && <div style={{ color: '#f87171', fontSize: '13px' }}>{error}</div>}
+          {!error && cards === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Carregando…</div>}
+          {cards && cards.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Nenhuma O.S. nesta célula.</div>}
+          {cards && cards.map(card => (
+            <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} />
+          ))}
+        </div>
+      </div>
     </div>
   );
 };
@@ -381,7 +448,8 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 const MobileBoard: React.FC<{
   board: BoardData | null; loading: boolean; stageFilter: string; setStageFilter: (k: string) => void;
   isAdmin: boolean; onOpenTech: (name: string) => void; showEmpresa: boolean;
-}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa }) => {
+  onOpenCell: (tecnico: string, stage: string, label: string) => void;
+}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell }) => {
   const stages = board?.stages || [];
   const stageKeys = stageFilter ? [stageFilter] : stages.map(s => s.key);
 
@@ -421,7 +489,14 @@ const MobileBoard: React.FC<{
                 <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} />
               ))}
               {shown > items.length && (
-                <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{shown - items.length} O.S. (abra pelo computador para ver todas)</div>
+                stageFilter ? (
+                  <button
+                    onClick={() => onOpenCell(tech.name, stageFilter, stages.find(s => s.key === stageFilter)?.label || stageFilter)}
+                    style={{ padding: '8px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary)', background: 'rgba(0,230,153,0.08)', border: 'none', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', textAlign: 'center', cursor: 'pointer' }}
+                  >Ver todas as {shown} O.S.</button>
+                ) : (
+                  <div style={{ padding: '8px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{shown - items.length} O.S. (filtre por um estágio pra ver todas)</div>
+                )
               )}
             </div>
           </div>
@@ -515,7 +590,8 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
 const TvCarousel: React.FC<{
   board: BoardData | null; loading: boolean; activeIndex: number; carouselMs: number; carouselKey: number;
   onGoTo: (i: number) => void; scale: number; fs: (px: number) => string;
-}> = ({ board, loading, activeIndex, carouselMs, carouselKey, onGoTo, scale, fs }) => {
+  onOpenCell: (tecnico: string, stage: string, label: string) => void;
+}> = ({ board, loading, activeIndex, carouselMs, carouselKey, onGoTo, scale, fs, onOpenCell }) => {
   const stages = board?.stages || [];
   const tech = board?.technicians[activeIndex];
 
@@ -553,8 +629,11 @@ const TvCarousel: React.FC<{
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: `${6 * scale}px`, display: 'flex', flexDirection: 'column', gap: `${5 * scale}px` }}>
                 {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
-                {cell.count > cell.cards.length && (
-                  <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center', padding: '4px 0' }}>+{cell.count - cell.cards.length} O.S.</div>
+                {cell.count > cell.cards.length && tech && (
+                  <button
+                    onClick={() => onOpenCell(tech.name, st.key, st.label)}
+                    style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--accent-primary)', textAlign: 'center', padding: '4px 0', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.25)', borderRadius: '6px', cursor: 'pointer' }}
+                  >+{cell.count - cell.cards.length} O.S.</button>
                 )}
               </div>
             </div>

@@ -385,6 +385,9 @@ class OsBoardOrder(Base):
     finalizada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     paga: Mapped[bool] = mapped_column(Boolean, default=False)  # condição de pagamento preenchida = já efetivada
     venda_codigo: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # CODORCAMENTO da O.S. ("Ver Venda N") = já devolvida ao cliente
+    telefone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # quem recebe o acompanhamento (Contato da O.S., senão cadastro)
+    contato_nome: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)  # nome pra saudação (pode diferir de "cliente", que é a Razão Social)
+    last_nudge_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # última cobrança automática (aprovação/retirada) da etapa atual
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 

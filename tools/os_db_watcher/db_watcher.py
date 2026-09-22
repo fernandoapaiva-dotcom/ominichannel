@@ -519,7 +519,7 @@ def _board_orders_query(where_sql: str) -> str:
     return f"""
         SELECT os.LOJA, os.CODOS, os.CNPJ, os.DATA, os.TECNICOATENDIMENTO, os.TECNICOATENDIMENTO2,
                os.CODTIPOORDEMSERVICO, os.DATAALTERACAO, cli.RAZAOSOCIAL, cli.NOMEFANTASIA, os.CODCONDPAG,
-               os.CODORCAMENTO
+               os.CODORCAMENTO, os.CONTATO, cli.DDD, cli.CELULAR, cli.FONE
         FROM ORDEMSERVICO os
         LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
         {where_sql}
@@ -570,11 +570,17 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
     equips = _board_equipamentos(cur, keys)
     events = _board_events(cur, keys)
     orders, evs = [], []
-    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo in order_rows:
+    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo, contato, ddd, celular, fone in order_rows:
+        # Mesma regra do aviso de abertura: celular do campo Contato da O.S., senão o do cadastro do
+        # cliente - é quem recebe a cobrança automática de aprovação/retirada (ver os_board_followup_service).
+        telefone, contato_nome, _origem = resolve_recipient({
+            "RAZAOSOCIAL": razao, "NOMEFANTASIA": fantasia, "DDD": ddd, "CELULAR": celular, "FONE": fone, "CONTATO": contato,
+        })
         orders.append({
             "loja": loja, "codos": codos, "cnpj": cnpj, "cliente": razao or fantasia,
             "tecnico": tec1, "tecnico2": tec2, "data_entrada": data.isoformat() if data else None,
             "cod_tipo_os": cod_tipo, "equipamento": equips.get((loja, codos)),
+            "telefone": telefone or None, "contato_nome": contato_nome,
             # Já efetivada (sai do quadro, fica só na auditoria): condição de pagamento preenchida OU venda
             # gerada ("Ver Venda N" na tela da O.S., devolvida ao cliente)
             "paga": cond_pag is not None,

@@ -34,6 +34,7 @@ from app.services.whatsapp_watchdog_service import start_whatsapp_watchdog_loop
 from app.services.whatsapp_reconciliation_service import start_whatsapp_reconciliation_loop
 from app.services.backup_service import start_backup_scheduler_loop
 from app.services.daily_backup_drive_service import start_daily_drive_backup_loop
+from app.services.os_board_followup_service import start_os_board_followup_loop
 
 import mimetypes
 
@@ -80,6 +81,11 @@ async def lifespan(app: FastAPI):
     watchdog_task = asyncio.create_task(start_whatsapp_watchdog_loop(interval_seconds=30))
     logger.info("🛡️ WhatsApp Instance Auto-Heal Watchdog background loop started (30s interval).")
 
+    # Quadro de Técnicos: cobrança automática de aprovação de orçamento (2 em 2 dias) e retirada
+    # do equipamento (2 em 2 dias, com contagem regressiva de 90 dias até o descarte)
+    os_board_followup_task = asyncio.create_task(start_os_board_followup_loop(interval_seconds=3600))
+    logger.info("📋 Quadro de Técnicos: cobrança automática de aprovação/retirada iniciada (1h de intervalo).")
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation is triggered passively via connection webhooks or manual admin action.
     reconcile_task = None
@@ -95,6 +101,7 @@ async def lifespan(app: FastAPI):
     business_hours_task.cancel()
     calendar_reminder_task.cancel()
     watchdog_task.cancel()
+    os_board_followup_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")

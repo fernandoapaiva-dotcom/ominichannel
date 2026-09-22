@@ -319,6 +319,22 @@ async def notify_os_approval_result(
     identified on the document) so they know exactly what was approved.
     """
     from app.core.database import AsyncSessionLocal
+
+    # Reflete no Quadro de Técnicos na hora (sem esperar alguém lançar o mesmo evento no Softsystem
+    # depois) - move o card para a coluna Aprovado/Não Aprovado. Falha aqui nunca deve derrubar o
+    # aviso ao grupo/técnico abaixo, que é o que realmente importa pro fluxo operacional.
+    try:
+        codos_int = int(os_numero)
+    except (TypeError, ValueError):
+        codos_int = None
+    if codos_int is not None:
+        try:
+            from app.api.v1.os_board import record_board_event, EVENTO_APROVADO, EVENTO_NAO_APROVADO
+            async with AsyncSessionLocal() as db_board:
+                await record_board_event(db_board, tenant_id, codos_int, EVENTO_APROVADO if aprovado else EVENTO_NAO_APROVADO)
+        except Exception as board_err:
+            logger.debug(f"[OS BOARD] Não foi possível refletir a aprovação da O.S. #{os_numero} no quadro: {board_err}")
+
     try:
         status_label = "✅ *APROVADO*" if aprovado else "❌ *RECUSADO*"
 
