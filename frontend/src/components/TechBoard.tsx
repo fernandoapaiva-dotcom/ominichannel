@@ -33,11 +33,12 @@ interface TimelineItem { evento: string; cod: number; data: string }
 interface DetailOrder {
   codos: number; empresa: string; cliente?: string | null; equipamento?: string | null;
   tecnico?: string | null; tecnico2?: string | null; data_entrada?: string | null; situacao: string; stage: string;
-  finalizada_em?: string | null; aberta: boolean; paga: boolean; timeline: TimelineItem[];
+  finalizada_em?: string | null; aberta: boolean; paga: boolean; venda_codigo?: number | null; efetivada_motivo?: string | null;
+  timeline: TimelineItem[];
 }
 interface DetailData {
   name: string;
-  summary: { abertas_agora: number; entradas_no_periodo: number; finalizadas_no_periodo: number; trabalhou_no_periodo: number };
+  summary: { abertas_agora: number; entradas_no_periodo: number; finalizadas_no_periodo: number; trabalhou_no_periodo: number; efetivadas_no_periodo: number };
   orders: DetailOrder[];
   truncated: boolean;
 }
@@ -85,6 +86,19 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const [now, setNow] = useState(new Date());
   const [detailTech, setDetailTech] = useState<string | null>(null);
   const reloadTimer = useRef<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  // Mede o espaço disponível para as colunas caberem na tela sem precisar rolar de lado
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) setContainerWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -148,7 +162,17 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
 
   const stages = board?.stages || [];
-  const gridCols = `${tvMode ? 200 : 150}px repeat(${Math.max(stages.length, 1)}, minmax(${tvMode ? 190 : 150}px, 1fr))`;
+  const stagesCount = Math.max(stages.length, 1);
+  // Colunas dimensionadas para caber no espaço disponível (sem rolagem lateral, quando possível); com muitas
+  // colunas numa tela estreita elas param no mínimo legível e a rolagem lateral assume.
+  const techColWidth = tvMode ? 180 : 128;
+  const minStageCol = tvMode ? 150 : 116;
+  const maxStageCol = tvMode ? 260 : 190;
+  const availableForStages = Math.max(0, containerWidth - techColWidth - 2);
+  const fitStageCol = containerWidth > 0 ? availableForStages / stagesCount : minStageCol;
+  const stageColWidth = Math.min(maxStageCol, Math.max(minStageCol, Math.floor(fitStageCol)));
+  const boardTotalWidth = techColWidth + stageColWidth * stagesCount;
+  const gridCols = `${techColWidth}px repeat(${stagesCount}, ${stageColWidth}px)`;
 
   const wrapperStyle: React.CSSProperties = tvMode
     ? { position: 'fixed', inset: 0, zIndex: 20000, background: 'var(--bg-primary, #0b1220)', display: 'flex', flexDirection: 'column', padding: '14px 18px', overflow: 'hidden' }
@@ -212,14 +236,14 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       )}
 
       {/* Quadro */}
-      <div style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
-        <div style={{ minWidth: 'max-content', display: 'grid', gridTemplateColumns: gridCols }}>
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+        <div style={{ width: `${boardTotalWidth}px`, display: 'grid', gridTemplateColumns: gridCols }}>
           {/* linha de títulos */}
           <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
           {stages.map(st => (
-            <div key={st.key} style={{ ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}` }}>
-              <span>{st.label}</span>
-              <span style={{ marginLeft: '8px', color: STAGE_COLORS[st.key] || 'var(--text-muted)' }}>{board?.totals?.[st.key] ?? 0}</span>
+            <div key={st.key} title={st.label} style={{ ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`, gap: '4px' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{st.label}</span>
+              <span style={{ flexShrink: 0, color: STAGE_COLORS[st.key] || 'var(--text-muted)' }}>{board?.totals?.[st.key] ?? 0}</span>
             </div>
           ))}
 
@@ -235,19 +259,19 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
                 onClick={() => { if (isAdmin && !tvMode) setDetailTech(tech.name); }}
                 title={isAdmin && !tvMode ? 'Ver detalhes e auditoria deste técnico' : undefined}
                 style={{
-                  position: 'sticky', left: 0, zIndex: 1, padding: `${10 * scale}px ${12 * scale}px`,
+                  position: 'sticky', left: 0, zIndex: 1, padding: `${7 * scale}px ${9 * scale}px`,
                   background: 'var(--bg-primary, #0b1220)', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))',
                   borderRight: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-                  cursor: isAdmin && !tvMode ? 'pointer' : 'default',
+                  cursor: isAdmin && !tvMode ? 'pointer' : 'default', minWidth: 0,
                 }}
               >
-                <div style={{ fontSize: fs(15), fontWeight: 800, color: 'var(--text-main)' }}>{titleCase(tech.name)}</div>
-                <div style={{ fontSize: fs(12), color: 'var(--text-muted)', marginTop: '2px' }}>{tech.total_open} em aberto</div>
+                <div style={{ fontSize: fs(13.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
+                <div style={{ fontSize: fs(11), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
               </div>
               {stages.map(st => {
                 const cell = tech.cells[st.key] || { count: 0, cards: [] };
                 return (
-                  <div key={st.key} style={{ padding: `${8 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${6 * scale}px`, minHeight: `${64 * scale}px` }}>
+                  <div key={st.key} style={{ padding: `${5 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${4 * scale}px`, minHeight: `${52 * scale}px`, minWidth: 0 }}>
                     {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
                     {cell.count > cell.cards.length && (
                       <div style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--text-muted)', textAlign: 'center' }}>+{cell.count - cell.cards.length} O.S.</div>
@@ -275,9 +299,10 @@ const iconBtn: React.CSSProperties = {
 };
 
 const headCell = (scale: number): React.CSSProperties => ({
-  padding: `${10 * scale}px ${12 * scale}px`, fontSize: `${12 * scale}px`, fontWeight: 800, textTransform: 'uppercase',
-  letterSpacing: '0.6px', color: 'var(--text-main)', background: 'var(--bg-primary, #0b1220)',
+  padding: `${7 * scale}px ${8 * scale}px`, fontSize: `${10.5 * scale}px`, fontWeight: 800, textTransform: 'uppercase',
+  letterSpacing: '0.3px', color: 'var(--text-main)', background: 'var(--bg-primary, #0b1220)',
   borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.12))', display: 'flex', alignItems: 'center',
+  overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
 });
 
 const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmpresa: boolean }> = ({ card, color, scale, showEmpresa }) => {
@@ -286,24 +311,24 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
   return (
     <div style={{
-      borderRadius: '8px', padding: `${6 * scale}px ${8 * scale}px`, background: 'rgba(255,255,255,0.04)',
-      borderLeft: `3px solid ${aging || color || '#64748b'}`, minWidth: 0,
+      borderRadius: '7px', padding: `${5 * scale}px ${7 * scale}px`, background: 'rgba(255,255,255,0.04)',
+      borderLeft: `3px solid ${aging || color || '#64748b'}`, minWidth: 0, overflow: 'hidden',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', fontSize: `${12 * scale}px`, fontWeight: 800, color: 'var(--text-main)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${11.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)' }}>
         <span>#{card.codos}</span>
-        <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
+        <span style={{ fontWeight: 600, color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(card.data_entrada)}</span>
       </div>
-      <div style={{ fontSize: `${11 * scale}px`, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.cliente || ''}>
+      <div style={{ fontSize: `${10.5 * scale}px`, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.cliente || ''}>
         {card.cliente ? titleCase(card.cliente) : '—'}
       </div>
       {card.equipamento && (
-        <div style={{ fontSize: `${10.5 * scale}px`, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.equipamento}>
+        <div style={{ fontSize: `${10 * scale}px`, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.equipamento}>
           {card.equipamento}
         </div>
       )}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '6px', fontSize: `${10 * scale}px`, marginTop: '2px' }}>
-        <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500 }}>{dias === 0 ? 'hoje' : `${dias}d no estágio`}</span>
-        {showEmpresa && <span style={{ color: 'var(--text-muted)' }}>{EMPRESA_LABEL[card.empresa] || card.empresa}</span>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '4px', fontSize: `${9.5 * scale}px`, marginTop: '2px' }}>
+        <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{dias === 0 ? 'hoje' : `${dias}d`}</span>
+        {showEmpresa && <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{(EMPRESA_LABEL[card.empresa] || card.empresa).slice(0, 4)}</span>}
       </div>
     </div>
   );
@@ -316,6 +341,7 @@ const STATUS_OPTIONS = [
   { key: 'entrada', label: 'Entradas no período' },
   { key: 'finalizadas', label: 'Finalizadas no período' },
   { key: 'abertas', label: 'Em aberto agora' },
+  { key: 'efetivadas', label: 'Efetivadas (venda/pagamento)' },
   { key: 'todas', label: 'Todas' },
 ];
 
@@ -347,12 +373,13 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
   const exportCsv = () => {
     if (!data) return;
     const q = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const lines = [['O.S.', 'Empresa', 'Cliente', 'Equipamento', 'Técnico', 'Técnico 2', 'Entrada', 'Situação', 'Finalizada em', 'Efetivada', 'Linha do tempo']
+    const lines = [['O.S.', 'Empresa', 'Cliente', 'Equipamento', 'Técnico', 'Técnico 2', 'Entrada', 'Situação', 'Finalizada em', 'Efetivada', 'Venda', 'Linha do tempo']
       .map(q).join(';')];
     for (const o of data.orders) {
       lines.push([
         o.codos, EMPRESA_LABEL[o.empresa] || o.empresa, o.cliente, o.equipamento, o.tecnico, o.tecnico2,
-        fmtDateTime(o.data_entrada), o.situacao, fmtDateTime(o.finalizada_em), o.paga ? 'sim' : 'não',
+        fmtDateTime(o.data_entrada), o.situacao, fmtDateTime(o.finalizada_em), o.efetivada_motivo ? 'sim' : 'não',
+        o.venda_codigo ? `#${o.venda_codigo}` : '',
         o.timeline.map(t => `${t.evento} ${fmtDateTime(t.data)}`).join(' > '),
       ].map(q).join(';'));
     }
@@ -408,6 +435,7 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
           {tile('Entradas no período', data.summary.entradas_no_periodo, '#60a5fa')}
           {tile('Finalizadas no período', data.summary.finalizadas_no_periodo, '#34d399')}
           {tile('Trabalhou no período', data.summary.trabalhou_no_periodo, '#a78bfa')}
+          {tile('Efetivadas no período', data.summary.efetivadas_no_periodo, '#64748b')}
         </div>
       )}
 
@@ -444,7 +472,7 @@ const TechDetail: React.FC<{ name: string; empresa: string; onBack: () => void }
                     <td style={{ padding: '9px 12px', color: 'var(--text-main)' }}>{fmtDateTime(o.data_entrada)}</td>
                     <td style={{ padding: '9px 12px' }}>
                       <span style={{ padding: '2px 8px', borderRadius: '999px', fontSize: '11px', fontWeight: 700, background: `${STAGE_COLORS[o.stage] || '#64748b'}26`, color: STAGE_COLORS[o.stage] || 'var(--text-muted)' }}>{o.situacao}</span>
-                      {o.paga && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>efetivada</div>}
+                      {o.efetivada_motivo && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{o.efetivada_motivo}</div>}
                     </td>
                     <td style={{ padding: '9px 12px', color: 'var(--text-main)' }}>{fmtDateTime(o.finalizada_em)}</td>
                     <td style={{ padding: '9px 12px', color: 'var(--text-muted)' }}>{o.timeline.length} evento(s) {open ? '▲' : '▼'}</td>

@@ -10,7 +10,8 @@ O painel lê daqui: GET /os-board/board (quadro geral, todos os usuários) e GET
 Regras combinadas com a loja:
   - "Finalizada" = o evento FINALIZADA (código 7). Todo o resto está "em aberto".
   - O quadro (e o modo TV) mostra só o que está em aberto: as finalizadas ficam para auditoria (detalhe por técnico).
-  - O.S. com condição de pagamento preenchida no Softsystem (já efetivadas) não entram no quadro.
+  - O.S. com condição de pagamento preenchida OU com uma venda gerada ("Ver Venda N" na tela da O.S., campo
+    CODORCAMENTO) no Softsystem (já efetivadas/devolvidas ao cliente) não entram no quadro - ficam só na auditoria.
   - Um quadro só para as duas empresas (Servweld e Centro-Oeste), com filtro por empresa.
 """
 import logging
@@ -67,6 +68,7 @@ class BoardOrderIn(BaseModel):
     cod_tipo_os: Optional[int] = None
     equipamento: Optional[str] = None
     paga: bool = False
+    venda_codigo: Optional[int] = None
 
 
 class BoardEventIn(BaseModel):
@@ -134,6 +136,7 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
         row.cod_tipo_os = o.cod_tipo_os
         row.equipamento = _clean(o.equipamento, 255)
         row.paga = bool(o.paga)
+        row.venda_codigo = o.venda_codigo
         row.atualizado_em = now
 
     # ---- eventos (só insere os que ainda não existem)
@@ -199,6 +202,18 @@ def _stage_of(order: OsBoardOrder) -> str:
     return _CODE_TO_STAGE.get(order.situacao_evento or 1, "entrada")
 
 
+def _efetivada(order: OsBoardOrder) -> bool:
+    return bool(order.paga or order.venda_codigo)
+
+
+def _efetivada_motivo(order: OsBoardOrder) -> Optional[str]:
+    if order.venda_codigo:
+        return f"Venda #{order.venda_codigo}"
+    if order.paga:
+        return "Pagamento já lançado"
+    return None
+
+
 def _card(order: OsBoardOrder, now: datetime) -> Dict[str, Any]:
     ref = order.ultimo_evento_em or order.data_entrada
     return {
@@ -234,6 +249,7 @@ async def get_board(
         OsBoardOrder.tenant_id == current_user.tenant_id,
         *_empresa_filter(empresa),
         OsBoardOrder.paga.is_(False),
+        OsBoardOrder.venda_codigo.is_(None),
         or_(OsBoardOrder.situacao_evento.is_(None), OsBoardOrder.situacao_evento != EVENTO_FINALIZADA),
         or_(OsBoardOrder.ultimo_evento_em >= since_open, OsBoardOrder.data_entrada >= since_open)
     ).order_by(OsBoardOrder.data_entrada.desc())
@@ -272,7 +288,7 @@ async def get_technician_detail(
     empresa: Optional[str] = None,
     start: Optional[datetime] = Query(None, description="Início do período"),
     end: Optional[datetime] = Query(None, description="Fim do período"),
-    status: str = Query("trabalhou", description="trabalhou | entrada | finalizadas | abertas | todas"),
+    status: str = Query("trabalhou", description="trabalhou | entrada | finalizadas | abertas | efetivadas | todas"),
     limit: int = Query(300, ge=1, le=1000),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -293,7 +309,7 @@ async def get_technician_detail(
     ))).scalars().all()
     if not orders:
         return {"name": tech, "summary": {"abertas_agora": 0, "entradas_no_periodo": 0, "finalizadas_no_periodo": 0,
-                                          "trabalhou_no_periodo": 0}, "orders": [], "truncated": False}
+                                          "trabalhou_no_periodo": 0, "efetivadas_no_periodo": 0}, "orders": [], "truncated": False}
 
     # eventos de todas as O.S. do técnico (para a linha do tempo e para "trabalhou no período")
     keys = {(o.empresa, o.loja, o.codos) for o in orders}
@@ -312,11 +328,11 @@ async def get_technician_detail(
     def in_period(dt: Optional[datetime]) -> bool:
         return bool(dt and start_dt <= dt <= end_dt)
 
-    summary = {"abertas_agora": 0, "entradas_no_periodo": 0, "finalizadas_no_periodo": 0, "trabalhou_no_periodo": 0}
+    summary = {"abertas_agora": 0, "entradas_no_periodo": 0, "finalizadas_no_periodo": 0, "trabalhou_no_periodo": 0, "efetivadas_no_periodo": 0}
     result = []
     for o in orders:
         evs = events_by_order.get((o.empresa, o.loja, o.codos), [])
-        is_open = o.situacao_evento != EVENTO_FINALIZADA
+        is_open = o.situacao_evento != EVENTO_FINALIZADA and not _efetivada(o)
         entered = in_period(o.data_entrada)
         finished = in_period(o.finalizada_em)
         worked = any(in_period(e.data) for e in evs) or entered
@@ -325,10 +341,11 @@ async def get_technician_detail(
         summary["entradas_no_periodo"] += 1 if entered else 0
         summary["finalizadas_no_periodo"] += 1 if finished else 0
         summary["trabalhou_no_periodo"] += 1 if worked else 0
+        summary["efetivadas_no_periodo"] += 1 if (_efetivada(o) and worked) else 0
 
         include = {
             "trabalhou": worked, "entrada": entered, "finalizadas": finished,
-            "abertas": is_open, "todas": True,
+            "abertas": is_open and not _efetivada(o), "efetivadas": _efetivada(o), "todas": True,
         }.get(status, worked)
         if not include:
             continue
@@ -343,8 +360,10 @@ async def get_technician_detail(
             "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "—"),
             "stage": _stage_of(o),
             "finalizada_em": _iso(o.finalizada_em),
-            "aberta": is_open,
+            "aberta": is_open and not _efetivada(o),
             "paga": bool(o.paga),
+            "venda_codigo": o.venda_codigo,
+            "efetivada_motivo": _efetivada_motivo(o),
             "timeline": [{"evento": EVENT_LABELS.get(e.cod_evento, str(e.cod_evento)), "cod": e.cod_evento, "data": _iso(e.data)} for e in evs],
         })
 

@@ -518,7 +518,8 @@ BOARD_BATCH_SIZE = 200
 def _board_orders_query(where_sql: str) -> str:
     return f"""
         SELECT os.LOJA, os.CODOS, os.CNPJ, os.DATA, os.TECNICOATENDIMENTO, os.TECNICOATENDIMENTO2,
-               os.CODTIPOORDEMSERVICO, os.DATAALTERACAO, cli.RAZAOSOCIAL, cli.NOMEFANTASIA, os.CODCONDPAG
+               os.CODTIPOORDEMSERVICO, os.DATAALTERACAO, cli.RAZAOSOCIAL, cli.NOMEFANTASIA, os.CODCONDPAG,
+               os.CODORCAMENTO
         FROM ORDEMSERVICO os
         LEFT JOIN CLIENTES cli ON cli.CGC = os.CNPJ
         {where_sql}
@@ -569,13 +570,15 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
     equips = _board_equipamentos(cur, keys)
     events = _board_events(cur, keys)
     orders, evs = [], []
-    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag in order_rows:
+    for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo in order_rows:
         orders.append({
             "loja": loja, "codos": codos, "cnpj": cnpj, "cliente": razao or fantasia,
             "tecnico": tec1, "tecnico2": tec2, "data_entrada": data.isoformat() if data else None,
             "cod_tipo_os": cod_tipo, "equipamento": equips.get((loja, codos)),
-            # Condição de pagamento preenchida = O.S. já efetivada (venda gerada): sai do quadro
+            # Já efetivada (sai do quadro, fica só na auditoria): condição de pagamento preenchida OU venda
+            # gerada ("Ver Venda N" na tela da O.S., devolvida ao cliente)
             "paga": cond_pag is not None,
+            "venda_codigo": venda_codigo,
         })
         for ev_data, cod in events.get((loja, codos), []):
             evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "data": ev_data.isoformat()})
@@ -610,10 +613,11 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
 
             if not board.get("backfilled"):
                 backfill_from = datetime.now() - timedelta(days=BOARD_BACKFILL_DAYS)
-                # O.S. já efetivadas (condição de pagamento preenchida) não entram na carga inicial
-                cur.execute(_board_orders_query("WHERE os.DATA >= ? AND os.CODCONDPAG IS NULL ORDER BY os.CODOS"), (backfill_from,))
+                # Traz TODAS as O.S. do período, inclusive já efetivadas: o backend decide o que entra no
+                # quadro (paga/venda_codigo) e mantém as efetivadas disponíveis para a auditoria.
+                cur.execute(_board_orders_query("WHERE os.DATA >= ? ORDER BY os.CODOS"), (backfill_from,))
                 rows = cur.fetchall()
-                logger.info(f"[{empresa_key}] Quadro de técnicos: carga inicial de {len(rows)} O.S. em aberto de pagamento (desde {backfill_from.date()}).")
+                logger.info(f"[{empresa_key}] Quadro de técnicos: carga inicial de {len(rows)} O.S. (desde {backfill_from.date()}).")
                 for i in range(0, len(rows), BOARD_BATCH_SIZE):
                     batch = rows[i:i + BOARD_BATCH_SIZE]
                     if not _board_post(config, _board_payload(cur, empresa_key, batch)):
