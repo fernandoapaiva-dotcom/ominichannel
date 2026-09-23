@@ -1646,7 +1646,7 @@ async def retry_message_send(
     """
     stmt = (
         select(Message)
-        .options(selectinload(Message.conversation))
+        .options(selectinload(Message.conversation).selectinload(Conversation.contact))
         .where(Message.id == message_id)
     )
     res = await db.execute(stmt)
