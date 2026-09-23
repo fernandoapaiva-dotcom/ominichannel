@@ -867,10 +867,26 @@ def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -
     return record if record.get("flow") == flow else {}
 
 
-def mark_os_dispatched(conversation: Conversation, codos: int, flow: str, pdf_sent: bool):
+def mark_os_dispatched(
+    conversation: Conversation, codos: int, flow: str, pdf_sent: bool,
+    pdf_rel_path: str = "", tecnico_phone: Optional[str] = None
+):
     extra = dict(conversation.dados_adicionais or {})
     os_dispatched = dict(extra.get("os_dispatched", {}))
-    os_dispatched[str(codos)] = {"flow": flow, "pdf_sent": pdf_sent}
+    prev = os_dispatched.get(str(codos)) or {}
+    # dispatched_at: guarda quando o despacho foi ANUNCIADO PELA PRIMEIRA VEZ (antes da tarefa
+    # de fundo rodar) - é o que permite detectar depois se essa tarefa foi interrompida no meio
+    # (ex.: o processo reiniciou bem naquela hora) e nunca terminou de perguntar a aprovação -
+    # ver os_board_followup_service._resume_stuck_orcamento_dispatches. pdf_rel_path/tecnico_phone
+    # ficam guardados aqui pelo mesmo motivo: sem eles, uma retomada automática não teria como
+    # remontar o marcador CONFIRM_OS_APPROVAL exatamente como dispatch_orcamento_messages monta.
+    os_dispatched[str(codos)] = {
+        "flow": flow,
+        "pdf_sent": pdf_sent,
+        "dispatched_at": prev.get("dispatched_at") or datetime.utcnow().isoformat(),
+        "pdf_rel_path": pdf_rel_path or prev.get("pdf_rel_path", ""),
+        "tecnico_phone": tecnico_phone if tecnico_phone is not None else prev.get("tecnico_phone"),
+    }
     extra["os_dispatched"] = os_dispatched
     conversation.dados_adicionais = extra
     flag_modified(conversation, "dados_adicionais")
@@ -1087,7 +1103,7 @@ async def ingest_db_event_common(
                     )
                     if not delivered:
                         return {"status": "pdf_delivery_failed", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
-                    mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True)
+                    mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=True, pdf_rel_path=saved_rel_path)
                     await db.commit()
                     logger.info(f"[OS DB EVENT] ORC AGUARDANDO APROVACAO - O.S. #{codos} já tinha sido avisada; PDF entregue agora (conversa #{conversation.id})")
                     return {"status": "pdf_delivered", "flow": "orcamento", "codos": codos, "conversation_id": conversation.id}
@@ -1100,7 +1116,10 @@ async def ingest_db_event_common(
                 logger.info(f"[OS DB EVENT] O.S. #{codos}: PDF do orçamento ainda não encontrado, avisando o cliente mesmo assim.")
 
             tecnico_phone = await resolve_tecnico_phone_by_name(db, tenant_id, tecnico_nome)
-            mark_os_dispatched(conversation, codos, "orcamento", pdf_sent=bool(saved_rel_path))
+            mark_os_dispatched(
+                conversation, codos, "orcamento", pdf_sent=bool(saved_rel_path),
+                pdf_rel_path=saved_rel_path or "", tecnico_phone=tecnico_phone
+            )
             await db.commit()
         asyncio.create_task(dispatch_orcamento_messages(
             tenant_id, whatsapp_number.id, instance_name, phone, conversation.id,

@@ -2300,8 +2300,26 @@ async def receive_evolution_webhook(
                 tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
                 tenant_gemini_model_name=dec_sets.get("gemini_model_name")
             )
-            if audio_transcription:
-                new_caption = f"🎙️ *Transcrição do Áudio:*\n_{audio_transcription}_"
+            # process_audio_message SEMPRE devolve um dict ({transcription, success,
+            # fallback_message, tokens}), nunca só o texto. O código antigo fazia
+            # f"...{audio_transcription}..." direto - quando a transcrição falhava (success:
+            # False), isso jogava o dict INTEIRO como string na mensagem ("{'transcription':
+            # '', 'success': False, ...}"), tanto na tela do atendente quanto no texto que ia
+            # pro classificador de intenção (localização/horário) e pra IA - explicando por
+            # que um cliente pedindo localização por áudio não recebia nada com sentido quando
+            # a transcrição falhava (achado em produção em 23/09/2026, cliente Valdonesio).
+            transcript_ok = isinstance(audio_transcription, dict) and audio_transcription.get("success") and audio_transcription.get("transcription")
+            new_caption = None
+            if transcript_ok:
+                new_caption = f"🎙️ *Transcrição do Áudio:*\n_{audio_transcription['transcription']}_"
+            elif isinstance(audio_transcription, dict):
+                # Falha real (Gemini indisponível, áudio corrompido, etc.) - mostra a mensagem
+                # amigável que a própria função já preparou pra isso, em vez do dict cru.
+                friendly = audio_transcription.get("fallback_message") or "Não foi possível transcrever o áudio."
+                new_caption = f"🎙️ _{friendly}_"
+                logger.info(f"[TRANSCRIÇÃO DE ÁUDIO] Falhou para conversa #{conversation.id}: {audio_transcription}")
+
+            if new_caption:
                 if saved_media_url:
                     text_content = f"{saved_media_url}|{new_caption}"
                 else:

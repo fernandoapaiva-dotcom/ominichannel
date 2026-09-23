@@ -32,10 +32,11 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal
-from app.models.models import OsBoardOrder, WhatsAppNumber
+from app.models.models import Contact, Conversation, OsBoardOrder, WhatsAppNumber
 
 logger = logging.getLogger("os_board_followup")
 
@@ -44,6 +45,9 @@ RETIRADA_PRAZO_DIAS = 90
 EVENTO_ORCAMENTO_ENVIADO = 3
 EVENTO_RETIRADA = 6
 EVENTO_DESCARTE = 14
+
+STUCK_DISPATCH_MIN_AGE_MINUTES = 15  # abaixo disso a tarefa de fundo pode só estar lenta (rajada, etc.)
+STUCK_DISPATCH_MAX_AGE_HOURS = 48    # não tenta retomar disparos muito antigos (já resolvidos de outra forma)
 
 CHECK_INTERVAL_SECONDS = 600      # varre a fila a cada 10 min
 BUSINESS_START_HOUR = 8           # só manda entre 08h e 18h de Brasília
@@ -218,6 +222,103 @@ async def _process_descarte(wn: WhatsAppNumber, item: _DueItem, now: datetime):
         logger.error(f"[OS BOARD FOLLOWUP] Falha ao processar descarte da O.S. #{item.codos}: {err}")
 
 
+async def _resume_stuck_orcamento_dispatches(wn: WhatsAppNumber, now_utc: datetime) -> int:
+    """
+    dispatch_orcamento_messages (os_handler_ingest.py) é uma tarefa de fundo "fire-and-forget":
+    se o processo reiniciar bem no meio dela (foi exatamente o que aconteceu com a O.S. #1934 do
+    Cleniton em 23/09/2026, derrubada por um `pm2 restart` concorrente), ela morre em silêncio,
+    sem registrar erro nenhum, e o cliente nunca recebe a pergunta de aprovação - só o aviso
+    inicial (e às vezes o PDF). Pedido do usuário: "seria bom o sistema perceber quando as
+    tarefas automatizadas foram paradas no meio, pra retomar e finalizar".
+
+    Detecção: mark_os_dispatched grava um registro em dados_adicionais.os_dispatched ANTES da
+    tarefa de fundo rodar. Se esse registro já tem mais de STUCK_DISPATCH_MIN_AGE_MINUTES e a
+    O.S. ainda está em "Orçamento enviado" no quadro (ninguém respondeu nem foi decidido no
+    Softsystem), mas a conversa nunca chegou no marcador CONFIRM_OS_APPROVAL esperado, a tarefa
+    nunca terminou de perguntar. Retoma mandando só a pergunta de aprovação - nunca reenvia o
+    aviso inicial nem o PDF, pra não arriscar duplicar o que já possa ter saído antes de travar.
+    """
+    from app.api.v1.os_handler_ingest import send_and_log_text
+
+    cutoff_min = now_utc - timedelta(minutes=STUCK_DISPATCH_MIN_AGE_MINUTES)
+    cutoff_max = now_utc - timedelta(hours=STUCK_DISPATCH_MAX_AGE_HOURS)
+    resumed = 0
+    async with AsyncSessionLocal() as db:
+        conversations = (await db.execute(select(Conversation).where(
+            Conversation.tenant_id == wn.tenant_id,
+            Conversation.whatsapp_number_id == wn.id,
+            Conversation.ultima_interacao_em >= cutoff_max,
+        ))).scalars().all()
+
+        for conversation in conversations:
+            extra = dict(conversation.dados_adicionais or {})
+            os_dispatched = dict(extra.get("os_dispatched", {}))
+            changed = False
+
+            for codos_str, record in os_dispatched.items():
+                if record.get("flow") != "orcamento" or record.get("resumed_at"):
+                    continue
+                dispatched_at_raw = record.get("dispatched_at")
+                if not dispatched_at_raw:
+                    continue
+                try:
+                    dispatched_at = datetime.fromisoformat(dispatched_at_raw)
+                except ValueError:
+                    continue
+                if not (cutoff_max <= dispatched_at <= cutoff_min):
+                    continue  # nova demais (pode só estar lenta) ou velha demais (já não é confiável retomar)
+
+                expected_prefix = f"CONFIRM_OS_APPROVAL:{codos_str}|"
+                if (conversation.assunto_atual or "").startswith(expected_prefix):
+                    continue  # pergunta já foi feita certinho, só esperando o cliente responder
+
+                try:
+                    codos_int = int(codos_str)
+                except ValueError:
+                    continue
+                board_row = (await db.execute(select(OsBoardOrder).where(
+                    OsBoardOrder.tenant_id == wn.tenant_id, OsBoardOrder.codos == codos_int
+                ))).scalars().first()
+                if not board_row or board_row.situacao_evento != EVENTO_ORCAMENTO_ENVIADO:
+                    continue  # já foi respondido/decidido por outro caminho - nada a retomar
+
+                contact = await db.get(Contact, conversation.contact_id)
+                phone = _clean_phone(contact.telefone) if contact else None
+                if not phone:
+                    continue
+
+                approval_prompt = (
+                    "Você *aprova* a execução do serviço pelo valor informado no orçamento? "
+                    "Responda *SIM* para aprovar ou *NÃO* para recusar."
+                )
+                try:
+                    await send_and_log_text(
+                        db, wn.tenant_id, wn.id, wn.instancia_evolution_api, phone,
+                        conversation, approval_prompt, delay_sec=1.5
+                    )
+                    pdf_rel_path = record.get("pdf_rel_path", "")
+                    tecnico_phone = record.get("tecnico_phone") or ""
+                    conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{codos_str}|{pdf_rel_path}|{tecnico_phone}"
+                    record["resumed_at"] = now_utc.isoformat()
+                    os_dispatched[codos_str] = record
+                    changed = True
+                    resumed += 1
+                    logger.warning(
+                        f"[OS BOARD FOLLOWUP] Retomada automática: disparo da O.S. #{codos_str} estava "
+                        f"travado (conversa #{conversation.id}) - pergunta de aprovação reenviada."
+                    )
+                except Exception as err:
+                    logger.error(f"[OS BOARD FOLLOWUP] Falha ao retomar disparo travado da O.S. #{codos_str}: {err}")
+
+            if changed:
+                extra["os_dispatched"] = os_dispatched
+                conversation.dados_adicionais = extra
+                flag_modified(conversation, "dados_adicionais")
+                await db.commit()
+
+    return resumed
+
+
 async def check_os_board_followups():
     wn = await _get_whatsapp_number()
     if not wn or not wn.instancia_evolution_api:
@@ -225,6 +326,13 @@ async def check_os_board_followups():
     now = _now_brt()
     if not (BUSINESS_START_HOUR <= now.hour < BUSINESS_END_HOUR):
         return  # fora do horário comercial (08h-18h) - não manda nada agora, só retoma no próximo dia útil
+
+    try:
+        resumed = await _resume_stuck_orcamento_dispatches(wn, datetime.utcnow())
+        if resumed:
+            logger.info(f"[OS BOARD FOLLOWUP] {resumed} disparo(s) travado(s) retomado(s) neste ciclo.")
+    except Exception as err:
+        logger.error(f"[OS BOARD FOLLOWUP] Erro ao verificar disparos travados: {err}", exc_info=True)
 
     cutoff = now - timedelta(days=NUDGE_INTERVAL_DAYS)
     try:
