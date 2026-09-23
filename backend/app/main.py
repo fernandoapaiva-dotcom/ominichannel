@@ -5,6 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -221,3 +222,26 @@ async def root():
         "docs": "/docs",
         "status": "healthy"
     }
+
+
+@app.get(f"{settings.API_V1_STR}/health")
+async def health_check():
+    """
+    Usado pelo vigia externo (tools/health_watchdog/health_watchdog.sh). Achado em produção em
+    23/09/2026: o vigia checava "/" na URL pública, mas o nginx serve essa rota direto do disco
+    (frontend estático - ver location / no nginx.conf), NUNCA passando pelo backend Python. Nos
+    episódios de sobrecarga por memória/swap daquele dia (não o travamento original de CPU 100%
+    que o vigia foi testado contra), o processo do backend ficava extremamente lento pra
+    responder (80-140s), mas o "/" continuava respondendo 200 rápido porque nem chegava a
+    encostar nele - o vigia nunca via o problema. Esta rota fica em /api/, que o nginx REALMENTE
+    encaminha pro backend, e faz uma consulta real ao banco (com timeout curto) pra também
+    detectar quando o problema é o processo travado/lento, não só derrubado de vez.
+    """
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy import text
+    try:
+        async with AsyncSessionLocal() as db:
+            await asyncio.wait_for(db.execute(text("SELECT 1")), timeout=5.0)
+        return {"status": "healthy"}
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"status": "unhealthy", "detail": str(e)})

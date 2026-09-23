@@ -23,8 +23,18 @@ set -uo pipefail
 DIR="/home/ubuntu/ominichannel/tools/watchdog"
 STATE_FILE="$DIR/state.json"
 LOG_FILE="$DIR/watchdog.log"
-HEALTH_URL="https://ominichannel.duckdns.org/"
+# "/" é servido pelo nginx direto do disco (frontend estático), sem passar pelo backend - ver
+# location / no nginx.conf. Um /api/... É o que o nginx de fato encaminha pro processo Python.
+# Achado em produção em 23/09/2026: nos episódios de sobrecarga por memória/swap daquele dia (não
+# o travamento original de CPU 100% que este vigia foi testado contra), "/" continuava respondendo
+# 200 rápido mesmo com o backend praticamente parado (80-140s pra responder de verdade), e o vigia
+# nunca via o problema. /api/v1/health passa pelo nginx E faz uma consulta real ao banco.
+HEALTH_URL="https://ominichannel.duckdns.org/api/v1/health"
 CHECK_TIMEOUT=10
+# Mesmo achado: um 200 que demora quase o timeout inteiro pra chegar já é sintoma de sobrecarga
+# real (nenhum atendente espera 8s por uma tela) - conta como falha igual a um HTTP não-200, em
+# vez de só reagir quando já virou um apagão total.
+SLOW_THRESHOLD_SECONDS=8
 FAILURES_TO_ACT=3
 COOLDOWN_SECONDS=1200
 MAX_RESTARTS_PER_DAY=3
@@ -52,10 +62,16 @@ send_whatsapp_alert() {
 prune_ts=$(date -d '2 days ago' -Iseconds 2>/dev/null || date -Iseconds)
 jq --arg cutoff "$prune_ts" '.restarts_today = [.restarts_today[] | select(. > $cutoff)]' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
 
-# 1. Checagem de saúde (mesma URL pública que qualquer atendente usa - se nginx+backend
-#    estiverem OK, isso responde 200 rápido; se estiver travado como em 23/09, demora/falha).
-http_code=$(curl -s -o /dev/null -w '%{http_code}' -m "$CHECK_TIMEOUT" "$HEALTH_URL" 2>/dev/null)
+# 1. Checagem de saúde real (backend + banco, não só nginx) - se estiver travado/lento, ou não
+#    responde no timeout, ou responde 200 só depois de demorar demais (ver SLOW_THRESHOLD_SECONDS).
+read -r http_code time_total < <(curl -s -o /dev/null -w '%{http_code} %{time_total}' -m "$CHECK_TIMEOUT" "$HEALTH_URL" 2>/dev/null)
 http_code="${http_code:-000}"
+time_total="${time_total:-0}"
+is_slow=$(awk -v t="$time_total" -v thresh="$SLOW_THRESHOLD_SECONDS" 'BEGIN { print (t+0 > thresh) ? "1" : "0" }')
+if [ "$http_code" = "200" ] && [ "$is_slow" = "1" ]; then
+    log "Respondeu 200 mas levou ${time_total}s (acima de ${SLOW_THRESHOLD_SECONDS}s) - tratando como falha de sobrecarga."
+    http_code="000"
+fi
 
 consecutive_failures=$(jq -r '.consecutive_failures' "$STATE_FILE")
 last_restart_ts=$(jq -r '.last_restart_ts' "$STATE_FILE")
