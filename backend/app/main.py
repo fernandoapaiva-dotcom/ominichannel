@@ -31,7 +31,7 @@ from app.services.evolution_service import start_profile_picture_syncer_loop
 from app.services.business_hours_service import start_business_hours_scheduler_loop
 from app.services.calendar_reminder_service import start_calendar_reminder_loop
 from app.services.whatsapp_watchdog_service import start_whatsapp_watchdog_loop
-from app.services.whatsapp_reconciliation_service import start_whatsapp_reconciliation_loop
+from app.services.whatsapp_reconciliation_service import start_whatsapp_reconciliation_loop, whatsapp_reconciliation_service
 from app.services.backup_service import start_backup_scheduler_loop
 from app.services.daily_backup_drive_service import start_daily_drive_backup_loop
 from app.services.os_board_followup_service import start_os_board_followup_loop
@@ -103,10 +103,28 @@ async def lifespan(app: FastAPI):
         logger.info("📋 Quadro de Técnicos: cobrança automática PAUSADA (aguardando confirmação do usuário).")
 
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
-    # Reconciliation is triggered passively via connection webhooks or manual admin action.
-    reconcile_task = None
-    logger.info("🛡️ WhatsApp Continuous Polling disabled for safety (anti-ban protection).")
-    
+    # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual) -
+    # ISSO aqui é diferente: uma varredura ÚNICA (não um loop) disparada só nesse boot do
+    # processo. Cobre o caso que aconteceu em 23/09/2026 - o backend ficou sobrecarregado por
+    # horas (link preview sem limite de concorrência) e algumas mensagens podem ter chegado
+    # atrasadas ou, no pior caso, não terem sido confirmadas a tempo pela Evolution API. Toda
+    # vez que o processo reinicia - por deploy, por travar e precisar reiniciar manual, ou por
+    # qualquer outro motivo - essa varredura confere o histórico real de cada instância do
+    # WhatsApp contra o que está salvo aqui e importa o que estiver faltando. Não sobrecarrega
+    # (é só 1 vez, não fica repetindo) e não duplica nada (reconcile_instance já é seguro pra
+    # rodar em cima de dados que já existem).
+    async def _startup_reconciliation_sweep():
+        await asyncio.sleep(20)  # deixa o resto do boot (DB, conexões) assentar primeiro
+        try:
+            logger.info("🔄 [RECONCILIAÇÃO DE BOOT] Conferindo se alguma mensagem ficou pra trás durante o tempo que o processo esteve fora do ar...")
+            await whatsapp_reconciliation_service.reconcile_all_instances()
+            logger.info("🔄 [RECONCILIAÇÃO DE BOOT] Varredura concluída.")
+        except Exception as e:
+            logger.warning(f"🔄 [RECONCILIAÇÃO DE BOOT] Falhou (não é crítico, o normal do dia a dia continua funcionando): {e}")
+
+    reconcile_task = asyncio.create_task(_startup_reconciliation_sweep())
+    logger.info("🛡️ WhatsApp Continuous Polling disabled for safety (anti-ban protection) - varredura única de recuperação agendada pra daqui 20s.")
+
     yield
     
     # Shutdown actions
