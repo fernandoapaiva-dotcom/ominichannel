@@ -697,10 +697,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                   };
 
                   if (hasSameId) {
+                    // So um "tique" de status (enviado -> entregue -> lido) numa mensagem que a
+                    // gente ja conhece - NAO e um evento novo pra mover a conversa na lista. Antes
+                    // isso reescrevia ultima_interacao_em a cada tique, reordenando/pulando a
+                    // conversa de posicao varias vezes pra UMA mensagem so ("sobe desce" na lista).
                     return {
                       ...c,
                       dados_adicionais: nextDados,
-                      ultima_interacao_em: newMsg.timestamp,
                       messages: currentMsgs.map(m => ((m.id === newMsg.id) || (Boolean(newMsg.whatsapp_msg_id) && m.whatsapp_msg_id === newMsg.whatsapp_msg_id)) ? { ...m, ...newMsg } : m)
                     };
                   }
@@ -719,10 +722,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                   });
                   const alreadyPresent = replacedSending.some(m => (m.id === newMsg.id) || (Boolean(newMsg.whatsapp_msg_id) && m.whatsapp_msg_id === newMsg.whatsapp_msg_id));
                   const finalMsgs = alreadyPresent ? replacedSending : [...replacedSending, newMsg];
+                  // Monotônico pelo mesmo motivo do handleOptimisticMessageAdded acima: o eco do
+                  // WebSocket pode chegar com um timestamp um pouco antes do que o envio otimista
+                  // já tinha marcado (relógio do servidor vs. navegador) - nunca deixa voltar.
+                  const wsCandidateTs = newMsg.timestamp;
+                  const wsCurrentTs = c.ultima_interacao_em;
+                  const wsNextUltimaInteracao = (wsCandidateTs && (!wsCurrentTs || new Date(wsCandidateTs).getTime() > new Date(wsCurrentTs).getTime()))
+                    ? wsCandidateTs : wsCurrentTs;
                   return {
                     ...c,
                     dados_adicionais: nextDados,
-                    ultima_interacao_em: newMsg.timestamp,
+                    ultima_interacao_em: wsNextUltimaInteracao,
                     messages: finalMsgs.sort(
                       (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
                     )
@@ -1034,10 +1044,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           (a, b) => (new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()) || ((a.id || 0) - (b.id || 0))
         );
 
+        // Monotônico: o envio de UMA mensagem passa por aqui até 2x (placeholder otimista, depois
+        // a confirmação real) e pode receber o eco do WebSocket também - cada uma com um timestamp
+        // um pouco diferente (relógio do navegador vs. do servidor). Deixar cada chamada reescrever
+        // ultima_interacao_em fazia a conversa pular de posição na lista mais de uma vez pra UM
+        // envio só. Só avança pra frente; nunca volta.
+        const candidateTs = msg.timestamp || new Date().toISOString();
+        const currentTs = c.ultima_interacao_em;
+        const nextUltimaInteracao = (!currentTs || new Date(candidateTs).getTime() > new Date(currentTs).getTime())
+          ? candidateTs : currentTs;
+
         return {
           ...c,
           messages: nextMsgs,
-          ultima_interacao_em: msg.timestamp || new Date().toISOString()
+          ultima_interacao_em: nextUltimaInteracao
         };
       })
     );
