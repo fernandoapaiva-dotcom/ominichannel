@@ -169,7 +169,15 @@ async def _resolve_lid_info_impl(lid_str: str) -> Dict[str, Any]:
         "name": name,
         "profile_pic": profile_pic
     }
-    _LID_CACHE[clean_lid] = info_res
+    # Só guarda em cache se ACHOU o telefone de verdade. Guardar uma falha (real_phone continua
+    # sendo o próprio LID cru) como se fosse definitiva foi a causa raiz de um cliente ficar
+    # PERMANENTEMENTE bifurcado em dois contatos/conversas - achado em produção em 23/09/2026:
+    # uma falha passageira na consulta (aconteceu bem na hora de vários reinícios do backend)
+    # travava esse resultado "não sei quem é" pro resto da vida do processo, então toda
+    # resolução seguinte dessa mesma pessoa desistia na hora e criava um contato novo, em vez de
+    # tentar de novo e achar o contato certo (o que só precisa de UMA tentativa bem-sucedida).
+    if real_phone and real_phone.startswith("55"):
+        _LID_CACHE[clean_lid] = info_res
     return info_res
 
 async def download_and_cache_avatar_locally(contact_id: int, photo_url: Optional[str]) -> Optional[str]:
