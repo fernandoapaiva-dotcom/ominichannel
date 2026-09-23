@@ -78,9 +78,13 @@ class WhatsAppSyncService:
             url = msg_payload["audioMessage"].get("url", "")
             return url or "[Áudio]", MessageType.AUDIO
 
-        if "videoMessage" in msg_payload:
-            caption = msg_payload["videoMessage"].get("caption", "")
-            url = msg_payload["videoMessage"].get("url", "")
+        if "videoMessage" in msg_payload or "ptvMessage" in msg_payload:
+            # ptvMessage = "video note" (bolinha de video gravada na hora) - mesmos campos do
+            # videoMessage. Sem isso, caia no fallback generico "[ptvMessage]" sem url nenhuma -
+            # achado em producao em 23/09/2026 reconciliando um video assim do cliente Valdonesio.
+            v_obj = msg_payload.get("videoMessage") or msg_payload.get("ptvMessage")
+            caption = v_obj.get("caption", "")
+            url = v_obj.get("url", "")
             return f"{url}|{caption}" if (url and caption) else (url or caption or "[Vídeo]"), MessageType.VIDEO
 
         if "documentMessage" in msg_payload or "documentWithCaptionMessage" in msg_payload:
@@ -625,7 +629,7 @@ def parse_quoted_context(msg_obj: Dict[str, Any], from_me: bool = False, contact
         if isinstance(msg_payload, dict):
             context_info = msg_payload.get("contextInfo")
             if not context_info:
-                for sub_key in ["extendedTextMessage", "imageMessage", "videoMessage", "audioMessage", "documentMessage", "documentWithCaptionMessage"]:
+                for sub_key in ["extendedTextMessage", "imageMessage", "videoMessage", "ptvMessage", "audioMessage", "documentMessage", "documentWithCaptionMessage"]:
                     sub = msg_payload.get(sub_key)
                     if isinstance(sub, dict) and sub.get("contextInfo"):
                         context_info = sub["contextInfo"]
@@ -652,8 +656,8 @@ def parse_quoted_context(msg_obj: Dict[str, Any], from_me: bool = False, contact
             caption = quoted_msg["imageMessage"].get("caption", "")
             quoted_text = f"📷 {caption}" if caption else "📷 Foto"
             quoted_type = "imagem"
-        elif quoted_msg.get("videoMessage"):
-            caption = quoted_msg["videoMessage"].get("caption", "")
+        elif quoted_msg.get("videoMessage") or quoted_msg.get("ptvMessage"):
+            caption = (quoted_msg.get("videoMessage") or quoted_msg.get("ptvMessage")).get("caption", "")
             quoted_text = f"🎥 {caption}" if caption else "🎥 Vídeo"
             quoted_type = "video"
         elif quoted_msg.get("audioMessage"):

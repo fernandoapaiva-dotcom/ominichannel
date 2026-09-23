@@ -1128,8 +1128,8 @@ class EvolutionService:
             elif "audioMessage" in msg_body:
                 text = "[Áudio no WhatsApp]"
                 tipo = "audio"
-            elif "videoMessage" in msg_body:
-                text = msg_body["videoMessage"].get("caption", "[Vídeo]")
+            elif "videoMessage" in msg_body or "ptvMessage" in msg_body:
+                text = (msg_body.get("videoMessage") or msg_body.get("ptvMessage")).get("caption", "[Vídeo]")
                 tipo = "video"
             elif "documentMessage" in msg_body:
                 text = msg_body["documentMessage"].get("fileName", "[Arquivo]")

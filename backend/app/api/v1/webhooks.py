@@ -1414,7 +1414,12 @@ async def receive_evolution_webhook(
     msg_type = MessageType.TEXTO
     # Check media payloads
     img_msg = message_obj.get("imageMessage")
-    vid_msg = message_obj.get("videoMessage")
+    # ptvMessage = "video note" (bolinha de video, gravado na hora dentro do chat - o equivalente
+    # em video do audioMessage/PTT). Mesmo formato de campos do videoMessage (url, mimetype,
+    # caption, seconds) - so nao existia esse tipo aqui, entao a mensagem toda era descartada como
+    # nao reconhecida. Achado em producao em 23/09/2026: cliente (Valdonesio) mandou um video assim
+    # pedindo localizacao e nunca apareceu no sistema - nem o texto de placeholder, nada.
+    vid_msg = message_obj.get("videoMessage") or message_obj.get("ptvMessage")
     aud_msg = message_obj.get("audioMessage")
     doc_msg = message_obj.get("documentMessage")
     stk_msg = message_obj.get("stickerMessage") or (message_obj.get("sticker") if isinstance(message_obj.get("sticker"), dict) else None)
