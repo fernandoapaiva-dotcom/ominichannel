@@ -909,6 +909,20 @@ async def get_conversation_detail(
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # assigned_user_name não é uma coluna de verdade (é calculado) - a listagem (GET /conversations/)
+    # já monta isso certo com um user_map, mas essa rota aqui só devolvia o objeto do banco puro,
+    # então o schema sempre serializava esse campo como None. Toda vez que a tela buscava o
+    # detalhe de uma conversa (ex.: depois de mandar localização/Pix), a linha "Atendente: X" do
+    # cabeçalho sumia - achado em produção em 23/09/2026, o cabeçalho ficava mudando de altura/
+    # posição por causa disso ("oscilando").
+    if conv.assigned_user_id:
+        assigned_user = (await db.execute(
+            select(User.nome).where(User.id == conv.assigned_user_id)
+        )).scalar_one_or_none()
+        conv.assigned_user_name = assigned_user
+    else:
+        conv.assigned_user_name = None
     return conv
 
 @router.get("/{conversation_id}/media", response_model=List[MessageResponse])
