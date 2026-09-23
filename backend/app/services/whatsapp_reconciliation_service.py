@@ -508,8 +508,15 @@ class WhatsAppReconciliationService:
             logger.error(f"Erro em reconcile_by_instance_name({instance_name}): {e}")
             return 0
 
-    async def reconcile_all_instances(self):
-        """Runs reconciliation across all active WhatsApp numbers in database."""
+    async def reconcile_all_instances(self, limit_chats: int = 60, limit_msgs: int = 50):
+        """Runs reconciliation across all active WhatsApp numbers in database.
+
+        `limit_chats`/`limit_msgs` afinam o peso da varredura - a varredura de emergência
+        disparada pelo vigia (ver main.py) usa valores bem menores que o padrão daqui: numa
+        queda real o mais importante é ser rápido e pegar o que é mais recente/relevante, não
+        varrer exaustivamente - confirmado em produção em 23/09/2026 que a versão pesada podia
+        levar vários minutos e competir por recursos com o uso normal do sistema.
+        """
         try:
             async with AsyncSessionLocal() as db:
                 stmt = select(WhatsAppNumber).where(WhatsAppNumber.status == True)
@@ -521,7 +528,9 @@ class WhatsAppReconciliationService:
                         instance_name=wn.instancia_evolution_api,
                         whatsapp_number_id=wn.id,
                         tenant_id=wn.tenant_id,
-                        dept_name=wn.nome_departamento or "Geral"
+                        dept_name=wn.nome_departamento or "Geral",
+                        limit_chats=limit_chats,
+                        limit_msgs=limit_msgs
                     )
         except Exception as e:
             logger.debug(f"[RECONCILE] Error during reconcile_all_instances: {e}")

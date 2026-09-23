@@ -482,6 +482,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // uniu as duas). Uma ref atualiza na hora, sem esperar re-render, entao fecha essa
   // corrida de verdade.
   const sendLockRef = useRef(false);
+  // Guarda toda TENTATIVA de envio de texto (não só as confirmadas) - achado em produção em
+  // 23/09/2026: com o servidor lento, um envio pode ficar minutos "pendurado" sem resposta pro
+  // navegador (ou retornar erro mesmo tendo saído de verdade no fim). Nesses casos a mensagem
+  // otimista ainda não tinha entrado em conversation.messages quando o atendente, sem
+  // feedback, mandou de novo - o aviso de "você já mandou isso" (mais abaixo) só olhava
+  // mensagens JÁ confirmadas e não pegava esse caso. Agora registra a tentativa na hora,
+  // antes mesmo de saber se vai dar certo.
+  const recentSendAttemptsRef = useRef<Map<string, number>>(new Map());
   const [isTogglingStatus, setIsTogglingStatus] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
 
@@ -1840,13 +1848,27 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (textToSend && pendingFiles.length === 0) {
       const stripAgentPrefix = (s: string) => (s || '').replace(/^\*👤 [^*]+:\*\n\n?/, '').trim();
       const normalizedToSend = stripAgentPrefix(textToSend);
-      const recentDuplicate = (conversation?.messages || []).find(m => {
+      const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+
+      // Limpa tentativas velhas do mapa pra não crescer sem parar numa sessão longa.
+      for (const [key, ts] of recentSendAttemptsRef.current) {
+        if (Date.now() - ts > DEDUPE_WINDOW_MS) recentSendAttemptsRef.current.delete(key);
+      }
+
+      const confirmedDuplicate = (conversation?.messages || []).find(m => {
         if (m.remetente !== 'atendente') return false;
         if (stripAgentPrefix(m.conteudo || '') !== normalizedToSend) return false;
         const ageMs = Date.now() - normalizeIsoDate(m.timestamp).getTime();
-        return ageMs >= 0 && ageMs < 5 * 60 * 1000;
+        return ageMs >= 0 && ageMs < DEDUPE_WINDOW_MS;
       });
-      if (recentDuplicate) {
+      // Tentativa recente do MESMO texto que ainda não apareceu confirmada em
+      // conversation.messages (pode estar pendurada no servidor, ou ter "falhado" no
+      // navegador mas saído de verdade do outro lado) - pega o caso que o check acima sozinho
+      // não pegava.
+      const attemptTs = recentSendAttemptsRef.current.get(normalizedToSend);
+      const inFlightDuplicate = attemptTs !== undefined && (Date.now() - attemptTs) < DEDUPE_WINDOW_MS;
+
+      if (confirmedDuplicate || inFlightDuplicate) {
         const confirmResend = window.confirm(
           '⚠️ Você já enviou essa MESMA mensagem há poucos minutos nesta conversa.\n\nSe o envio anterior pareceu travado, ele pode já ter chegado ao destinatário. Enviar de novo mesmo assim?'
         );
@@ -1855,6 +1877,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           return;
         }
       }
+      recentSendAttemptsRef.current.set(normalizedToSend, Date.now());
     }
 
     setSendError(null);

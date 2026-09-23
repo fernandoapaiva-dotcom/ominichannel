@@ -119,6 +119,12 @@ O WhatsApp em si NÃO desconecta com isso - só o painel/atendimento automático
 
 $(date '+%d/%m %H:%M')"
 
+# Sinaliza pro backend que essa é uma queda REAL (não um deploy de rotina) - o boot vai ver
+# esse arquivo e disparar a varredura de recuperação (confere o que ficou faltando de mensagem
+# enquanto ficou fora do ar). Um `pm2 restart` manual comum NÃO cria esse arquivo, então não
+# dispara a varredura pesada à toa - só quando o vigia mesmo decide que precisou reiniciar.
+touch "$DIR/reconcile_requested.flag"
+
 pm2 restart omini-backend --update-env >> "$LOG_FILE" 2>&1
 
 jq --argjson ts "$now_ts" --arg d "$(date -Iseconds)" \
