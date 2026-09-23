@@ -1464,6 +1464,7 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
 
                         updates = []
                         pic_fetches = 0
+                        lid_resolves = 0
 
                         for c_id, c_tel, c_nome, c_pic in contacts_data:
                             raw_tel = c_tel.split("@")[0] if "@" in str(c_tel) else str(c_tel)
@@ -1491,8 +1492,16 @@ async def start_profile_picture_syncer_loop(interval_seconds: int = 60):
                                         updates.append({"id": c_id, "nome": target_name, "foto_perfil_url": target_pic})
                                 continue
 
-                            # C. Check if Contact is an unresolved raw LID
-                            if len(clean_num) >= 14 and not clean_num.startswith("55") and not clean_num.startswith("120363"):
+                            # C. Check if Contact is an unresolved raw LID (limitado por ciclo - ver
+                            # comentário do _LID_FAILURE_RETRY_SECONDS em lid_resolver_service.py:
+                            # mesmo com o cache de falha, um teto aqui evita que a PRIMEIRA varredura
+                            # depois do boot, ou logo que o TTL de vários LIDs expira ao mesmo tempo,
+                            # dispare uma rajada grande de resoluções (Postgres/docker/HTTP) de uma vez.
+                            if (
+                                len(clean_num) >= 14 and not clean_num.startswith("55")
+                                and not clean_num.startswith("120363") and lid_resolves < 10
+                            ):
+                                lid_resolves += 1
                                 lid_res = await resolve_lid_info(clean_num)
                                 if lid_res.get("real_phone") or lid_res.get("name") or lid_res.get("profile_pic"):
                                     cached_p = None

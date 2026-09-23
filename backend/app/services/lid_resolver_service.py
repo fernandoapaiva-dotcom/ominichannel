@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import asyncio
+import time
 from typing import Optional, Dict, Any
 import httpx
 import asyncpg
@@ -17,6 +18,17 @@ PG_CONN_STR = "postgresql://omini_user:omini_password@172.18.0.2:5432/omini_db"
 
 _LID_CACHE: Dict[str, Dict[str, Any]] = {}
 _PG_POOL: Optional[asyncpg.Pool] = None
+
+# Quanto tempo uma FALHA de resolução fica em cache antes de tentar de novo. Achado em produção em
+# 23/09/2026: start_profile_picture_syncer_loop (evolution_service.py) varre TODOS os contatos a
+# cada 60s, e pra cada LID não resolvido chama resolve_lid_info do zero - sem isso, um LID
+# permanentemente irresolúvel (contato de grupo que saiu, LID nunca vinculado etc.) reexecutava a
+# cadeia inteira (Postgres + docker exec + até 4 chamadas HTTP na Evolution API) A CADA 60 SEGUNDOS,
+# pra sempre. Isso sozinho derrubou o servidor (RAM/swap no limite, requisições de 80-140s). Cachear
+# a falha OU pra sempre (bug antigo: cliente ficava bifurcado em 2 contatos pro resto da vida) OU
+# nunca (esse incidente) está errado - um TTL curto resolve os dois: some rápido o bastante pra não
+# martelar o sistema, mas tenta de novo depois, pro caso de os dados aparecerem mais tarde.
+_LID_FAILURE_RETRY_SECONDS = 900
 
 # Mesmo problema do link_preview_service: uma tela que abre um grupo grande do WhatsApp pode
 # ter dezenas de participantes com LID não resolvido, e cada um aqui pode disparar várias
@@ -53,8 +65,13 @@ async def _resolve_lid_info_impl(lid_str: str) -> Dict[str, Any]:
     if not clean_lid:
         return {"lid": "", "real_phone": None, "name": None, "profile_pic": None}
 
-    if clean_lid in _LID_CACHE:
-        return _LID_CACHE[clean_lid]
+    cached = _LID_CACHE.get(clean_lid)
+    if cached:
+        if cached.get("real_phone"):
+            return cached  # sucesso: fica em cache pra sempre, não precisa resolver de novo
+        failed_at = cached.get("_failed_at")
+        if failed_at is not None and (time.monotonic() - failed_at) < _LID_FAILURE_RETRY_SECONDS:
+            return cached  # falha recente: não martela de novo antes do TTL
 
     lid_jid = f"{clean_lid}@lid"
 
@@ -177,6 +194,9 @@ async def _resolve_lid_info_impl(lid_str: str) -> Dict[str, Any]:
     # resolução seguinte dessa mesma pessoa desistia na hora e criava um contato novo, em vez de
     # tentar de novo e achar o contato certo (o que só precisa de UMA tentativa bem-sucedida).
     if real_phone and real_phone.startswith("55"):
+        _LID_CACHE[clean_lid] = info_res
+    else:
+        info_res["_failed_at"] = time.monotonic()
         _LID_CACHE[clean_lid] = info_res
     return info_res
 
