@@ -18,6 +18,13 @@ PG_CONN_STR = "postgresql://omini_user:omini_password@172.18.0.2:5432/omini_db"
 _LID_CACHE: Dict[str, Dict[str, Any]] = {}
 _PG_POOL: Optional[asyncpg.Pool] = None
 
+# Mesmo problema do link_preview_service: uma tela que abre um grupo grande do WhatsApp pode
+# ter dezenas de participantes com LID não resolvido, e cada um aqui pode disparar várias
+# consultas (Postgres, docker exec, HTTP na Evolution API) - achado durante a investigação do
+# travamento de 23/09/2026 como um segundo ponto com o mesmo risco (rajada sem limite de
+# concorrência num processo só, VM de 1GB). Trava em no máximo 3 resoluções ao mesmo tempo.
+_LID_RESOLVE_SEMAPHORE = asyncio.Semaphore(3)
+
 async def get_pg_pool() -> Optional[asyncpg.Pool]:
     global _PG_POOL
     if _PG_POOL is None or _PG_POOL._closed:
@@ -29,6 +36,12 @@ async def get_pg_pool() -> Optional[asyncpg.Pool]:
     return _PG_POOL
 
 async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
+    """Trava a concorrência (ver _LID_RESOLVE_SEMAPHORE) antes de chamar a resolução de verdade."""
+    async with _LID_RESOLVE_SEMAPHORE:
+        return await _resolve_lid_info_impl(lid_str)
+
+
+async def _resolve_lid_info_impl(lid_str: str) -> Dict[str, Any]:
     """
     Given any WhatsApp LID (e.g. '198440541790321' or '198440541790321@lid'),
     resolves:
@@ -95,7 +108,15 @@ async def resolve_lid_info(lid_str: str) -> Dict[str, Any]:
                 (SELECT "profilePicUrl" FROM "Contact" WHERE "remoteJid" = '{lid_jid}' LIMIT 1);
             """
             cmd = ["docker", "exec", "-i", "omini_postgres", "psql", "-U", "omini_user", "-d", "omini_db", "-t", "-A", "-F", "|||", "-c", sql]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=2.5)
+            # subprocess.run é bloqueante - achado durante a investigação do travamento de
+            # 23/09/2026 que isso travava o processo INTEIRO (não só essa tarefa) enquanto
+            # rodava, já que Python não tem como paralelizar em cima de uma chamada síncrona
+            # dentro do event loop. Rodar numa thread separada devolve o controle pro event
+            # loop imediatamente, deixando o resto do sistema (webhooks, outras requisições)
+            # continuar respondendo normalmente enquanto isso espera o docker exec terminar.
+            res = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=2.5)
+            )
             out = res.stdout.strip()
             if out and "|||" in out:
                 parts = out.split("|||")

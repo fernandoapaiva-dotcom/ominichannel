@@ -759,7 +759,11 @@ class EvolutionService:
             lpath = os.path.join("uploads", fname)
             # If file is not already ogg, convert it first
             if os.path.exists(lpath) and not fname.endswith(".ogg"):
-                ogg_path = convert_to_ogg_opus(lpath)
+                # ffmpeg via subprocess.run é bloqueante - roda numa thread separada pra não
+                # travar o processo inteiro (webhooks, outras requisições) enquanto converte.
+                # Achado na investigação do travamento de 23/09/2026: isso roda em TODO áudio
+                # enviado, então era uma fonte constante de lentidão, não só um caso raro.
+                ogg_path = await asyncio.get_event_loop().run_in_executor(None, convert_to_ogg_opus, lpath)
                 if os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0:
                     import shutil
                     ogg_fname = os.path.basename(ogg_path)
@@ -778,7 +782,7 @@ class EvolutionService:
                 os.write(in_fd, raw_bytes)
                 os.close(in_fd)
 
-                ogg_path = convert_to_ogg_opus(in_path)
+                ogg_path = await asyncio.get_event_loop().run_in_executor(None, convert_to_ogg_opus, in_path)
                 if os.path.exists(ogg_path) and os.path.getsize(ogg_path) > 0:
                     with open(ogg_path, "rb") as f:
                         raw_b64 = base64.b64encode(f.read()).decode("utf-8")

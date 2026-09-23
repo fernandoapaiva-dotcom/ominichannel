@@ -2179,9 +2179,13 @@ async def upload_general_file(
     # This distinguishes audio recordings from actual video files
     if raw_ext == ".mp4" and not is_audio_mime:
         try:
-            probe = subprocess.run(
-                ["ffprobe", "-v", "quiet", "-show_streams", "-of", "json", temp_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8
+            # subprocess.run bloqueia o event loop inteiro (não só essa requisição) enquanto
+            # roda - numa thread separada devolve o controle pro resto do sistema na hora.
+            probe = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-show_streams", "-of", "json", temp_path],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8
+                )
             )
             if probe.returncode == 0:
                 import json as _json
@@ -2210,7 +2214,9 @@ async def upload_general_file(
                 "-application", "voip",
                 final_path
             ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            res = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            )
             if res.returncode == 0 and os.path.exists(final_path) and os.path.getsize(final_path) > 0:
                 logger.info(f"[UPLOAD] Audio converted: {temp_path} -> {final_path} ({os.path.getsize(final_path)} bytes)")
                 try:
