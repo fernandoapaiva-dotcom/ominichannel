@@ -1,3 +1,4 @@
+import asyncio
 import re
 import html
 import json
@@ -10,6 +11,15 @@ logger = logging.getLogger("link_preview_service")
 
 # In-memory cache for fast repeated lookups
 _PREVIEW_CACHE: Dict[str, Dict[str, Any]] = {}
+
+# Trava a quantidade de buscas de preview rodando ao mesmo tempo. Confirmado em produção: um
+# grupo com varios links diferentes (ex.: videos do bible.com, cada um com URL unica - o cache
+# acima nao ajuda entre eles) faz a tela abrir e disparar uma rajada de buscas simultaneas. Como
+# o backend roda num processo so (pm2 fork mode, VM de 1GB), essa rajada de requisicoes HTTP
+# externas (rede + potencial lentidao/limite do site de fora) travou o processo inteiro por
+# minutos - toda a fila de webhooks/mensagens ficou atras dela. O timeout de 2.5s em cada request
+# nao ajudava porque o problema era a QUANTIDADE simultanea, nao a demora de uma so.
+_PREVIEW_SEMAPHORE = asyncio.Semaphore(2)
 
 class LinkPreviewService:
     def _normalize_url(self, url: str) -> str:
@@ -52,7 +62,10 @@ class LinkPreviewService:
             "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
         }
 
+        acquired = False
         try:
+            await _PREVIEW_SEMAPHORE.acquire()
+            acquired = True
             async with httpx.AsyncClient(timeout=2.5, follow_redirects=True, verify=False) as client:
                 resp = await client.get(clean_url, headers=headers)
                 if resp.status_code >= 400:
@@ -156,5 +169,8 @@ class LinkPreviewService:
             _PREVIEW_CACHE[cache_key] = result
             _PREVIEW_CACHE[clean_url] = result
             return result
+        finally:
+            if acquired:
+                _PREVIEW_SEMAPHORE.release()
 
 link_preview_service = LinkPreviewService()

@@ -870,10 +870,21 @@ async def get_url_link_preview(
 ):
     """
     Fetches OpenGraph title, description, domain, and thumbnail image preview for a link.
+
+    Trava de tempo total aqui em cima do timeout já existente no client HTTP (2.5s) e do
+    semáforo de concorrência (link_preview_service): confirmado em produção que uma rajada de
+    links diferentes (cache não ajuda entre URLs distintas) enfileirou tantas buscas de preview
+    que essa rota sozinha levou minutos pra responder e travou o processo inteiro (VM de 1GB,
+    um processo só) - webhook de mensagem nova ficou parado atrás dela. Isso é só um enfeite
+    visual da prévia do link; nunca pode competir por tempo com o resto do sistema.
     """
     from app.services.link_preview_service import link_preview_service
-    preview = await link_preview_service.get_preview(url)
-    return preview or {"url": url, "title": url, "description": None, "image": None, "domain": ""}
+    fallback = {"url": url, "title": url, "description": None, "image": None, "domain": ""}
+    try:
+        preview = await asyncio.wait_for(link_preview_service.get_preview(url), timeout=6.0)
+    except asyncio.TimeoutError:
+        return fallback
+    return preview or fallback
 
 
 @router.get("/{conversation_id}", response_model=ConversationResponse)
