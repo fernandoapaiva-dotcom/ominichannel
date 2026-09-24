@@ -19,6 +19,7 @@ from typing import Tuple
 STORE_LOCATION = "STORE_LOCATION"
 STORE_HOURS = "STORE_HOURS"
 CUSTOMER_LOCATION = "CUSTOMER_LOCATION"
+STORE_DOCUMENT = "STORE_DOCUMENT"
 NONE = "NONE"
 
 # Texto que o próprio webhook gera quando o cliente compartilha um pin (ver receive_evolution_webhook).
@@ -102,6 +103,37 @@ _HOURS = re.compile(
     r"funciona (sabado|domingo|hoje)|qual o horario)\b"
 )
 
+# --- cliente pedindo Nota Fiscal / Boleto / XML de uma compra já feita (ver ClientDocument) ---
+_DOC_NOUN = r"(nota fiscal|notinha|danfe|nf-?e|nf|xml|boleto|fatura|2\s*a?\s*via|segunda via|comprovante de pagamento)"
+_DOC_ASK = (r"(manda|mande|mandar|envia|envie|enviar|passa|passe|passar|me\s*d[aá]|reenvia|reenvie|pode|poderia|"
+            r"consegue|tem\s*como|preciso|precisava|queria|quero|gostaria|cade|onde\s*esta|nao\s*(recebi|achei|encontro))")
+_DOC_PATTERNS = [
+    re.compile(rf"\b{_DOC_ASK}\b.*\b{_DOC_NOUN}\b"),
+    re.compile(rf"\b{_DOC_NOUN}\b.*\b{_DOC_ASK}\b"),
+]
+_DOC_BARE = {"nota fiscal", "boleto", "nf", "nfe", "danfe", "xml", "segunda via", "2 via", "2a via"}
+
+
+def classify_document_type(text: str) -> str:
+    """"boleto" | "xml" | "nota_fiscal" (padrão quando não dá pra distinguir, é o mais pedido)."""
+    n = normalize(text)
+    if re.search(r"\bboleto\b|\bfatura\b", n):
+        return "boleto"
+    if re.search(r"\bxml\b", n):
+        return "xml"
+    return "nota_fiscal"
+
+
+def document_request(text: str) -> bool:
+    """O cliente está pedindo a Nota Fiscal/Boleto/XML de uma compra já feita (não é dúvida sobre
+    a loja em si - ver STORE_LOCATION/STORE_HOURS acima)."""
+    n = normalize(text)
+    if len(n) < 2:
+        return False
+    if n in _DOC_BARE:
+        return True
+    return any(p.search(n) for p in _DOC_PATTERNS)
+
 
 def is_customer_location(text: str, is_location_pin: bool = False) -> bool:
     """O cliente ENVIOU uma localização: pin do WhatsApp ou link do Maps/Waze."""
@@ -141,4 +173,6 @@ def rule_intent(text: str, is_location_pin: bool = False) -> Tuple[str, bool]:
         return STORE_LOCATION, False
     if _HOURS.search(n) or (re.search(r"\b(horario|expediente)\b", n) and re.search(r"\b(qual|atendimento|funcionamento|loja)\b", n)):
         return STORE_HOURS, False
+    if document_request(text):
+        return STORE_DOCUMENT, False
     return NONE, False

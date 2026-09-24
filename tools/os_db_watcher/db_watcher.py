@@ -27,6 +27,7 @@ import socket
 import shutil
 import logging
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 import requests
@@ -509,6 +510,185 @@ class PdfFolderHandler(FileSystemEventHandler):
             self._process(event.dest_path)
 
 
+# ---------------------------------------------------------------------------------------------
+# Documentos do cliente (Nota Fiscal): Z:\SOFTSYSTEM\NFe\pdf guarda o par PDF+XML de cada nota
+# emitida pela loja (nome = chave de acesso de 44 dígitos + "-procNFe"; "-procEventoNFe" são
+# eventos de cancelamento, ignorados). Sem evento equivalente no banco pra monitorar - o gatilho
+# é o ARQUIVO aparecendo, igual o vigia de pasta de O.S. já faz, mas aqui o dado todo vem de
+# dentro do XML (padrão SEFAZ), não do nome do arquivo. Pedido do usuário em 24/09/2026: guardar
+# a nota (e o boleto, por e-mail - fora deste script) pra poder mandar pro cliente quando ele
+# pedir pelo WhatsApp.
+# ---------------------------------------------------------------------------------------------
+NFE_NS = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
+
+
+def parse_nfe_xml(xml_path: str) -> dict:
+    try:
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        inf_nfe = root.find(".//nfe:infNFe", NFE_NS)
+        if inf_nfe is None:
+            return {}
+
+        def txt(parent_tag: str, tag: str):
+            parent = inf_nfe.find(f"nfe:{parent_tag}", NFE_NS)
+            if parent is None:
+                return None
+            node = parent.find(f"nfe:{tag}", NFE_NS)
+            return node.text if node is not None else None
+
+        chave = (inf_nfe.get("Id") or "").replace("NFe", "").strip()
+        v_nf = None
+        total = inf_nfe.find("nfe:total/nfe:ICMSTot/nfe:vNF", NFE_NS)
+        if total is not None and total.text:
+            try:
+                v_nf = float(total.text)
+            except ValueError:
+                v_nf = None
+
+        return {
+            "chave_acesso": chave,
+            "nNF": txt("ide", "nNF"),
+            "serie": txt("ide", "serie"),
+            "dhEmi": txt("ide", "dhEmi"),
+            "dest_cnpj": txt("dest", "CNPJ"),
+            "dest_nome": txt("dest", "xNome"),
+            "vNF": v_nf,
+        }
+    except Exception as e:
+        logger.error(f"[NFe] Erro ao ler XML {xml_path}: {e}")
+        return {}
+
+
+def find_client_phone_by_cnpj(config: dict, cnpj: str):
+    """Procura o CNPJ em CLIENTES em cada empresa configurada - retorna (telefone, nome) do
+    primeiro cadastro encontrado, ou ("", None) se não achar em nenhuma."""
+    for empresa_key, empresa_cfg in config.get("empresas", {}).items():
+        try:
+            con = db_connect(empresa_cfg)
+        except Exception:
+            continue
+        try:
+            tra, cur = read_only_cursor(con)
+            try:
+                cur.execute(
+                    "SELECT FIRST 1 DDD, CELULAR, FONE, RAZAOSOCIAL, NOMEFANTASIA FROM CLIENTES WHERE CGC=?",
+                    (cnpj,)
+                )
+                row = cur.fetchone()
+                if row:
+                    ddd, celular, fone, razao, fantasia = row
+                    phone = build_phone(ddd, celular or fone)
+                    if phone:
+                        return phone, (fantasia or razao)
+            finally:
+                tra.commit()
+        finally:
+            con.close()
+    return "", None
+
+
+def send_nfe_document_to_backend(config: dict, payload: dict, pdf_path: str, xml_path: str) -> bool:
+    url = config["backend_url"].rstrip("/") + "/api/v1/os-handler/nfe-document"
+    headers = {"X-OS-Handler-Key": config["api_key"]}
+    opened = []
+    try:
+        files = {}
+        if pdf_path and os.path.isfile(pdf_path):
+            f1 = open(pdf_path, "rb")
+            opened.append(f1)
+            files["pdf_file"] = (os.path.basename(pdf_path), f1, "application/pdf")
+        if xml_path and os.path.isfile(xml_path):
+            f2 = open(xml_path, "rb")
+            opened.append(f2)
+            files["xml_file"] = (os.path.basename(xml_path), f2, "application/xml")
+
+        resp = requests.post(
+            url, headers=headers,
+            data={"payload": json.dumps(payload, ensure_ascii=False)},
+            files=files if files else None,
+            timeout=config.get("timeout_seconds", 60)
+        )
+        if resp.status_code == 200:
+            logger.info(f"OK [NFe] Nota #{payload.get('numero_nota')} (CNPJ {payload.get('cnpj')}) -> {resp.json()}")
+            return True
+        logger.error(f"FALHA [NFe] Nota #{payload.get('numero_nota')} -> HTTP {resp.status_code}: {resp.text}")
+        return False
+    except Exception as e:
+        logger.error(f"ERRO ao enviar documento NFe (nota {payload.get('numero_nota')}): {e}")
+        return False
+    finally:
+        for f in opened:
+            f.close()
+
+
+def move_processed_nfe(xml_path: str, pdf_path: str, success: bool):
+    for p in (xml_path, pdf_path):
+        if p and os.path.isfile(p):
+            move_processed_pdf(p, success)
+
+
+class NFeFolderHandler(FileSystemEventHandler):
+    """Observa Z:\\SOFTSYSTEM\\NFe\\pdf pelo XML da Nota Fiscal de venda (gatilho pelo arquivo,
+    mesma ideia do PdfFolderHandler acima, mas o dado todo vem de dentro do XML, não do nome)."""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self._seen = set()
+
+    def _process(self, xml_path: str):
+        if not xml_path.lower().endswith("-procnfe.xml") or xml_path in self._seen:
+            return
+        self._seen.add(xml_path)
+        try:
+            logger.info(f"[NFe] Novo XML detectado: {xml_path}")
+            if not wait_until_file_is_stable(xml_path):
+                logger.warning(f"[NFe] XML não estabilizou a tempo, tentando mesmo assim: {xml_path}")
+
+            pdf_path = xml_path[:-4] + ".pdf"
+            for _ in range(10):
+                if os.path.isfile(pdf_path):
+                    break
+                time.sleep(2)
+            if os.path.isfile(pdf_path):
+                wait_until_file_is_stable(pdf_path)
+            else:
+                logger.warning(f"[NFe] PDF correspondente não apareceu, seguindo só com o XML: {pdf_path}")
+
+            parsed = parse_nfe_xml(xml_path)
+            if not parsed or not parsed.get("dest_cnpj") or not parsed.get("chave_acesso"):
+                logger.warning(f"[NFe] Não consegui ler dados do XML, pulando: {xml_path}")
+                move_processed_nfe(xml_path, pdf_path, success=False)
+                return
+
+            phone, nome_cadastro = find_client_phone_by_cnpj(self.config, parsed["dest_cnpj"])
+            if not phone:
+                logger.warning(f"[NFe] Cliente CNPJ {parsed['dest_cnpj']} sem telefone cadastrado - nota #{parsed.get('nNF')} guardada sem vínculo de contato.")
+
+            payload = {
+                "cnpj": parsed["dest_cnpj"],
+                "cliente_nome": nome_cadastro or parsed.get("dest_nome"),
+                "cliente_telefone": phone or None,
+                "numero_nota": parsed.get("nNF"),
+                "serie_nota": parsed.get("serie"),
+                "chave_acesso": parsed.get("chave_acesso"),
+                "valor": parsed.get("vNF"),
+                "data_emissao": parsed.get("dhEmi"),
+            }
+            success = send_nfe_document_to_backend(self.config, payload, pdf_path, xml_path)
+            move_processed_nfe(xml_path, pdf_path, success)
+        finally:
+            self._seen.discard(xml_path)
+
+    def on_created(self, event):
+        if not event.is_directory:
+            self._process(event.src_path)
+
+    def on_moved(self, event):
+        if not event.is_directory:
+            self._process(event.dest_path)
+
+
 def start_folder_watcher(config: dict) -> Observer:
     observer = Observer()
     watched_any = False
@@ -520,6 +700,15 @@ def start_folder_watcher(config: dict) -> Observer:
         observer.schedule(PdfFolderHandler(config, cod_tipo_evento, tipo), folder, recursive=False)
         logger.info(f"[vigia de pasta] Observando [{tipo}]: {folder}")
         watched_any = True
+
+    nfe_folder = config.get("pasta_nfe")
+    if nfe_folder and os.path.isdir(nfe_folder):
+        observer.schedule(NFeFolderHandler(config), nfe_folder, recursive=False)
+        logger.info(f"[vigia de pasta] Observando [nota fiscal]: {nfe_folder}")
+        watched_any = True
+    elif nfe_folder:
+        logger.warning(f"[vigia de pasta] 'pasta_nfe' configurada mas não encontrada - pulando: {nfe_folder}")
+
     if watched_any:
         observer.start()
     return observer

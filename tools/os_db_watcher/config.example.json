@@ -4,6 +4,7 @@
   "poll_interval_seconds": 20,
   "pasta_abertura": "\\\\SRV-SERVWELD\\Users\\Administrator\\My Drive\\O.S SOFTSYSTEM\\ABERTURA",
   "pasta_orcamento": "\\\\SRV-SERVWELD\\Users\\Administrator\\My Drive\\O.S SOFTSYSTEM\\ORCAMENTO",
+  "pasta_nfe": "Z:\\SOFTSYSTEM\\NFe\\pdf",
   "timeout_seconds": 60,
   "empresas": {
     "servweld": {

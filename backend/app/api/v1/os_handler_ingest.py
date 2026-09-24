@@ -55,7 +55,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import (
     Conversation, ConversationStatus, Message, MessageSender, MessageType,
-    WhatsAppNumber, AuthorizedTechnician, CalendarEvent
+    WhatsAppNumber, AuthorizedTechnician, CalendarEvent, ClientDocument
 )
 from app.services.lid_resolver_service import resolve_and_bind_contact
 from app.services.automation_service import automation_service, normalize_text, get_greeting
@@ -1282,3 +1282,110 @@ async def ingest_pedido_nf_event(
             notified += 1
 
     return {"status": "success", "codorcamento": codorcamento, "tasks_matched": len(events), "notified": notified}
+
+
+DOCS_UPLOAD_SUBDIR = "client_docs"
+
+
+def save_client_document_file(file_bytes: bytes, ext: str) -> str:
+    os.makedirs(os.path.join("uploads", DOCS_UPLOAD_SUBDIR), exist_ok=True)
+    saved_filename = f"{uuid.uuid4().hex}{ext}"
+    saved_rel_path = f"{DOCS_UPLOAD_SUBDIR}/{saved_filename}"
+    with open(os.path.join("uploads", saved_rel_path), "wb") as f:
+        f.write(file_bytes)
+    return saved_rel_path
+
+
+@router.post("/nfe-document", dependencies=[Depends(verify_os_handler_key)])
+async def ingest_nfe_document(
+    payload: str = Form(...),
+    pdf_file: Optional[UploadFile] = File(None),
+    xml_file: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Recebido do vigia de pasta (tools/os_db_watcher/): um par PDF+XML novo de Nota Fiscal
+    emitida pela loja apareceu em Z:\\SOFTSYSTEM\\NFe\\pdf. O vigia já leu o XML (CNPJ do
+    destinatário, número/série da nota, valor) e já resolveu o telefone do cliente consultando
+    CLIENTES no Firebird do Softsystem - aqui só resolve/cria o Contact e guarda o registro em
+    ClientDocument, pra poder mandar automaticamente quando o cliente pedir a nota fiscal pelo
+    WhatsApp (ver STORE_DOCUMENT em webhooks.py). Pedido do usuário em 24/09/2026.
+
+    `payload` é uma string JSON: {"cnpj", "cliente_nome", "cliente_telefone", "numero_nota",
+    "serie_nota", "chave_acesso", "valor", "data_emissao" (ISO), "codorcamento" (opcional)}.
+    Dedup natural por chave_acesso (44 dígitos, único por nota de verdade).
+    """
+    try:
+        data = json.loads(payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload não é um JSON válido")
+
+    chave_acesso = data.get("chave_acesso")
+    if not chave_acesso:
+        raise HTTPException(status_code=422, detail="Campo obrigatório faltando: chave_acesso")
+
+    existing = (await db.execute(
+        select(ClientDocument.id).where(ClientDocument.chave_acesso == chave_acesso)
+    )).scalars().first()
+    if existing:
+        return {"status": "already_recorded", "chave_acesso": chave_acesso}
+
+    # Assistência Técnica é só a instância "dona" de referência pro tenant_id - o documento em
+    # si não pertence a departamento nenhum, o cliente pode pedir a nota por qualquer WhatsApp.
+    wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.id == settings.ASSISTENCIA_TECNICA_WHATSAPP_NUMBER_ID)
+    whatsapp_number = (await db.execute(wn_stmt)).scalar_one_or_none()
+    if not whatsapp_number:
+        raise HTTPException(status_code=500, detail="Instância de referência não configurada no servidor")
+    tenant_id = whatsapp_number.tenant_id
+
+    contact_id = None
+    cliente_telefone = data.get("cliente_telefone")
+    if cliente_telefone:
+        phone = re.sub(r"\D", "", str(cliente_telefone))
+        if not phone.startswith("55") and len(phone) in (10, 11):
+            phone = "55" + phone
+        if len(phone) >= 12:
+            contact = await resolve_and_bind_contact(db, tenant_id, phone, push_name=data.get("cliente_nome"))
+            await db.flush()
+            contact_id = contact.id
+
+    pdf_rel_path = None
+    if pdf_file is not None:
+        pdf_bytes = await pdf_file.read()
+        if pdf_bytes:
+            pdf_rel_path = save_client_document_file(pdf_bytes, ".pdf")
+
+    xml_rel_path = None
+    if xml_file is not None:
+        xml_bytes = await xml_file.read()
+        if xml_bytes:
+            xml_rel_path = save_client_document_file(xml_bytes, ".xml")
+
+    data_emissao = None
+    if data.get("data_emissao"):
+        try:
+            data_emissao = datetime.fromisoformat(str(data["data_emissao"]).replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            data_emissao = None
+
+    doc = ClientDocument(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
+        cnpj=data.get("cnpj"),
+        cliente_nome=data.get("cliente_nome"),
+        tipo="nota_fiscal",
+        numero_nota=str(data.get("numero_nota")) if data.get("numero_nota") else None,
+        serie_nota=str(data.get("serie_nota")) if data.get("serie_nota") else None,
+        codorcamento=str(data.get("codorcamento")) if data.get("codorcamento") else None,
+        chave_acesso=chave_acesso,
+        valor=float(data["valor"]) if data.get("valor") else None,
+        data_emissao=data_emissao,
+        pdf_path=pdf_rel_path,
+        xml_path=xml_rel_path,
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+
+    logger.info(f"[NFE DOCUMENT] Nota fiscal #{doc.numero_nota} registrada (contact_id={contact_id}, cnpj={doc.cnpj}, chave={chave_acesso}).")
+    return {"status": "success", "id": doc.id, "contact_id": contact_id}

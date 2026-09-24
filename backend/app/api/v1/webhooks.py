@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
     ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog,
-    AuthorizedTechnician, CalendarEvent
+    AuthorizedTechnician, CalendarEvent, ClientDocument
 )
 
 from app.services.evolution_service import evolution_service
@@ -448,6 +448,83 @@ async def _finalize_answered_call(call_id: str, data: Dict[str, Any]):
         )
     except Exception as err:
         logger.error(f"Error broadcasting call duration update: {err}")
+
+
+async def send_client_document_to_customer(
+    db: AsyncSession, conversation: "Conversation", contact_id: int, instance_name: str,
+    phone: str, doc_type: str, tenant_id: int, whatsapp_number_id: int
+) -> bool:
+    """
+    Manda automaticamente a Nota Fiscal/Boleto/XML mais recente do cliente, quando ele pede pelo
+    WhatsApp (ver location_intent.STORE_DOCUMENT/classify_document_type). Pedido explícito do
+    usuário em 24/09/2026: envio automático, sem confirmação de atendente - ciente do risco de
+    mandar pro contato errado se o cruzamento cliente↔telefone tiver falhado. O risco é baixo
+    porque esse cruzamento já acontece na ENTRADA (o vigia resolve o telefone consultando
+    diretamente o cadastro do cliente no Softsystem pelo CNPJ da nota, não por adivinhação) -
+    ver os_handler_ingest.ingest_nfe_document.
+    """
+    if not contact_id:
+        return False
+
+    stmt = (
+        select(ClientDocument)
+        .where(ClientDocument.contact_id == contact_id, ClientDocument.tipo == doc_type)
+        .order_by(ClientDocument.criado_em.desc())
+        .limit(1)
+    )
+    doc = (await db.execute(stmt)).scalars().first()
+    file_rel_path = doc.xml_path if (doc and doc_type == "xml") else (doc.pdf_path if doc else None)
+    if not doc or not file_rel_path:
+        return False
+
+    abs_path = os.path.join("uploads", file_rel_path)
+    if not os.path.isfile(abs_path):
+        logger.warning(f"[DOCUMENTO CLIENTE] Arquivo não encontrado no disco: {abs_path} (documento #{doc.id})")
+        return False
+
+    with open(abs_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    label = {"boleto": "Boleto", "xml": "XML da Nota Fiscal", "nota_fiscal": "Nota Fiscal"}.get(doc_type, "Documento")
+    num_suffix = f" #{doc.numero_nota}" if doc.numero_nota and doc_type != "boleto" else ""
+    ext = "xml" if doc_type == "xml" else "pdf"
+    file_name = f"{label}{num_suffix}.{ext}".replace(" ", "_")
+    caption = f"📎 {label}{num_suffix}"
+
+    send_res = await evolution_service.send_media_message(
+        instance_name=instance_name, number=phone, media_type="document",
+        mimetype="application/xml" if doc_type == "xml" else "application/pdf",
+        media=b64, file_name=file_name, caption=caption
+    )
+    if not (isinstance(send_res, dict) and send_res.get("success")):
+        logger.warning(f"[DOCUMENTO CLIENTE] Falha ao enviar {doc_type} (documento #{doc.id}) para {phone}: {send_res}")
+        return False
+
+    doc_msg = Message(
+        conversation_id=conversation.id, remetente=MessageSender.IA,
+        conteudo=f"/uploads/{file_rel_path}|{file_name}|{caption}",
+        tipo=MessageType.ARQUIVO, status="sent",
+        whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
+        timestamp=datetime.utcnow()
+    )
+    db.add(doc_msg)
+    await db.commit()
+    await db.refresh(doc_msg)
+
+    try:
+        await ws_manager.broadcast_to_department(
+            tenant_id=tenant_id, whatsapp_number_id=whatsapp_number_id,
+            message_data={
+                "type": "NEW_MESSAGE", "conversation_id": conversation.id, "id": doc_msg.id,
+                "remetente": "ia", "tipo": "arquivo", "conteudo": doc_msg.conteudo,
+                "timestamp": doc_msg.timestamp.isoformat() + "Z"
+            }
+        )
+    except Exception as err:
+        logger.error(f"Error broadcasting client document send: {err}")
+
+    logger.info(f"[DOCUMENTO CLIENTE] {label}{num_suffix} enviado(a) automaticamente pra {phone} (conversa #{conversation.id}).")
+    return True
 
 
 def extract_message_datetime(data: Any) -> datetime:
@@ -2960,6 +3037,34 @@ async def receive_evolution_webhook(
                 )
                 return {"status": "success", "action": "store_hours_sent"}
 
+            elif store_intent == "STORE_DOCUMENT":
+                from app.services import location_intent
+                doc_type = location_intent.classify_document_type(text_content)
+                target_inst = whatsapp_number.instancia_evolution_api if whatsapp_number else instance_name
+                sent = False
+                if target_inst and contact:
+                    sent = await send_client_document_to_customer(
+                        db, conversation, contact.id, target_inst, phone_number, doc_type,
+                        tenant_id, whatsapp_number.id
+                    )
+                if not sent:
+                    fallback_text = (
+                        "Ainda não encontrei esse documento aqui no sistema - vou verificar com a equipe "
+                        "e te retorno assim que localizar! 🙏"
+                    )
+                    if target_inst:
+                        await evolution_service.send_text_message(
+                            instance_name=target_inst, number=phone_number,
+                            text=f"*🤖 IA Concierge:*\n\n{fallback_text}"
+                        )
+                        fb_msg = Message(
+                            conversation_id=conversation.id, remetente=MessageSender.IA, conteudo=fallback_text,
+                            tipo=MessageType.TEXTO, status="sent", timestamp=datetime.utcnow()
+                        )
+                        db.add(fb_msg)
+                        await db.commit()
+                return {"status": "success", "action": "client_document_sent" if sent else "client_document_not_found"}
+
             # Fora do horário comercial, não fica em silêncio total: manda o aviso de horário de
             # funcionamento, no máximo 1x a cada 4h por conversa (debounce, pra não repetir a
             # cada mensagem). Achado em produção em 24/09/2026: is_human_handled (acima) considera
@@ -3324,6 +3429,27 @@ async def receive_evolution_webhook(
                     "enviar_pix": False,
                     "escalar_humano": False,
                     "nova_memoria": "Cliente perguntou o horário de funcionamento; informado."
+                }
+                transfer_executed = True
+            elif loc_intent == "STORE_DOCUMENT":
+                from app.services import location_intent as _loc_intent_mod
+                doc_type = _loc_intent_mod.classify_document_type(text_content)
+                sent = await send_client_document_to_customer(
+                    db, conversation, contact.id if contact else None, instance_name, phone_number,
+                    doc_type, tenant_id, whatsapp_number.id
+                )
+                resposta_doc = (
+                    f"Segue o documento solicitado{loc_greeting}! 📎" if sent else
+                    f"Ainda não encontrei esse documento aqui no sistema{loc_greeting} - vou verificar com a "
+                    f"equipe e te retorno assim que localizar! 🙏"
+                )
+                ai_output = {
+                    "resposta": resposta_doc,
+                    "transferir_setor": "NENHUM",
+                    "enviar_localizacao": False,
+                    "enviar_pix": False,
+                    "escalar_humano": False,
+                    "nova_memoria": "Cliente pediu documento (nota fiscal/boleto/xml); " + ("enviado." if sent else "não encontrado, vai ser verificado.")
                 }
                 transfer_executed = True
 

@@ -413,3 +413,36 @@ class OsBoardEvent(Base):
     codos: Mapped[int] = mapped_column(Integer, index=True)
     cod_evento: Mapped[int] = mapped_column(Integer)
     data: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class ClientDocument(Base):
+    """
+    Nota Fiscal / Boleto / XML emitidos pra um cliente, capturados automaticamente (vigia de
+    pasta lê Z:\\SOFTSYSTEM\\NFe\\pdf pro par PDF+XML da Nota; e-mail de disparo pro Boleto) e
+    guardados aqui pra o sistema poder mandar pro cliente sozinho quando ele pedir pelo WhatsApp
+    (ver location_intent.py-style de classificação + o envio automático em webhooks.py).
+    Casa pelo CNPJ do destinatário da NF - o vigia resolve o telefone consultando CLIENTES no
+    Firebird do Softsystem na hora que detecta o arquivo, então contact_id já vem pronto aqui.
+    """
+    __tablename__ = "client_documents"
+    __table_args__ = (
+        Index("ix_client_documents_lookup", "tenant_id", "contact_id", "tipo", "criado_em"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    contact_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    cnpj: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, index=True)
+    cliente_nome: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    tipo: Mapped[str] = mapped_column(String(20), index=True)  # nota_fiscal | boleto | xml
+    numero_nota: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, index=True)
+    serie_nota: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    codorcamento: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # cruza com CalendarEvent.pedido_codigo quando existir
+    chave_acesso: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)  # chave de 44 digitos da NFe - dedup natural
+    valor: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    data_emissao: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    pdf_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    xml_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    contact: Mapped[Optional["Contact"]] = relationship("Contact")
