@@ -981,6 +981,17 @@ async def ingest_db_event_common(
     eventos_anteriores: Optional[List[int]] = None,
     razao_social: Optional[str] = None
 ):
+    # Ajuste interno: quando o campo "Observação" do evento no Softsystem é só "N/A"/"NA"
+    # (maiúsculo ou minúsculo, sem mais nada no campo), é a loja corrigindo um evento lançado
+    # errado no sistema - não uma mudança de verdade pro cliente. Pedido explícito do usuário
+    # em 24/09/2026: não disparar mensagem nenhuma nesse caso, independente do tipo do evento.
+    if str(obs or "").strip().lower() in ("n/a", "na"):
+        logger.info(
+            f"[OS DB EVENT] O.S. #{codos}, evento tipo {cod_tipo_evento}: Observação = '{obs}' - "
+            f"ajuste interno, nenhuma mensagem disparada ao cliente."
+        )
+        return {"status": "skipped_internal_adjustment", "codos": codos, "cod_tipo_evento": cod_tipo_evento}
+
     phone = re.sub(r"\D", "", cliente_telefone or "")
     if not phone.startswith("55") and len(phone) in (10, 11):
         phone = "55" + phone
