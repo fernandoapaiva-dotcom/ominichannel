@@ -755,7 +755,7 @@ export const MobileBoard: React.FC<{
         ))}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {board && rows.length === 0 && !loading && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
         )}
