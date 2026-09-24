@@ -2365,12 +2365,21 @@ async def receive_evolution_webhook(
                     logger.debug(f"Não foi possível vincular whatsapp_msg_id ao bot: {link_err}")
             return {"status": "success", "action": "bot_echo_ignored"}
 
-        # Check if this outgoing message is already recorded in the database
+        # Check if this outgoing message is already recorded in THIS conversation. Escopo por
+        # conversation_id (não só whatsapp_msg_id) é essencial pra grupo do WhatsApp acompanhado por
+        # mais de um departamento/instância ao mesmo tempo: uma mensagem de grupo tem o MESMO
+        # whatsapp_msg_id pra todo mundo que a recebe, então uma checagem global fazia a instância
+        # que processasse primeiro "vencer" e todas as outras descartarem a própria cópia como
+        # duplicata pra sempre - a conversa da outra instância parava de atualizar (grupo com o
+        # mesmo nome, uma cópia viva e outra travada no passado).
         if msg_id:
-            existing_outgoing_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
+            existing_outgoing_stmt = select(Message.id).where(
+                Message.whatsapp_msg_id == msg_id,
+                Message.conversation_id == conversation.id
+            )
             existing_outgoing_res = await db.execute(existing_outgoing_stmt)
             if existing_outgoing_res.scalars().first():
-                logger.info(f"[OUTGOING DEDUP] Mensagem '{msg_id}' já gravada no sistema. Descartando duplicata.")
+                logger.info(f"[OUTGOING DEDUP] Mensagem '{msg_id}' já gravada na conversa #{conversation.id}. Descartando duplicata.")
                 return {"status": "success", "action": "ignored_duplicate"}
 
         # Check if an attendant message was sent recently (last 60s) with matching text
@@ -2698,12 +2707,17 @@ async def receive_evolution_webhook(
 
     msg_dt = extract_message_datetime(data)
 
-    # Ensure customer message is not already saved in database for this msg_id
+    # Ensure customer message is not already saved in THIS conversation for this msg_id - mesmo motivo
+    # do dedup de saída acima: escopo global (sem conversation_id) faz um grupo acompanhado por mais
+    # de uma instância perder mensagens em todas menos a primeira que processar cada uma.
     if msg_id:
-        chk_stmt = select(Message.id).where(Message.whatsapp_msg_id == msg_id)
+        chk_stmt = select(Message.id).where(
+            Message.whatsapp_msg_id == msg_id,
+            Message.conversation_id == conversation.id
+        )
         chk_res = await db.execute(chk_stmt)
         if chk_res.scalars().first():
-            logger.info(f"[DB DEDUP] Mensagem cliente '{msg_id}' já gravada no banco. Ignorando inserção duplicada.")
+            logger.info(f"[DB DEDUP] Mensagem cliente '{msg_id}' já gravada na conversa #{conversation.id}. Ignorando inserção duplicada.")
             return {"status": "success", "action": "ignored_duplicate"}
 
     user_msg = Message(
