@@ -279,10 +279,18 @@ class AuthorizedTechnician(Base):
     departamento: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # Assistência Técnica, Vendas, Locação, etc.
     especialidade: Mapped[Optional[str]] = mapped_column(String(255), nullable=True) # Ex: "Inversores, MIG/MAG, TIG, Entrega de Gás"
     ativo: Mapped[bool] = mapped_column(Boolean, default=True)
+    # PIN de acesso ao Portal do Técnico (login separado por telefone+PIN, ver technician_portal.py) - hash
+    # bcrypt igual ao de User.senha_hash, nunca o PIN em texto puro.
+    pin_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pin_definido_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     tenant: Mapped["Tenant"] = relationship("Tenant")
+
+    @property
+    def has_pin(self) -> bool:
+        return bool(self.pin_hash)
 
 # Continuous Improvement / Feedback Loop Table (correcoes_ia)
 class AICorrection(Base):

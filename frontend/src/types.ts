@@ -90,6 +90,7 @@ export interface AuthorizedTechnician {
   departamento?: string | null;
   especialidade?: string | null;
   ativo: boolean;
+  has_pin?: boolean;
   criado_em: string;
 }
 

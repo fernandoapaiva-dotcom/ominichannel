@@ -9,7 +9,7 @@ import { User } from '../types';
  * As finalizadas não aparecem aqui (são muitas): ficam para a auditoria no detalhe do técnico.
  */
 
-interface BoardCard {
+export interface BoardCard {
   codos: number;
   empresa: string;
   cliente?: string | null;
@@ -21,9 +21,9 @@ interface BoardCard {
   dias_desde_entrada?: number | null;
   tipo_os?: string | null;
 }
-interface BoardCell { count: number; cards: BoardCard[] }
-interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
-interface BoardData {
+export interface BoardCell { count: number; cards: BoardCard[] }
+export interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
+export interface BoardData {
   stages: { key: string; label: string }[];
   technicians: BoardTech[];
   totals: Record<string, number>;
@@ -138,13 +138,36 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   }, [tvMode]);
 
   // Tela estreita (celular/tablet retrato): 8 colunas não cabem de jeito nenhum, então vira uma
-  // lista vertical por técnico em vez da grade. O modo TV é sempre um telão largo.
+  // lista vertical por técnico em vez da grade. Já deitado (paisagem), mostra a mesma grade do
+  // desktop (rolável por toque) - só o retrato vira lista. O modo TV é sempre um telão largo.
   const [isNarrow, setIsNarrow] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth < 860);
+  const [isLandscape, setIsLandscape] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth > window.innerHeight);
   useEffect(() => {
-    const onResize = () => setIsNarrow(window.innerWidth < 860);
+    const onResize = () => {
+      setIsNarrow(window.innerWidth < 860);
+      setIsLandscape(window.innerWidth > window.innerHeight);
+    };
     window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
   }, []);
+
+  // Zoom manual pro celular (retrato ou paisagem): a tela é pequena e tem muita informação, então o
+  // técnico/atendente ajusta o tamanho como quiser. Mesmo mecanismo de "scale" que o Modo TV já usa.
+  const [mobileZoom, setMobileZoom] = useState<number>(() => {
+    try {
+      const v = parseFloat(localStorage.getItem('omni_board_mobile_zoom') || '1');
+      return isFinite(v) && v > 0 ? v : 1;
+    } catch { return 1; }
+  });
+  const setZoom = (next: number) => {
+    const clamped = Math.max(0.8, Math.min(1.6, Math.round(next * 100) / 100));
+    setMobileZoom(clamped);
+    try { localStorage.setItem('omni_board_mobile_zoom', String(clamped)); } catch {}
+  };
 
   // "+N O.S." de uma célula do quadro: abre com a lista completa (sem o limite de cartões por célula)
   const [cellModal, setCellModal] = useState<{ tecnico: string; label: string; stage: string } | null>(null);
@@ -213,16 +236,19 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     return <TechDetail name={detailTech} empresa={empresa} onBack={() => setDetailTech(null)} />;
   }
 
-  const scale = tvMode ? 1.1 : 1;
+  const scale = tvMode ? 1.1 : (isNarrow ? mobileZoom : 1);
   const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
 
   const stages = board?.stages || [];
   const stagesCount = Math.max(stages.length, 1);
-  const useMobileLayout = isNarrow && !tvMode;
+  // Retrato vira lista vertical (MobileBoard); paisagem já usa a mesma grade do desktop (rolável por
+  // toque nos dois eixos) - só o Modo TV nunca cai aqui.
+  const useMobileLayout = isNarrow && !tvMode && !isLandscape;
+  const showZoomControls = isNarrow && !tvMode;
   // Colunas fixas ocupando 100% da largura disponível (grid com container de largura definida - sem isso,
   // nomes longos de cliente em uma só linha inflam a largura "natural" das colunas bem além do necessário).
-  const techColWidth = tvMode ? 132 : 100;
-  const minStageCol = tvMode ? 108 : 82;
+  const techColWidth = tvMode ? 132 : Math.round(100 * (isNarrow ? mobileZoom : 1));
+  const minStageCol = tvMode ? 108 : Math.round(82 * (isNarrow ? mobileZoom : 1));
   const gridCols = `${techColWidth}px repeat(${stagesCount}, minmax(${minStageCol}px, 1fr))`;
 
   const wrapperStyle: React.CSSProperties = tvMode
@@ -303,6 +329,13 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         </div>
       )}
 
+      {showZoomControls && (
+        <div style={{ position: 'fixed', right: '14px', bottom: '14px', zIndex: 50, display: 'flex', flexDirection: 'column', gap: '6px', background: 'var(--bg-secondary, rgba(20,24,32,0.92))', border: '1px solid var(--border-color, rgba(255,255,255,0.14))', borderRadius: '10px', padding: '4px', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
+          <button onClick={() => setZoom(mobileZoom + 0.15)} title="Aumentar zoom" style={{ ...iconBtn, width: '36px', height: '36px', fontSize: '16px', fontWeight: 800 }}>+</button>
+          <button onClick={() => setZoom(mobileZoom - 0.15)} title="Diminuir zoom" style={{ ...iconBtn, width: '36px', height: '36px', fontSize: '16px', fontWeight: 800 }}>−</button>
+        </div>
+      )}
+
       {/* Quadro: carrossel (TV), lista por técnico (tela estreita) ou grade (desktop) */}
       {tvMode ? (
         <TvCarousel
@@ -328,7 +361,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
         />
       ) : (
-        <div style={{ flex: 1, overflow: 'auto', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+        <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
           <div style={{ width: '100%', display: 'grid', gridTemplateColumns: gridCols }}>
             {/* linha de títulos */}
             <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
@@ -658,7 +691,7 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
 
 // --------------------------------------------------------------------------- lista (tela estreita / celular)
 
-const MobileBoard: React.FC<{
+export const MobileBoard: React.FC<{
   board: BoardData | null; loading: boolean; stageFilter: string; setStageFilter: (k: string) => void;
   isAdmin: boolean; onOpenTech: (name: string) => void; showEmpresa: boolean;
   onOpenCell: (tecnico: string, stage: string, label: string) => void;

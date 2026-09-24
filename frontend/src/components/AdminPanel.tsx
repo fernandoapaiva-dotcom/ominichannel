@@ -209,6 +209,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [techDept, setTechDept] = useState('Assistência Técnica');
   const [techSpecialty, setTechSpecialty] = useState('');
   const [techAtivo, setTechAtivo] = useState(true);
+  const [techPin, setTechPin] = useState('');
+  const [techClearPin, setTechClearPin] = useState(false);
 
   const loadTechnicians = async () => {
     try {
@@ -230,6 +232,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
     setTechDept('Assistência Técnica');
     setTechSpecialty('');
     setTechAtivo(true);
+    setTechPin('');
+    setTechClearPin(false);
   };
 
   const handleSaveTechnician = async (e: React.FormEvent) => {
@@ -238,6 +242,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
       alert('Por favor, preencha o Nome e o Telefone do Funcionário.');
       return;
     }
+    if (techPin.trim() && !/^\d{4,6}$/.test(techPin.trim())) {
+      alert('O PIN do Portal do Técnico deve ter de 4 a 6 dígitos numéricos.');
+      return;
+    }
+    // pin: undefined = não mexe no PIN atual; string vazia = remove o PIN; dígitos = define um novo
+    const pinPayload = techClearPin ? '' : (techPin.trim() || undefined);
     try {
       if (editingTechId) {
         await apiFetch(`/technicians/${editingTechId}`, {
@@ -248,7 +258,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             cargo: techCargo || null,
             departamento: techDept || null,
             especialidade: techSpecialty || null,
-            ativo: techAtivo
+            ativo: techAtivo,
+            ...(pinPayload !== undefined ? { pin: pinPayload } : {})
           })
         });
       } else {
@@ -260,7 +271,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             cargo: techCargo || null,
             departamento: techDept || null,
             especialidade: techSpecialty || null,
-            ativo: techAtivo
+            ativo: techAtivo,
+            ...(pinPayload ? { pin: pinPayload } : {})
           })
         });
       }
@@ -279,6 +291,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
     setTechDept(t.departamento || 'Assistência Técnica');
     setTechSpecialty(t.especialidade || '');
     setTechAtivo(t.ativo);
+    setTechPin('');
+    setTechClearPin(false);
   };
 
   const handleDeleteTechnician = async (id: number) => {
@@ -3013,6 +3027,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                   />
                 </div>
 
+                <div>
+                  <label style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>
+                    PIN de acesso ao Portal do Técnico (4 a 6 dígitos{editingTechId ? ' — deixe em branco para não alterar o PIN atual' : ', opcional'})
+                    {editingTechId && ` — ${(technicians.find(t => t.id === editingTechId)?.has_pin) ? 'PIN definido ✓' : 'PIN não definido'}`}
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="Ex: 1234"
+                    maxLength={6}
+                    value={techPin}
+                    disabled={techClearPin}
+                    onChange={(e) => setTechPin(e.target.value.replace(/\D/g, ''))}
+                    style={{ width: '100%', padding: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-main)', boxSizing: 'border-box', opacity: techClearPin ? 0.5 : 1 }}
+                  />
+                  {editingTechId && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                      <input
+                        type="checkbox"
+                        id="techClearPin"
+                        checked={techClearPin}
+                        onChange={(e) => { setTechClearPin(e.target.checked); if (e.target.checked) setTechPin(''); }}
+                      />
+                      <label htmlFor="techClearPin" style={{ fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                        Remover PIN (bloqueia o acesso dele ao Portal do Técnico)
+                      </label>
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
                   <input
                     type="checkbox"
@@ -3103,6 +3147,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                                 Inativo
                               </span>
                             )}
+                            <span
+                              title={item.has_pin ? 'Tem PIN definido - pode entrar no Portal do Técnico' : 'Sem PIN - não consegue entrar no Portal do Técnico'}
+                              style={{ fontSize: '10px', backgroundColor: item.has_pin ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.08)', color: item.has_pin ? '#60a5fa' : 'var(--text-muted)', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}
+                            >
+                              {item.has_pin ? 'Portal ✓' : 'Sem PIN'}
+                            </span>
                           </div>
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Phone size={11} /> <strong>WhatsApp:</strong> {item.telefone}

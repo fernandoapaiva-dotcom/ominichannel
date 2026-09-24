@@ -338,6 +338,7 @@ class AuthorizedTechnicianCreate(BaseModel):
     departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: bool = True
+    pin: Optional[str] = None  # PIN opcional (4-6 dígitos) pro Portal do Técnico já na criação
 
 class AuthorizedTechnicianUpdate(BaseModel):
     nome: Optional[str] = None
@@ -346,6 +347,7 @@ class AuthorizedTechnicianUpdate(BaseModel):
     departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: Optional[bool] = None
+    pin: Optional[str] = None  # PIN novo (4-6 dígitos) pro Portal do Técnico; None = não mexe no PIN atual
 
 class AuthorizedTechnicianResponse(BaseModel):
     id: int
@@ -356,6 +358,7 @@ class AuthorizedTechnicianResponse(BaseModel):
     departamento: Optional[str] = None
     especialidade: Optional[str] = None
     ativo: bool
+    has_pin: bool = False
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,11 +1,12 @@
 import re
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.core.database import get_db
-from app.core.security import get_current_user
+from app.core.security import get_current_user, get_password_hash
 from app.models.models import AuthorizedTechnician, User, UserRole
 from app.schemas.schemas import AuthorizedTechnicianCreate, AuthorizedTechnicianUpdate, AuthorizedTechnicianResponse
 
@@ -66,6 +67,10 @@ async def create_technician(
             detail=f"Já existe um técnico cadastrado com o telefone {clean_phone} ({existing.nome})."
         )
 
+    pin_clean = payload.pin.strip() if payload.pin else None
+    if pin_clean and not re.fullmatch(r"\d{4,6}", pin_clean):
+        raise HTTPException(status_code=400, detail="O PIN deve ter de 4 a 6 dígitos numéricos.")
+
     tech = AuthorizedTechnician(
         tenant_id=current_user.tenant_id,
         nome=payload.nome.strip(),
@@ -73,7 +78,9 @@ async def create_technician(
         cargo=payload.cargo.strip() if payload.cargo else None,
         departamento=payload.departamento.strip() if payload.departamento else None,
         especialidade=payload.especialidade.strip() if payload.especialidade else None,
-        ativo=payload.ativo
+        ativo=payload.ativo,
+        pin_hash=get_password_hash(pin_clean) if pin_clean else None,
+        pin_definido_em=datetime.utcnow() if pin_clean else None,
     )
     db.add(tech)
     await db.commit()
@@ -114,6 +121,17 @@ async def update_technician(
         tech.especialidade = payload.especialidade.strip() if payload.especialidade else None
     if payload.ativo is not None:
         tech.ativo = payload.ativo
+    if payload.pin is not None:
+        pin = payload.pin.strip()
+        if pin:
+            if not re.fullmatch(r"\d{4,6}", pin):
+                raise HTTPException(status_code=400, detail="O PIN deve ter de 4 a 6 dígitos numéricos.")
+            tech.pin_hash = get_password_hash(pin)
+            tech.pin_definido_em = datetime.utcnow()
+        else:
+            # PIN vazio explícito = remover o acesso do técnico ao Portal (ex: ele saiu da empresa)
+            tech.pin_hash = None
+            tech.pin_definido_em = None
 
     await db.commit()
     await db.refresh(tech)

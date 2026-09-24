@@ -12,7 +12,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.models import User, UserRole
+from app.models.models import User, UserRole, AuthorizedTechnician
 from app.schemas.schemas import TokenData
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -109,10 +109,12 @@ async def get_current_user(
         user_id: int = payload.get("sub")
         tenant_id: int = payload.get("tenant_id")
         role: str = payload.get("role")
-        if user_id is None or tenant_id is None:
+        # Token do Portal do Técnico (sem "role") não é um User - rejeita aqui em vez de estourar
+        # ValueError em UserRole(None) tentando ler um cargo que esse tipo de token nunca tem.
+        if user_id is None or tenant_id is None or role is None:
             raise credentials_exception
         token_data = TokenData(user_id=user_id, tenant_id=tenant_id, role=UserRole(role))
-    except jwt.PyJWTError:
+    except (jwt.PyJWTError, ValueError):
         raise credentials_exception
 
     stmt = select(User).where(User.id == token_data.user_id, User.tenant_id == token_data.tenant_id, User.status == True)
@@ -129,3 +131,49 @@ async def get_admin_user(current_user: User = Depends(get_current_user)) -> User
             detail="Acesso restrito a administradores"
         )
     return current_user
+
+# --- Portal do Técnico: auth separada, por telefone+PIN (ver technician_portal.py) ---
+# Token com "type": "tecnico_portal" - nunca aceito por get_current_user (que exige um UserRole válido) nem
+# vice-versa (get_current_technician exige esse "type"), então uma sessão de técnico não vira sessão de
+# atendente/admin por engano mesmo compartilhando o mesmo SECRET_KEY/algoritmo de assinatura.
+TECHNICIAN_TOKEN_TYPE = "tecnico_portal"
+
+def create_technician_access_token(tech: "AuthorizedTechnician") -> str:
+    # "sub" precisa ser string - PyJWT rejeita decode de um "sub" numérico (InvalidSubjectError), mesmo
+    # convenção já seguida em auth.py (str(user.id)) pro token de User comum.
+    return create_access_token(
+        data={"sub": str(tech.id), "tenant_id": tech.tenant_id, "type": TECHNICIAN_TOKEN_TYPE},
+        expires_delta=timedelta(days=90),
+    )
+
+async def get_current_technician(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db)
+) -> AuthorizedTechnician:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Sessão do Portal do Técnico inválida ou expirada",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != TECHNICIAN_TOKEN_TYPE:
+            raise credentials_exception
+        tech_id_raw = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
+        if tech_id_raw is None or tenant_id is None:
+            raise credentials_exception
+        tech_id = int(tech_id_raw)
+    except (jwt.PyJWTError, ValueError, TypeError):
+        raise credentials_exception
+
+    stmt = select(AuthorizedTechnician).where(
+        AuthorizedTechnician.id == tech_id,
+        AuthorizedTechnician.tenant_id == tenant_id,
+        AuthorizedTechnician.ativo == True
+    )
+    result = await db.execute(stmt)
+    tech = result.scalar_one_or_none()
+    if tech is None:
+        raise credentials_exception
+    return tech

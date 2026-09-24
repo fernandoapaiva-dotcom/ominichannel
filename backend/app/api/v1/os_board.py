@@ -313,20 +313,21 @@ def _empresa_filter(empresa: Optional[str]):
     return [OsBoardOrder.empresa == empresa] if empresa in ("servweld", "centrooeste") else []
 
 
-@router.get("/board")
-async def get_board(
-    empresa: Optional[str] = Query(None, description="servweld | centrooeste | (vazio = as duas)"),
-    days_open: int = Query(120, ge=1, le=1500, description="O.S. em aberto com atividade nos últimos N dias"),
-    cards_per_cell: int = Query(6, ge=1, le=120),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Quadro geral: uma linha por técnico, uma coluna por estágio. Aberto a todos os usuários."""
+async def build_board_data(
+    db: AsyncSession,
+    tenant_id: int,
+    empresa: Optional[str] = None,
+    days_open: int = 120,
+    cards_per_cell: int = 6,
+) -> Dict[str, Any]:
+    """Monta o quadro geral (uma linha por técnico, uma coluna por estágio) - sem nenhum dado financeiro,
+    por isso é seguro pra qualquer usuário logado ver, inclusive o Portal do Técnico (technician_portal.py),
+    que reaproveita esta mesma função em vez de duplicar a query/agrupamento."""
     now = now_brt()
     since_open = now - timedelta(days=days_open)
 
     stmt = select(OsBoardOrder).where(
-        OsBoardOrder.tenant_id == current_user.tenant_id,
+        OsBoardOrder.tenant_id == tenant_id,
         *_empresa_filter(empresa),
         OsBoardOrder.paga.is_(False),
         OsBoardOrder.venda_codigo.is_(None),
@@ -367,6 +368,18 @@ async def get_board(
         "total_open": sum(totals.values()),
         "generated_at": now.isoformat(),
     }
+
+
+@router.get("/board")
+async def get_board(
+    empresa: Optional[str] = Query(None, description="servweld | centrooeste | (vazio = as duas)"),
+    days_open: int = Query(120, ge=1, le=1500, description="O.S. em aberto com atividade nos últimos N dias"),
+    cards_per_cell: int = Query(6, ge=1, le=120),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Quadro geral: uma linha por técnico, uma coluna por estágio. Aberto a todos os usuários."""
+    return await build_board_data(db, current_user.tenant_id, empresa, days_open, cards_per_cell)
 
 
 @router.get("/cell")
