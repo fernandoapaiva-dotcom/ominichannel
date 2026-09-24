@@ -2931,15 +2931,35 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             msg.dados_adicionais?.is_video ||
             msg.dados_adicionais?.call_type === 'video'
           );
+          // Atendida (verde) x perdida (vermelha) - pedido do usuário em 24/09/2026, ícone
+          // diferente pra cada desfecho, igual o próprio WhatsApp faz.
+          const isAnswered = (
+            rawText.includes('ATENDIDA') ||
+            msg.dados_adicionais?.call_status === 'accept'
+          );
 
-          let title = isVideo ? 'Ligação de vídeo perdida' : 'Ligação de voz perdida';
-          let subtitle = 'Clique para retornar';
+          let title = isAnswered
+            ? (isVideo ? 'Ligação de vídeo atendida' : 'Ligação de voz atendida')
+            : (isVideo ? 'Ligação de vídeo perdida' : 'Ligação de voz perdida');
+          let subtitle = isAnswered ? 'Chamada atendida' : 'Clique para retornar';
 
           if (rawText.startsWith('[CHAMADA_')) {
             const parts = rawText.split('|');
             if (parts.length > 1 && parts[1].trim()) title = parts[1].trim();
             if (parts.length > 2 && parts[2].trim()) subtitle = parts[2].trim();
           }
+          // Duração chega depois, via atualização em tempo real (CALL_DURATION_UPDATE) -
+          // dados_adicionais.call_duration_seconds tem prioridade sobre o texto salvo, então a
+          // tela atualiza na hora sem precisar recarregar a conversa.
+          const durationSeconds = msg.dados_adicionais?.call_duration_seconds;
+          if (isAnswered && typeof durationSeconds === 'number' && durationSeconds > 0) {
+            const mins = Math.floor(durationSeconds / 60);
+            const secs = durationSeconds % 60;
+            subtitle = `Duração: ${mins}:${String(secs).padStart(2, '0')}`;
+          }
+
+          const iconColor = isAnswered ? '#22c55e' : '#ef4444';
+          const iconBg = isAnswered ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)';
 
           return (
             <div
@@ -2966,7 +2986,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   width: '38px',
                   height: '38px',
                   borderRadius: '50%',
-                  backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                  backgroundColor: iconBg,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -2974,9 +2994,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 }}
               >
                 {isVideo ? (
-                  <Video size={18} style={{ color: '#ef4444' }} />
+                  <Video size={18} style={{ color: iconColor }} />
+                ) : isAnswered ? (
+                  <PhoneIncoming size={18} style={{ color: iconColor }} />
                 ) : (
-                  <PhoneMissed size={18} style={{ color: '#ef4444' }} />
+                  <PhoneMissed size={18} style={{ color: iconColor }} />
                 )}
               </div>
 

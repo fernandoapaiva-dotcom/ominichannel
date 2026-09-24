@@ -22,6 +22,12 @@ export function formatMessageContent(conteudo?: string | null, tipo?: string | n
   const t = String(tipo || '').toLowerCase();
 
   // 1. WhatsApp Calls & System Events
+  if (c.startsWith('[CHAMADA_VIDEO_ATENDIDA]') || c.includes('Ligação de vídeo atendida')) {
+    return '📹 Ligação de vídeo atendida';
+  }
+  if (c.startsWith('[CHAMADA_VOZ_ATENDIDA]') || c.includes('Ligação de voz atendida')) {
+    return '📞 Ligação de voz atendida';
+  }
   if (c.startsWith('[CHAMADA_VIDEO_PERDIDA]') || c.includes('Ligação de vídeo perdida') || (c.includes('CHAMADA') && c.includes('VÍDEO'))) {
     return '📹 Ligação de vídeo perdida';
   }

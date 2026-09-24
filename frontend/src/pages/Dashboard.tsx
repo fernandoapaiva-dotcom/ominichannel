@@ -822,6 +822,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               return c;
             }));
 
+          } else if (payload.type === 'CALL_DURATION_UPDATE') {
+            // Chamada atendida cujo aviso de encerramento chegou depois - atualiza o cartão
+            // verde já exibido com a duração, sem precisar recarregar a conversa.
+            setConversations(prev => prev.map(c => {
+              if (c.id === payload.conversation_id) {
+                return {
+                  ...c,
+                  messages: (c.messages || []).map(m => {
+                    if (m.id === payload.id) {
+                      return {
+                        ...m,
+                        conteudo: payload.conteudo || m.conteudo,
+                        dados_adicionais: {
+                          ...(m.dados_adicionais || {}),
+                          call_duration_seconds: payload.call_duration_seconds
+                        }
+                      };
+                    }
+                    return m;
+                  })
+                };
+              }
+              return c;
+            }));
           } else if (payload.type === 'MESSAGE_REACTION_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {

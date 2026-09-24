@@ -51,6 +51,11 @@ _last_customer_msg_timestamps: Dict[int, float] = {}
 _pending_call_offers: Dict[str, Dict[str, Any]] = {}
 CALL_MISSED_FALLBACK_SECONDS = 45
 
+# Chamadas já atendidas, aguardando um eventual aviso de encerramento pra saber a duração - ver
+# _record_answered_call / _finalize_answered_call. Chave: call_id -> {"accepted_at", ...}.
+_answered_calls: Dict[str, Dict[str, Any]] = {}
+CALL_ANSWERED_TRACKING_MAX_HOURS = 6  # nunca guarda rastreando uma chamada por mais que isso
+
 
 async def _record_missed_call(instance_name: str, data: Dict[str, Any], status_call: str) -> Dict[str, Any]:
     """
@@ -241,6 +246,209 @@ async def _fallback_missed_call_check(call_id: str, instance_name: str, data: Di
         logger.info(f"[CALL FALLBACK] Chamada {call_id} sem desfecho em {CALL_MISSED_FALLBACK_SECONDS}s - registrada como perdida por timeout: {result}")
     except Exception as e:
         logger.error(f"[CALL FALLBACK] Erro ao registrar chamada perdida por timeout (call_id={call_id}): {e}", exc_info=True)
+
+
+async def _record_answered_call(instance_name: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Registra o cartão de "ligação atendida" (ícone/cor diferente do cartão de perdida - pedido
+    do usuário em 24/09/2026). Sem duração ainda aqui: o WhatsApp não participa do áudio/vídeo
+    em si, só do "aperto de mão" inicial (offer/accept), então na maioria das vezes não tem como
+    saber quanto tempo durou. Se um evento de encerramento chegar depois pra esse call_id (ver
+    despachante do webhook e _finalize_answered_call), a duração é preenchida; se não chegar
+    nada, o cartão fica só com "Ligação atendida", sem inventar um tempo.
+    """
+    from app.core.database import AsyncSessionLocal
+
+    # Limpeza oportunista de rastreamentos antigos demais (chamada nunca finalizada) - evita que
+    # _answered_calls cresça pra sempre, mesmo tendo um volume de chamadas baixo.
+    now_cleanup = datetime.utcnow()
+    stale_ids = [
+        cid for cid, info in _answered_calls.items()
+        if (now_cleanup - info["accepted_at"]).total_seconds() > CALL_ANSWERED_TRACKING_MAX_HOURS * 3600
+    ]
+    for cid in stale_ids:
+        _answered_calls.pop(cid, None)
+
+    async with AsyncSessionLocal() as db:
+        call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
+        raw_caller_jid = (
+            data.get("caller") or
+            data.get("from") or
+            data.get("chatId") or
+            data.get("creator") or
+            data.get("creatorJid") or
+            data.get("peerJid") or
+            (data.get("key") or {}).get("remoteJid", "")
+        )
+        raw_phone = str(raw_caller_jid).split("@")[0] if "@" in str(raw_caller_jid) else str(raw_caller_jid)
+        phone_number = "".join(filter(str.isdigit, raw_phone))
+        is_video = bool(data.get("isVideo", False))
+        push_name = data.get("pushName") or "Cliente"
+
+        wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+        wn = (await db.execute(wn_stmt)).scalar_one_or_none()
+        if not wn:
+            wn = (await db.execute(select(WhatsAppNumber))).scalars().first()
+        if not wn:
+            return {"status": "error", "message": "Nenhum número cadastrado"}
+
+        contact = None
+        if raw_caller_jid:
+            contact = await resolve_and_bind_contact(
+                session=db, tenant_id=wn.tenant_id, raw_jid=str(raw_caller_jid), push_name=push_name
+            )
+        elif phone_number and len(phone_number) >= 8:
+            contact = (await db.execute(
+                select(Contact).where(Contact.tenant_id == wn.tenant_id, Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            )).scalars().first()
+
+        now = datetime.utcnow()
+        call_dt = extract_message_datetime(data)
+
+        if not contact:
+            contact = Contact(tenant_id=wn.tenant_id, nome=push_name, telefone=phone_number or "Cliente", criado_em=now)
+            db.add(contact)
+            await db.commit()
+            await db.refresh(contact)
+
+        conv_stmt = select(Conversation).where(
+            Conversation.contact_id == contact.id, Conversation.whatsapp_number_id == wn.id
+        )
+        conv = (await db.execute(conv_stmt)).scalar_one_or_none()
+        if not conv:
+            conv = Conversation(
+                tenant_id=wn.tenant_id, whatsapp_number_id=wn.id, contact_id=contact.id,
+                status=ConversationStatus.COM_HUMANO, criado_em=now, ultima_interacao_em=now
+            )
+            db.add(conv)
+            await db.commit()
+            await db.refresh(conv)
+        else:
+            conv.ultima_interacao_em = now
+            await db.commit()
+
+        if call_id:
+            existing = (await db.execute(
+                select(Message.id).where((Message.whatsapp_msg_id == f"call_{call_id}") | (Message.whatsapp_msg_id == str(call_id)))
+            )).scalars().first()
+            if existing:
+                return {"status": "ignored", "reason": f"Call ID '{call_id}' already recorded"}
+
+        call_token = "[CHAMADA_VIDEO_ATENDIDA]" if is_video else "[CHAMADA_VOZ_ATENDIDA]"
+        call_title = "Ligação de vídeo atendida" if is_video else "Ligação de voz atendida"
+        call_sub = "Chamada atendida"
+        call_msg_text = f"{call_token}|{call_title}|{call_sub}"
+
+        call_msg = Message(
+            conversation_id=conv.id,
+            remetente="cliente",
+            tipo=MessageType.TEXTO,
+            conteudo=call_msg_text,
+            whatsapp_msg_id=f"call_{call_id}" if call_id else None,
+            dados_adicionais={
+                "call_id": call_id,
+                "call_type": "video" if is_video else "voice",
+                "is_video": is_video,
+                "call_status": "accept"
+            },
+            timestamp=call_dt
+        )
+        db.add(call_msg)
+        await db.commit()
+        await db.refresh(call_msg)
+
+        if call_id:
+            _answered_calls[call_id] = {
+                "accepted_at": now,
+                "message_id": call_msg.id,
+                "conversation_id": conv.id,
+                "tenant_id": wn.tenant_id,
+                "whatsapp_number_id": wn.id,
+                "is_video": is_video
+            }
+
+        try:
+            await ws_manager.broadcast_to_department(
+                tenant_id=wn.tenant_id,
+                whatsapp_number_id=wn.id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conv.id,
+                    "id": call_msg.id,
+                    "remetente": "cliente",
+                    "conteudo": call_msg_text,
+                    "tipo": "texto",
+                    "dados_adicionais": call_msg.dados_adicionais,
+                    "timestamp": call_msg.timestamp.isoformat() + "Z" if hasattr(call_msg.timestamp, "isoformat") else str(call_msg.timestamp),
+                    "contact_name": contact.nome,
+                    "contact_phone": contact.telefone,
+                    "department": wn.nome_departamento
+                }
+            )
+        except Exception as err:
+            logger.error(f"Error broadcasting answered-call websocket event: {err}")
+
+        return {"status": "success", "event": "call_answered", "conversation_id": conv.id}
+
+
+async def _finalize_answered_call(call_id: str, data: Dict[str, Any]):
+    """
+    Atualiza o cartão verde de "ligação atendida" com a duração, quando um evento de encerramento
+    chega depois do "accept" pra esse call_id. Tenta primeiro um campo de duração explícito no
+    payload (se a Evolution API mandar um); sem isso, calcula pelo tempo entre o "accept" e agora
+    - uma estimativa razoável, já que o encerramento normalmente chega logo depois do fim real.
+    """
+    from app.core.database import AsyncSessionLocal
+    from sqlalchemy.orm.attributes import flag_modified as _flag_modified
+
+    info = _answered_calls.pop(call_id, None)
+    if not info:
+        return
+
+    explicit_seconds = None
+    for key in ("duration", "callDuration", "elapsedTime", "durationSeconds"):
+        v = data.get(key)
+        if isinstance(v, (int, float)) and v > 0:
+            explicit_seconds = int(v)
+            break
+
+    seconds = explicit_seconds if explicit_seconds is not None else int((datetime.utcnow() - info["accepted_at"]).total_seconds())
+    if seconds <= 0 or seconds > CALL_ANSWERED_TRACKING_MAX_HOURS * 3600:
+        return  # sem sinal confiável - deixa o cartão como "atendida", sem duração
+
+    mins, secs = divmod(seconds, 60)
+    duration_str = f"{mins}:{secs:02d}"
+    is_video = info.get("is_video", False)
+    call_token = "[CHAMADA_VIDEO_ATENDIDA]" if is_video else "[CHAMADA_VOZ_ATENDIDA]"
+    call_title = "Ligação de vídeo atendida" if is_video else "Ligação de voz atendida"
+    new_conteudo = f"{call_token}|{call_title}|Duração: {duration_str}"
+
+    async with AsyncSessionLocal() as db:
+        msg = await db.get(Message, info["message_id"])
+        if not msg:
+            return
+        msg.conteudo = new_conteudo
+        extra = dict(msg.dados_adicionais or {})
+        extra["call_duration_seconds"] = seconds
+        msg.dados_adicionais = extra
+        _flag_modified(msg, "dados_adicionais")
+        await db.commit()
+
+    try:
+        await ws_manager.broadcast_to_department(
+            tenant_id=info["tenant_id"],
+            whatsapp_number_id=info["whatsapp_number_id"],
+            message_data={
+                "type": "CALL_DURATION_UPDATE",
+                "conversation_id": info["conversation_id"],
+                "id": info["message_id"],
+                "conteudo": new_conteudo,
+                "call_duration_seconds": seconds
+            }
+        )
+    except Exception as err:
+        logger.error(f"Error broadcasting call duration update: {err}")
+
 
 def extract_message_datetime(data: Any) -> datetime:
     if not isinstance(data, dict):
@@ -858,13 +1066,23 @@ async def receive_evolution_webhook(
             status_call = str(data.get("status") or "offer").lower()
             call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
 
+            # Se essa chamada já foi marcada como atendida antes, qualquer evento novo pra esse
+            # call_id só pode ser o fim dela - o WhatsApp não manda mais nada depois de "accept"
+            # além, às vezes, de um aviso de encerramento. Tenta extrair a duração e atualiza o
+            # cartão verde já criado, em vez de criar um novo (ver _finalize_answered_call).
+            if call_id and call_id in _answered_calls and status_call not in ["offer", "ringing", "accept"]:
+                await _finalize_answered_call(call_id, data)
+                return {"status": "success", "action": "call_duration_updated"}
+
             if status_call == "accept":
                 # Atendida - cancela o fallback por timeout agendado no offer/ringing abaixo, se
                 # algum estiver pendente pra esse call_id, pra não marcar como perdida uma
-                # ligação que na verdade foi atendida.
+                # ligação que na verdade foi atendida. Pedido explícito do usuário em 24/09/2026:
+                # registrar a chamada atendida também (ícone diferente da perdida), com a
+                # duração quando a Evolution API mandar um aviso de encerramento depois.
                 if call_id:
                     _pending_call_offers.pop(call_id, None)
-                return {"status": "ignored", "reason": "Call accepted, not missed"}
+                return await _record_answered_call(instance_name, data)
 
             if status_call in ["missed", "timeout", "reject"]:
                 if call_id:
