@@ -1,5 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Download, FileText, Monitor, RefreshCw, X } from 'lucide-react';
+import {
+  ArrowLeft, Download, FileText, Monitor, RefreshCw, X,
+  Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
+  type LucideIcon,
+} from 'lucide-react';
 import { apiFetch } from '../services/api';
 import { User } from '../types';
 
@@ -55,6 +59,13 @@ const EMPRESA_LABEL: Record<string, string> = { servweld: 'Servweld', centrooest
 const STAGE_COLORS: Record<string, string> = {
   entrada: '#60a5fa', avaliacao: '#a78bfa', orcamento: '#f59e0b', aprovado: '#34d399', nao_aprovado: '#ef4444',
   execucao: '#00e699', peca: '#f97316', retirada: '#22d3ee', sem_reparo: '#94a3b8', descarte: '#fb7185', finalizada: '#64748b',
+};
+
+// Um ícone por estágio - deixa os chips de filtro (lista do celular/Portal do Técnico) reconhecíveis de
+// relance, não só por cor.
+const STAGE_ICONS: Record<string, LucideIcon> = {
+  entrada: Inbox, avaliacao: Search, orcamento: FileText, aprovado: CheckCircle2, nao_aprovado: XCircle,
+  execucao: Wrench, peca: Package, retirada: PackageCheck, sem_reparo: AlertTriangle, descarte: Trash2,
 };
 
 // Tipo de O.S. (natureza): cor e sigla para identificar de relance no cartão - paleta separada da cor de
@@ -735,16 +746,16 @@ export const MobileBoard: React.FC<{
     .filter(r => r.shown > 0);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, touchAction: 'pan-y' }}>
       {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
-      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch' }}>
+      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x', flexShrink: 0 }}>
         <StageChip label={`Todos · ${board?.total_open ?? 0}`} active={!stageFilter} onClick={() => setStageFilter('')} />
         {stages.map(st => (
-          <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
+          <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
         ))}
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {board && rows.length === 0 && !loading && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
         )}
@@ -779,18 +790,27 @@ export const MobileBoard: React.FC<{
   );
 };
 
-const StageChip: React.FC<{ label: string; active: boolean; onClick: () => void; color?: string }> = ({ label, active, onClick, color }) => (
-  <button
-    onClick={onClick}
-    style={{
-      flexShrink: 0, padding: '6px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
-      background: active ? (color ? `${color}26` : 'rgba(0,230,153,0.16)') : 'transparent',
-      color: active ? (color || 'var(--accent-primary)') : 'var(--text-muted)',
-      border: `1px solid ${active ? (color || 'rgba(0,230,153,0.4)') : 'var(--border-color, rgba(255,255,255,0.12))'}`,
-      whiteSpace: 'nowrap',
-    }}
-  >{label}</button>
-);
+const StageChip: React.FC<{ label: string; active: boolean; onClick: () => void; color?: string; Icon?: LucideIcon }> = ({ label, active, onClick, color, Icon }) => {
+  // Cor do estágio sempre aparece (não só quando selecionado) - senão os chips ficam todos cinzas e
+  // iguais, difícil de bater o olho e achar "Não aprovado" ou "Entrada" rapidamente na lista do celular.
+  const c = color || 'var(--accent-primary)';
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px 6px 10px', borderRadius: '999px',
+        fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+        background: active ? `${c}2E` : `${c}14`,
+        color: active ? c : 'var(--text-main)',
+        border: `1.5px solid ${active ? c : `${c}55`}`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {Icon && <Icon size={13} color={c} style={{ flexShrink: 0 }} />}
+      {label}
+    </button>
+  );
+};
 
 const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: string; showEmpresa: boolean; showStage: boolean }> = ({ card, stageLabel, color, showEmpresa, showStage }) => {
   const dias = card.dias_no_estagio ?? 0;
