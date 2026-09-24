@@ -2686,6 +2686,57 @@ async def receive_evolution_webhook(
                 )
                 return {"status": "success", "action": "store_hours_sent"}
 
+            # Fora do horário comercial, não fica em silêncio total: manda o aviso de horário de
+            # funcionamento, no máximo 1x a cada 4h por conversa (debounce, pra não repetir a
+            # cada mensagem). Achado em produção em 24/09/2026: is_human_handled (acima) considera
+            # QUALQUER assigned_user_id sobrando de um dia anterior como "humano atendendo agora" -
+            # e como o fechamento automático das 18h foi desativado a pedido do usuário
+            # (BUSINESS_HOURS_CLOSING_ENABLED em main.py), esse assigned_user_id nunca mais era
+            # limpo, deixando a conversa "presa" nesse estado pra sempre. Um cliente (Jean) mandou
+            # 4 mensagens de madrugada e não recebeu resposta nenhuma por causa disso - pedido
+            # explícito do usuário pra corrigir. Pedidos de localização/horário específicos já são
+            # respondidos acima (store_intent), então aqui só sobra o caso genérico.
+            if not business_hours_service.is_within_business_hours():
+                extra_oh = dict(conversation.dados_adicionais or {})
+                last_oh_raw = extra_oh.get("last_out_of_hours_notice_at")
+                should_send_oh = True
+                if last_oh_raw:
+                    try:
+                        should_send_oh = (datetime.utcnow() - datetime.fromisoformat(last_oh_raw)).total_seconds() > 4 * 3600
+                    except Exception:
+                        should_send_oh = True
+                if should_send_oh and whatsapp_number and whatsapp_number.instancia_evolution_api:
+                    oh_text = business_hours_service.get_store_hours_info_message()
+                    try:
+                        await evolution_service.send_text_message(
+                            instance_name=whatsapp_number.instancia_evolution_api,
+                            number=phone_number,
+                            text=oh_text
+                        )
+                        oh_msg = Message(
+                            conversation_id=conversation.id, remetente=MessageSender.IA, conteudo=oh_text,
+                            tipo=MessageType.TEXTO, status="delivered",
+                            dados_adicionais={"auto_reply": True, "info_type": "out_of_hours"}, timestamp=datetime.utcnow()
+                        )
+                        db.add(oh_msg)
+                        extra_oh["last_out_of_hours_notice_at"] = datetime.utcnow().isoformat()
+                        conversation.dados_adicionais = extra_oh
+                        flag_modified(conversation, "dados_adicionais")
+                        await db.commit()
+                        await ws_manager.broadcast_to_department(
+                            tenant_id=tenant_id,
+                            whatsapp_number_id=whatsapp_number.id,
+                            message_data={
+                                "type": "NEW_MESSAGE", "conversation_id": conversation.id, "id": oh_msg.id,
+                                "remetente": "ia", "tipo": "texto", "conteudo": oh_text,
+                                "timestamp": oh_msg.timestamp.isoformat() + "Z"
+                            }
+                        )
+                        logger.info(f"[FORA DO EXPEDIENTE] Aviso automático de horário enviado na conversa #{conversation.id} (assunto preso a atendente).")
+                        return {"status": "success", "action": "out_of_hours_notice_sent"}
+                    except Exception as oh_err:
+                        logger.warning(f"Erro ao enviar aviso automático de fora de expediente na conversa #{conversation.id}: {oh_err}")
+
             # For all other messages during human attendance, SILENCE the AI completely!
             logger.info(f"[HUMAN SHIELD] Conversa #{conversation.id} possui atendimento humano ativo ({contact.nome or contact.telefone}). IA Concierge 100% silenciada.")
             await db.commit()
