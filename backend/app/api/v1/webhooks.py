@@ -46,6 +46,202 @@ _in_flight_webhook_messages: Dict[str, float] = {}
 _in_flight_ai_conversations: Dict[int, float] = {}
 _last_customer_msg_timestamps: Dict[int, float] = {}
 
+# Chamadas "offer"/"ringing" aguardando um desfecho (accept, ou o evento final de perdida) - ver
+# _fallback_missed_call_check. Chave: call_id.
+_pending_call_offers: Dict[str, Dict[str, Any]] = {}
+CALL_MISSED_FALLBACK_SECONDS = 45
+
+
+async def _record_missed_call(instance_name: str, data: Dict[str, Any], status_call: str) -> Dict[str, Any]:
+    """
+    Registra o cartão de "ligação perdida" na conversa do cliente. Roda com sua própria sessão de
+    banco (não reaproveita a da requisição) porque também é chamado de dentro de uma tarefa de
+    fundo (o fallback por timeout), que já não tem mais a sessão da requisição original disponível.
+    """
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
+        raw_caller_jid = (
+            data.get("caller") or
+            data.get("from") or
+            data.get("chatId") or
+            data.get("creator") or
+            data.get("creatorJid") or
+            data.get("peerJid") or
+            (data.get("key") or {}).get("remoteJid", "")
+        )
+        raw_phone = str(raw_caller_jid).split("@")[0] if "@" in str(raw_caller_jid) else str(raw_caller_jid)
+        phone_number = "".join(filter(str.isdigit, raw_phone))
+
+        is_video = bool(data.get("isVideo", False))
+        push_name = data.get("pushName") or "Cliente"
+
+        # Find WhatsApp Number by instance
+        wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
+        wn_res = await db.execute(wn_stmt)
+        wn = wn_res.scalar_one_or_none()
+        if not wn:
+            wn_stmt = select(WhatsAppNumber)
+            wn_res = await db.execute(wn_stmt)
+            wn = wn_res.scalars().first()
+
+        if not wn:
+            return {"status": "error", "message": "Nenhum número cadastrado"}
+
+        # Resolve contact strictly to the caller (no erroneous fallback to recent active conversation)
+        contact = None
+        if raw_caller_jid:
+            contact = await resolve_and_bind_contact(
+                session=db,
+                tenant_id=wn.tenant_id,
+                raw_jid=str(raw_caller_jid),
+                push_name=push_name
+            )
+        elif phone_number and len(phone_number) >= 8:
+            c_stmt = select(Contact).where(Contact.tenant_id == wn.tenant_id, Contact.telefone.like(f"%{phone_number[-8:]}%"))
+            c_res = await db.execute(c_stmt)
+            contact = c_res.scalars().first()
+
+        now = datetime.utcnow()
+        call_dt = extract_message_datetime(data)
+
+        if not contact:
+            contact = Contact(
+                tenant_id=wn.tenant_id,
+                nome=push_name,
+                telefone=phone_number or "Cliente",
+                criado_em=now
+            )
+            db.add(contact)
+            await db.commit()
+            await db.refresh(contact)
+
+        # Find or create conversation
+        conv_stmt = select(Conversation).where(
+            Conversation.contact_id == contact.id,
+            Conversation.whatsapp_number_id == wn.id
+        )
+        conv_res = await db.execute(conv_stmt)
+        conv = conv_res.scalar_one_or_none()
+
+        if not conv:
+            conv = Conversation(
+                tenant_id=wn.tenant_id,
+                whatsapp_number_id=wn.id,
+                contact_id=contact.id,
+                status=ConversationStatus.COM_HUMANO,
+                criado_em=now,
+                ultima_interacao_em=now
+            )
+            db.add(conv)
+            await db.commit()
+            await db.refresh(conv)
+        else:
+            conv.ultima_interacao_em = now
+            await db.commit()
+
+        # Deduplication: Check if this call was already recorded
+        if call_id:
+            existing_call_stmt = select(Message.id).where(
+                (Message.whatsapp_msg_id == f"call_{call_id}") |
+                (Message.whatsapp_msg_id == str(call_id))
+            )
+            existing_call_res = await db.execute(existing_call_stmt)
+            if existing_call_res.scalars().first():
+                return {"status": "ignored", "reason": f"Call ID '{call_id}' already recorded"}
+
+        # Deduplication cooldown (60 seconds within same conversation)
+        recent_call_stmt = select(Message).where(
+            Message.conversation_id == conv.id,
+            (Message.conteudo.like("%[CHAMADA_%") | Message.conteudo.like("%O CLIENTE ESTÁ LIGANDO%") | Message.conteudo.like("%Ligação de%"))
+        ).order_by(Message.timestamp.desc())
+        recent_call_res = await db.execute(recent_call_stmt)
+        last_call_msg = recent_call_res.scalars().first()
+
+        if last_call_msg and (now - last_call_msg.timestamp).total_seconds() < 60.0:
+            return {"status": "ignored", "reason": "Call already logged within cooldown"}
+
+        # Format authentic WhatsApp Call card text
+        call_token = "[CHAMADA_VIDEO_PERDIDA]" if is_video else "[CHAMADA_VOZ_PERDIDA]"
+        call_title = "Ligação de vídeo perdida" if is_video else "Ligação de voz perdida"
+        call_sub = "Clique para retornar"
+        call_msg_text = f"{call_token}|{call_title}|{call_sub}"
+
+        call_msg = Message(
+            conversation_id=conv.id,
+            remetente="cliente",
+            tipo=MessageType.TEXTO,
+            conteudo=call_msg_text,
+            whatsapp_msg_id=f"call_{call_id}" if call_id else None,
+            dados_adicionais={
+                "call_id": call_id,
+                "call_type": "video" if is_video else "voice",
+                "is_video": is_video,
+                "call_status": status_call
+            },
+            timestamp=call_dt
+        )
+        db.add(call_msg)
+        await db.commit()
+        await db.refresh(call_msg)
+
+        # Broadcast to department so UI updates immediately
+        try:
+            await ws_manager.broadcast_to_department(
+                tenant_id=wn.tenant_id,
+                whatsapp_number_id=wn.id,
+                message_data={
+                    "type": "NEW_MESSAGE",
+                    "conversation_id": conv.id,
+                    "remetente": "cliente",
+                    "conteudo": call_msg_text,
+                    "tipo": "texto",
+                    "dados_adicionais": call_msg.dados_adicionais,
+                    "timestamp": call_msg.timestamp.isoformat() + "Z" if hasattr(call_msg.timestamp, "isoformat") else str(call_msg.timestamp),
+                    "contact_name": contact.nome,
+                    "contact_phone": contact.telefone,
+                    "department": wn.nome_departamento
+                }
+            )
+            await ws_manager.broadcast({
+                "type": "incoming_call",
+                "conversation_id": conv.id,
+                "contact_name": contact.nome,
+                "phone": contact.telefone,
+                "is_video": is_video,
+                "message_id": call_msg.id
+            })
+        except Exception as err:
+            logger.error(f"Error broadcasting call websocket event: {err}")
+
+        return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
+
+
+async def _fallback_missed_call_check(call_id: str, instance_name: str, data: Dict[str, Any]):
+    """
+    Rede de segurança pro caso do WhatsApp/Baileys nunca mandar o evento final da chamada -
+    achado em produção em 24/09/2026 (cliente Nilson - CIPLAN: a chamada tocou, ninguém viu a
+    tempo, e o aviso de "perdida" nunca chegou - diferente de mensagem de texto/mídia, o WhatsApp
+    não guarda histórico de chamada em lugar nenhum, nem na própria Evolution API, então depois
+    não tinha como sincronizar/recuperar). Pedido explícito do usuário: registrar de qualquer
+    forma. Se em CALL_MISSED_FALLBACK_SECONDS não chegou nem "accept" nem um evento final pra
+    esse call_id, assume perdida e registra mesmo assim.
+
+    Risco avisado ao usuário e aceito por ele: sem uma confirmação explícita de "atendida em
+    outro aparelho" no protocolo da Evolution API, uma ligação atendida bem devagar (mais que o
+    timeout) ou em outro dispositivo pode acabar marcada como perdida por engano.
+    """
+    await asyncio.sleep(CALL_MISSED_FALLBACK_SECONDS)
+    if call_id not in _pending_call_offers:
+        return  # resolvida nesse meio tempo (atendida, ou o evento final chegou de verdade)
+    _pending_call_offers.pop(call_id, None)
+    try:
+        result = await _record_missed_call(instance_name, data, "timeout_fallback")
+        logger.info(f"[CALL FALLBACK] Chamada {call_id} sem desfecho em {CALL_MISSED_FALLBACK_SECONDS}s - registrada como perdida por timeout: {result}")
+    except Exception as e:
+        logger.error(f"[CALL FALLBACK] Erro ao registrar chamada perdida por timeout (call_id={call_id}): {e}", exc_info=True)
+
 def extract_message_datetime(data: Any) -> datetime:
     if not isinstance(data, dict):
         return datetime.utcnow()
@@ -653,176 +849,36 @@ async def receive_evolution_webhook(
     is_call_event = (
         event_type in ["call", "CALL", "call.updated", "call_received"] or
         "call" in str(event_type).lower() or
-        data.get("status") in ["offer", "ringing"] or
+        data.get("status") in ["offer", "ringing", "accept"] or
         "caller" in data
     )
 
     if is_call_event:
         try:
             status_call = str(data.get("status") or "offer").lower()
-            # Only log a "missed call" card on an actual negative outcome. "offer"/"ringing" are
-            # just the call starting - not yet an outcome - and "accept" means it was answered.
-            # This used to fire on "offer" alone, so every call got marked as missed the instant
-            # it started ringing, and since "accept" was never handled, answering it never fixed
-            # the card - the customer's call showed as missed even when the agent picked up.
-            if status_call not in ["missed", "timeout", "reject"]:
-                return {"status": "ignored", "reason": f"Call status '{status_call}' is not a missed-call outcome"}
-
             call_id = data.get("id") or data.get("callId") or (data.get("key") or {}).get("id") or ""
-            raw_caller_jid = (
-                data.get("caller") or
-                data.get("from") or
-                data.get("chatId") or
-                data.get("creator") or
-                data.get("creatorJid") or
-                data.get("peerJid") or
-                (data.get("key") or {}).get("remoteJid", "")
-            )
-            raw_phone = str(raw_caller_jid).split("@")[0] if "@" in str(raw_caller_jid) else str(raw_caller_jid)
-            phone_number = "".join(filter(str.isdigit, raw_phone))
 
-            is_video = bool(data.get("isVideo", False))
-            push_name = data.get("pushName") or "Cliente"
+            if status_call == "accept":
+                # Atendida - cancela o fallback por timeout agendado no offer/ringing abaixo, se
+                # algum estiver pendente pra esse call_id, pra não marcar como perdida uma
+                # ligação que na verdade foi atendida.
+                if call_id:
+                    _pending_call_offers.pop(call_id, None)
+                return {"status": "ignored", "reason": "Call accepted, not missed"}
 
-            # Find WhatsApp Number by instance
-            wn_stmt = select(WhatsAppNumber).where(WhatsAppNumber.instancia_evolution_api == instance_name)
-            wn_res = await db.execute(wn_stmt)
-            wn = wn_res.scalar_one_or_none()
-            if not wn:
-                wn_stmt = select(WhatsAppNumber)
-                wn_res = await db.execute(wn_stmt)
-                wn = wn_res.scalars().first()
+            if status_call in ["missed", "timeout", "reject"]:
+                if call_id:
+                    _pending_call_offers.pop(call_id, None)
+                return await _record_missed_call(instance_name, data, status_call)
 
-            if not wn:
-                return {"status": "error", "message": "Nenhum número cadastrado"}
+            # "offer"/"ringing" ainda não é um desfecho - agenda a checagem de fallback (ver
+            # _fallback_missed_call_check) pro caso do WhatsApp/Baileys nunca mandar o evento
+            # final de perdida.
+            if call_id and status_call in ["offer", "ringing"] and call_id not in _pending_call_offers:
+                _pending_call_offers[call_id] = {"data": data, "instance_name": instance_name}
+                asyncio.create_task(_fallback_missed_call_check(call_id, instance_name, data))
 
-            # Resolve contact strictly to the caller (no erroneous fallback to recent active conversation)
-            contact = None
-            if raw_caller_jid:
-                contact = await resolve_and_bind_contact(
-                    session=db,
-                    tenant_id=wn.tenant_id,
-                    raw_jid=str(raw_caller_jid),
-                    push_name=push_name
-                )
-            elif phone_number and len(phone_number) >= 8:
-                c_stmt = select(Contact).where(Contact.tenant_id == wn.tenant_id, Contact.telefone.like(f"%{phone_number[-8:]}%"))
-                c_res = await db.execute(c_stmt)
-                contact = c_res.scalars().first()
-
-            now = datetime.utcnow()
-            call_dt = extract_message_datetime(data)
-
-            if not contact:
-                contact = Contact(
-                    tenant_id=wn.tenant_id,
-                    nome=push_name,
-                    telefone=phone_number or "Cliente",
-                    criado_em=now
-                )
-                db.add(contact)
-                await db.commit()
-                await db.refresh(contact)
-
-            # Find or create conversation
-            conv_stmt = select(Conversation).where(
-                Conversation.contact_id == contact.id,
-                Conversation.whatsapp_number_id == wn.id
-            )
-            conv_res = await db.execute(conv_stmt)
-            conv = conv_res.scalar_one_or_none()
-
-            if not conv:
-                conv = Conversation(
-                    tenant_id=wn.tenant_id,
-                    whatsapp_number_id=wn.id,
-                    contact_id=contact.id,
-                    status=ConversationStatus.COM_HUMANO,
-                    criado_em=now,
-                    ultima_interacao_em=now
-                )
-                db.add(conv)
-                await db.commit()
-                await db.refresh(conv)
-            else:
-                conv.ultima_interacao_em = now
-                await db.commit()
-
-            # Deduplication: Check if this call was already recorded
-            if call_id:
-                existing_call_stmt = select(Message.id).where(
-                    (Message.whatsapp_msg_id == f"call_{call_id}") |
-                    (Message.whatsapp_msg_id == str(call_id))
-                )
-                existing_call_res = await db.execute(existing_call_stmt)
-                if existing_call_res.scalars().first():
-                    return {"status": "ignored", "reason": f"Call ID '{call_id}' already recorded"}
-
-            # Deduplication cooldown (60 seconds within same conversation)
-            recent_call_stmt = select(Message).where(
-                Message.conversation_id == conv.id,
-                (Message.conteudo.like("%[CHAMADA_%") | Message.conteudo.like("%O CLIENTE ESTÁ LIGANDO%") | Message.conteudo.like("%Ligação de%"))
-            ).order_by(Message.timestamp.desc())
-            recent_call_res = await db.execute(recent_call_stmt)
-            last_call_msg = recent_call_res.scalars().first()
-
-            if last_call_msg and (now - last_call_msg.timestamp).total_seconds() < 60.0:
-                return {"status": "ignored", "reason": "Call already logged within cooldown"}
-
-            # Format authentic WhatsApp Call card text
-            call_token = "[CHAMADA_VIDEO_PERDIDA]" if is_video else "[CHAMADA_VOZ_PERDIDA]"
-            call_title = "Ligação de vídeo perdida" if is_video else "Ligação de voz perdida"
-            call_sub = "Clique para retornar"
-            call_msg_text = f"{call_token}|{call_title}|{call_sub}"
-
-            call_msg = Message(
-                conversation_id=conv.id,
-                remetente="cliente",
-                tipo=MessageType.TEXTO,
-                conteudo=call_msg_text,
-                whatsapp_msg_id=f"call_{call_id}" if call_id else None,
-                dados_adicionais={
-                    "call_id": call_id,
-                    "call_type": "video" if is_video else "voice",
-                    "is_video": is_video,
-                    "call_status": status_call
-                },
-                timestamp=call_dt
-            )
-            db.add(call_msg)
-            await db.commit()
-            await db.refresh(call_msg)
-
-            # Broadcast to department so UI updates immediately
-            try:
-                await ws_manager.broadcast_to_department(
-                    tenant_id=wn.tenant_id,
-                    whatsapp_number_id=wn.id,
-                    message_data={
-                        "type": "NEW_MESSAGE",
-                        "conversation_id": conv.id,
-                        "remetente": "cliente",
-                        "conteudo": call_msg_text,
-                        "tipo": "texto",
-                        "dados_adicionais": call_msg.dados_adicionais,
-                        "timestamp": call_msg.timestamp.isoformat() + "Z" if hasattr(call_msg.timestamp, "isoformat") else str(call_msg.timestamp),
-                        "contact_name": contact.nome,
-                        "contact_phone": contact.telefone,
-                        "department": wn.nome_departamento
-                    }
-                )
-                await ws_manager.broadcast({
-                    "type": "incoming_call",
-                    "conversation_id": conv.id,
-                    "contact_name": contact.nome,
-                    "phone": contact.telefone,
-                    "is_video": is_video,
-                    "message_id": call_msg.id
-                })
-            except Exception as err:
-                logger.error(f"Error broadcasting call websocket event: {err}")
-
-            return {"status": "success", "event": "incoming_call", "conversation_id": conv.id}
+            return {"status": "ignored", "reason": f"Call status '{status_call}' is not yet an outcome"}
         except Exception as e:
             logger.error(f"Error processing call webhook: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
