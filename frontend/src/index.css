@@ -274,6 +274,21 @@ button {
     box-sizing: border-box !important;
   }
 
+  /* Portal do Técnico (rota /tecnico, TechnicianPortalApp.tsx): página simples fora do shell do
+     painel administrativo, que rola a PRÓPRIA página (scroll nativo do documento) em vez de uma
+     região interna - mais compatível com WebViews de celular. As regras acima (!important, sem essa
+     classe) travam html/body/#root em overflow:hidden mesmo com JS setando estilo inline, porque
+     !important sempre vence estilo inline. Essa classe (adicionada só enquanto o Portal do Técnico
+     está montado) tem especificidade maior que as de cima e libera o scroll de verdade.
+     Especificidade: id+classe (1,1,0) bate #root sozinho (1,0,0); tipo+classe (0,1,1) bate
+     html/body sozinhos (0,0,1) - por isso funciona mesmo com !important dos dois lados. */
+  html.tech-portal-scroll, body.tech-portal-scroll, #root.tech-portal-scroll {
+    height: auto !important;
+    max-height: none !important;
+    overflow: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+
   /* ── Dashboard wrapper ─────────────────── */
   .dashboard-layout {
     flex-direction: column !important;

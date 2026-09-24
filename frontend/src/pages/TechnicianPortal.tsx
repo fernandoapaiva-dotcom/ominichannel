@@ -47,26 +47,6 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   }, []);
   const useMobileLayout = isNarrow && !isLandscape;
 
-  // index.css trava body/#root em overflow:hidden + altura fixa (o app administrativo controla o
-  // próprio scroll internamente). O Portal do Técnico é mais simples e, depois de tentar várias vezes
-  // fazer uma região interna rolar (overflow:auto aninhado dentro de flex/position:fixed) sem sucesso
-  // em alguns celulares/WebViews reais, a solução à prova de qualquer navegador é deixar a PRÓPRIA
-  // PÁGINA rolar (scroll nativo do documento) - por isso libera o overflow do body só enquanto esse
-  // componente estiver montado, e devolve como estava ao sair (login/logout do técnico).
-  useEffect(() => {
-    const prevBodyOverflow = document.body.style.overflow;
-    const prevBodyHeight = document.body.style.height;
-    const prevHtmlOverflow = document.documentElement.style.overflow;
-    document.body.style.overflow = 'auto';
-    document.body.style.height = 'auto';
-    document.documentElement.style.overflow = 'auto';
-    return () => {
-      document.body.style.overflow = prevBodyOverflow;
-      document.body.style.height = prevBodyHeight;
-      document.documentElement.style.overflow = prevHtmlOverflow;
-    };
-  }, []);
-
   const [zoom, setZoomState] = useState<number>(() => {
     try {
       const v = parseFloat(localStorage.getItem('omni_tech_portal_zoom') || '1');

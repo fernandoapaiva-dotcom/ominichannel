@@ -7,6 +7,22 @@ export const TechnicianPortalApp: React.FC = () => {
   const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // index.css trava html/body/#root em overflow:hidden !important no celular (o app administrativo
+  // depende disso pra controlar o próprio scroll internamente) - !important sempre vence estilo
+  // inline via JS, então a única forma de liberar o scroll da página aqui é por uma classe CSS com
+  // especificidade maior (ver a regra "tech-portal-scroll" em index.css). Aplicada durante toda a
+  // vida do Portal do Técnico (login + quadro), removida ao sair pro app administrativo não ser afetado.
+  useEffect(() => {
+    document.documentElement.classList.add('tech-portal-scroll');
+    document.body.classList.add('tech-portal-scroll');
+    document.getElementById('root')?.classList.add('tech-portal-scroll');
+    return () => {
+      document.documentElement.classList.remove('tech-portal-scroll');
+      document.body.classList.remove('tech-portal-scroll');
+      document.getElementById('root')?.classList.remove('tech-portal-scroll');
+    };
+  }, []);
+
   const checkAuth = async () => {
     const token = localStorage.getItem('tech_token');
     if (!token) {
