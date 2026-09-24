@@ -454,26 +454,34 @@ async def get_technician_detail(
     result = []
     for o in orders:
         evs = events_by_order.get((o.empresa, o.loja, o.codos), [])
-        is_open = o.situacao_evento != EVENTO_FINALIZADA and not _efetivada(o)
+        efetivada = _efetivada(o)
+        is_open = o.situacao_evento != EVENTO_FINALIZADA and not efetivada
         entered = in_period(o.data_entrada)
-        finished = in_period(o.finalizada_em)
+        # "finalizada" = tem o evento oficial (finalizada_em) OU já está efetivada (paga/venda
+        # vinculada) mas o Softsystem nunca lançou o evento 7 pra essa O.S. - achado em produção em
+        # 24/09/2026 (O.S. #1729: só tinha o evento ENTRADA, mas já tinha "Ver Venda #6041" e
+        # Status Finalizada). Sem uma data própria de "quando foi efetivada" vinda do Softsystem,
+        # usa a data de entrada como referência nesse segundo caso - melhor que nunca aparecer em
+        # lugar nenhum do relatório (nem aberta, nem finalizada).
+        efetivada_sem_evento = efetivada and not o.finalizada_em
+        finished = in_period(o.finalizada_em) or (efetivada_sem_evento and entered)
         worked = any(in_period(e.data) for e in evs) or entered
         if is_open:
             summary["abertas_agora"] += 1
         summary["entradas_no_periodo"] += 1 if entered else 0
         summary["finalizadas_no_periodo"] += 1 if finished else 0
         summary["trabalhou_no_periodo"] += 1 if worked else 0
-        summary["efetivadas_no_periodo"] += 1 if (_efetivada(o) and worked) else 0
+        summary["efetivadas_no_periodo"] += 1 if (efetivada and worked) else 0
 
         include = {
             # "entrada" é usado como lista de pendência ("o que ainda falta olhar"), não histórico -
             # uma O.S. que entrou no período mas já foi finalizada/efetivada (Venda vinculada/paga)
             # não deve continuar aparecendo aqui, mesmo que o único evento registrado seja ENTRADA.
-            # Achado em produção em 24/09/2026: O.S. #1729 (Junior) só tinha o evento ENTRADA, mas
-            # já estava com "Ver Venda #6041" e Status Finalizada no Softsystem - o quadro geral já
-            # filtra isso certo (paga/venda_codigo), só faltava aqui no relatório por técnico.
             "trabalhou": worked, "entrada": entered and is_open, "finalizadas": finished,
-            "abertas": is_open and not _efetivada(o), "efetivadas": _efetivada(o), "todas": True,
+            # "efetivadas" batendo com o mesmo critério period-bound do resumo (efetivadas_no_periodo)
+            # acima - antes mostrava TODAS as O.S. efetivadas do técnico, sem respeitar o período
+            # escolhido, o que fazia a lista não bater com o número do resumo.
+            "abertas": is_open, "efetivadas": efetivada and worked, "todas": True,
         }.get(status, worked)
         if not include:
             continue
@@ -489,7 +497,7 @@ async def get_technician_detail(
             "situacao": EVENT_LABELS.get(o.situacao_evento or 0, "—"),
             "stage": _stage_of(o),
             "finalizada_em": _iso(o.finalizada_em),
-            "aberta": is_open and not _efetivada(o),
+            "aberta": is_open,
             "paga": bool(o.paga),
             "venda_codigo": o.venda_codigo,
             "efetivada_motivo": _efetivada_motivo(o),
