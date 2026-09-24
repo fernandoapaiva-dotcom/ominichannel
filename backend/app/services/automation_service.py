@@ -541,13 +541,39 @@ class AutomationService:
         norm = normalize_text(text)
         yes_words = ["sim", "confirmo", "confirmado", "concordo", "aceito", "certo", "correto", "isso", "pode", "ok", "okay", "de acordo", "afirmativo"]
         no_words = ["nao", "recuso", "negativo", "cancela", "cancelar", "nunca"]
+        # "não" antes de um verbo de RECEBIMENTO/POSSE/ENTENDIMENTO não é uma resposta de recusa -
+        # é o cliente dizendo que não recebeu/não tem/não entendeu o que foi perguntado, um assunto
+        # diferente de aprovar ou não. Achado em produção em 24/09/2026: "não recebi esse
+        # orçamento" e "não tenho nada aqui dessa tochas" caíram como NEGA na hora (o classificador
+        # rápido "ganhava" por já não ser AMBIGUA, sem nunca chegar a consultar a IA em
+        # classify_confirmation_intent). Nesses casos cai pra AMBIGUA, que aí sim escalona pra IA.
+        negation_exception = re.search(
+            r"\bnao\s+(recebi|receb[ie]|tenho|chegou|chegaram|sei|entendi|vi\b|encontrei|achei|"
+            r"consigo\s+ver|apareceu|ve[ji]o)\b",
+            norm
+        )
         has_yes = any(w in norm for w in yes_words)
-        has_no = any(w in norm for w in no_words)
+        has_no = any(w in norm for w in no_words) and not negation_exception
         if has_yes and not has_no:
             return "CONFIRMA"
         if has_no and not has_yes:
             return "NEGA"
         return "AMBIGUA"
+
+    @staticmethod
+    def customer_says_document_not_received(text: str) -> bool:
+        """
+        Detecta especificamente "não recebi"/"não chegou"/"não encontrei" o documento - usado só
+        dentro de um fluxo CONFIRM_OS_PDF/CONFIRM_OS_APPROVAL (contexto já restrito ao PDF/
+        orçamento em questão), pra reenviar o arquivo em vez de só repetir "responda SIM ou NÃO"
+        pra alguém que nem tem o que confirmar. Achado em produção em 24/09/2026 (cliente Ygor:
+        "não recebi esse orçamento").
+        """
+        norm = normalize_text(text)
+        return bool(re.search(
+            r"\bnao\s+(recebi|chegou|chegaram|encontrei|achei|apareceu|consegui\s+ver|consigo\s+ver|abriu|abre)\b",
+            norm
+        ))
 
     @classmethod
     async def classify_confirmation_intent(cls, db: AsyncSession, tenant_id: int, text: str) -> str:

@@ -2820,6 +2820,34 @@ async def receive_evolution_webhook(
                     instance_name=instance_name, os_numero=os_numero, client_name=contact.nome or "Cliente",
                     aprovado=aprovado, pdf_relative_path=pdf_rel_path, tecnico_phone=tecnico_phone
                 )
+            elif pdf_rel_path and automation_service.customer_says_document_not_received(text_content):
+                # Acesso rápido pelo README pra recuperar o próprio Firebird - achado em produção
+                # em 24/09/2026: cliente (Ygor) respondeu "não recebi esse orçamento" a essa mesma
+                # pergunta e o sistema, antes desta correção, classificava como recusa (NEGA) na
+                # cara - agora, em vez de só repetir a pergunta pra quem nem tem o PDF, reenvia o
+                # arquivo direto.
+                abs_path = os.path.join("uploads", pdf_rel_path)
+                if os.path.isfile(abs_path):
+                    with open(abs_path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("utf-8")
+                    pdf_file_name = _build_os_pdf_filename(
+                        os_numero, os_pdf_client_name(conversation.dados_adicionais, os_numero, contact.nome)
+                    )
+                    resend_res = await evolution_service.send_media_message(
+                        instance_name=instance_name, number=phone_number, media_type="document",
+                        mimetype="application/pdf", media=b64, file_name=pdf_file_name
+                    )
+                    if isinstance(resend_res, dict) and resend_res.get("success"):
+                        resend_msg = Message(
+                            conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
+                            conteudo=f"/uploads/{pdf_rel_path}|{pdf_file_name}", tipo=MessageType.ARQUIVO, status="sent",
+                            whatsapp_msg_id=extract_evolution_msg_id(resend_res), timestamp=datetime.utcnow()
+                        )
+                        db.add(resend_msg)
+                reply_text = (
+                    f"Aqui está de novo o orçamento da O.S. #{os_numero}! 📎 Você *aprova* a execução do "
+                    f"serviço pelo valor informado? Responda *SIM* para aprovar ou *NÃO* para recusar."
+                )
             else:
                 reply_text = f"Só para eu confirmar: você *aprova* a execução do serviço da O.S. #{os_numero} pelo valor informado no orçamento? Responda *SIM* ou *NÃO*."
 
