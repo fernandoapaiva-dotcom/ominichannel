@@ -68,6 +68,8 @@ def _format_event_response(event: CalendarEvent) -> CalendarEventResponse:
         confirmation_token=event.confirmation_token,
         whatsapp_number_id=event.whatsapp_number_id,
         whatsapp_instance=event.whatsapp_instance,
+        pedido_codigo=event.pedido_codigo,
+        pedido_nf_notificado=event.pedido_nf_notificado or False,
         criado_em=event.criado_em,
         atualizado_em=event.atualizado_em,
         contact_name=c_name,
@@ -206,6 +208,7 @@ async def create_calendar_event(
         custom_reminder_hours=payload.custom_reminder_hours or 2,
         whatsapp_number_id=payload.whatsapp_number_id,
         whatsapp_instance=payload.whatsapp_instance.strip() if payload.whatsapp_instance else None,
+        pedido_codigo=payload.pedido_codigo.strip() if payload.pedido_codigo else None,
         notified_creation=True,
         notified_day_of=False,
         notified_hours_before=False,
@@ -304,6 +307,13 @@ async def update_calendar_event(
         event.whatsapp_number_id = payload.whatsapp_number_id
     if payload.whatsapp_instance is not None:
         event.whatsapp_instance = payload.whatsapp_instance.strip() if payload.whatsapp_instance else None
+    if payload.pedido_codigo is not None:
+        new_pedido = payload.pedido_codigo.strip() if payload.pedido_codigo else None
+        if new_pedido != event.pedido_codigo:
+            # Vínculo mudou (ou foi limpo) - a notificação de NF, se já tinha sido enviada pro
+            # pedido antigo, não vale mais pra esse novo vínculo.
+            event.pedido_nf_notificado = False
+        event.pedido_codigo = new_pedido
 
     event.atualizado_em = datetime.utcnow()
     await db.commit()

@@ -340,6 +340,94 @@ def send_event_to_backend(config: dict, empresa_key: str, event: dict, tipo: str
         return False
 
 
+# ---------------------------------------------------------------------------------------------
+# Aviso automático de Nota Fiscal do Pedido: quando o usuário cria uma tarefa na agenda vinculada
+# a um "Código" (CODORCAMENTO) de Pedido do Softsystem, avisa o funcionário responsável assim que
+# uma Nota Fiscal aparecer na tabela NOTAFISCAL pra esse mesmo pedido - sem precisar avisar
+# manualmente. Backend decide se existe alguma tarefa vinculada (ver
+# os_handler_ingest.ingest_pedido_nf_event); esse vigia só detecta e encaminha, igual o
+# fetch_new_events/send_event_to_backend acima fazem pros eventos de O.S.
+# ---------------------------------------------------------------------------------------------
+
+def fetch_new_notas_fiscais(cur, since_data) -> list:
+    if since_data:
+        cur.execute("""
+            SELECT LOJA, CODORCAMENTO, NUMERONOTA, SERIENOTA, DATA, CANCELADA
+            FROM NOTAFISCAL
+            WHERE DATA > ?
+            ORDER BY DATA ASC
+        """, (since_data,))
+    else:
+        cur.execute("SELECT LOJA, CODORCAMENTO, NUMERONOTA, SERIENOTA, DATA, CANCELADA FROM NOTAFISCAL WHERE 1=0")
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def send_nf_event_to_backend(config: dict, empresa_key: str, nf: dict) -> bool:
+    url = config["backend_url"].rstrip("/") + "/api/v1/os-handler/pedido-nf-event"
+    headers = {"X-OS-Handler-Key": config["api_key"]}
+    payload = {
+        "codorcamento": nf["CODORCAMENTO"],
+        "numero_nota": str(nf["NUMERONOTA"]) if nf.get("NUMERONOTA") else None,
+        "cancelada": str(nf.get("CANCELADA") or "").strip().upper() in ("S", "1", "TRUE"),
+    }
+    try:
+        resp = requests.post(
+            url, headers=headers,
+            data={"payload": json.dumps(payload, ensure_ascii=False)},
+            timeout=config.get("timeout_seconds", 60)
+        )
+        if resp.status_code == 200:
+            resp_json = resp.json()
+            if resp_json.get("notified"):
+                logger.info(f"OK [{empresa_key}] Pedido #{nf['CODORCAMENTO']} - nota #{nf.get('NUMERONOTA')} -> {resp_json}")
+            return True
+        logger.error(f"FALHA [{empresa_key}] Pedido #{nf['CODORCAMENTO']} (nota fiscal) -> HTTP {resp.status_code}: {resp.text}")
+        return False
+    except Exception as e:
+        logger.error(f"ERRO ao enviar evento de nota fiscal do pedido #{nf['CODORCAMENTO']} ({empresa_key}): {e}")
+        return False
+
+
+def poll_notas_fiscais(config: dict, empresa_key: str, empresa_cfg: dict, state: dict):
+    try:
+        con = db_connect(empresa_cfg)
+    except Exception as e:
+        logger.error(f"[{empresa_key}] Nota fiscal: não foi possível conectar ao banco: {e}")
+        return
+
+    try:
+        tra, cur = read_only_cursor(con)
+        try:
+            since_data_raw = state.get(empresa_key, {}).get("last_nf_data")
+            since_data = datetime.fromisoformat(since_data_raw) if since_data_raw else None
+            notas = fetch_new_notas_fiscais(cur, since_data)
+
+            if since_data is None and notas == []:
+                # Primeira vez rodando: marca o "agora" do banco como ponto de partida, sem
+                # avisar retroativamente de notas fiscais antigas.
+                cur.execute("SELECT FIRST 1 DATA FROM NOTAFISCAL ORDER BY DATA DESC")
+                row = cur.fetchone()
+                baseline = row[0] if row else None
+                state.setdefault(empresa_key, {})["last_nf_data"] = str(baseline) if baseline else "1900-01-01"
+                save_state(state)
+                logger.info(f"[{empresa_key}] Nota fiscal: primeira execução - marcando ponto de partida em {baseline}.")
+                return
+
+            for nf in notas:
+                success = send_nf_event_to_backend(config, empresa_key, nf)
+                if success:
+                    state.setdefault(empresa_key, {})["last_nf_data"] = str(nf["DATA"])
+                    save_state(state)
+                else:
+                    logger.warning(f"[{empresa_key}] Vai tentar a nota fiscal do pedido #{nf['CODORCAMENTO']} de novo no próximo ciclo.")
+                    break
+        finally:
+            tra.commit()
+    finally:
+        con.close()
+
+
 def wait_until_file_is_stable(path: str, checks: int = 4, interval: float = 1.0) -> bool:
     """Espera o arquivo parar de crescer - o Softsystem pode ainda estar terminando de escrever."""
     last_size = -1
@@ -707,6 +795,10 @@ def main():
                     poll_empresa(config, empresa_key, empresa_cfg, state)
                 except Exception as e:
                     logger.error(f"[{empresa_key}] Erro inesperado no ciclo de consulta: {e}", exc_info=True)
+                try:
+                    poll_notas_fiscais(config, empresa_key, empresa_cfg, state)
+                except Exception as e:
+                    logger.error(f"[{empresa_key}] Nota fiscal: erro inesperado no ciclo (não afeta os avisos de O.S.): {e}", exc_info=True)
                 try:
                     sync_board_empresa(config, empresa_key, empresa_cfg, state)
                 except Exception as e:

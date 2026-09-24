@@ -206,7 +206,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
   const [formMessageId, setFormMessageId] = useState<number | null>(null);
   const [formContactName, setFormContactName] = useState<string | null>(null);
   const [formContactPhone, setFormContactPhone] = useState<string | null>(null);
-  
+  const [formPedidoCodigo, setFormPedidoCodigo] = useState<string>('');
+
   // Store Employee & WhatsApp Reminders
   const [whatsappNumbers, setWhatsappNumbers] = useState<WhatsAppNumber[]>([]);
   const [formEmployeeId, setFormEmployeeId] = useState<number | ''>('');
@@ -347,6 +348,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormMessageId(prefill?.message_id || null);
     setFormContactName(prefill?.contact_name || null);
     setFormContactPhone(prefill?.contact_phone || null);
+    setFormPedidoCodigo(prefill?.pedido_codigo || '');
 
     setFormEmployeeId(prefill?.employee_id || '');
     setFormEmployeeName(prefill?.employee_name || '');
@@ -392,6 +394,7 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     setFormMessageId(event.message_id || null);
     setFormContactName(event.contact_name || null);
     setFormContactPhone(event.contact_phone || null);
+    setFormPedidoCodigo(event.pedido_codigo || '');
 
     setFormEmployeeId(event.employee_id || '');
     setFormEmployeeName(event.employee_name || '');
@@ -455,7 +458,8 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
         custom_reminder_hours: formCustomReminderHours,
         confirmed_by_employee: formConfirmedByEmployee,
         whatsapp_number_id: formWhatsappNumberId ? Number(formWhatsappNumberId) : null,
-        whatsapp_instance: formWhatsappInstance || null
+        whatsapp_instance: formWhatsappInstance || null,
+        pedido_codigo: formPedidoCodigo.trim() || null
       };
 
       if (editingEvent) {
@@ -3213,6 +3217,31 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
                     fontSize: '13px',
                     outline: 'none',
                     resize: 'vertical'
+                  }}
+                />
+              </div>
+
+              {/* Vínculo com Pedido do Softsystem (opcional) - quando preenchido, o sistema avisa
+                  o funcionário automaticamente assim que uma Nota Fiscal for emitida pra esse
+                  pedido (ou confirmada sem nota, se o cliente não quiser NF) */}
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                  CÓDIGO DO PEDIDO NO SOFTSYSTEM (OPCIONAL)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: 6574 - avisa o funcionário sozinho quando a Nota Fiscal sair"
+                  value={formPedidoCodigo}
+                  onChange={e => setFormPedidoCodigo(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)',
+                    backgroundColor: 'var(--bg-primary)',
+                    color: '#fff',
+                    fontSize: '13px',
+                    outline: 'none'
                   }}
                 />
               </div>

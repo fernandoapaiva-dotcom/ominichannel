@@ -347,6 +347,13 @@ class CalendarEvent(Base):
     whatsapp_number_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("whatsapp_numbers.id", ondelete="SET NULL"), nullable=True)
     whatsapp_instance: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    # Vínculo opcional com o Pedido/Orçamento do Softsystem (CODORCAMENTO) - quando preenchido,
+    # o vigia de banco avisa o funcionário responsável assim que uma Nota Fiscal for emitida (ou
+    # não, se o cliente não quiser NF) pra esse mesmo pedido. Ver os_handler_ingest.py
+    # (ingest_pedido_nf_event) e calendar_reminder_service.py.
+    pedido_codigo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    pedido_nf_notificado: Mapped[bool] = mapped_column(Boolean, default=False)
+
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

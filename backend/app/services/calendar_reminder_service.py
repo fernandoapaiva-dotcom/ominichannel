@@ -396,6 +396,80 @@ async def send_immediate_creation_notification(event_id: int):
     except Exception as e:
         logger.error(f"Erro ao enviar notificação imediata do evento #{event_id}: {e}")
 
+async def send_pedido_nf_notification(event_id: int, numero_nota: Optional[str], cancelada: bool = False) -> bool:
+    """
+    Avisa o funcionário responsável pela tarefa que o Pedido vinculado (CalendarEvent.pedido_codigo)
+    teve uma Nota Fiscal emitida - ou, se `numero_nota` vier vazio, só confirma que o pedido segue
+    sem nota (cliente que não quer NF). Pedido do usuário em 24/09/2026: quando ele cria uma tarefa
+    ligada a um pedido do Softsystem, avisar o funcionário assim que o pedido "andar" (nota emitida),
+    sem precisar o próprio Fernando avisar manualmente. Marca `pedido_nf_notificado` pra não repetir
+    o aviso se o mesmo evento de nota chegar de novo (o vigia não tem como saber se já entregamos).
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            stmt = select(CalendarEvent).where(CalendarEvent.id == event_id)
+            res = await session.execute(stmt)
+            ev = res.scalar_one_or_none()
+            if not ev or not ev.employee_phone or ev.pedido_nf_notificado:
+                return False
+
+            stmt_w = select(WhatsAppNumber).where(WhatsAppNumber.tenant_id == ev.tenant_id, WhatsAppNumber.status == True)
+            res_w = await session.execute(stmt_w)
+            wns = res_w.scalars().all()
+            if not wns:
+                return False
+
+            ordered_inst_names = await get_candidate_instances_for_event(ev, wns)
+            emp_name = (ev.employee_name or "Colaborador").split(",")[0].split(";")[0].strip() or "Colaborador"
+
+            if cancelada:
+                title = "⚠️ NOTA FISCAL CANCELADA"
+                description = (
+                    f"Olá, *{emp_name}*! A nota fiscal *#{numero_nota}* do pedido *#{ev.pedido_codigo}* "
+                    f"(referente à atividade *{ev.title}*) foi cancelada. Fique de olho, pode precisar "
+                    f"de uma nova emissão."
+                )
+            elif numero_nota:
+                title = "🧾 NOTA FISCAL EMITIDA"
+                description = (
+                    f"Olá, *{emp_name}*! A nota fiscal do pedido *#{ev.pedido_codigo}* já foi emitida "
+                    f"(referente à atividade *{ev.title}*):\n\n"
+                    f"🔢 *Número da Nota:* {numero_nota}\n\n"
+                    f"Pode seguir com a entrega/atendimento."
+                )
+            else:
+                title = "✅ PEDIDO CONFIRMADO"
+                description = (
+                    f"Olá, *{emp_name}*! O pedido *#{ev.pedido_codigo}* (referente à atividade "
+                    f"*{ev.title}*) foi confirmado no sistema. Pode seguir com a entrega/atendimento."
+                )
+
+            dept_label = "Servsolda"
+            if ev.whatsapp_instance:
+                for w in wns:
+                    if w.instancia_evolution_api == ev.whatsapp_instance:
+                        dept_label = w.nome_departamento
+                        break
+            elif ev.whatsapp_number_id:
+                for w in wns:
+                    if w.id == ev.whatsapp_number_id:
+                        dept_label = w.nome_departamento
+                        break
+            footer = f"{dept_label} • Sistema de Tarefas"
+
+            success = await send_whatsapp_to_employee(
+                ordered_inst_names, ev.employee_phone, title, description, footer,
+                event_id=ev.id, tenant_id=ev.tenant_id, employee_name=emp_name
+            )
+            if success:
+                ev.pedido_nf_notificado = True
+                await session.commit()
+                logger.info(f"[PEDIDO NF] Aviso enviado pro evento #{ev.id} (pedido #{ev.pedido_codigo}, nota={numero_nota}, cancelada={cancelada}).")
+            return success
+    except Exception as e:
+        logger.error(f"Erro ao enviar aviso de nota fiscal do pedido (evento #{event_id}): {e}", exc_info=True)
+        return False
+
 async def send_event_update_notification(event_id: int):
     """
     Envia notificação no WhatsApp do colaborador avisando que a atividade agendada foi alterada.

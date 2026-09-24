@@ -55,7 +55,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import (
     Conversation, ConversationStatus, Message, MessageSender, MessageType,
-    WhatsAppNumber, AuthorizedTechnician
+    WhatsAppNumber, AuthorizedTechnician, CalendarEvent
 )
 from app.services.lid_resolver_service import resolve_and_bind_contact
 from app.services.automation_service import automation_service, normalize_text, get_greeting
@@ -1235,3 +1235,50 @@ async def ingest_os_db_event(
         eventos_anteriores=[int(c) for c in (data.get("eventos_anteriores") or [])],
         razao_social=data.get("cliente_razao_social")
     )
+
+
+@router.post("/pedido-nf-event", dependencies=[Depends(verify_os_handler_key)])
+async def ingest_pedido_nf_event(
+    payload: str = Form(...),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Recebido do vigia de banco (tools/os_db_watcher/): uma Nota Fiscal nova foi emitida (ou
+    cancelada) pra um Pedido do Softsystem (tabela NOTAFISCAL, chave CODORCAMENTO+NUMERONOTA).
+    Pedido do usuário em 24/09/2026: quando cria uma tarefa (Minha Agenda) vinculada a um Pedido
+    (CalendarEvent.pedido_codigo), avisar o funcionário responsável assim que o pedido "andar" -
+    nota emitida (informa o número) ou cancelada -, sem precisar avisar manualmente.
+
+    `payload` é uma string JSON: {"codorcamento": int, "numero_nota": str|null, "cancelada": bool}.
+    Casa por CODORCAMENTO (como string) contra CalendarEvent.pedido_codigo - pode haver mais de
+    uma tarefa vinculada ao mesmo pedido (ex.: duas entregas diferentes), todas são avisadas.
+    """
+    try:
+        data = json.loads(payload)
+    except Exception:
+        raise HTTPException(status_code=400, detail="payload não é um JSON válido")
+
+    codorcamento = data.get("codorcamento")
+    if codorcamento is None:
+        raise HTTPException(status_code=422, detail="Campo obrigatório faltando: codorcamento")
+
+    numero_nota = data.get("numero_nota")
+    cancelada = bool(data.get("cancelada", False))
+
+    stmt = select(CalendarEvent).where(
+        CalendarEvent.pedido_codigo == str(codorcamento),
+        CalendarEvent.pedido_nf_notificado == False  # noqa: E712 - comparação explícita, SQLAlchemy exige
+    )
+    events = (await db.execute(stmt)).scalars().all()
+    if not events:
+        return {"status": "no_matching_task", "codorcamento": codorcamento}
+
+    from app.services.calendar_reminder_service import send_pedido_nf_notification
+
+    notified = 0
+    for ev in events:
+        ok = await send_pedido_nf_notification(ev.id, numero_nota, cancelada)
+        if ok:
+            notified += 1
+
+    return {"status": "success", "codorcamento": codorcamento, "tasks_matched": len(events), "notified": notified}

@@ -123,6 +123,8 @@ export interface CalendarEvent {
   confirmation_token?: string | null;
   whatsapp_number_id?: number | null;
   whatsapp_instance?: string | null;
+  pedido_codigo?: string | null;
+  pedido_nf_notificado?: boolean;
   criado_em: string;
   atualizado_em: string;
   contact_name?: string | null;

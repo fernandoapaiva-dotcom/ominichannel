@@ -383,6 +383,7 @@ class CalendarEventCreate(BaseModel):
     custom_reminder_hours: int = 2
     whatsapp_number_id: Optional[int] = None
     whatsapp_instance: Optional[str] = None
+    pedido_codigo: Optional[str] = None
 
 class CalendarEventUpdate(BaseModel):
     title: Optional[str] = None
@@ -407,6 +408,7 @@ class CalendarEventUpdate(BaseModel):
     confirmed_by_employee: Optional[bool] = None
     whatsapp_number_id: Optional[int] = None
     whatsapp_instance: Optional[str] = None
+    pedido_codigo: Optional[str] = None
 
 class CalendarEventResponse(BaseModel):
     id: int
@@ -438,6 +440,8 @@ class CalendarEventResponse(BaseModel):
     confirmation_token: Optional[str] = None
     whatsapp_number_id: Optional[int] = None
     whatsapp_instance: Optional[str] = None
+    pedido_codigo: Optional[str] = None
+    pedido_nf_notificado: bool = False
     criado_em: datetime
     atualizado_em: datetime
     contact_name: Optional[str] = None
