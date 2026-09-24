@@ -252,7 +252,7 @@ async def chat_with_rag_trainer(
 
     decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
     api_key = decrypted.get("gemini_api_key")
-    model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+    model_name = decrypted.get("gemini_model_name") or "gemini-3.6-flash"
 
     if not api_key:
         return {
@@ -350,7 +350,7 @@ async def diagnose_hallucination_endpoint(
 
     decrypted = await settings_service.get_tenant_decrypted_settings(db, admin_user.tenant_id)
     api_key = decrypted.get("gemini_api_key")
-    model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+    model_name = decrypted.get("gemini_model_name") or "gemini-3.6-flash"
 
     if not api_key:
         raise HTTPException(status_code=400, detail="Nenhuma chave do Gemini configurada.")

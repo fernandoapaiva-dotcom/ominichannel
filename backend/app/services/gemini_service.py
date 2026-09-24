@@ -202,7 +202,16 @@ class GeminiService:
             self.client = None
 
     def get_client_for_key(self, api_key: Optional[str]) -> Optional[genai.Client]:
-        if api_key and api_key.strip():
+        # "COLOQUE_SUA_CHAVE_AQUI" (o placeholder padrão do formulário de Configurações) é uma
+        # string não-vazia - sem essa checagem, TODA função que passa a chave do tenant direto
+        # pra cá (a maioria não tinha a guarda manual que classify_store_info_intent já tinha)
+        # criava um client fadado a falhar com "API key not valid" em vez de cair pro client
+        # global (settings.GEMINI_API_KEY) que de fato funciona. Achado em produção em
+        # 24/09/2026: classify_confirmation_intent nunca conseguia consultar a IA pra casos
+        # ambíguos de aprovação de O.S. ("já estão autorizado, posso buscar?") porque o tenant
+        # nunca configurou uma chave própria - caía sempre em AMBIGUA (repetia a pergunta) em
+        # vez de usar a chave global que o resto do sistema já usa com sucesso.
+        if api_key and api_key.strip() and "COLOQUE" not in api_key.upper() and len(api_key.strip()) > 25:
             return genai.Client(api_key=api_key)
         return self.client
 
@@ -217,7 +226,7 @@ class GeminiService:
         tenant_gemini_model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
         clean_name = sanitize_customer_name(customer_name)
 
         dept_descriptions_text = "\n".join([
@@ -348,7 +357,7 @@ class GeminiService:
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
         clean_name = sanitize_customer_name(customer_name)
 
         messages_text = []
@@ -1333,7 +1342,7 @@ class GeminiService:
         tenant_gemini_model_name: Optional[str] = None
     ) -> str:
         client = self.get_client_for_key(tenant_gemini_api_key)
-        primary_model = tenant_gemini_model_name or "gemini-2.5-flash"
+        primary_model = tenant_gemini_model_name or "gemini-3.6-flash"
         clean_name = sanitize_customer_name(customer_name)
 
         if not messages_history:
@@ -1456,7 +1465,7 @@ class GeminiService:
             )
 
             client = self.get_client_for_key(tenant_gemini_api_key)
-            model_name = tenant_gemini_model_name or "gemini-2.5-flash"
+            model_name = tenant_gemini_model_name or "gemini-3.6-flash"
 
             try:
                 response = await asyncio.to_thread(

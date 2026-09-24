@@ -409,7 +409,7 @@ class AutomationService:
             if not client:
                 return ""
             res = client.models.generate_content(
-                model=decrypted.get("gemini_model_name") or "gemini-2.5-flash",
+                model=decrypted.get("gemini_model_name") or "gemini-3.6-flash",
                 contents=[{"role": "user", "parts": [{"text": f"Anotação do técnico: {obs_limpa}"}]}],
                 config={
                     "system_instruction": (
@@ -596,7 +596,7 @@ class AutomationService:
             api_key = decrypted.get("gemini_api_key")
             if not api_key:
                 return "AMBIGUA"
-            model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+            model_name = decrypted.get("gemini_model_name") or "gemini-3.6-flash"
             client = gemini_service.get_client_for_key(api_key)
             if not client:
                 return "AMBIGUA"
@@ -610,10 +610,20 @@ class AutomationService:
                         "pergunta de confirmação (ex.: 'posso te enviar o PDF?', 'você aprova o "
                         "orçamento?'). O cliente pode responder de forma natural, sem usar as "
                         "palavras exatas 'sim' ou 'não' (ex.: 'manda ai', 'pode fazer', 'quero "
-                        "cancelar', 'não quero mais'). Responda com EXATAMENTE uma palavra: "
+                        "cancelar', 'não quero mais', 'já estão autorizado', 'pode liberar', "
+                        "'tá aprovado'). Responda com EXATAMENTE uma palavra: "
                         "CONFIRMA (intenção afirmativa/aprovação), NEGA (intenção negativa/recusa) "
-                        "ou AMBIGUA (não é possível saber, é sobre outro assunto, ou é uma pergunta "
-                        "em vez de uma resposta). Nunca responda nada além dessa única palavra."
+                        "ou AMBIGUA (não dá pra saber, é sobre outro assunto totalmente diferente "
+                        "da pergunta, ou é uma pergunta pura sem nenhuma afirmação junto).\n\n"
+                        "IMPORTANTE: se a mensagem TEM uma afirmação/aprovação clara (mesmo vindo "
+                        "junto de uma pergunta de acompanhamento, ex.: 'já está autorizado, posso "
+                        "buscar?', 'tá aprovado, quando fica pronto?'), classifique como CONFIRMA - "
+                        "a pergunta extra não anula a confirmação que veio junto. Só classifique "
+                        "como AMBIGUA quando a mensagem for SÓ uma pergunta, sem nenhuma afirmação "
+                        "(ex.: 'quanto ficou o orçamento?', 'vocês já viram meu caso?'), ou quando "
+                        "for sobre um assunto sem relação com a pergunta feita (ex.: reclamar de "
+                        "outro produto, perguntar o endereço da loja). Nunca responda nada além "
+                        "dessa única palavra."
                     ),
                     "temperature": 0.0
                 }
@@ -640,7 +650,7 @@ class AutomationService:
         """
         decrypted = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
         api_key = decrypted.get("gemini_api_key")
-        model_name = decrypted.get("gemini_model_name") or "gemini-2.5-flash"
+        model_name = decrypted.get("gemini_model_name") or "gemini-3.6-flash"
 
         if not api_key:
             return {

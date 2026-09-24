@@ -253,7 +253,7 @@ class BusinessHoursResponse(BusinessHoursBase):
 # Integration Settings Schemas
 class SaveIntegrationSettingsPayload(BaseModel):
     gemini_api_key: Optional[str] = None
-    gemini_model_name: Optional[str] = "gemini-2.5-flash"
+    gemini_model_name: Optional[str] = "gemini-3.6-flash"
     evolution_api_url: Optional[str] = None
     evolution_api_key: Optional[str] = None
     inatividade_minutos: Optional[int] = 30

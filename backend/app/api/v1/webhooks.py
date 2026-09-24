@@ -2646,8 +2646,16 @@ async def receive_evolution_webhook(
                 "image": thumb_url
             }
 
-    # Lazy audio transcription: only transcribe if AI is going to answer (COM_IA) and not in a group
-    if msg_type == MessageType.AUDIO and media_bytes and conversation.status == ConversationStatus.COM_IA and not is_group and not is_internal_company_number and not is_bot_echo:
+    # Lazy audio transcription: transcreve se a IA vai responder (COM_IA) OU se essa conversa está
+    # aguardando uma confirmação determinística (CONFIRM_OS_PDF/APPROVAL/TRANSFER) - sem isso, um
+    # cliente respondendo por áudio a "você aprova a O.S.?" nunca tinha o áudio transcrito (a
+    # conversa normalmente já está em COM_HUMANO nesse ponto do fluxo, não COM_IA), e a
+    # classificação de aprovação rodava em cima de um texto vazio. Achado em produção em
+    # 24/09/2026 (cliente Vinicius Coimbra - "tem gente que está enviando a aprovação por áudio").
+    _pending_confirmation_flow = pending_os_or_transfer_marker.startswith(
+        ("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")
+    )
+    if msg_type == MessageType.AUDIO and media_bytes and (conversation.status == ConversationStatus.COM_IA or _pending_confirmation_flow) and not is_group and not is_internal_company_number and not is_bot_echo:
         try:
             dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
             audio_transcription = await gemini_service.process_audio_message(
