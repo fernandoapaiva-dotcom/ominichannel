@@ -21,15 +21,12 @@ from zoneinfo import ZoneInfo
 from app.services.business_hours_service import BRASILIA_TZ
 
 TIMEOUT_INATIVIDADE = timedelta(hours=4)
-AVISO_1 = timedelta(minutes=30)   # 30 minutos antes do fechamento (210 min úteis)
-AVISO_2 = timedelta(minutes=10)   # 10 minutos antes do fechamento (230 min úteis)
 
 # ══════════════════════════════════════════════════════════════════════
 # ANTI-SPAM / WHATSAPP PROTECTION LIMITS
 # These limits exist to prevent WhatsApp from detecting automated mass
 # messaging and restricting/banning the account.
 # ══════════════════════════════════════════════════════════════════════
-MAX_WHATSAPP_MSGS_PER_CYCLE = 3     # Max automated messages sent per 15s cycle
 MAX_WHATSAPP_MSGS_PER_DAY  = 30    # Max automated messages per calendar day (all types)
 DELAY_BETWEEN_MSGS_SECS    = 3.0   # Seconds to wait between each message send
 
@@ -91,11 +88,13 @@ def calcula_inatividade_util(ultima_mensagem_em: datetime, agora: datetime) -> t
 class InactivityService:
     async def check_and_expire_idle_conversations(self):
         """
-        Inactivity Monitor Ciente do Horário de Funcionamento (Tarefa 3):
+        Inactivity Monitor Ciente do Horário de Funcionamento:
         - Timeout total: 4 horas úteis (240 min) dentro do expediente (08:00 - 18:00 seg-sex).
-        - Aviso 1: 30 minutos restantes (210 min úteis decorridos).
-        - Aviso 2: 10 minutos restantes (230 min úteis decorridos).
-        - Encerramento: 4 horas úteis (240 min úteis decorridos).
+        - Encerramento: 4 horas úteis (240 min úteis decorridos) - silencioso, sem avisar o cliente
+          antes (o usuário achou os avisos de "vai fechar em 10/30 min" ruins e pediu pra tirar) e sem
+          mandar mensagem de encerramento pelo WhatsApp - só fecha o protocolo por trás. Se o cliente
+          mandar mensagem de novo depois, um protocolo novo é aberto automaticamente (ver webhooks.py,
+          bloco que trata conversa em EXPIRADA_POR_INATIVIDADE).
         - Mensagens fora do expediente não contam inatividade até a reabertura da loja.
         """
         async with AsyncSessionLocal() as db:
@@ -127,14 +126,8 @@ class InactivityService:
 
                 now = datetime.utcnow()
                 changes_made = False
-                msgs_sent_this_cycle = 0  # Anti-spam: reset every cycle
 
                 for conv in conversations:
-                    # Anti-spam: stop sending if per-cycle cap reached
-                    if msgs_sent_this_cycle >= MAX_WHATSAPP_MSGS_PER_CYCLE:
-                        logger.warning(f"[ANTI-SPAM] Per-cycle cap ({MAX_WHATSAPP_MSGS_PER_CYCLE}) reached. Stopping sends for this cycle.")
-                        break
-
                     tenant = tenant_config_map.get(conv.tenant_id)
                     if not tenant:
                         continue
@@ -143,7 +136,7 @@ class InactivityService:
                     if conv.contact and (conv.contact.telefone.startswith("120363") or "@g.us" in conv.contact.telefone or len(conv.contact.telefone) > 15):
                         continue
 
-                    # CRITICAL: Inactivity warnings and closing messages MUST ONLY EVER be sent to live active protocols!
+                    # CRITICAL: Only expire conversations that have a live active protocol.
                     if not conv.protocol_number or conv.protocol_number in ["S/N", "None", "", None]:
                         continue
 
@@ -178,12 +171,9 @@ class InactivityService:
                     inatividade_util = calcula_inatividade_util(conv.ultima_interacao_em, now)
                     minutos_uteis = inatividade_util.total_seconds() / 60.0
 
-                    proto = conv.protocol_number or "S/N"
-                    cust_name = conv.contact.nome if (conv.contact and conv.contact.nome) else "Cliente"
-                    inst_name = conv.whatsapp_number.instancia_evolution_api if conv.whatsapp_number else None
-
                     # ----------------------------------------------------
-                    # TIER 3: FINAL EXPIRATION (inatividade_util >= 4 horas = 240 min)
+                    # FINAL EXPIRATION (inatividade_util >= 4 horas = 240 min) - silenciosa, sem avisos
+                    # prévios e sem mensagem de encerramento pro cliente (ver docstring acima).
                     # ----------------------------------------------------
                     if inatividade_util >= TIMEOUT_INATIVIDADE:
                         logger.info(f"[INATIVIDADE ÚTIL] Conversa #{conv.id} atingiu limite de 4 horas úteis de expediente ({minutos_uteis:.1f} min). Expirando chamado...")
@@ -192,30 +182,10 @@ class InactivityService:
                         conv.dados_adicionais = extra
                         conv.protocol_number = None
 
-                        # Closing WhatsApp message
-                        closing_msg = (
-                            f"🔒 *Atendimento Finalizado por Inatividade*\n\n"
-                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) foi encerrado automaticamente após 4 horas de inatividade durante o horário de expediente.\n\n"
-                            f"Caso ainda precise de suporte, basta nos enviar uma nova mensagem a qualquer momento!"
-                        )
-                        if inst_name and conv.contact:
-                            if inst_name in ["instancia_vendas"]:
-                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade final na conversa #{conv.id} ('{inst_name}'): Chamado expirado no CRM. Mensagem de encerramento no WhatsApp silenciada para proteção contra bloqueio da Meta.")
-                            else:
-                                try:
-                                    if _check_and_increment_daily_counter():
-                                        await evolution_service.send_text_message(
-                                            instance_name=inst_name,
-                                            number=conv.contact.telefone,
-                                            text=closing_msg
-                                        )
-                                        msgs_sent_this_cycle += 1
-                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                    else:
-                                        logger.warning(f"[ANTI-SPAM] Skipped closing message for conv #{conv.id} — daily cap reached.")
-                                except Exception as err:
-                                    logger.warning(f"Failed to send inactivity closing message to #{conv.id}: {err}")
-
+                        # Encerramento silencioso: usuário pediu pra tirar o aviso "vai fechar em X min"
+                        # e a mensagem de encerramento no WhatsApp - o protocolo só fecha por trás, sem
+                        # avisar o cliente. Fica só o registro interno (mensagem de sistema no chat, pro
+                        # atendente ver no histórico) e o backup no Drive.
 
                         # System audit message
                         sys_msg = Message(
@@ -286,100 +256,6 @@ class InactivityService:
                                 pass
 
                         continue
-
-                    # ----------------------------------------------------
-                    # TIER 2: WARNING 2 (10 min restantes / inatividade >= 3h50 = 230 min)
-                    # ----------------------------------------------------
-                    if inatividade_util >= (TIMEOUT_INATIVIDADE - AVISO_2) and not extra.get("aviso_2_enviado") and not extra.get("inactivity_warning_10m_sent"):
-                        logger.info(f"[INATIVIDADE ÚTIL] Enviando 2º aviso prévio (10 min restantes) para conversa #{conv.id}...")
-                        
-                        warning_text = (
-                            f"⚠️ *Aviso de Inatividade*\n\n"
-                            f"Olá, {cust_name}! Seu atendimento (Protocolo: {proto}) será finalizado em aproximadamente 10 minutos por ausência de interação.\n\n"
-                            f"Estamos à disposição caso queira dar continuidade!"
-                        )
-                        if inst_name and conv.contact:
-                            if inst_name in ["instancia_vendas"]:
-                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade (aviso 10m) na conversa #{conv.id} ('{inst_name}'): Mensagem no WhatsApp silenciada para proteção contra bloqueio da Meta.")
-                            else:
-                                try:
-                                    if _check_and_increment_daily_counter():
-                                        await evolution_service.send_text_message(
-                                            instance_name=inst_name,
-                                            number=conv.contact.telefone,
-                                            text=warning_text
-                                        )
-                                        msgs_sent_this_cycle += 1
-                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                    else:
-                                        logger.warning(f"[ANTI-SPAM] Skipped 10m warning for conv #{conv.id} — daily cap reached.")
-                                except Exception as err:
-                                    logger.warning(f"Failed to send 10m warning message to #{conv.id}: {err}")
-
-
-                        sys_msg = Message(
-                            conversation_id=conv.id,
-                            remetente="sistema",
-                            conteudo="⏳ Segundo aviso prévio de inatividade (10 minutos restantes) registrado pelo sistema.",
-                            tipo=MessageType.TEXTO,
-                            timestamp=now
-                        )
-                        db.add(sys_msg)
-
-                        extra["aviso_2_enviado"] = True
-                        extra["inactivity_warning_10m_sent"] = True
-                        extra["inactivity_warning_10m_at"] = now.isoformat()
-                        conv.dados_adicionais = extra
-                        changes_made = True
-                        continue
-
-                    # ----------------------------------------------------
-                    # TIER 1: WARNING 1 (30 min restantes / inatividade >= 3h30 = 210 min)
-                    # ----------------------------------------------------
-                    if inatividade_util >= (TIMEOUT_INATIVIDADE - AVISO_1) and not extra.get("aviso_1_enviado") and not extra.get("inactivity_warning_30m_sent"):
-                        logger.info(f"[INATIVIDADE ÚTIL] Verificando 1º aviso prévio (30 min restantes) para conversa #{conv.id}...")
-                        
-                        warning_text = (
-                            f"⏳ *Aviso de Atendimento*\n\n"
-                            f"Olá, {cust_name}! Notamos que você está sem interagir há algum tempo. Ainda está por aí?\n\n"
-                            f"Seu atendimento (Protocolo: {proto}) será encerrado em aproximadamente 30 minutos caso não haja nova resposta."
-                        )
-                        if inst_name and conv.contact:
-                            if inst_name in ["instancia_vendas"]:
-                                logger.info(f"🛡️ [ESCUDO ANTI-BAN] Inatividade (aviso 30m) na conversa #{conv.id} ('{inst_name}'): Mensagem no WhatsApp silenciada para proteção contra bloqueio da Meta.")
-                            else:
-                                try:
-                                    if _check_and_increment_daily_counter():
-                                        await evolution_service.send_text_message(
-                                            instance_name=inst_name,
-                                            number=conv.contact.telefone,
-                                            text=warning_text
-                                        )
-                                        msgs_sent_this_cycle += 1
-                                        await asyncio.sleep(DELAY_BETWEEN_MSGS_SECS)
-                                    else:
-                                        logger.warning(f"[ANTI-SPAM] Skipped 30m warning for conv #{conv.id} — daily cap reached.")
-                                except Exception as err:
-                                    logger.warning(f"Failed to send 30m warning message to #{conv.id}: {err}")
-
-
-                        sys_msg = Message(
-                            conversation_id=conv.id,
-                            remetente="sistema",
-                            conteudo="⏳ Primeiro aviso prévio de inatividade (30 minutos restantes) enviado ao cliente.",
-                            tipo=MessageType.TEXTO,
-                            timestamp=now
-                        )
-                        db.add(sys_msg)
-
-                        extra["aviso_1_enviado"] = True
-                        extra["inactivity_warning_30m_sent"] = True
-                        extra["inactivity_warning_30m_at"] = now.isoformat()
-                        conv.dados_adicionais = extra
-                        changes_made = True
-
-                if changes_made:
-                    await db.commit()
 
                 if changes_made:
                     await db.commit()
