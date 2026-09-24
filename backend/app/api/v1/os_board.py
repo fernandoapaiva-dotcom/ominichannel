@@ -50,11 +50,14 @@ BOARD_STAGES: List[Dict[str, Any]] = [
     {"key": "avaliacao", "label": "Avaliação", "codes": [2]},
     {"key": "orcamento", "label": "Orçamento enviado", "codes": [EVENTO_ORCAMENTO_ENVIADO]},
     {"key": "aprovado", "label": "Aprovado", "codes": [EVENTO_APROVADO]},
-    {"key": "nao_aprovado", "label": "Não aprovado", "codes": [EVENTO_NAO_APROVADO]},
+    # Código 12 é o evento "Não autorizada" que o próprio Softsystem já tem (o atendente lança direto
+    # na tela da O.S., como no chamado #1704) - antes caía junto de "Sem reparo" (11/13), mas pro
+    # usuário "não autorizada" é a mesma coisa que "não aprovado", então entra nessa coluna também.
+    {"key": "nao_aprovado", "label": "Não aprovado", "codes": [EVENTO_NAO_APROVADO, 12]},
     {"key": "execucao", "label": "Execução", "codes": [4]},
     {"key": "peca", "label": "Aguardando peça", "codes": [8]},
     {"key": "retirada", "label": "Aguardando retirada", "codes": [EVENTO_RETIRADA]},
-    {"key": "sem_reparo", "label": "Sem reparo", "codes": [11, 12, 13]},
+    {"key": "sem_reparo", "label": "Sem reparo", "codes": [11, 13]},
     {"key": "descarte", "label": "Desmanche e Descarte", "codes": [EVENTO_DESCARTE]},
 ]
 EVENT_LABELS = {
