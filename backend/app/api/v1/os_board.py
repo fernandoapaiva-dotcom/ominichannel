@@ -466,7 +466,13 @@ async def get_technician_detail(
         summary["efetivadas_no_periodo"] += 1 if (_efetivada(o) and worked) else 0
 
         include = {
-            "trabalhou": worked, "entrada": entered, "finalizadas": finished,
+            # "entrada" é usado como lista de pendência ("o que ainda falta olhar"), não histórico -
+            # uma O.S. que entrou no período mas já foi finalizada/efetivada (Venda vinculada/paga)
+            # não deve continuar aparecendo aqui, mesmo que o único evento registrado seja ENTRADA.
+            # Achado em produção em 24/09/2026: O.S. #1729 (Junior) só tinha o evento ENTRADA, mas
+            # já estava com "Ver Venda #6041" e Status Finalizada no Softsystem - o quadro geral já
+            # filtra isso certo (paga/venda_codigo), só faltava aqui no relatório por técnico.
+            "trabalhou": worked, "entrada": entered and is_open, "finalizadas": finished,
             "abertas": is_open and not _efetivada(o), "efetivadas": _efetivada(o), "todas": True,
         }.get(status, worked)
         if not include:
