@@ -9,6 +9,13 @@ from app.core.config import settings
 
 logger = logging.getLogger("gemini_service")
 
+# Chave do Gemini so passou a funcionar de verdade nesta sessao (antes, tanto o
+# tenant quanto o .env tinham só um placeholder). Ate a IA ter um aprendizado de
+# maquina melhor pra respostas livres, generate_concierge_response fica travado
+# no fallback deterministico de sempre - classificacao (classify_confirmation_intent,
+# classify_store_info_intent etc.) continua usando a IA normalmente.
+AI_CONCIERGE_FREEFORM_ENABLED = False
+
 # =========================================================================
 # CENTRALIZED CUSTOMER NAME SANITIZATION & ANTI-HALLUCINATION DIRECTIVES
 # =========================================================================
@@ -595,7 +602,7 @@ class GeminiService:
             "enviar_localizacao": False
         }
 
-        if not client:
+        if not client or not AI_CONCIERGE_FREEFORM_ENABLED:
             return default_res
 
         models_to_try = [primary_model] if primary_model in ["gemini-3.1-flash-lite", "gemini-3.6-flash"] else ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
