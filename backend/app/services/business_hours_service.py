@@ -330,6 +330,50 @@ class BusinessHoursService:
         logger.info("[JOB 08:00] Reabertura automática desativada conforme regra de negócio (atendimentos não são reabertos sozinhos).")
         return {"status": "skipped", "message": "Auto-reopening disabled per business rule."}
 
+    async def clear_stale_assignments_job(self) -> Dict[str, Any]:
+        """
+        Limpeza silenciosa diária (07:00 Brasília, antes de abrir às 08h) - some com o
+        assigned_user_id de conversas que ficaram paradas desde véspera pra trás (nenhuma
+        mensagem trocada ainda hoje). NÃO manda nada pro cliente, NÃO mexe em status nem
+        protocolo - só evita que um "atendente responsável" esquecido trave o HUMAN SHIELD
+        (webhooks.py, is_human_handled) indefinidamente.
+
+        Achado em produção em 24/09/2026: como o fechamento automático das 18h foi desativado
+        a pedido do usuário (BUSINESS_HOURS_CLOSING_ENABLED em main.py), o assigned_user_id
+        de uma conversa nunca mais era limpo sozinho - um cliente (Jean) mandou 4 mensagens de
+        madrugada numa conversa "presa" assim e não recebeu resposta nenhuma. Pedido explícito
+        do usuário: limpar sozinho depois de ficar parado, sem mandar aviso nenhum ao cliente
+        (diferente do fechamento das 18h, que ele não quis reativar).
+        """
+        from app.models.models import Conversation
+        from datetime import timezone
+
+        now_br = self.get_brasilia_now()
+        hoje_inicio_br = datetime.combine(now_br.date(), time(0, 0, 0), tzinfo=BRASILIA_TZ)
+        hoje_inicio_utc = hoje_inicio_br.astimezone(timezone.utc).replace(tzinfo=None)
+
+        cleared = 0
+        async with AsyncSessionLocal() as db:
+            try:
+                stmt = select(Conversation).where(
+                    Conversation.assigned_user_id.isnot(None),
+                    Conversation.ultima_interacao_em < hoje_inicio_utc
+                )
+                res = await db.execute(stmt)
+                convs = res.scalars().all()
+                for conv in convs:
+                    conv.assigned_user_id = None
+                    cleared += 1
+                if cleared:
+                    await db.commit()
+            except Exception as e:
+                logger.error(f"[LIMPEZA DIÁRIA] Erro ao limpar atendentes parados: {e}")
+                return {"status": "error", "cleared": 0}
+
+        if cleared:
+            logger.info(f"[LIMPEZA DIÁRIA] {cleared} conversa(s) com atendente parado desde véspera liberada(s) (assigned_user_id limpo, sem aviso ao cliente).")
+        return {"status": "success", "cleared": cleared}
+
 business_hours_service = BusinessHoursService()
 
 async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
@@ -339,6 +383,7 @@ async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
     - Does NOT auto-reopen conversations on the next morning at 08:00.
     """
     last_executed_18h: Optional[str] = None
+    last_executed_cleanup: Optional[str] = None
     logger.info("Business hours 18:00 shift closing scheduler background loop started.")
 
     while True:
@@ -354,6 +399,13 @@ async def start_business_hours_scheduler_loop(check_interval_seconds: int = 30):
                         logger.info(f"[SCHEDULER 18:00] Triggering 18:00 evening shift closing job for {today_str}...")
                         await business_hours_service.execute_18h_shift_closing_job()
                         last_executed_18h = today_str
+
+            # 07:00 Limpeza silenciosa de atendente preso (todo dia, inclusive fim de semana -
+            # um cliente pode mandar mensagem sábado/domingo e ficar preso até segunda)
+            if now_br.hour == 7 and now_br.minute == 0:
+                if last_executed_cleanup != today_str:
+                    await business_hours_service.clear_stale_assignments_job()
+                    last_executed_cleanup = today_str
         except Exception as e:
             logger.error(f"Error in business hours scheduler loop: {e}")
 
