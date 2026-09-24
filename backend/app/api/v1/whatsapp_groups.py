@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.models.models import User, WhatsAppNumber, WhatsAppGroup, AuditLog
+from app.models.models import User, WhatsAppNumber, WhatsAppGroup, AuditLog, Contact
 from app.api.v1.auth import get_current_user
 from app.services.evolution_service import evolution_service
 
@@ -68,59 +68,75 @@ async def sync_whatsapp_groups(
         return {"success": True, "synced_count": 0, "message": "Nenhum número ativo da Evolution API encontrado."}
 
     total_synced = 0
+    instances_failed = []
 
+    # Cada instância roda isolada: um erro numa (Evolution fora do ar, grupo com dado
+    # inesperado, etc.) não pode mais derrubar a varredura inteira e deixar as instâncias
+    # seguintes (ex.: Financeiro, se vier depois de uma que falhou) sem serem nem tentadas -
+    # achado em produção em 24/09/2026 (NameError travava a função inteira no primeiro grupo
+    # com Contact correspondente, nunca chegando nas instâncias seguintes).
     for num in active_numbers:
         if not num.instancia_evolution_api:
             continue
 
-        groups_raw = await evolution_service.fetch_all_groups(num.instancia_evolution_api)
+        try:
+            groups_raw = await evolution_service.fetch_all_groups(num.instancia_evolution_api)
+        except Exception as fetch_err:
+            logger.error(f"[SYNC GRUPOS] Falha ao buscar grupos da instância '{num.instancia_evolution_api}': {fetch_err}", exc_info=True)
+            instances_failed.append(num.nome_departamento or num.instancia_evolution_api)
+            continue
+
         for g_data in groups_raw:
-            if not isinstance(g_data, dict):
-                continue
+            try:
+                if not isinstance(g_data, dict):
+                    continue
 
-            group_jid = g_data.get("id") or g_data.get("jid")
-            if not group_jid or not str(group_jid).endswith("@g.us"):
-                continue
+                group_jid = g_data.get("id") or g_data.get("jid")
+                if not group_jid or not str(group_jid).endswith("@g.us"):
+                    continue
 
-            subject = g_data.get("subject") or g_data.get("name") or g_data.get("subjectOwner") or f"Grupo {group_jid[:8]}"
+                subject = g_data.get("subject") or g_data.get("name") or g_data.get("subjectOwner") or f"Grupo {group_jid[:8]}"
 
-            # Check existing group in DB
-            g_stmt = select(WhatsAppGroup).where(
-                WhatsAppGroup.tenant_id == current_user.tenant_id,
-                WhatsAppGroup.whatsapp_number_id == num.id,
-                WhatsAppGroup.group_jid == group_jid
-            )
-            g_res = await db.execute(g_stmt)
-            existing_group = g_res.scalar_one_or_none()
-
-            if existing_group:
-                existing_group.nome = subject
-            else:
-                new_group = WhatsAppGroup(
-                    tenant_id=current_user.tenant_id,
-                    whatsapp_number_id=num.id,
-                    group_jid=group_jid,
-                    nome=subject,
-                    ia_ativa=False # Disabled by default
+                # Check existing group in DB
+                g_stmt = select(WhatsAppGroup).where(
+                    WhatsAppGroup.tenant_id == current_user.tenant_id,
+                    WhatsAppGroup.whatsapp_number_id == num.id,
+                    WhatsAppGroup.group_jid == group_jid
                 )
-                db.add(new_group)
+                g_res = await db.execute(g_stmt)
+                existing_group = g_res.scalar_one_or_none()
 
-            # Keep Contact table in sync for this WhatsApp Group
-            raw_g_id = group_jid.split("@")[0]
-            c_grp_stmt = select(Contact).where(
-                Contact.tenant_id == current_user.tenant_id,
-                (Contact.telefone == group_jid) |
-                (Contact.telefone == raw_g_id) |
-                (Contact.telefone == f"{raw_g_id}@g.us")
-            )
-            c_grp_res = await db.execute(c_grp_stmt)
-            for c_grp in c_grp_res.scalars().all():
-                c_grp.nome = subject
-                extra_g = dict(c_grp.dados_adicionais or {})
-                extra_g["is_group"] = True
-                c_grp.dados_adicionais = extra_g
+                if existing_group:
+                    existing_group.nome = subject
+                else:
+                    new_group = WhatsAppGroup(
+                        tenant_id=current_user.tenant_id,
+                        whatsapp_number_id=num.id,
+                        group_jid=group_jid,
+                        nome=subject,
+                        ia_ativa=False # Disabled by default
+                    )
+                    db.add(new_group)
 
-            total_synced += 1
+                # Keep Contact table in sync for this WhatsApp Group
+                raw_g_id = group_jid.split("@")[0]
+                c_grp_stmt = select(Contact).where(
+                    Contact.tenant_id == current_user.tenant_id,
+                    (Contact.telefone == group_jid) |
+                    (Contact.telefone == raw_g_id) |
+                    (Contact.telefone == f"{raw_g_id}@g.us")
+                )
+                c_grp_res = await db.execute(c_grp_stmt)
+                for c_grp in c_grp_res.scalars().all():
+                    c_grp.nome = subject
+                    extra_g = dict(c_grp.dados_adicionais or {})
+                    extra_g["is_group"] = True
+                    c_grp.dados_adicionais = extra_g
+
+                total_synced += 1
+            except Exception as group_err:
+                logger.error(f"[SYNC GRUPOS] Falha ao processar grupo {g_data.get('id') if isinstance(g_data, dict) else g_data!r} da instância '{num.instancia_evolution_api}': {group_err}", exc_info=True)
+                continue
 
         await db.commit()
 
@@ -135,10 +151,14 @@ async def sync_whatsapp_groups(
     db.add(audit)
     await db.commit()
 
+    msg = f"{total_synced} grupos sincronizados com sucesso."
+    if instances_failed:
+        msg += f" Atenção: falha ao consultar {', '.join(instances_failed)} - tente varrer de novo em instantes."
     return {
         "success": True,
         "synced_count": total_synced,
-        "message": f"{total_synced} grupos sincronizados com sucesso."
+        "instances_failed": instances_failed,
+        "message": msg
     }
 
 @router.put("/{group_id}/toggle-ia")
