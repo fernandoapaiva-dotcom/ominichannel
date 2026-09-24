@@ -47,6 +47,26 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   }, []);
   const useMobileLayout = isNarrow && !isLandscape;
 
+  // index.css trava body/#root em overflow:hidden + altura fixa (o app administrativo controla o
+  // próprio scroll internamente). O Portal do Técnico é mais simples e, depois de tentar várias vezes
+  // fazer uma região interna rolar (overflow:auto aninhado dentro de flex/position:fixed) sem sucesso
+  // em alguns celulares/WebViews reais, a solução à prova de qualquer navegador é deixar a PRÓPRIA
+  // PÁGINA rolar (scroll nativo do documento) - por isso libera o overflow do body só enquanto esse
+  // componente estiver montado, e devolve como estava ao sair (login/logout do técnico).
+  useEffect(() => {
+    const prevBodyOverflow = document.body.style.overflow;
+    const prevBodyHeight = document.body.style.height;
+    const prevHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'auto';
+    document.body.style.height = 'auto';
+    document.documentElement.style.overflow = 'auto';
+    return () => {
+      document.body.style.overflow = prevBodyOverflow;
+      document.body.style.height = prevBodyHeight;
+      document.documentElement.style.overflow = prevHtmlOverflow;
+    };
+  }, []);
+
   const [zoom, setZoomState] = useState<number>(() => {
     try {
       const v = parseFloat(localStorage.getItem('omni_tech_portal_zoom') || '1');
@@ -91,13 +111,11 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   };
 
   return (
-    // position:fixed + inset:0 em vez de depender de height:100dvh/100vh: em alguns WebViews de
-    // celular esses units de viewport não se comportam direito dentro de uma cadeia de flex (o card
-    // com a lista fica com altura "auto"/indefinida e o dedo não rola nada, mesmo com touch-action
-    // certo). Fixed+inset:0 trava o tamanho do container raiz no viewport visível de verdade, sem
-    // depender de nenhuma unit especial.
-    <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '14px 16px 10px', flexShrink: 0 }}>
+    <div style={{ minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '14px 16px 10px',
+        position: useMobileLayout ? 'sticky' : 'static', top: 0, zIndex: 6, background: 'var(--bg-primary)',
+      }}>
         <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'rgba(0,230,153,0.16)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <UserIcon size={17} />
         </div>
@@ -116,7 +134,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: '6px', padding: '0 16px 10px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: '6px', padding: '0 16px 10px' }}>
         <button
           onClick={() => setTab('meus')}
           style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'meus' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'meus' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'meus' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
@@ -127,7 +145,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
         >Quadro Geral</button>
       </div>
 
-      <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px' }}>
         {EMPRESAS.map(e => (
           <button
             key={e.key || 'todas'}
@@ -143,7 +161,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
       </div>
 
       {error && (
-        <div style={{ margin: '0 16px 10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '13px', flexShrink: 0 }}>{error}</div>
+        <div style={{ margin: '0 16px 10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '13px' }}>{error}</div>
       )}
 
       {!useMobileLayout && (
@@ -153,8 +171,8 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
         </div>
       )}
 
-      <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, padding: '0 16px 16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {useMobileLayout ? (
+      {useMobileLayout ? (
+        <div style={{ padding: '0 16px 24px' }}>
           <MobileBoard
             board={board}
             loading={loading}
@@ -164,8 +182,11 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             onOpenTech={() => {}}
             showEmpresa={!empresa}
             onOpenCell={() => {}}
+            pageScroll
           />
-        ) : (
+        </div>
+      ) : (
+        <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, padding: '0 16px 16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <BoardGrid
             board={board}
             loading={loading}
@@ -174,8 +195,8 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             showEmpresa={!empresa}
             onOpenCell={() => {}}
           />
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -733,7 +733,14 @@ export const MobileBoard: React.FC<{
   board: BoardData | null; loading: boolean; stageFilter: string; setStageFilter: (k: string) => void;
   isAdmin: boolean; onOpenTech: (name: string) => void; showEmpresa: boolean;
   onOpenCell: (tecnico: string, stage: string, label: string) => void;
-}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell }) => {
+  // O quadro administrativo (TechBoard.tsx) fica dentro de um shell que já controla o próprio scroll,
+  // então a lista precisa rolar DENTRO de si mesma (overflow interno). O Portal do Técnico
+  // (TechnicianPortal.tsx) não tem esse shell - em alguns navegadores/WebViews de celular, overflow
+  // aninhado dentro de flex/position:fixed simplesmente não rola (visto em produção, mesmo com
+  // touch-action certo). pageScroll faz a lista fluir no fluxo normal da página e deixa a PÁGINA
+  // inteira rolar - o jeito de rolagem mais compatível que existe, sem regiões de scroll aninhadas.
+  pageScroll?: boolean;
+}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell, pageScroll }) => {
   const stages = board?.stages || [];
   const stageKeys = stageFilter ? [stageFilter] : stages.map(s => s.key);
 
@@ -746,16 +753,22 @@ export const MobileBoard: React.FC<{
     .filter(r => r.shown > 0);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, touchAction: 'pan-y' }}>
+    <div style={pageScroll ? { display: 'flex', flexDirection: 'column', width: '100%' } : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, touchAction: 'pan-y' }}>
       {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
-      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x', flexShrink: 0 }}>
+      <div style={{
+        display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x', flexShrink: 0,
+        ...(pageScroll ? { position: 'sticky', top: 0, zIndex: 5, background: 'var(--bg-primary)', paddingTop: '4px' } : {}),
+      }}>
         <StageChip label={`Todos · ${board?.total_open ?? 0}`} active={!stageFilter} onClick={() => setStageFilter('')} />
         {stages.map(st => (
           <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
         ))}
       </div>
 
-      <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={pageScroll
+        ? { display: 'flex', flexDirection: 'column', gap: '10px' }
+        : { flex: '1 1 0%', minHeight: 0, minWidth: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }
+      }>
         {board && rows.length === 0 && !loading && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
         )}
