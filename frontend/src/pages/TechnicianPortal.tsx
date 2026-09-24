@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { LogOut, RefreshCw, User as UserIcon } from 'lucide-react';
 import { techApiFetch } from '../services/techApi';
-import { MobileBoard, BoardData } from '../components/TechBoard';
+import { MobileBoard, BoardGrid, BoardData } from '../components/TechBoard';
 
 interface TechnicianMe {
   id: number;
@@ -28,6 +28,36 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [stageFilter, setStageFilter] = useState('');
+
+  // Igual ao quadro administrativo (TechBoard.tsx): tela estreita em retrato vira lista; deitada ou
+  // desktop usa a mesma grade com cabeçalho colorido por estágio, ocupando 100% da largura disponível.
+  const [isNarrow, setIsNarrow] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth < 860);
+  const [isLandscape, setIsLandscape] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth > window.innerHeight);
+  useEffect(() => {
+    const onResize = () => {
+      setIsNarrow(window.innerWidth < 860);
+      setIsLandscape(window.innerWidth > window.innerHeight);
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+  const useMobileLayout = isNarrow && !isLandscape;
+
+  const [zoom, setZoomState] = useState<number>(() => {
+    try {
+      const v = parseFloat(localStorage.getItem('omni_tech_portal_zoom') || '1');
+      return isFinite(v) && v > 0 ? v : 1;
+    } catch { return 1; }
+  });
+  const setZoom = (next: number) => {
+    const clamped = Math.max(0.8, Math.min(1.6, Math.round(next * 100) / 100));
+    setZoomState(clamped);
+    try { localStorage.setItem('omni_tech_portal_zoom', String(clamped)); } catch {}
+  };
 
   useEffect(() => {
     techApiFetch('/me').then(setMe).catch(() => {});
@@ -61,7 +91,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   };
 
   return (
-    <div style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box' }}>
+    <div style={{ height: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '14px 16px 10px' }}>
         <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'rgba(0,230,153,0.16)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
           <UserIcon size={17} />
@@ -111,17 +141,35 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
         <div style={{ margin: '0 16px 10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '13px' }}>{error}</div>
       )}
 
+      {!useMobileLayout && (
+        <div style={{ position: 'fixed', right: '14px', bottom: '14px', zIndex: 50, display: 'flex', flexDirection: 'column', gap: '6px', background: 'var(--bg-secondary, rgba(20,24,32,0.92))', border: '1px solid var(--border-color, rgba(255,255,255,0.14))', borderRadius: '10px', padding: '4px', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
+          <button onClick={() => setZoom(zoom + 0.15)} title="Aumentar zoom" style={{ width: '36px', height: '36px', fontSize: '16px', fontWeight: 800, borderRadius: 'var(--radius-md, 8px)', cursor: 'pointer', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}>+</button>
+          <button onClick={() => setZoom(zoom - 0.15)} title="Diminuir zoom" style={{ width: '36px', height: '36px', fontSize: '16px', fontWeight: 800, borderRadius: 'var(--radius-md, 8px)', cursor: 'pointer', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}>−</button>
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 0, padding: '0 16px 16px', display: 'flex' }}>
-        <MobileBoard
-          board={board}
-          loading={loading}
-          stageFilter={stageFilter}
-          setStageFilter={setStageFilter}
-          isAdmin={false}
-          onOpenTech={() => {}}
-          showEmpresa={!empresa}
-          onOpenCell={() => {}}
-        />
+        {useMobileLayout ? (
+          <MobileBoard
+            board={board}
+            loading={loading}
+            stageFilter={stageFilter}
+            setStageFilter={setStageFilter}
+            isAdmin={false}
+            onOpenTech={() => {}}
+            showEmpresa={!empresa}
+            onOpenCell={() => {}}
+          />
+        ) : (
+          <BoardGrid
+            board={board}
+            loading={loading}
+            scale={zoom}
+            isAdmin={false}
+            showEmpresa={!empresa}
+            onOpenCell={() => {}}
+          />
+        )}
       </div>
     </div>
   );

@@ -37,7 +37,7 @@ export const TechnicianLogin: React.FC<TechnicianLoginProps> = ({ onLoginSuccess
 
   return (
     <div style={{
-      minHeight: '100vh', width: '100vw', backgroundColor: 'var(--bg-primary)',
+      height: '100dvh', width: '100%', backgroundColor: 'var(--bg-primary)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', boxSizing: 'border-box',
       backgroundImage: 'radial-gradient(circle at 50% 30%, rgba(0, 230, 153, 0.08) 0%, transparent 60%)'
     }}>

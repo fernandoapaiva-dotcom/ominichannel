@@ -240,16 +240,10 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
 
   const stages = board?.stages || [];
-  const stagesCount = Math.max(stages.length, 1);
   // Retrato vira lista vertical (MobileBoard); paisagem já usa a mesma grade do desktop (rolável por
-  // toque nos dois eixos) - só o Modo TV nunca cai aqui.
+  // toque nos dois eixos, ver BoardGrid) - só o Modo TV nunca cai aqui.
   const useMobileLayout = isNarrow && !tvMode && !isLandscape;
   const showZoomControls = isNarrow && !tvMode;
-  // Colunas fixas ocupando 100% da largura disponível (grid com container de largura definida - sem isso,
-  // nomes longos de cliente em uma só linha inflam a largura "natural" das colunas bem além do necessário).
-  const techColWidth = tvMode ? 132 : Math.round(100 * (isNarrow ? mobileZoom : 1));
-  const minStageCol = tvMode ? 108 : Math.round(82 * (isNarrow ? mobileZoom : 1));
-  const gridCols = `${techColWidth}px repeat(${stagesCount}, minmax(${minStageCol}px, 1fr))`;
 
   const wrapperStyle: React.CSSProperties = tvMode
     ? { position: 'fixed', inset: 0, zIndex: 20000, background: 'var(--bg-primary, #0b1220)', display: 'flex', flexDirection: 'column', padding: '14px 18px', overflow: 'hidden' }
@@ -361,63 +355,15 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
         />
       ) : (
-        <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
-          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: gridCols }}>
-            {/* linha de títulos */}
-            <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
-            {stages.map(st => (
-              <div
-                key={st.key} title={st.label}
-                style={{
-                  ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`,
-                  flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: '2px',
-                  whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip',
-                }}
-              >
-                <span style={{ lineHeight: 1.15, wordBreak: 'break-word' }}>{st.label}</span>
-                <span style={{ color: STAGE_COLORS[st.key] || 'var(--text-muted)', fontSize: `${11 * scale}px` }}>{board?.totals?.[st.key] ?? 0}</span>
-              </div>
-            ))}
-
-            {board && board.technicians.length === 0 && !loading && (
-              <div style={{ gridColumn: `1 / span ${stages.length + 1}`, padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(14) }}>
-                Nenhuma O.S. em aberto neste filtro.
-              </div>
-            )}
-
-            {(board?.technicians || []).map(tech => (
-              <React.Fragment key={tech.name}>
-                <div
-                  onClick={() => { if (isAdmin && !tvMode) setDetailTech(tech.name); }}
-                  title={isAdmin && !tvMode ? 'Ver detalhes e auditoria deste técnico' : undefined}
-                  style={{
-                    position: 'sticky', left: 0, zIndex: 1, padding: `${7 * scale}px ${9 * scale}px`,
-                    background: 'var(--bg-primary, #0b1220)', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-                    borderRight: '1px solid var(--border-color, rgba(255,255,255,0.08))',
-                    cursor: isAdmin && !tvMode ? 'pointer' : 'default', minWidth: 0,
-                  }}
-                >
-                  <div style={{ fontSize: fs(12.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
-                  <div style={{ fontSize: fs(10), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
-                </div>
-                {stages.map(st => {
-                  const cell = tech.cells[st.key] || { count: 0, cards: [] };
-                  return (
-                    <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
-                      {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={!empresa} />)}
-                      {cell.count > cell.cards.length && (
-                        <button
-                          onClick={() => setCellModal({ tecnico: tech.name, stage: st.key, label: st.label })}
-                          style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--accent-primary)', textAlign: 'center', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.25)', borderRadius: '6px', padding: '3px 0', cursor: 'pointer' }}
-                        >+{cell.count - cell.cards.length} O.S.</button>
-                      )}
-                    </div>
-                  );
-                })}
-              </React.Fragment>
-            ))}
-          </div>
-        </div>
+        <BoardGrid
+          board={board}
+          loading={loading}
+          scale={scale}
+          isAdmin={isAdmin}
+          onOpenTech={setDetailTech}
+          showEmpresa={!empresa}
+          onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
+        />
       )}
       {!tvMode && !isAdmin && (
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
@@ -439,6 +385,87 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       {reportOpen && (
         <ReportPanel stages={stages} defaultEmpresa={empresa} isAdmin={isAdmin} onClose={() => setReportOpen(false)} />
       )}
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- grade (desktop / celular deitado / Portal do Técnico)
+
+// Mesma grade do quadro administrativo (uma linha por técnico, uma coluna por estágio, cabeçalho colorido
+// por STAGE_COLORS) - extraída pra ser reaproveitada também no Portal do Técnico (TechnicianPortal.tsx)
+// em telas largas, em vez de reimplementar o visual do quadro principal.
+export const BoardGrid: React.FC<{
+  board: BoardData | null; loading: boolean; scale?: number; isAdmin: boolean;
+  onOpenTech?: (name: string) => void; onOpenCell: (tecnico: string, stage: string, label: string) => void;
+  showEmpresa: boolean;
+}> = ({ board, loading, scale = 1, isAdmin, onOpenTech, onOpenCell, showEmpresa }) => {
+  const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
+  const stages = board?.stages || [];
+  const stagesCount = Math.max(stages.length, 1);
+  // Colunas fixas ocupando 100% da largura disponível (grid com container de largura definida - sem isso,
+  // nomes longos de cliente em uma só linha inflam a largura "natural" das colunas bem além do necessário).
+  const techColWidth = Math.round(100 * scale);
+  const minStageCol = Math.round(82 * scale);
+  const gridCols = `${techColWidth}px repeat(${stagesCount}, minmax(${minStageCol}px, 1fr))`;
+  const clickable = isAdmin && !!onOpenTech;
+
+  return (
+    <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x pan-y', border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+      <div style={{ width: '100%', display: 'grid', gridTemplateColumns: gridCols }}>
+        {/* linha de títulos */}
+        <div style={{ ...headCell(scale), position: 'sticky', left: 0, top: 0, zIndex: 3 }}>Técnico</div>
+        {stages.map(st => (
+          <div
+            key={st.key} title={st.label}
+            style={{
+              ...headCell(scale), position: 'sticky', top: 0, zIndex: 2, borderTop: `3px solid ${STAGE_COLORS[st.key] || '#64748b'}`,
+              flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: '2px',
+              whiteSpace: 'normal', overflow: 'visible', textOverflow: 'clip',
+            }}
+          >
+            <span style={{ lineHeight: 1.15, wordBreak: 'break-word' }}>{st.label}</span>
+            <span style={{ color: STAGE_COLORS[st.key] || 'var(--text-muted)', fontSize: `${11 * scale}px` }}>{board?.totals?.[st.key] ?? 0}</span>
+          </div>
+        ))}
+
+        {board && board.technicians.length === 0 && !loading && (
+          <div style={{ gridColumn: `1 / span ${stages.length + 1}`, padding: '40px', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(14) }}>
+            Nenhuma O.S. em aberto neste filtro.
+          </div>
+        )}
+
+        {(board?.technicians || []).map(tech => (
+          <React.Fragment key={tech.name}>
+            <div
+              onClick={() => { if (clickable) onOpenTech!(tech.name); }}
+              title={clickable ? 'Ver detalhes e auditoria deste técnico' : undefined}
+              style={{
+                position: 'sticky', left: 0, zIndex: 1, padding: `${7 * scale}px ${9 * scale}px`,
+                background: 'var(--bg-primary, #0b1220)', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                borderRight: '1px solid var(--border-color, rgba(255,255,255,0.08))',
+                cursor: clickable ? 'pointer' : 'default', minWidth: 0,
+              }}
+            >
+              <div style={{ fontSize: fs(12.5), fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={titleCase(tech.name)}>{titleCase(tech.name)}</div>
+              <div style={{ fontSize: fs(10), color: 'var(--text-muted)', marginTop: '1px' }}>{tech.total_open} em aberto</div>
+            </div>
+            {stages.map(st => {
+              const cell = tech.cells[st.key] || { count: 0, cards: [] };
+              return (
+                <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
+                  {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={showEmpresa} />)}
+                  {cell.count > cell.cards.length && (
+                    <button
+                      onClick={() => onOpenCell(tech.name, st.key, st.label)}
+                      style={{ fontSize: fs(11), fontWeight: 700, color: 'var(--accent-primary)', textAlign: 'center', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.25)', borderRadius: '6px', padding: '3px 0', cursor: 'pointer' }}
+                    >+{cell.count - cell.cards.length} O.S.</button>
+                  )}
+                </div>
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 };

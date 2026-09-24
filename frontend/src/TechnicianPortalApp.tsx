@@ -29,7 +29,7 @@ export const TechnicianPortalApp: React.FC = () => {
   if (loading) {
     return (
       <div style={{
-        height: '100vh', width: '100vw', backgroundColor: 'var(--bg-primary)',
+        height: '100dvh', width: '100%', backgroundColor: 'var(--bg-primary)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         color: 'var(--accent-primary)', fontFamily: 'var(--font-heading)', fontSize: '16px'
       }}>
