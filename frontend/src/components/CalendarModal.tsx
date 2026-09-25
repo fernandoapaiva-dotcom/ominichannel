@@ -425,6 +425,16 @@ export const CalendarModal: React.FC<CalendarModalProps> = ({
     e.preventDefault();
     if (!formTitle.trim()) return;
 
+    // Sem funcionário vinculado, não tem pra quem mandar lembrete no WhatsApp - o evento salvava
+    // assim sem avisar nada, e só se percebia dias depois que "a mensagem não chegou". Confirma antes
+    // de deixar passar batido (alguns eventos são só um lembrete pessoal mesmo, então não bloqueia).
+    if (!formEmployeePhone) {
+      const proceed = window.confirm(
+        'Nenhum funcionário foi vinculado a este evento - ninguém vai receber lembrete no WhatsApp.\n\nSalvar assim mesmo?'
+      );
+      if (!proceed) return;
+    }
+
     try {
       setIsSaving(true);
       const [sYear, sMonth, sDay] = formStartDate.split('-').map(Number);
