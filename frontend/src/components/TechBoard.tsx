@@ -746,16 +746,21 @@ export const MobileBoard: React.FC<{
     .filter(r => r.shown > 0);
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, touchAction: 'pan-y' }}>
+    // Mesma estrutura de UM nível só que já funciona na grade (BoardGrid): um único container com
+    // overflow:auto, cabeçalho fixo por DENTRO dele via position:sticky - não um wrapper flex extra
+    // por fora com o cabeçalho como irmão. Testado em produção: com dois níveis de flex-column (esse
+    // wrapper + o container de scroll) a lista não rolava no celular; achatado num nível só, como a
+    // grade, resolve.
+    <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
       {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
-      <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x', flexShrink: 0 }}>
+      <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-primary)', display: 'flex', gap: '6px', overflowX: 'auto', padding: '2px 0 8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}>
         <StageChip label={`Todos · ${board?.total_open ?? 0}`} active={!stageFilter} onClick={() => setStageFilter('')} />
         {stages.map(st => (
           <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
         ))}
       </div>
 
-      <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {board && rows.length === 0 && !loading && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
         )}
