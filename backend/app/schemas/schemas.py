@@ -359,6 +359,7 @@ class AuthorizedTechnicianResponse(BaseModel):
     especialidade: Optional[str] = None
     ativo: bool
     has_pin: bool = False
+    pin_deve_trocar: bool = False
     criado_em: datetime
     model_config = ConfigDict(from_attributes=True)
 

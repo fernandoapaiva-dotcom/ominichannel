@@ -81,6 +81,8 @@ async def create_technician(
         ativo=payload.ativo,
         pin_hash=get_password_hash(pin_clean) if pin_clean else None,
         pin_definido_em=datetime.utcnow() if pin_clean else None,
+        # Todo PIN que o admin define é provisório até o técnico trocar pelo dele no primeiro acesso.
+        pin_deve_trocar=bool(pin_clean),
     )
     db.add(tech)
     await db.commit()
@@ -128,10 +130,14 @@ async def update_technician(
                 raise HTTPException(status_code=400, detail="O PIN deve ter de 4 a 6 dígitos numéricos.")
             tech.pin_hash = get_password_hash(pin)
             tech.pin_definido_em = datetime.utcnow()
+            # Reset de PIN esquecido cai aqui também - o técnico recupera o acesso com esse PIN
+            # provisório e troca pelo dele de novo no primeiro login seguinte.
+            tech.pin_deve_trocar = True
         else:
             # PIN vazio explícito = remover o acesso do técnico ao Portal (ex: ele saiu da empresa)
             tech.pin_hash = None
             tech.pin_definido_em = None
+            tech.pin_deve_trocar = False
 
     await db.commit()
     await db.refresh(tech)

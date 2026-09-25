@@ -91,6 +91,7 @@ export interface AuthorizedTechnician {
   especialidade?: string | null;
   ativo: boolean;
   has_pin?: boolean;
+  pin_deve_trocar?: boolean;
   criado_em: string;
 }
 

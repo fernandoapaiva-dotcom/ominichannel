@@ -283,6 +283,10 @@ class AuthorizedTechnician(Base):
     # bcrypt igual ao de User.senha_hash, nunca o PIN em texto puro.
     pin_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     pin_definido_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Todo PIN definido pelo admin (criação, edição ou reset após o técnico esquecer) é tratado como
+    # provisório - true força a trocar por um PIN próprio no primeiro login (POST /technician-portal/
+    # change-pin), false só depois que o próprio técnico já trocou.
+    pin_deve_trocar: Mapped[bool] = mapped_column(Boolean, default=False)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

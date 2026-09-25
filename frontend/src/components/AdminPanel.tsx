@@ -3032,6 +3032,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                     PIN de acesso ao Portal do Técnico (4 a 6 dígitos{editingTechId ? ' — deixe em branco para não alterar o PIN atual' : ', opcional'})
                     {editingTechId && ` — ${(technicians.find(t => t.id === editingTechId)?.has_pin) ? 'PIN definido ✓' : 'PIN não definido'}`}
                   </label>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
+                    Esse PIN é sempre provisório: no primeiro acesso o técnico é obrigado a trocar por um PIN próprio antes de usar o portal.
+                  </div>
                   <input
                     type="text"
                     inputMode="numeric"
@@ -3147,12 +3150,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                                 Inativo
                               </span>
                             )}
-                            <span
-                              title={item.has_pin ? 'Tem PIN definido - pode entrar no Portal do Técnico' : 'Sem PIN - não consegue entrar no Portal do Técnico'}
-                              style={{ fontSize: '10px', backgroundColor: item.has_pin ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.08)', color: item.has_pin ? '#60a5fa' : 'var(--text-muted)', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}
-                            >
-                              {item.has_pin ? 'Portal ✓' : 'Sem PIN'}
-                            </span>
+                            {item.has_pin && item.pin_deve_trocar ? (
+                              <span
+                                title="PIN provisório dado por você - o técnico ainda não trocou pelo dele no primeiro acesso"
+                                style={{ fontSize: '10px', backgroundColor: 'rgba(234, 179, 8, 0.2)', color: '#eab308', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}
+                              >
+                                Aguardando troca
+                              </span>
+                            ) : (
+                              <span
+                                title={item.has_pin ? 'Tem PIN definido - pode entrar no Portal do Técnico' : 'Sem PIN - não consegue entrar no Portal do Técnico'}
+                                style={{ fontSize: '10px', backgroundColor: item.has_pin ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255,255,255,0.08)', color: item.has_pin ? '#60a5fa' : 'var(--text-muted)', padding: '1px 6px', borderRadius: '8px', fontWeight: '600' }}
+                              >
+                                {item.has_pin ? 'Portal ✓' : 'Sem PIN'}
+                              </span>
+                            )}
                           </div>
                           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Phone size={11} /> <strong>WhatsApp:</strong> {item.telefone}
