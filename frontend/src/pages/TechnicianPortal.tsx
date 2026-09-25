@@ -96,50 +96,97 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
     // padrão (região interna com overflow, não a página inteira) também é usado no retrato agora, em
     // vez do scroll nativo da página que não deu certo.
     <div style={{ height: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '14px 16px 10px', flexShrink: 0 }}>
-        <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'rgba(0,230,153,0.16)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <UserIcon size={17} />
-        </div>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {useMobileLayout ? (
+        // Retrato: sobra altura de sobra, cabeçalho em 3 linhas confortáveis pro dedo.
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '14px 16px 10px', flexShrink: 0 }}>
+            <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: 'rgba(0,230,153,0.16)', color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <UserIcon size={17} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {me?.nome || 'Técnico'}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{me?.cargo || 'Portal do Técnico'}</div>
+            </div>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => { setLoading(true); load(); }} title="Atualizar" style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button onClick={handleLogout} title="Sair" style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <LogOut size={14} />
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px', padding: '0 16px 10px', flexShrink: 0 }}>
+            <button
+              onClick={() => setTab('meus')}
+              style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'meus' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'meus' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'meus' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >Minhas O.S.</button>
+            <button
+              onClick={() => setTab('geral')}
+              style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'geral' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'geral' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'geral' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >Quadro Geral</button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px', flexShrink: 0 }}>
+            {EMPRESAS.map(e => (
+              <button
+                key={e.key || 'todas'}
+                onClick={() => setEmpresa(e.key)}
+                style={{
+                  padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', borderRadius: '8px',
+                  background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
+                  color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
+                  border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
+                }}
+              >{e.label}</button>
+            ))}
+          </div>
+        </>
+      ) : (
+        // Paisagem: altura de sobra é curta (celular deitado) - usuário reportou que o cabeçalho em
+        // 3 linhas "atrapalha", deixando a grade (a parte que realmente importa/rola) apertada demais.
+        // Tudo numa linha só, compacto.
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', flexShrink: 0, flexWrap: 'nowrap', overflowX: 'auto' }}>
+          <div style={{ fontSize: '12.5px', fontWeight: 800, color: 'var(--text-main)', whiteSpace: 'nowrap', flexShrink: 0 }}>
             {me?.nome || 'Técnico'}
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{me?.cargo || 'Portal do Técnico'}</div>
+          <div style={{ width: '1px', height: '18px', background: 'var(--border-color, rgba(255,255,255,0.12))', flexShrink: 0 }} />
+          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+            <button
+              onClick={() => setTab('meus')}
+              style={{ padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', whiteSpace: 'nowrap', background: tab === 'meus' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'meus' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'meus' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >Minhas O.S.</button>
+            <button
+              onClick={() => setTab('geral')}
+              style={{ padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', whiteSpace: 'nowrap', background: tab === 'geral' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'geral' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'geral' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >Quadro Geral</button>
+          </div>
+          <div style={{ width: '1px', height: '18px', background: 'var(--border-color, rgba(255,255,255,0.12))', flexShrink: 0 }} />
+          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+            {EMPRESAS.map(e => (
+              <button
+                key={e.key || 'todas'}
+                onClick={() => setEmpresa(e.key)}
+                style={{
+                  padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer', borderRadius: '7px', whiteSpace: 'nowrap',
+                  background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
+                  color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
+                  border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
+                }}
+              >{e.label}</button>
+            ))}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => { setLoading(true); load(); }} title="Atualizar" style={{ width: '28px', height: '28px', borderRadius: '7px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button onClick={handleLogout} title="Sair" style={{ width: '28px', height: '28px', borderRadius: '7px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <LogOut size={12} />
+          </button>
         </div>
-        <div style={{ flex: 1 }} />
-        <button onClick={() => { setLoading(true); load(); }} title="Atualizar" style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-        </button>
-        <button onClick={handleLogout} title="Sair" style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-          <LogOut size={14} />
-        </button>
-      </div>
-
-      <div style={{ display: 'flex', gap: '6px', padding: '0 16px 10px', flexShrink: 0 }}>
-        <button
-          onClick={() => setTab('meus')}
-          style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'meus' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'meus' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'meus' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
-        >Minhas O.S.</button>
-        <button
-          onClick={() => setTab('geral')}
-          style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'geral' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'geral' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'geral' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
-        >Quadro Geral</button>
-      </div>
-
-      <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px', flexShrink: 0 }}>
-        {EMPRESAS.map(e => (
-          <button
-            key={e.key || 'todas'}
-            onClick={() => setEmpresa(e.key)}
-            style={{
-              padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', borderRadius: '8px',
-              background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
-              color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
-              border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
-            }}
-          >{e.label}</button>
-        ))}
-      </div>
+      )}
 
       {error && (
         <div style={{ margin: '0 16px 10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '13px', flexShrink: 0 }}>{error}</div>
