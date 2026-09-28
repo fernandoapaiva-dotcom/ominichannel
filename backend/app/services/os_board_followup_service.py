@@ -222,21 +222,23 @@ async def _process_descarte(wn: WhatsAppNumber, item: _DueItem, now: datetime):
         logger.error(f"[OS BOARD FOLLOWUP] Falha ao processar descarte da O.S. #{item.codos}: {err}")
 
 
-async def _resume_stuck_orcamento_dispatches(wn: WhatsAppNumber, now_utc: datetime) -> int:
+async def _resume_stuck_os_dispatches(wn: WhatsAppNumber, now_utc: datetime) -> int:
     """
-    dispatch_orcamento_messages (os_handler_ingest.py) é uma tarefa de fundo "fire-and-forget":
-    se o processo reiniciar bem no meio dela (foi exatamente o que aconteceu com a O.S. #1934 do
-    Cleniton em 23/09/2026, derrubada por um `pm2 restart` concorrente), ela morre em silêncio,
-    sem registrar erro nenhum, e o cliente nunca recebe a pergunta de aprovação - só o aviso
-    inicial (e às vezes o PDF). Pedido do usuário: "seria bom o sistema perceber quando as
-    tarefas automatizadas foram paradas no meio, pra retomar e finalizar".
+    As tarefas de fundo de os_handler_ingest.py (dispatch_orcamento_messages,
+    dispatch_abertura_messages, _dispatch_supplementary_entrada_item,
+    _send_evento_message_background) são "fire-and-forget": se o processo reiniciar bem no meio de
+    uma delas (aconteceu de verdade com a O.S. #1934 do Cleniton em 23/09/2026, derrubada por um
+    `pm2 restart` concorrente, e o usuário relatou o mesmo padrão em 28/09/2026 depois de vários
+    reinícios seguidos por sobrecarga), ela morre em silêncio, sem registrar erro nenhum, e o
+    cliente nunca recebe a mensagem. Pedido do usuário: "o sistema precisa ter esse mecanismo de
+    proteção para não deixar o cliente sem comunicação".
 
-    Detecção: mark_os_dispatched grava um registro em dados_adicionais.os_dispatched ANTES da
-    tarefa de fundo rodar. Se esse registro já tem mais de STUCK_DISPATCH_MIN_AGE_MINUTES e a
-    O.S. ainda está em "Orçamento enviado" no quadro (ninguém respondeu nem foi decidido no
-    Softsystem), mas a conversa nunca chegou no marcador CONFIRM_OS_APPROVAL esperado, a tarefa
-    nunca terminou de perguntar. Retoma mandando só a pergunta de aprovação - nunca reenvia o
-    aviso inicial nem o PDF, pra não arriscar duplicar o que já possa ter saído antes de travar.
+    Detecção, igual pros três fluxos: mark_os_dispatched (os_handler_ingest.py) grava um registro
+    em dados_adicionais.os_dispatched ANTES da tarefa de fundo rodar; mark_os_dispatch_confirmed
+    marca record["confirmed_at"] quando ela chega no fim de verdade. Um registro com mais de
+    STUCK_DISPATCH_MIN_AGE_MINUTES e sem confirmed_at é uma tarefa que morreu no meio - cada fluxo
+    retoma do seu jeito (ver comentários abaixo), sempre evitando reenviar o que já tem evidência
+    de ter saído.
     """
     from app.api.v1.os_handler_ingest import send_and_log_text
 
@@ -256,7 +258,8 @@ async def _resume_stuck_orcamento_dispatches(wn: WhatsAppNumber, now_utc: dateti
             changed = False
 
             for codos_str, record in os_dispatched.items():
-                if record.get("flow") != "orcamento" or record.get("resumed_at"):
+                flow = record.get("flow")
+                if flow not in ("orcamento", "abertura", "evento_progresso") or record.get("resumed_at") or record.get("confirmed_at"):
                     continue
                 dispatched_at_raw = record.get("dispatched_at")
                 if not dispatched_at_raw:
@@ -266,49 +269,64 @@ async def _resume_stuck_orcamento_dispatches(wn: WhatsAppNumber, now_utc: dateti
                 except ValueError:
                     continue
                 if not (cutoff_max <= dispatched_at <= cutoff_min):
-                    continue  # nova demais (pode só estar lenta) ou velha demais (já não é confiável retomar)
-
-                expected_prefix = f"CONFIRM_OS_APPROVAL:{codos_str}|"
-                if (conversation.assunto_atual or "").startswith(expected_prefix):
-                    continue  # pergunta já foi feita certinho, só esperando o cliente responder
-
-                try:
-                    codos_int = int(codos_str)
-                except ValueError:
-                    continue
-                board_row = (await db.execute(select(OsBoardOrder).where(
-                    OsBoardOrder.tenant_id == wn.tenant_id, OsBoardOrder.codos == codos_int
-                ))).scalars().first()
-                if not board_row or board_row.situacao_evento != EVENTO_ORCAMENTO_ENVIADO:
-                    continue  # já foi respondido/decidido por outro caminho - nada a retomar
+                    continue  # novo demais (pode só estar lento) ou velho demais (já não é confiável retomar)
 
                 contact = await db.get(Contact, conversation.contact_id)
                 phone = _clean_phone(contact.telefone) if contact else None
                 if not phone:
                     continue
 
-                approval_prompt = (
-                    "Você *aprova* a execução do serviço pelo valor informado no orçamento? "
-                    "Responda *SIM* para aprovar ou *NÃO* para recusar."
-                )
+                try:
+                    codos_int = int(codos_str)
+                except ValueError:
+                    continue
+
+                if flow == "orcamento":
+                    expected_prefix = f"CONFIRM_OS_APPROVAL:{codos_str}|"
+                    if (conversation.assunto_atual or "").startswith(expected_prefix):
+                        continue  # pergunta já foi feita certinho, só esperando o cliente responder
+                    board_row = (await db.execute(select(OsBoardOrder).where(
+                        OsBoardOrder.tenant_id == wn.tenant_id, OsBoardOrder.codos == codos_int
+                    ))).scalars().first()
+                    if not board_row or board_row.situacao_evento != EVENTO_ORCAMENTO_ENVIADO:
+                        continue  # já foi respondido/decidido por outro caminho - nada a retomar
+                    texto = (
+                        "Você *aprova* a execução do serviço pelo valor informado no orçamento? "
+                        "Responda *SIM* para aprovar ou *NÃO* para recusar."
+                    )
+                elif flow == "evento_progresso":
+                    texto = record.get("extra_text")
+                    if not texto:
+                        continue  # registro antigo, sem o texto guardado - nada pra reenviar com segurança
+                else:  # "abertura" - a sequência original (termos/preço/confirmação) é rica demais pra
+                    # remontar com segurança aqui; a prioridade é o cliente nunca ficar sem NENHUMA
+                    # resposta, então manda um aviso simples garantindo que o equipamento foi recebido,
+                    # e deixa marcado no log pra um atendente conferir se precisa completar manualmente.
+                    texto = (
+                        f"Olá! 👋 Confirmando: recebemos sua Ordem de Serviço *#{codos_str}* e nossa equipe "
+                        f"já está cuidando dela. Qualquer dúvida ou informação que precisar, é só chamar "
+                        f"por aqui! 😊"
+                    )
+
                 try:
                     await send_and_log_text(
                         db, wn.tenant_id, wn.id, wn.instancia_evolution_api, phone,
-                        conversation, approval_prompt, delay_sec=1.5
+                        conversation, texto, delay_sec=1.5
                     )
-                    pdf_rel_path = record.get("pdf_rel_path", "")
-                    tecnico_phone = record.get("tecnico_phone") or ""
-                    conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{codos_str}|{pdf_rel_path}|{tecnico_phone}"
+                    if flow == "orcamento":
+                        pdf_rel_path = record.get("pdf_rel_path", "")
+                        tecnico_phone = record.get("tecnico_phone") or ""
+                        conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{codos_str}|{pdf_rel_path}|{tecnico_phone}"
                     record["resumed_at"] = now_utc.isoformat()
                     os_dispatched[codos_str] = record
                     changed = True
                     resumed += 1
                     logger.warning(
-                        f"[OS BOARD FOLLOWUP] Retomada automática: disparo da O.S. #{codos_str} estava "
-                        f"travado (conversa #{conversation.id}) - pergunta de aprovação reenviada."
+                        f"[OS BOARD FOLLOWUP] Retomada automática: disparo '{flow}' da O.S. #{codos_str} estava "
+                        f"travado (conversa #{conversation.id}) - mensagem reenviada."
                     )
                 except Exception as err:
-                    logger.error(f"[OS BOARD FOLLOWUP] Falha ao retomar disparo travado da O.S. #{codos_str}: {err}")
+                    logger.error(f"[OS BOARD FOLLOWUP] Falha ao retomar disparo '{flow}' travado da O.S. #{codos_str}: {err}")
 
             if changed:
                 extra["os_dispatched"] = os_dispatched
@@ -328,7 +346,7 @@ async def check_os_board_followups():
         return  # fora do horário comercial (08h-18h) - não manda nada agora, só retoma no próximo dia útil
 
     try:
-        resumed = await _resume_stuck_orcamento_dispatches(wn, datetime.utcnow())
+        resumed = await _resume_stuck_os_dispatches(wn, datetime.utcnow())
         if resumed:
             logger.info(f"[OS BOARD FOLLOWUP] {resumed} disparo(s) travado(s) retomado(s) neste ciclo.")
     except Exception as err:

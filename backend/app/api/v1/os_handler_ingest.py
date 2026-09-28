@@ -502,6 +502,7 @@ async def dispatch_abertura_messages(
                     codos_list, paths_list = parse_confirm_os_pdf_marker(conversation.assunto_atual)
                     conversation.assunto_atual = "Atendimento Concierge"
                     os_burst_state.mark_confirmed(conversation_id)
+                    mark_os_dispatch_confirmed(conversation, codos)
                     await db.commit()
                     ack = (
                         "Perfeito! Só um instante, já vou te enviar o PDF completo da sua Ordem de Serviço. 📎"
@@ -540,6 +541,10 @@ async def dispatch_abertura_messages(
                         )
             finally:
                 os_burst_state.finish(conversation_id, burst)
+
+            await db.refresh(conversation)
+            mark_os_dispatch_confirmed(conversation, codos)
+            await db.commit()
 
         logger.info(f"[OS HANDLER INGEST] O.S. '{natureza}' despachada para conversa #{conversation_id} ({phone})")
     except Exception as err:
@@ -616,6 +621,10 @@ async def _dispatch_supplementary_entrada_item(
                     logger.info(f"[OS HANDLER INGEST] O.S. #{codos} suplementar: cliente já tinha confirmado - PDF enviado direto (conversa #{conversation_id})")
                 else:
                     logger.warning(f"[OS HANDLER INGEST] O.S. #{codos} suplementar: nenhuma confirmação CONFIRM_OS_PDF pendente encontrada para incluir (conversa #{conversation_id})")
+
+            await db.refresh(conversation)
+            mark_os_dispatch_confirmed(conversation, codos)
+            await db.commit()
 
         logger.info(f"[OS HANDLER INGEST] Item suplementar da O.S. #{codos} ('{natureza}') incorporado à confirmação pendente (conversa #{conversation_id})")
     except Exception as err:
@@ -869,27 +878,52 @@ def check_os_dispatch_state(conversation: Conversation, codos: int, flow: str) -
 
 def mark_os_dispatched(
     conversation: Conversation, codos: int, flow: str, pdf_sent: bool,
-    pdf_rel_path: str = "", tecnico_phone: Optional[str] = None
+    pdf_rel_path: str = "", tecnico_phone: Optional[str] = None, extra_text: Optional[str] = None
 ):
     extra = dict(conversation.dados_adicionais or {})
     os_dispatched = dict(extra.get("os_dispatched", {}))
     prev = os_dispatched.get(str(codos)) or {}
     # dispatched_at: guarda quando o despacho foi ANUNCIADO PELA PRIMEIRA VEZ (antes da tarefa
     # de fundo rodar) - é o que permite detectar depois se essa tarefa foi interrompida no meio
-    # (ex.: o processo reiniciou bem naquela hora) e nunca terminou de perguntar a aprovação -
-    # ver os_board_followup_service._resume_stuck_orcamento_dispatches. pdf_rel_path/tecnico_phone
-    # ficam guardados aqui pelo mesmo motivo: sem eles, uma retomada automática não teria como
+    # (ex.: o processo reiniciou bem naquela hora) e nunca terminou - ver
+    # os_board_followup_service._resume_stuck_os_dispatches. pdf_rel_path/tecnico_phone ficam
+    # guardados aqui pelo mesmo motivo: sem eles, uma retomada automática não teria como
     # remontar o marcador CONFIRM_OS_APPROVAL exatamente como dispatch_orcamento_messages monta.
+    # extra_text: pro fluxo "evento_progresso" (aviso simples de 1 mensagem só) - guarda o texto
+    # já renderizado pra retomada poder reenviar exatamente a mesma mensagem, sem precisar
+    # reconstruir o contexto (config/natureza/etc.) do zero.
     os_dispatched[str(codos)] = {
         "flow": flow,
         "pdf_sent": pdf_sent,
         "dispatched_at": prev.get("dispatched_at") or datetime.utcnow().isoformat(),
         "pdf_rel_path": pdf_rel_path or prev.get("pdf_rel_path", ""),
         "tecnico_phone": tecnico_phone if tecnico_phone is not None else prev.get("tecnico_phone"),
+        "extra_text": extra_text if extra_text is not None else prev.get("extra_text"),
+        "confirmed_at": prev.get("confirmed_at"),
     }
     extra["os_dispatched"] = os_dispatched
     conversation.dados_adicionais = extra
     flag_modified(conversation, "dados_adicionais")
+
+
+def mark_os_dispatch_confirmed(conversation: Conversation, codos: int):
+    """
+    Marca que o despacho dessa O.S. realmente terminou de rodar (a tarefa de fundo chegou até o
+    fim sem ser interrompida no meio). Sem isso, a varredura de recuperação
+    (os_board_followup_service._resume_stuck_os_dispatches) não tem como distinguir "ainda
+    mandando as mensagens" de "o processo morreu no meio e o cliente nunca recebeu nada" - as
+    duas situações são indistinguíveis olhando só pra dispatched_at.
+    """
+    extra = dict(conversation.dados_adicionais or {})
+    os_dispatched = dict(extra.get("os_dispatched", {}))
+    record = os_dispatched.get(str(codos))
+    if record:
+        record = dict(record)
+        record["confirmed_at"] = datetime.utcnow().isoformat()
+        os_dispatched[str(codos)] = record
+        extra["os_dispatched"] = os_dispatched
+        conversation.dados_adicionais = extra
+        flag_modified(conversation, "dados_adicionais")
 
 
 async def deliver_late_pdf(
@@ -1167,8 +1201,14 @@ async def ingest_db_event_common(
     if not msg:
         return {"status": "no_template", "codos": codos, "cod_tipo_evento": cod_tipo_evento, "conversation_id": conversation.id}
 
+    # Registra ANTES de despachar (mesmo padrão de "abertura"/"orcamento" acima) - guarda o texto já
+    # pronto pra a varredura de recuperação poder reenviar exatamente essa mensagem se o processo
+    # morrer no meio antes dela sair (ver os_board_followup_service._resume_stuck_os_dispatches).
+    mark_os_dispatched(conversation, codos, "evento_progresso", pdf_sent=False, extra_text=msg)
+    await db.commit()
+
     asyncio.create_task(_send_evento_message_background(
-        tenant_id, whatsapp_number.id, instance_name, phone, conversation.id, msg
+        tenant_id, whatsapp_number.id, instance_name, phone, conversation.id, msg, codos
     ))
     logger.info(f"[OS DB EVENT] Evento tipo {cod_tipo_evento} - O.S. #{codos} agendado (conversa #{conversation.id})")
     return {"status": "queued", "flow": "evento_progresso", "codos": codos, "conversation_id": conversation.id}
@@ -1176,7 +1216,7 @@ async def ingest_db_event_common(
 
 async def _send_evento_message_background(
     tenant_id: int, whatsapp_number_id: int, instance_name: str, phone: str,
-    conversation_id: int, msg_content: str
+    conversation_id: int, msg_content: str, codos: Optional[int] = None
 ):
     from app.core.database import AsyncSessionLocal
     try:
@@ -1185,6 +1225,10 @@ async def _send_evento_message_background(
             if not conversation:
                 return
             await send_and_log_text(db, tenant_id, whatsapp_number_id, instance_name, phone, conversation, msg_content, 0.5)
+            if codos is not None:
+                await db.refresh(conversation)
+                mark_os_dispatch_confirmed(conversation, codos)
+                await db.commit()
     except Exception as err:
         logger.error(f"[OS DB EVENT] Erro ao enviar aviso de progresso: {err}", exc_info=True)
 

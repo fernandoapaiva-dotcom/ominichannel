@@ -461,6 +461,44 @@ def move_processed_pdf(file_path: str, success: bool):
         logger.error(f"Não foi possível mover {file_path} para {dest_dir}: {e}")
 
 
+def process_pdf_file(config: dict, path: str, cod_tipo_evento: int, tipo: str) -> None:
+    """
+    Processa um PDF de O.S. (ABERTURA/ORÇAMENTO): acha o evento correspondente no banco pelo
+    número no nome do arquivo e manda pro backend. Reaproveitado tanto pelo gatilho em tempo real
+    (PdfFolderHandler.on_created) quanto pela varredura periódica de pendências
+    (retry_pending_folder_pdfs) - por isso NÃO decide sozinho se deve mover o arquivo: só
+    "erros" (falha permanente, ex. O.S. não encontrada) é decidido aqui; falha de envio ao
+    backend (rede/backend fora do ar - quase sempre transitória) deixa o arquivo *no lugar*,
+    pra próxima varredura tentar de novo, em vez de arquivar em "erros" e nunca mais tentar -
+    era exatamente esse o buraco relatado pelo usuário em 28/09/2026: "sexta o sistema estava
+    caindo e salvamos algumas O.S's, eu não vi ele disparar".
+    """
+    basename = os.path.splitext(os.path.basename(path))[0]
+    if not basename.isdigit():
+        logger.warning(f"[vigia de pasta] Nome de arquivo não é um código de O.S. numérico, ignorando: {path}")
+        return
+    codos = int(basename)
+
+    logger.info(f"[vigia de pasta] Processando PDF [{tipo}]: {path}")
+    if not wait_until_file_is_stable(path):
+        logger.warning(f"[vigia de pasta] Arquivo não estabilizou a tempo, tentando mesmo assim: {path}")
+
+    empresa_key, event = find_os_by_codos(config, codos)
+    if not event:
+        # Falha permanente: o número no nome do arquivo não bate com nenhuma O.S. em nenhuma
+        # empresa - tentar de novo depois não vai mudar isso. Só aqui é seguro mover pra "erros".
+        logger.error(f"[vigia de pasta] O.S. #{codos} não encontrada em nenhuma empresa - PDF não enviado: {path}")
+        move_processed_pdf(path, success=False)
+        return
+
+    event["CODTIPOEVENTOOS"] = cod_tipo_evento
+    success = send_event_to_backend(config, empresa_key, event, tipo, path)
+    if success:
+        move_processed_pdf(path, success=True)
+    else:
+        logger.warning(f"[vigia de pasta] Falha ao enviar O.S. #{codos} pro backend - arquivo fica na pasta pra tentar de novo: {path}")
+
+
 class PdfFolderHandler(FileSystemEventHandler):
     """
     Gatilho pelo ARQUIVO em vez do evento no banco - cobre o caso em que o PDF só é salvo
@@ -479,31 +517,55 @@ class PdfFolderHandler(FileSystemEventHandler):
             return
         self._seen.add(path)
         try:
-            basename = os.path.splitext(os.path.basename(path))[0]
-            if not basename.isdigit():
-                logger.warning(f"[vigia de pasta] Nome de arquivo não é um código de O.S. numérico, ignorando: {path}")
-                return
-            codos = int(basename)
-
-            logger.info(f"[vigia de pasta] Novo PDF detectado [{self.tipo}]: {path}")
-            if not wait_until_file_is_stable(path):
-                logger.warning(f"[vigia de pasta] Arquivo não estabilizou a tempo, tentando mesmo assim: {path}")
-
-            empresa_key, event = find_os_by_codos(self.config, codos)
-            if not event:
-                logger.error(f"[vigia de pasta] O.S. #{codos} não encontrada em nenhuma empresa - PDF não enviado: {path}")
-                move_processed_pdf(path, success=False)
-                return
-
-            event["CODTIPOEVENTOOS"] = self.cod_tipo_evento
-            success = send_event_to_backend(self.config, empresa_key, event, self.tipo, path)
-            move_processed_pdf(path, success)
+            process_pdf_file(self.config, path, self.cod_tipo_evento, self.tipo)
         finally:
             self._seen.discard(path)
 
     def on_created(self, event):
         if not event.is_directory:
             self._process(event.src_path)
+
+
+_PDF_RETRY_FOLDERS = [(1, "abertura", "pasta_abertura"), (3, "orcamento", "pasta_orcamento")]
+_PDF_RETRY_INTERVAL_SECONDS = 300  # não retenta a cada 20s (ciclo normal) - só a cada 5 min, pra
+                                    # não bater no backend repetidamente enquanto ele estiver fora
+_last_pdf_retry_ts = 0.0
+
+
+def retry_pending_folder_pdfs(config: dict):
+    """
+    Varredura periódica (chamada do loop principal): qualquer .pdf que ainda esteja direto na
+    raiz de pasta_abertura/pasta_orcamento (não em "processados" nem "erros") é um arquivo cujo
+    envio falhou da última vez - process_pdf_file só move pra "erros" em falha permanente,
+    deixando o resto pra essa varredura tentar de novo. Sem isso, um PDF que chegou com o backend
+    fora do ar ficava esquecido pra sempre (só reenviado se alguém reiniciasse o vigia).
+    """
+    global _last_pdf_retry_ts
+    now = time.time()
+    if now - _last_pdf_retry_ts < _PDF_RETRY_INTERVAL_SECONDS:
+        return
+    _last_pdf_retry_ts = now
+
+    for cod_tipo_evento, tipo, folder_key in _PDF_RETRY_FOLDERS:
+        folder = config.get(folder_key)
+        if not folder or not os.path.isdir(folder):
+            continue
+        try:
+            pendentes = [
+                os.path.join(folder, name) for name in os.listdir(folder)
+                if name.lower().endswith(".pdf") and os.path.isfile(os.path.join(folder, name))
+            ]
+        except Exception as e:
+            logger.error(f"[vigia de pasta] Não foi possível listar '{folder}' pra retentativa: {e}")
+            continue
+        if not pendentes:
+            continue
+        logger.info(f"[vigia de pasta] Retentativa [{tipo}]: {len(pendentes)} PDF(s) pendente(s) em {folder}")
+        for path in pendentes:
+            try:
+                process_pdf_file(config, path, cod_tipo_evento, tipo)
+            except Exception as e:
+                logger.error(f"[vigia de pasta] Erro inesperado ao retentar {path}: {e}", exc_info=True)
 
     def on_moved(self, event):
         if not event.is_directory:
@@ -992,6 +1054,10 @@ def main():
                     sync_board_empresa(config, empresa_key, empresa_cfg, state)
                 except Exception as e:
                     logger.error(f"[{empresa_key}] Quadro de técnicos: erro no ciclo (não afeta os avisos): {e}", exc_info=True)
+            try:
+                retry_pending_folder_pdfs(config)
+            except Exception as e:
+                logger.error(f"Retentativa de PDFs pendentes: erro inesperado no ciclo: {e}", exc_info=True)
             time.sleep(poll_interval)
     finally:
         folder_observer.stop()
