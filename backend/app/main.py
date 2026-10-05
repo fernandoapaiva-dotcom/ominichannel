@@ -37,6 +37,7 @@ from app.services.whatsapp_reconciliation_service import start_whatsapp_reconcil
 from app.services.backup_service import start_backup_scheduler_loop
 from app.services.daily_backup_drive_service import start_daily_drive_backup_loop
 from app.services.os_board_followup_service import start_os_board_followup_loop
+from app.services.failed_message_retry_service import start_failed_message_retry_loop
 
 import mimetypes
 
@@ -104,6 +105,11 @@ async def lifespan(app: FastAPI):
         os_board_followup_task = None
         logger.info("📋 Quadro de Técnicos: cobrança automática PAUSADA (aguardando confirmação do usuário).")
 
+    # Reenvio automático de mensagens de texto que falharam de verdade (Message.status == "failed") -
+    # ver app/services/failed_message_retry_service.py. Ligado em 29/09/2026 (pedido explícito do
+    # usuário, depois de precisar reenviar na mão as mensagens das O.S. #1815 e #33156).
+    failed_retry_task = asyncio.create_task(start_failed_message_retry_loop())
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual).
     #
@@ -158,6 +164,7 @@ async def lifespan(app: FastAPI):
     watchdog_task.cancel()
     if os_board_followup_task:
         os_board_followup_task.cancel()
+    failed_retry_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")

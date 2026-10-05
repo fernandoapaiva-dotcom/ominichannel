@@ -15,11 +15,14 @@ Regras (pedidas pelo usuário):
     Softsystem real não é alterado) - a decisão física continua sendo da loja.
 
 RITMO (pedido do usuário, depois de um disparo em rajada ter sobrecarregado o servidor): só manda
-mensagem em horário comercial (08h-18h de Brasília) e distribui o que está pendente ao longo do
-tempo que resta até as 18h, em vez de mandar tudo de uma vez - a cada ciclo (10 min), calcula quantas
-mensagens estão na fila e quantos ciclos ainda cabem até o fim do expediente, e manda só a fatia
-correspondente, com uma pausa curta entre uma e outra. Se a fila for maior do que dá pra esvaziar no
-dia, o resto continua no próximo dia útil - nunca tenta "compensar" mandando mais rápido.
+mensagem em horário comercial (08h-18h de Brasília), em dia útil (pula sábado, domingo e feriado
+nacional - ver _FERIADOS_NACIONAIS) e distribui o que está pendente ao longo do tempo que resta até
+as 18h, em vez de mandar tudo de uma vez - a cada ciclo (10 min), calcula quantas mensagens estão na
+fila e quantos ciclos ainda cabem até o fim do expediente, e manda só a fatia correspondente, com uma
+pausa curta entre uma e outra. Se a fila for maior do que dá pra esvaziar no dia, o resto continua no
+próximo dia útil - nunca tenta "compensar" mandando mais rápido. O corte de "2 em 2 dias" em si conta
+dias corridos (não pula fim de semana no cálculo), mas como o envio é bloqueado em fim de
+semana/feriado, na prática a cobrança represada só sai mesmo no próximo dia útil.
 
 Só manda mensagem para O.S. com telefone conhecido (Contato da O.S. ou cadastro do cliente - ver
 db_watcher.resolve_recipient) e computa o intervalo de 2 dias a partir do maior entre
@@ -55,6 +58,25 @@ BUSINESS_END_HOUR = 18
 MAX_PER_TICK = 8                  # teto de segurança, mesmo se a conta sugerir mais
 PER_ITEM_GAP_SECONDS = 5          # respiro entre uma mensagem e outra dentro do mesmo ciclo
 MAX_DESCARTE_PER_TICK = 3         # move pro "Desmanche e Descarte" aos poucos também
+
+# Feriados nacionais (data -> nome), pra não cobrar cliente em dia que a loja não abre. Revisar e
+# acrescentar o ano seguinte nesta lista todo fim de ano (não existe hoje nenhum cadastro de feriado
+# alimentado por tela/banco - BusinessHours.feriados_nacionais existe no modelo mas nada escreve nela).
+_FERIADOS_NACIONAIS = {
+    "2026-01-01": "Confraternização Universal",
+    "2026-02-16": "Carnaval (segunda)",
+    "2026-02-17": "Carnaval (terça)",
+    "2026-04-03": "Paixão de Cristo",
+    "2026-04-21": "Tiradentes",
+    "2026-05-01": "Dia do Trabalho",
+    "2026-06-04": "Corpus Christi",
+    "2026-09-07": "Independência do Brasil",
+    "2026-10-12": "Nossa Senhora Aparecida",
+    "2026-11-02": "Finados",
+    "2026-11-15": "Proclamação da República",
+    "2026-11-20": "Dia Nacional de Zumbi e da Consciência Negra",
+    "2026-12-25": "Natal",
+}
 
 
 def _clean_phone(raw: Optional[str]) -> str:
@@ -120,6 +142,12 @@ class _DueItem:
         self.prioridade = prioridade  # quanto mais no passado, mais prioridade (vai primeiro)
 
 
+def _is_na_obs(obs: Optional[str]) -> bool:
+    """Mesmo critério do vigia/backend (ver db_watcher._is_na_obs, ingest_db_event_common):
+    Observação só 'N/A'/'NA' é ajuste interno, não uma mudança de verdade pro cliente."""
+    return str(obs or "").strip().lower() in ("n/a", "na")
+
+
 async def _list_due_orcamento(now: datetime, cutoff: datetime, wn: WhatsAppNumber) -> List[_DueItem]:
     async with AsyncSessionLocal() as db:
         rows = (await db.execute(select(OsBoardOrder).where(
@@ -130,6 +158,13 @@ async def _list_due_orcamento(now: datetime, cutoff: datetime, wn: WhatsAppNumbe
         ))).scalars().all()
         due = []
         for row in rows:
+            # O quadro espelha o Softsystem fielmente mesmo quando o evento que gerou "Orçamento
+            # enviado" tem Observação "N/A" (ajuste interno, sem orçamento real - ver O.S.
+            # #1674/#1675/#1676, 28-29/09/2026) - mas cobrar o cliente por um orçamento que nunca
+            # existiu de verdade não pode, então a cobrança RECORRENTE (diferente da mensagem
+            # direta do evento, já tratada em ingest_db_event_common) pula esses casos aqui.
+            if _is_na_obs(row.situacao_obs):
+                continue
             last_touch = row.last_nudge_at or row.ultimo_evento_em
             if last_touch and last_touch <= cutoff:
                 due.append(_DueItem("orcamento", row.id, row.codos, row.telefone, row.contato_nome or row.cliente, row.tecnico, None, last_touch))
@@ -342,6 +377,10 @@ async def check_os_board_followups():
     if not wn or not wn.instancia_evolution_api:
         return
     now = _now_brt()
+    if now.weekday() >= 5:
+        return  # sábado/domingo - loja fechada, não cobra, só retoma na próxima segunda
+    if now.strftime("%Y-%m-%d") in _FERIADOS_NACIONAIS:
+        return  # feriado nacional - loja fechada, não cobra, só retoma no próximo dia útil
     if not (BUSINESS_START_HOUR <= now.hour < BUSINESS_END_HOUR):
         return  # fora do horário comercial (08h-18h) - não manda nada agora, só retoma no próximo dia útil
 
