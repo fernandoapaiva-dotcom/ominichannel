@@ -1,0 +1,25 @@
+{
+  "short_name": "Foto O.S.",
+  "name": "OminiChannel Foto O.S.",
+  "description": "Atalho rápido pra registrar foto/arquivo de uma Ordem de Serviço - digita o número da O.S. e manda a foto na hora, sem precisar abrir o sistema inteiro.",
+  "icons": [
+    {
+      "src": "/foto-icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/foto-icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "id": "/foto-os",
+  "start_url": "/foto-os",
+  "scope": "/foto-os",
+  "background_color": "#0a0f1d",
+  "theme_color": "#00e699",
+  "display": "standalone",
+  "orientation": "portrait"
+}

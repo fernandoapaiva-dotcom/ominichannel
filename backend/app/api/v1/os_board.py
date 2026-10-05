@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select, delete, and_, or_
@@ -28,8 +28,9 @@ from app.api.websockets import manager as ws_manager
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.models.models import OsBoardOrder, OsBoardEvent, User, UserRole, WhatsAppNumber
+from app.models.models import OsBoardOrder, OsBoardEvent, OsBoardItem, OsBoardPhoto, User, UserRole, WhatsAppNumber
 from app.api.v1.os_handler_ingest import verify_os_handler_key, TIPO_OS_LABEL
+from app.services.os_board_photo_service import handle_os_photo_upload
 
 logger = logging.getLogger("os_board")
 router = APIRouter(prefix="/os-board", tags=["Quadro de Técnicos"])
@@ -66,6 +67,15 @@ EVENT_LABELS = {
     14: "Desmontado/Sucateado", 15: "Orçamento aprovado", 16: "Orçamento não aprovado",
 }
 _CODE_TO_STAGE = {code: st["key"] for st in BOARD_STAGES for code in st["codes"]}
+# Eventos que o próprio backend grava direto (ver record_board_event: aprovação/recusa respondida
+# no WhatsApp, descarte automático por prazo) nunca vêm do vigia - usado tanto na reconciliação do
+# /sync quanto em compute_situacao_atual (mesma regra, um único lugar de verdade).
+BACKEND_ONLY_EVENTOS = {EVENTO_APROVADO, EVENTO_NAO_APROVADO, EVENTO_DESCARTE}
+# Estágios "iniciais": nada decisivo aconteceu ainda além de ter sido avisado o orçamento - é só
+# até aqui que um evento gravado pelo backend (aprovação/recusa) pode decidir a etapa atual do
+# quadro. Qualquer evento REAL (do Softsystem) além destes já venceu o jogo, não importa o
+# timestamp - ver compute_situacao_atual.
+_ESTAGIOS_INICIAIS = {1, 2, EVENTO_ORCAMENTO_ENVIADO}
 NO_TECH_LABEL = "SEM TÉCNICO"
 RETIRADA_PRAZO_DIAS = 90
 EMPRESA_LABEL_PT = {"servweld": "Servweld", "centrooeste": "Centro-Oeste"}
@@ -84,6 +94,30 @@ def now_brt() -> datetime:
     calendar_reminder_service.py para o mesmo motivo).
     """
     return datetime.utcnow() - timedelta(hours=3)
+
+
+def compute_situacao_atual(eventos: List[tuple]) -> Optional[tuple]:
+    """
+    Decide qual evento representa a etapa ATUAL da O.S. no quadro, a partir da lista completa de
+    eventos dela: [(cod_evento, data, obs), ...]. Devolve (cod, data, obs) do vencedor, ou None se
+    a lista estiver vazia.
+
+    Regra (achado em produção, 02/10/2026 - O.S. #1941 e #1899: aprovação/recusa gravada pelo
+    backend tem o timestamp de quando o BACKEND processou a resposta do WhatsApp, não de quando ela
+    chegou de verdade; sob fila/lentidão isso podia ficar "mais recente", no relógio, que um evento
+    REAL do Softsystem que na vida real já tinha acontecido depois - ex.: Finalizada lançada no
+    Softsystem, mas o quadro continuava preso em "Não aprovado" por causa de só comparar timestamp
+    cru): qualquer evento REAL além de "orçamento enviado" (execução, aguardando peça, aguardando
+    retirada, finalizada, sem reparo, descarte automático vindo do Softsystem etc.) sempre vence um
+    evento gravado pelo backend (aprovado/não aprovado/descarte automático), não importa o
+    timestamp - o Softsystem é quem manda na etapa atual. Aprovação/recusa só decide a etapa
+    enquanto nada além de "orçamento enviado" tiver acontecido ainda de verdade.
+    """
+    if not eventos:
+        return None
+    avancados = [e for e in eventos if e[0] not in BACKEND_ONLY_EVENTOS and e[0] not in _ESTAGIOS_INICIAIS]
+    candidatos = avancados if avancados else eventos
+    return max(candidatos, key=lambda e: e[1])
 
 
 # ---------------------------------------------------------------- ingestão (vigia da loja)
@@ -110,13 +144,23 @@ class BoardEventIn(BaseModel):
     loja: int = 1
     codos: int
     cod_evento: int
+    obs: Optional[str] = None
     data: datetime
+
+
+class BoardItemIn(BaseModel):
+    loja: int = 1
+    codos: int
+    descricao: str
+    quantidade: Optional[float] = None
+    preco: Optional[float] = None
 
 
 class BoardSyncIn(BaseModel):
     empresa: str
     orders: List[BoardOrderIn] = []
     events: List[BoardEventIn] = []
+    itens: List[BoardItemIn] = []
 
 
 async def _tenant_id_for_board(db: AsyncSession) -> int:
@@ -180,48 +224,96 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
         row.forma_pagamento = _clean(o.forma_pagamento, 60)
         row.atualizado_em = now
 
-    # ---- eventos (só insere os que ainda não existem)
-    existing_events = set()
+    # ---- eventos: substitui integralmente o histórico das O.S. tocadas neste lote (o vigia sempre
+    # manda a lista completa de eventos de cada uma que tocou, não só os novos - ver
+    # db_watcher._board_events) - assim uma correção feita no Softsystem (evento lançado errado e
+    # depois apagado/substituído por lá) também se reflete aqui, em vez de só acumular para sempre.
+    # O quadro espelha o Softsystem fielmente, incluindo eventos com Observação "N/A" - isso só
+    # afeta se sai mensagem direta pro cliente (ver ingest_db_event_common), nunca o estado do
+    # quadro (pedido explícito do usuário, 28/09/2026 - O.S. #1676).
+    incoming_by_key: Dict[tuple, Dict[tuple, Optional[str]]] = {}
+    for e in payload.events:
+        incoming_by_key.setdefault((e.loja, e.codos), {})[(e.cod_evento, e.data)] = e.obs
+
+    existing_by_key: Dict[tuple, Dict[tuple, OsBoardEvent]] = {k: {} for k in touched}
     for i in range(0, len(codos_list), 500):
         chunk = codos_list[i:i + 500]
-        rows = (await db.execute(select(
-            OsBoardEvent.loja, OsBoardEvent.codos, OsBoardEvent.cod_evento, OsBoardEvent.data
-        ).where(
+        rows = (await db.execute(select(OsBoardEvent).where(
             OsBoardEvent.tenant_id == tenant_id, OsBoardEvent.empresa == empresa, OsBoardEvent.codos.in_(chunk)
-        ))).all()
-        existing_events.update((r[0], r[1], r[2], r[3]) for r in rows)
+        ))).scalars().all()
+        for r in rows:
+            k = (r.loja, r.codos)
+            if k in existing_by_key:
+                existing_by_key[k][(r.cod_evento, r.data)] = r
+
+    # BACKEND_ONLY_EVENTOS (módulo): eventos que o próprio backend grava direto (ver
+    # record_board_event: aprovação/recusa respondida no WhatsApp, descarte automático por prazo)
+    # nunca vêm do vigia - "substituir pelo que o vigia mandou" não pode apagar esses, ou uma O.S.
+    # já aprovada pelo cliente volta a aparecer como "aguardando aprovação" e cobra de novo algo
+    # que já foi respondido (bug real: O.S. #1941 do Carolino, 28/09/2026, primeira versão desta
+    # reconciliação apagou o evento de aprovação porque só o evento 3 do Softsystem estava no lote
+    # reenviado no backfill).
     new_events = 0
-    for e in payload.events:
-        key = (e.loja, e.codos, e.cod_evento, e.data)
-        if key in existing_events:
-            continue
-        existing_events.add(key)
-        db.add(OsBoardEvent(tenant_id=tenant_id, empresa=empresa, loja=e.loja, codos=e.codos, cod_evento=e.cod_evento, data=e.data))
-        new_events += 1
+    for k in touched:
+        incoming_map = incoming_by_key.get(k, {})
+        existing_map = existing_by_key.get(k, {})
+        for ek, row in existing_map.items():
+            if ek not in incoming_map and ek[0] not in BACKEND_ONLY_EVENTOS:
+                await db.delete(row)
+        for ek, obs in incoming_map.items():
+            clean_obs = _clean(obs, 500)
+            if ek not in existing_map:
+                loja, codos = k
+                cod_evento, data = ek
+                db.add(OsBoardEvent(tenant_id=tenant_id, empresa=empresa, loja=loja, codos=codos, cod_evento=cod_evento, data=data, obs=clean_obs))
+                new_events += 1
+            elif existing_map[ek].obs != clean_obs:
+                # A chave (evento+data) já existia de antes deste campo obs ter sido adicionado
+                # (29/09/2026) - sem isso, eventos antigos ficariam pra sempre com obs=None mesmo
+                # quando o vigia manda o valor certo (O.S. #1676: "Orçamento enviado" com N/A
+                # nunca ficava de fora da cobrança recorrente porque o obs salvo nunca atualizava).
+                existing_map[ek].obs = clean_obs
+    await db.flush()
+
+    # ---- peças/itens: substitui integralmente a lista das O.S. tocadas (mesma lógica dos eventos -
+    # o vigia sempre manda a lista completa de cada O.S. que tocou, então um item removido/corrigido
+    # no Softsystem também some/corrige aqui, em vez de só acumular pra sempre).
+    for i in range(0, len(codos_list), 500):
+        chunk = codos_list[i:i + 500]
+        await db.execute(delete(OsBoardItem).where(
+            OsBoardItem.tenant_id == tenant_id, OsBoardItem.empresa == empresa, OsBoardItem.codos.in_(chunk)
+        ))
+    for it in payload.itens:
+        db.add(OsBoardItem(
+            tenant_id=tenant_id, empresa=empresa, loja=it.loja, codos=it.codos,
+            descricao=_clean(it.descricao, 255) or "", quantidade=it.quantidade, preco=it.preco
+        ))
     await db.flush()
 
     # ---- recalcula a situação (último evento) de cada O.S. tocada
-    latest: Dict[tuple, tuple] = {}
-    finalizada: Dict[tuple, datetime] = {}
+    events_by_key: Dict[tuple, list] = {}
     for i in range(0, len(codos_list), 500):
         chunk = codos_list[i:i + 500]
         rows = (await db.execute(select(
-            OsBoardEvent.loja, OsBoardEvent.codos, OsBoardEvent.cod_evento, OsBoardEvent.data
+            OsBoardEvent.loja, OsBoardEvent.codos, OsBoardEvent.cod_evento, OsBoardEvent.data, OsBoardEvent.obs
         ).where(
             OsBoardEvent.tenant_id == tenant_id, OsBoardEvent.empresa == empresa, OsBoardEvent.codos.in_(chunk)
         ))).all()
-        for loja, codos, cod, data in rows:
-            k = (loja, codos)
-            if k not in latest or data >= latest[k][1]:
-                latest[k] = (cod, data)
-            if cod == EVENTO_FINALIZADA and (k not in finalizada or data > finalizada[k]):
-                finalizada[k] = data
+        for loja, codos, cod, data, obs in rows:
+            events_by_key.setdefault((loja, codos), []).append((cod, data, obs))
+
+    latest = {k: compute_situacao_atual(evs) for k, evs in events_by_key.items()}
+    finalizada: Dict[tuple, datetime] = {}
+    for k, evs in events_by_key.items():
+        datas_finalizada = [data for cod, data, _obs in evs if cod == EVENTO_FINALIZADA]
+        if datas_finalizada:
+            finalizada[k] = max(datas_finalizada)
     for k, row in existing_orders.items():
         if k in latest:
-            novo_evento, novo_quando = latest[k]
+            novo_evento, novo_quando, novo_obs = latest[k]
             if novo_evento != row.situacao_evento:
                 row.last_nudge_at = None  # etapa mudou - a contagem de 2 em 2 dias da cobrança recomeça
-            row.situacao_evento, row.ultimo_evento_em = novo_evento, novo_quando
+            row.situacao_evento, row.ultimo_evento_em, row.situacao_obs = novo_evento, novo_quando, novo_obs
         row.finalizada_em = finalizada.get(k)
     await db.commit()
 
@@ -259,6 +351,7 @@ async def record_board_event(db: AsyncSession, tenant_id: int, codos: int, cod_e
         if cod_evento != row.situacao_evento:
             row.last_nudge_at = None
         row.situacao_evento = cod_evento
+        row.situacao_obs = None  # eventos gravados direto pelo backend nunca são "N/A" - são reais
         row.ultimo_evento_em = when
         if cod_evento == EVENTO_FINALIZADA:
             row.finalizada_em = when
@@ -418,6 +511,142 @@ async def get_board_cell(
     ).order_by(OsBoardOrder.data_entrada.desc()))).scalars().all()
 
     return {"tecnico": tech, "stage": stage, "label": stage_def["label"], "cards": [_card(o, now) for o in orders]}
+
+
+async def _search_orders(db: AsyncSession, tenant_id: int, q: str, empresa: Optional[str], tech_filter: list) -> List[Dict[str, Any]]:
+    """
+    Busca por número da O.S., cliente ou equipamento - usada tanto pelo quadro administrativo
+    (GET /os-board/search) quanto pelo Portal do Técnico (GET /technician-portal/search, que só
+    passa um tech_filter a mais pra restringir às O.S. do próprio técnico). Só entre as O.S. em
+    aberto (mesmo critério do quadro geral) - não é busca de auditoria/histórico.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    conditions = [or_(OsBoardOrder.cliente.ilike(like), OsBoardOrder.equipamento.ilike(like))]
+    if q.isdigit():
+        conditions.append(OsBoardOrder.codos == int(q))
+    now = now_brt()
+    orders = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == tenant_id, *_empresa_filter(empresa), *tech_filter,
+        OsBoardOrder.paga.is_(False), OsBoardOrder.venda_codigo.is_(None),
+        or_(OsBoardOrder.situacao_evento.is_(None), OsBoardOrder.situacao_evento != EVENTO_FINALIZADA),
+        or_(*conditions),
+    ).order_by(OsBoardOrder.data_entrada.desc()).limit(100))).scalars().all()
+
+    result = []
+    for o in orders:
+        card = _card(o, now)
+        stage = _stage_of(o)
+        card["tecnico"] = o.tecnico or NO_TECH_LABEL
+        card["stage"] = stage
+        card["stage_label"] = next((s["label"] for s in BOARD_STAGES if s["key"] == stage), stage)
+        result.append(card)
+    return result
+
+
+async def _order_detail(db: AsyncSession, tenant_id: int, codos: int) -> Dict[str, Any]:
+    """Detalhe de uma única O.S. pro modal de "ver mais" no quadro (web e Portal do Técnico):
+    histórico de eventos (linha do tempo, igual GET /technician já mostra) e as peças/produtos
+    lançados nela (ITENSORDEMSERVICO, espelhado pelo vigia - ver db_watcher._board_itens).
+    """
+    order = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos
+    ))).scalars().first()
+    if not order:
+        raise HTTPException(status_code=404, detail="O.S. não encontrada no quadro")
+
+    evs = (await db.execute(select(OsBoardEvent).where(
+        OsBoardEvent.tenant_id == tenant_id, OsBoardEvent.empresa == order.empresa, OsBoardEvent.codos == codos
+    ).order_by(OsBoardEvent.data.asc()))).scalars().all()
+
+    itens = (await db.execute(select(OsBoardItem).where(
+        OsBoardItem.tenant_id == tenant_id, OsBoardItem.empresa == order.empresa, OsBoardItem.codos == codos
+    ).order_by(OsBoardItem.id.asc()))).scalars().all()
+
+    fotos = (await db.execute(select(OsBoardPhoto).where(
+        OsBoardPhoto.tenant_id == tenant_id, OsBoardPhoto.empresa == order.empresa, OsBoardPhoto.codos == codos
+    ).order_by(OsBoardPhoto.id.desc()))).scalars().all()
+
+    return {
+        "codos": order.codos,
+        "empresa": order.empresa,
+        "cliente": order.cliente,
+        "equipamento": order.equipamento,
+        "tecnico": order.tecnico,
+        "tecnico2": order.tecnico2,
+        "data_entrada": _iso(order.data_entrada),
+        "tipo_os": TIPO_OS_LABEL.get(order.cod_tipo_os, None),
+        "situacao": EVENT_LABELS.get(order.situacao_evento or 0, "—"),
+        "stage": _stage_of(order),
+        "valor_total": order.valor_total,
+        "forma_pagamento": order.forma_pagamento,
+        "historico": [
+            {"evento": EVENT_LABELS.get(e.cod_evento, str(e.cod_evento)), "cod": e.cod_evento, "data": _iso(e.data), "obs": e.obs}
+            for e in evs
+        ],
+        "pecas": [
+            {"descricao": it.descricao, "quantidade": it.quantidade, "preco": it.preco}
+            for it in itens
+        ],
+        "fotos": [
+            {
+                "id": f.id, "file_url": f.file_url, "mimetype": f.mimetype,
+                "uploaded_by": f.uploaded_by, "criado_em": _iso(f.criado_em),
+                "gdrive_status": f.gdrive_status, "whatsapp_status": f.whatsapp_status,
+                "softsystem_status": f.softsystem_status,
+            }
+            for f in fotos
+        ],
+    }
+
+
+@router.get("/order/{codos}")
+async def get_order_detail(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Detalhe de uma O.S. (histórico + peças + fotos) pro modal do quadro administrativo."""
+    return await _order_detail(db, current_user.tenant_id, codos)
+
+
+@router.post("/order/{codos}/photos")
+async def upload_order_photo(
+    codos: int,
+    file: UploadFile = File(...),
+    send_to_customer: bool = Form(True),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Sobe uma foto/arquivo da O.S. tirado direto no sistema (câmera do navegador) - ver
+    app/services/os_board_photo_service.py pro que acontece depois (Drive, WhatsApp, Softsystem).
+    `send_to_customer=False`: documento interno (ex.: NF de compra que o cliente apresenta pra
+    acionar garantia de fábrica) - sobe pro Drive e anexa no Softsystem igual, só não dispara
+    pro WhatsApp do cliente.
+    """
+    file_bytes = await file.read()
+    try:
+        return await handle_os_photo_upload(
+            tenant_id=current_user.tenant_id, codos=codos, file_bytes=file_bytes,
+            original_filename=file.filename or "foto.jpg", content_type=file.content_type or "image/jpeg",
+            uploaded_by=current_user.nome or "Atendente", send_to_customer=send_to_customer,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/search")
+async def search_board(
+    q: str = Query(..., min_length=1, description="Número da O.S., nome do cliente ou equipamento"),
+    empresa: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Busca no quadro geral (todos os técnicos) - aberto a qualquer usuário logado, igual o quadro."""
+    return {"results": await _search_orders(db, current_user.tenant_id, q, empresa, [])}
 
 
 @router.get("/technician")

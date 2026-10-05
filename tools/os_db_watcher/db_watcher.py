@@ -1,8 +1,13 @@
 """
 Vigia de banco - roda no computador da loja (Windows), observa DIRETO o banco Firebird
-do Softsystem (só leitura, nunca escreve nada nele) em busca de eventos novos na aba
+do Softsystem (leitura, na esmagadora maioria do que faz aqui) em busca de eventos novos na aba
 "Eventos" da Ordem de Serviço, e envia os dados já resolvidos (telefone, natureza,
 equipamento, técnico) para o sistema Ominichannel processar automaticamente.
+
+Única exceção à regra de só leitura: poll_pending_writes, que executa pedidos de mudança de
+status vindos de fora do Softsystem (hoje só o Portal do Técnico - ver SoftsystemPendingWrite
+no backend) - o backend roda na nuvem e não alcança o Firebird da loja, então só enfileira o
+pedido; é este vigia, rodando dentro da rede da loja, quem grava de verdade.
 
 Também observa as pastas onde o Softsystem salva o PDF (ABERTURA/ORÇAMENTO) - quando um
 arquivo novo aparece, extrai o número da O.S. do NOME do arquivo (ex: "1934.pdf" -> 1934) e
@@ -29,6 +34,7 @@ import logging
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from typing import Optional
 
 import requests
 from firebird.driver import connect, TPB, Isolation, TraAccessMode
@@ -103,6 +109,15 @@ def db_connect(empresa_cfg: dict):
 def read_only_cursor(con):
     """Returns (transaction, cursor) using an explicit READ-ONLY transaction - never writes."""
     tpb = TPB(access_mode=TraAccessMode.READ, isolation=Isolation.READ_COMMITTED_RECORD_VERSION)
+    tra = con.transaction_manager(tpb.get_buffer())
+    tra.begin()
+    return tra, tra.cursor()
+
+
+def write_cursor(con):
+    """Transação normal (leitura E escrita) - só usada por poll_pending_writes, o único ponto
+    deste vigia que grava no Softsystem."""
+    tpb = TPB(access_mode=TraAccessMode.WRITE, isolation=Isolation.READ_COMMITTED_RECORD_VERSION)
     tra = con.transaction_manager(tpb.get_buffer())
     tra.begin()
     return tra, tra.cursor()
@@ -887,6 +902,34 @@ def _board_valores(cur, keys: set) -> dict:
     return out
 
 
+def _board_itens(cur, keys: set) -> dict:
+    """Peças/produtos lançados em cada O.S. (ITENSORDEMSERVICO) - descrição, quantidade e preço
+    linha a linha, pra tela de detalhe da O.S. no quadro. _board_valores (acima) já lê essa mesma
+    tabela mas só soma o total; aqui é a listagem de verdade, item por item."""
+    out = {}
+    if not keys:
+        return out
+    codos = sorted({c for _, c in keys})
+    for i in range(0, len(codos), 500):
+        chunk = codos[i:i + 500]
+        marks = ",".join("?" for _ in chunk)
+        cur.execute(f"""
+            SELECT LOJA, CODOS, DESCRICAO, QUANTIDADE, PRECO
+            FROM ITENSORDEMSERVICO
+            WHERE CODOS IN ({marks})
+            ORDER BY LOJA, CODOS
+        """, tuple(chunk))
+        for loja, codos_, descricao, quantidade, preco in cur.fetchall():
+            if not descricao:
+                continue
+            out.setdefault((loja, codos_), []).append({
+                "descricao": descricao.strip(),
+                "quantidade": float(quantidade) if quantidade is not None else None,
+                "preco": float(preco) if preco is not None else None,
+            })
+    return out
+
+
 def _board_equipamentos(cur, keys: set) -> dict:
     """Primeiro equipamento de cada O.S. -> 'MARCA MODELO (DESCRIÇÃO)'. Uma consulta por faixa de CODOS."""
     out = {}
@@ -913,6 +956,12 @@ def _board_equipamentos(cur, keys: set) -> dict:
 
 
 def _board_events(cur, keys: set) -> dict:
+    """O quadro espelha o Softsystem fielmente, sem exceção - o que muda por lá tem que aparecer
+    aqui igual (e vice-versa: mudanças feitas pelo nosso sistema, como aprovação por WhatsApp, se
+    refletem lá - ver poll_pending_writes). "N/A" na Observação só afeta se sai mensagem direta pro
+    cliente sobre aquele evento (ver ingest_db_event_common no backend) - nunca se o evento conta
+    pro estado do quadro. Pedido explícito do usuário em 28/09/2026 (O.S. #1676: Softsystem mostra
+    "Orçamento enviado" mesmo com N/A, e o quadro tem que mostrar a mesma coisa)."""
     out = {}
     if not keys:
         return out
@@ -920,9 +969,9 @@ def _board_events(cur, keys: set) -> dict:
     for i in range(0, len(codos), 500):
         chunk = codos[i:i + 500]
         marks = ",".join("?" for _ in chunk)
-        cur.execute(f"SELECT LOJA, CODOS, DATA, CODTIPOEVENTOOS FROM EVENTOSORDEMSERVICO WHERE CODOS IN ({marks}) ORDER BY DATA", tuple(chunk))
-        for loja, codos_, data, cod in cur.fetchall():
-            out.setdefault((loja, codos_), []).append((data, cod))
+        cur.execute(f"SELECT LOJA, CODOS, DATA, CODTIPOEVENTOOS, OBS FROM EVENTOSORDEMSERVICO WHERE CODOS IN ({marks}) ORDER BY DATA", tuple(chunk))
+        for loja, codos_, data, cod, obs in cur.fetchall():
+            out.setdefault((loja, codos_), []).append((data, cod, obs))
     return out
 
 
@@ -931,7 +980,8 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
     equips = _board_equipamentos(cur, keys)
     events = _board_events(cur, keys)
     valores = _board_valores(cur, keys)
-    orders, evs = [], []
+    itens_por_os = _board_itens(cur, keys)
+    orders, evs, itens = [], [], []
     for loja, codos, cnpj, data, tec1, tec2, cod_tipo, _alt, razao, fantasia, cond_pag, venda_codigo, contato, ddd, celular, fone, forma_pag in order_rows:
         # Mesma regra do aviso de abertura: celular do campo Contato da O.S., senão o do cadastro do
         # cliente - é quem recebe a cobrança automática de aprovação/retirada (ver os_board_followup_service).
@@ -950,9 +1000,11 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
             "valor_total": valores.get((loja, codos)),
             "forma_pagamento": forma_pag,
         })
-        for ev_data, cod in events.get((loja, codos), []):
-            evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "data": ev_data.isoformat()})
-    return {"empresa": empresa_key, "orders": orders, "events": evs}
+        for ev_data, cod, obs in events.get((loja, codos), []):
+            evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "obs": obs, "data": ev_data.isoformat()})
+        for item in itens_por_os.get((loja, codos), []):
+            itens.append({"loja": loja, "codos": codos, **item})
+    return {"empresa": empresa_key, "orders": orders, "events": evs, "itens": itens}
 
 
 def _board_post(config: dict, payload: dict) -> bool:
@@ -1029,6 +1081,147 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
         con.close()
 
 
+def _ack_pending_write(config: dict, write_id: int, success: bool, error: Optional[str]):
+    url = config["backend_url"].rstrip("/") + f"/api/v1/os-handler/pending-writes/{write_id}/ack"
+    try:
+        requests.post(
+            url, headers={"X-OS-Handler-Key": config["api_key"]},
+            json={"success": success, "error": error}, timeout=config.get("timeout_seconds", 60)
+        )
+    except Exception as e:
+        logger.error(f"Falha ao confirmar pro backend a escrita pendente #{write_id}: {e}")
+
+
+def poll_pending_writes(config: dict, empresa_key: str, empresa_cfg: dict):
+    """
+    Único ponto deste vigia que ESCREVE no Softsystem: pega os pedidos de mudança de status que se
+    acumularam no backend (hoje só o Portal do Técnico - ver SoftsystemPendingWrite e
+    technician_update_os_status no backend) e grava de verdade no Firebird - insere o evento novo em
+    EVENTOSORDEMSERVICO e "toca" a O.S. em ORDEMSERVICO (UPDATE de DATAALTERACAO) pra disparar o
+    gatilho TG_SITUACAO_OS, que é quem recalcula a situação que a TELA do Softsystem mostra (sem
+    esse toque, o evento fica gravado mas a tela da O.S. não reflete). Mecanismo confirmado
+    manualmente em produção na O.S. #1933 antes de automatizar (28/09/2026).
+    """
+    url = config["backend_url"].rstrip("/") + "/api/v1/os-handler/pending-writes"
+    try:
+        resp = requests.get(
+            url, headers={"X-OS-Handler-Key": config["api_key"]},
+            params={"empresa": empresa_key}, timeout=config.get("timeout_seconds", 60)
+        )
+        resp.raise_for_status()
+        writes = resp.json().get("writes", [])
+    except Exception as e:
+        logger.error(f"[{empresa_key}] Escrita pendente: erro ao consultar a fila no backend: {e}")
+        return
+    if not writes:
+        return
+
+    con = db_connect(empresa_cfg)
+    try:
+        for w in writes:
+            write_id = w["id"]
+            loja, codos, cod_evento, obs = w["loja"], w["codos"], w["cod_evento"], w.get("obs")
+            try:
+                tra, cur = write_cursor(con)
+                try:
+                    cur.execute(
+                        "INSERT INTO EVENTOSORDEMSERVICO (LOJA, CODOS, DATA, CODTIPOEVENTOOS, OBS, OPERADOR) "
+                        "VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)",
+                        (loja, codos, cod_evento, obs or "", "PORTAL_TECNICO")
+                    )
+                    cur.execute(
+                        "UPDATE ORDEMSERVICO SET DATAALTERACAO = CURRENT_TIMESTAMP WHERE LOJA=? AND CODOS=?",
+                        (loja, codos)
+                    )
+                    tra.commit()
+                except Exception:
+                    tra.rollback()
+                    raise
+                logger.info(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} -> evento {cod_evento} gravado no Softsystem.")
+                _ack_pending_write(config, write_id, True, None)
+            except Exception as e:
+                logger.error(f"[{empresa_key}] Escrita pendente #{write_id}: falha ao gravar O.S. #{codos} no Softsystem: {e}")
+                _ack_pending_write(config, write_id, False, str(e))
+    finally:
+        con.close()
+
+
+def _ack_pending_file_attach(config: dict, attach_id: int, success: bool, error: Optional[str]):
+    url = config["backend_url"].rstrip("/") + f"/api/v1/os-handler/pending-file-attaches/{attach_id}/ack"
+    try:
+        requests.post(
+            url, headers={"X-OS-Handler-Key": config["api_key"]},
+            json={"success": success, "error": error}, timeout=config.get("timeout_seconds", 60)
+        )
+    except Exception as e:
+        logger.error(f"Falha ao confirmar pro backend o anexo pendente #{attach_id}: {e}")
+
+
+def poll_pending_file_attachs(config: dict, empresa_key: str, empresa_cfg: dict):
+    """
+    Fotos/arquivos de O.S. tirados direto no sistema (câmera do atendente/técnico - ver
+    app/services/os_board_photo_service.py no backend) ainda não anexados na aba "Arquivos" da
+    O.S. no Softsystem. A tela "Arquivos" só mostra Descrição/Data/Operador - ela NÃO guarda o
+    arquivo em si, só esse metadado em ARQUIVOSORDEMSERVICO; quem acha o arquivo físico é o
+    próprio Softsystem, pelo NOME, dentro da pasta configurada em CONFIGURACAO.DIRETORIOIMAGENS
+    (confirmado em produção em 05/10/2026, testando um anexo manual pela tela em O.S.
+    #1964/Centro-Oeste e #33160/Servweld: ambos salvos achatados nessa pasta, sem subpasta, como
+    "Ordem Serviço {loja} {codos} {AAAAMMDD} {HHMMSS}.{extensão}" - o nome digitado pelo usuário
+    vira só o rótulo em DESCRICAO). Então este vigia: copia o arquivo (já salvo pelo backend,
+    mesma máquina deste vigia) pra essa pasta com esse nome, e grava a linha correspondente.
+    """
+    pasta = (config.get("pasta_arquivos") or {}).get(empresa_key)
+    if not pasta or not os.path.isdir(pasta):
+        return  # não configurado ou pasta não montada/acessível nesta máquina - pula sem erro
+
+    url = config["backend_url"].rstrip("/") + "/api/v1/os-handler/pending-file-attaches"
+    try:
+        resp = requests.get(
+            url, headers={"X-OS-Handler-Key": config["api_key"]},
+            params={"empresa": empresa_key}, timeout=config.get("timeout_seconds", 60)
+        )
+        resp.raise_for_status()
+        attaches = resp.json().get("attaches", [])
+    except Exception as e:
+        logger.error(f"[{empresa_key}] Anexo de O.S. pendente: erro ao consultar a fila no backend: {e}")
+        return
+    if not attaches:
+        return
+
+    con = db_connect(empresa_cfg)
+    try:
+        for a in attaches:
+            attach_id = a["id"]
+            loja, codos, source_path = a["loja"], a["codos"], a["source_path"]
+            descricao, extensao, operador = a["descricao"], a["extensao"], a.get("operador") or "SISTEMA"
+            try:
+                if not os.path.isfile(source_path):
+                    raise FileNotFoundError(f"Arquivo de origem não encontrado: {source_path}")
+                now = datetime.now()
+                dest_name = f"Ordem Serviço {loja} {codos} {now.strftime('%Y%m%d')} {now.strftime('%H%M%S')}{extensao}"
+                dest_path = os.path.join(pasta, dest_name)
+                shutil.copyfile(source_path, dest_path)
+
+                tra, cur = write_cursor(con)
+                try:
+                    cur.execute(
+                        "INSERT INTO ARQUIVOSORDEMSERVICO (LOJA, CODOS, DATA, OPERADOR, DESCRICAO, EXTENSAO) "
+                        "VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)",
+                        (loja, codos, operador, descricao, extensao)
+                    )
+                    tra.commit()
+                except Exception:
+                    tra.rollback()
+                    raise
+                logger.info(f"[{empresa_key}] Anexo pendente #{attach_id}: O.S. #{codos} -> '{dest_name}' copiado e gravado no Softsystem.")
+                _ack_pending_file_attach(config, attach_id, True, None)
+            except Exception as e:
+                logger.error(f"[{empresa_key}] Anexo pendente #{attach_id}: falha ao anexar arquivo da O.S. #{codos} no Softsystem: {e}")
+                _ack_pending_file_attach(config, attach_id, False, str(e))
+    finally:
+        con.close()
+
+
 def main():
     _lock_socket = acquire_single_instance_lock()  # noqa: F841
     config = load_config()
@@ -1054,6 +1247,14 @@ def main():
                     sync_board_empresa(config, empresa_key, empresa_cfg, state)
                 except Exception as e:
                     logger.error(f"[{empresa_key}] Quadro de técnicos: erro no ciclo (não afeta os avisos): {e}", exc_info=True)
+                try:
+                    poll_pending_writes(config, empresa_key, empresa_cfg)
+                except Exception as e:
+                    logger.error(f"[{empresa_key}] Escrita pendente: erro inesperado no ciclo: {e}", exc_info=True)
+                try:
+                    poll_pending_file_attachs(config, empresa_key, empresa_cfg)
+                except Exception as e:
+                    logger.error(f"[{empresa_key}] Anexo de O.S. pendente: erro inesperado no ciclo: {e}", exc_info=True)
             try:
                 retry_pending_folder_pdfs(config)
             except Exception as e:

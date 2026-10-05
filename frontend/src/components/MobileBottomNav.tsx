@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Users, Contact as ContactIcon, Settings, LayoutGrid } from 'lucide-react';
+import { MessageSquare, Users, Contact as ContactIcon, Settings, LayoutGrid, Camera } from 'lucide-react';
 import { User } from '../types';
 
 interface MobileBottomNavProps {
@@ -8,14 +8,22 @@ interface MobileBottomNavProps {
   pendingBadgeCount: number;
   groupPendingBadgeCount: number;
   user: User;
+  onQuickPhotoUpload?: () => void;
 }
+
+// Id reservado (nunca bate com activeTab de verdade) pro item de foto - ele não navega pra
+// nenhuma aba, só abre o modal de envio rápido (ver onQuickPhotoUpload). Achado em produção em
+// 05/10/2026: o botão de câmera só tinha sido adicionado na Sidebar.tsx (versão desktop), que
+// fica escondida no celular - essa barra inferior é o componente que realmente aparece no mobile.
+const QUICK_PHOTO_TAB_ID = '__quick_photo_upload__';
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   activeTab,
   setActiveTab,
   pendingBadgeCount,
   groupPendingBadgeCount,
-  user
+  user,
+  onQuickPhotoUpload
 }) => {
   const tabs = [
     {
@@ -44,6 +52,12 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       icon: LayoutGrid,
       badge: 0
     },
+    ...(onQuickPhotoUpload ? [{
+      id: QUICK_PHOTO_TAB_ID,
+      label: 'Foto O.S.',
+      icon: Camera,
+      badge: 0
+    }] : []),
     ...(user.role === 'admin' ? [{
       id: 'admin',
       label: 'Config',
@@ -78,7 +92,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
         return (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => tab.id === QUICK_PHOTO_TAB_ID ? onQuickPhotoUpload?.() : setActiveTab(tab.id)}
             style={{
               flex: 1,
               height: '100%',

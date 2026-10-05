@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LayoutGrid, MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download, Camera } from 'lucide-react';
 import { User, Conversation } from '../types';
 import { apiFetch } from '../services/api';
 
@@ -13,6 +13,7 @@ interface SidebarProps {
   conversations?: Conversation[];
   onSelectConversation?: (convId: number) => void;
   onRefreshConversations?: () => void;
+  onQuickPhotoUpload?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -24,7 +25,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
   conversations = [],
   onSelectConversation,
-  onRefreshConversations
+  onRefreshConversations,
+  onQuickPhotoUpload
 }) => {
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     return (localStorage.getItem('omni_theme') as 'dark' | 'light') || 'dark';
@@ -762,6 +764,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Técnicos</span>
           </button>
 
+          {/* Foto/arquivo rápido de O.S. - atalho pedido em 05/10/2026 pra não precisar abrir uma
+              O.S. específica antes de poder anexar foto. */}
+          {onQuickPhotoUpload && (
+            <button
+              onClick={onQuickPhotoUpload}
+              title="Enviar foto/arquivo de uma O.S."
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: 'var(--radius-md)',
+                background: 'transparent',
+                color: 'var(--text-muted)',
+                border: '1px solid transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexDirection: 'column',
+                gap: '2px',
+              }}
+            >
+              <Camera size={18} />
+              <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Foto O.S.</span>
+            </button>
+          )}
+
           {/* Admin */}
           {user.role === 'admin' && (
             <button
@@ -1070,6 +1098,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <LayoutGrid size={22} />
         </button>
+
+        {onQuickPhotoUpload && (
+          <button
+            onClick={onQuickPhotoUpload}
+            title="Enviar foto/arquivo de uma O.S."
+            style={{
+              width: 'clamp(34px, 4.3vh, 44px)',
+              height: 'clamp(34px, 4.3vh, 44px)',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(255, 255, 255, 0.04)',
+              color: 'var(--text-muted)',
+              border: '1px solid var(--border-color)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <Camera size={22} />
+          </button>
+        )}
 
         <button
           onClick={() => setActiveTab('segmentation')}

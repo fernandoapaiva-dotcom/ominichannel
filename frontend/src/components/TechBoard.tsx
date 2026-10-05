@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  ArrowLeft, Download, FileText, Monitor, RefreshCw, X,
+  ArrowLeft, Download, FileText, Monitor, RefreshCw, X, Clock,
   Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
+  Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight,
   type LucideIcon,
 } from 'lucide-react';
-import { apiFetch } from '../services/api';
+import { apiFetch, apiUpload } from '../services/api';
+import { techApiFetch, techApiUpload } from '../services/techApi';
 import { User } from '../types';
 
 /**
@@ -25,6 +28,16 @@ export interface BoardCard {
   dias_desde_entrada?: number | null;
   tipo_os?: string | null;
 }
+
+// Status que o Portal do Técnico deixa o próprio técnico mudar direto pelo cartão (ver
+// TECHNICIAN_ALLOWED_STATUSES no backend) - só passado como prop quando faz sentido (aba "Minhas
+// O.S.", nunca no quadro administrativo nem no "Quadro Geral").
+export const TECH_STATUS_OPTIONS: { key: number; short: string }[] = [
+  { key: 6, short: 'Retirada' },
+  { key: 13, short: 'S/ Defeito' },
+  { key: 11, short: 'S/ Conserto' },
+];
+export type ChangeStatusFn = (codos: number, empresa: string, status: number, label: string, obs?: string) => void;
 export interface BoardCell { count: number; cards: BoardCard[] }
 export interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
 export interface BoardData {
@@ -46,6 +59,20 @@ interface DetailData {
   summary: { abertas_agora: number; entradas_no_periodo: number; finalizadas_no_periodo: number; trabalhou_no_periodo: number; efetivadas_no_periodo: number };
   orders: DetailOrder[];
   truncated: boolean;
+}
+interface OsPecaItem { descricao: string; quantidade?: number | null; preco?: number | null }
+interface OsFotoItem {
+  id: number; file_url: string; mimetype: string; uploaded_by?: string | null; criado_em: string;
+  gdrive_status: string; whatsapp_status: string; softsystem_status: string;
+}
+interface OsOrderDetail {
+  codos: number; empresa: string; cliente?: string | null; equipamento?: string | null;
+  tecnico?: string | null; tecnico2?: string | null; data_entrada?: string | null;
+  tipo_os?: string | null; situacao: string; stage: string;
+  valor_total?: number | null; forma_pagamento?: string | null;
+  historico: (TimelineItem & { obs?: string | null })[];
+  pecas: OsPecaItem[];
+  fotos: OsFotoItem[];
 }
 
 const EMPRESAS: { key: string; label: string }[] = [
@@ -89,6 +116,7 @@ const TipoOsBadge: React.FC<{ tipo?: string | null; scale?: number }> = ({ tipo,
         display: 'inline-block', padding: `${1 * scale}px ${5 * scale}px`, borderRadius: '4px',
         fontSize: `${9 * scale}px`, fontWeight: 800, lineHeight: 1.5, letterSpacing: '0.2px',
         background: `${st.color}26`, color: st.color, whiteSpace: 'nowrap',
+        overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', minWidth: 0,
       }}
     >{st.short}</span>
   );
@@ -185,6 +213,26 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
   // Relatório em PDF (só admin)
   const [reportOpen, setReportOpen] = useState(false);
+
+  // Busca por número da O.S., cliente ou equipamento (pedido do usuário, 29/09/2026) - substitui o
+  // quadro normal enquanto tem texto digitado, igual o Portal do Técnico (TechnicianPortal.tsx).
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResultCard[]>([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) { setSearchResults([]); return; }
+    setSearching(true);
+    const handle = window.setTimeout(() => {
+      const qs = new URLSearchParams({ q });
+      if (empresa) qs.set('empresa', empresa);
+      apiFetch(`/os-board/search?${qs.toString()}`)
+        .then(data => setSearchResults(data.results || []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [searchQuery, empresa]);
 
   const load = useCallback(async () => {
     try {
@@ -291,6 +339,8 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           ))}
         </div>
 
+        {!tvMode && <SearchBar query={searchQuery} onQueryChange={setSearchQuery} />}
+
         <div style={{ flex: 1 }} />
         {tvMode && (
           <div style={{ fontSize: fs(26), fontWeight: 800, color: 'var(--text-main)', fontVariantNumeric: 'tabular-nums' }}>
@@ -341,8 +391,10 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         </div>
       )}
 
-      {/* Quadro: carrossel (TV), lista por técnico (tela estreita) ou grade (desktop) */}
-      {tvMode ? (
+      {/* Quadro: carrossel (TV), busca, lista por técnico (tela estreita) ou grade (desktop) */}
+      {!tvMode && searchQuery.trim() ? (
+        <SearchResultsList results={searchResults} loading={searching} showEmpresa={!empresa} showTecnico />
+      ) : tvMode ? (
         <TvCarousel
           board={board}
           loading={loading}
@@ -408,8 +460,8 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 export const BoardGrid: React.FC<{
   board: BoardData | null; loading: boolean; scale?: number; isAdmin: boolean;
   onOpenTech?: (name: string) => void; onOpenCell: (tecnico: string, stage: string, label: string) => void;
-  showEmpresa: boolean;
-}> = ({ board, loading, scale = 1, isAdmin, onOpenTech, onOpenCell, showEmpresa }) => {
+  showEmpresa: boolean; onChangeStatus?: ChangeStatusFn;
+}> = ({ board, loading, scale = 1, isAdmin, onOpenTech, onOpenCell, showEmpresa, onChangeStatus }) => {
   const fs = (px: number) => `${Math.round(px * scale * 10) / 10}px`;
   const stages = board?.stages || [];
   const stagesCount = Math.max(stages.length, 1);
@@ -464,7 +516,7 @@ export const BoardGrid: React.FC<{
               const cell = tech.cells[st.key] || { count: 0, cards: [] };
               return (
                 <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
-                  {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={showEmpresa} />)}
+                  {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={showEmpresa} onChangeStatus={onChangeStatus} />)}
                   {cell.count > cell.cards.length && (
                     <button
                       onClick={() => onOpenCell(tech.name, st.key, st.label)}
@@ -525,6 +577,293 @@ const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empre
           ))}
         </div>
       </div>
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- detalhe da O.S. (histórico + peças)
+
+const formatMoney = (v?: number | null) => (typeof v === 'number' ? v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : null);
+
+const formatDateTime = (iso?: string | null) => {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch { return iso; }
+};
+
+// Mesmo detalhe, dois back-ends (admin vs Portal do Técnico) - os dois módulos compartilham estes
+// componentes de cartão, então precisa descobrir qual chamar (ver technician_portal.order_detail /
+// os_board._order_detail, que devolvem o mesmo formato).
+//
+// Achado em produção, 02/10/2026: clicar numa O.S. no Portal do Técnico dava "sessão expirada" e
+// voltava pro login do admin. Duas causas, uma atrás da outra:
+// 1ª tentativa, incompleta: decidia o back-end pelo pathname da URL, que não é confiável (SPA de
+//    tela única, o caminho nem sempre bate com '/tecnico' no momento do clique).
+// 2ª causa, a de verdade: mesmo escolhendo a URL certa, o Portal do Técnico usa um cliente HTTP
+//    PRÓPRIO (techApiFetch, services/techApi.ts) com uma chave de sessão separada (localStorage
+//    'tech_token', não 'token') e seu próprio redirecionamento de sessão expirada (pra /tecnico,
+//    não /login) - de propósito, pra um técnico e um atendente poderem estar logados ao mesmo
+//    tempo no mesmo navegador/celular sem um derrubar a sessão do outro (ver o comentário em
+//    techApi.ts). Chamar apiFetch (do admin) sempre ia falhar pro técnico nessa tela, não importa
+//    a URL - precisa trocar o cliente HTTP inteiro, não só o prefixo.
+const fetchOsDetail = (codos: number) => {
+  const isTechnician = !!localStorage.getItem('tech_token');
+  return isTechnician ? techApiFetch(`/order/${codos}`) : apiFetch(`/os-board/order/${codos}`);
+};
+
+// Mesma escolha de cliente HTTP do fetchOsDetail acima - admin e técnico sobem a foto pra
+// endpoints espelhados (os_board.upload_order_photo / technician_portal.technician_upload_order_photo).
+// sendToCustomer=false: documento interno (ex.: NF de compra que o cliente apresenta pra acionar
+// garantia de fábrica - pedido do usuário em 05/10/2026) - sobe pro Drive e anexa no Softsystem
+// igual, só não dispara pro WhatsApp do cliente (ele já tem o original, não faz sentido devolver).
+const uploadOsPhoto = (codos: number, formData: FormData, sendToCustomer: boolean) => {
+  formData.append('send_to_customer', sendToCustomer ? 'true' : 'false');
+  const isTechnician = !!localStorage.getItem('tech_token');
+  return isTechnician ? techApiUpload(`/order/${codos}/photos`, formData) : apiUpload(`/os-board/order/${codos}/photos`, formData);
+};
+
+// Checkbox compartilhado pelos dois pontos de upload (OsDetailModal e OsPhotoQuickUploadModal) -
+// reseta sozinho pro padrão (enviar) depois de cada envio, pra não esquecer marcado sem querer e
+// pular o envio de uma foto que devia ir pro cliente.
+// Visualizador de foto em tela cheia, dentro da própria página (pedido do usuário em 05/10/2026:
+// clicar numa foto abria aba nova do navegador, perdendo o contexto da O.S.) - com setas pra
+// passar pra próxima/anterior sem fechar. Só participa da navegação quem é imagem de verdade;
+// documentos (PDF, etc.) continuam abrindo em aba nova ao clicar, já que não faz sentido "ampliar"
+// um PDF dentro desse visualizador.
+const PhotoLightbox: React.FC<{ photos: OsFotoItem[]; index: number; onClose: () => void; onIndexChange: (i: number) => void }> = ({ photos, index, onClose, onIndexChange }) => {
+  const photo = photos[index];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight' && photos.length > 1) onIndexChange((index + 1) % photos.length);
+      else if (e.key === 'ArrowLeft' && photos.length > 1) onIndexChange((index - 1 + photos.length) % photos.length);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, photos.length, onClose, onIndexChange]);
+
+  if (!photo) return null;
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40000, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <button
+        onClick={onClose}
+        style={{ position: 'absolute', top: '16px', right: '16px', width: '38px', height: '38px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+      ><X size={18} /></button>
+
+      {photos.length > 1 && (
+        <button
+          onClick={e => { e.stopPropagation(); onIndexChange((index - 1 + photos.length) % photos.length); }}
+          style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+        ><ChevronLeft size={22} /></button>
+      )}
+
+      <img
+        src={photo.file_url} alt="Foto da O.S." onClick={e => e.stopPropagation()}
+        style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}
+      />
+
+      {photos.length > 1 && (
+        <button
+          onClick={e => { e.stopPropagation(); onIndexChange((index + 1) % photos.length); }}
+          style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+        ><ChevronRight size={22} /></button>
+      )}
+
+      {photos.length > 1 && (
+        <div style={{ position: 'absolute', bottom: '18px', left: '50%', transform: 'translateX(-50%)', fontSize: '12.5px', fontWeight: 700, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: '999px' }}>
+          {index + 1} / {photos.length}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const InternalDocToggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
+  <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '11.5px', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px 0' }}>
+    <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} style={{ marginTop: '2px', flexShrink: 0 }} />
+    <span>Documento interno (ex.: NF de compra pra garantia de fábrica) — não enviar ao cliente, só anexar no Drive/Softsystem</span>
+  </label>
+);
+
+const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos, onClose }) => {
+  const [data, setData] = useState<OsOrderDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [internalDoc, setInternalDoc] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await fetchOsDetail(codos);
+        if (!cancelled) setData(result);
+      } catch (err: any) {
+        if (!cancelled) setError(err?.message || 'Não foi possível carregar o detalhe da O.S.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [codos]);
+
+  const handlePhotoSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
+    if (!file) return;
+    setPhotoError(null);
+    setUploadingPhoto(true);
+    const sendToCustomer = !internalDoc;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const newPhoto = await uploadOsPhoto(codos, formData, sendToCustomer);
+      setData(prev => prev ? { ...prev, fotos: [newPhoto, ...prev.fotos] } : prev);
+    } catch (err: any) {
+      setPhotoError(err?.message || 'Não foi possível enviar a foto.');
+    } finally {
+      setUploadingPhoto(false);
+      setInternalDoc(false);
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '520px', maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.1))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>O.S. #{codos}</div>
+            {data && <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600 }}>{data.cliente || '—'} · {data.equipamento || 'Sem equipamento'}</div>}
+          </div>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+          {error && <div style={{ color: '#f87171', fontSize: '13px' }}>{error}</div>}
+          {!error && !data && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Carregando…</div>}
+
+          {data && (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {data.tipo_os && <TipoOsBadge tipo={data.tipo_os} />}
+                <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: `${STAGE_COLORS[data.stage] || '#64748b'}22`, color: STAGE_COLORS[data.stage] || '#94a3b8', border: `1px solid ${STAGE_COLORS[data.stage] || '#64748b'}55` }}>
+                  {data.situacao}
+                </span>
+                {(data.tecnico || data.tecnico2) && (
+                  <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {[data.tecnico, data.tecnico2].filter(Boolean).join(' + ')}
+                  </span>
+                )}
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <Clock size={14} /> Histórico
+                </div>
+                {data.historico.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Sem eventos registrados ainda.</div>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {data.historico.map((h, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '10px', padding: '6px 0', borderBottom: i < data.historico.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0, minWidth: '82px' }}>{formatDateTime(h.data)}</div>
+                      <div style={{ fontSize: '12.5px', color: 'var(--text-main)', fontWeight: 600 }}>
+                        {h.evento}
+                        {h.obs && h.obs !== 'N/A' && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', fontWeight: 400, marginTop: '2px' }}>{h.obs}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <Package size={14} /> Peças
+                </div>
+                {data.pecas.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nenhuma peça lançada nesta O.S.</div>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {data.pecas.map((p, i) => (
+                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '6px 0', borderBottom: i < data.pecas.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+                      <div style={{ fontSize: '12.5px', color: 'var(--text-main)', fontWeight: 600 }}>
+                        {p.quantidade ? `${p.quantidade}x ` : ''}{p.descricao}
+                      </div>
+                      {formatMoney(p.preco) && <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatMoney(p.preco)}</div>}
+                    </div>
+                  ))}
+                </div>
+                {data.valor_total != null && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.1)', fontSize: '13px', fontWeight: 800 }}>
+                    <span style={{ color: 'var(--text-main)' }}>Total</span>
+                    <span style={{ color: 'var(--accent-primary, #00e699)' }}>{formatMoney(data.valor_total)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    <ImageIcon size={14} /> Fotos
+                  </div>
+                  <button
+                    onClick={() => cameraInputRef.current?.click()}
+                    disabled={uploadingPhoto}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '8px', padding: '6px 10px', cursor: uploadingPhoto ? 'default' : 'pointer', opacity: uploadingPhoto ? 0.6 : 1 }}
+                  >
+                    {uploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
+                    {uploadingPhoto ? 'Enviando…' : 'Tirar foto'}
+                  </button>
+                  <input
+                    ref={cameraInputRef} type="file" accept="image/*" capture="environment"
+                    onChange={handlePhotoSelected} style={{ display: 'none' }}
+                  />
+                </div>
+                <InternalDocToggle checked={internalDoc} onChange={setInternalDoc} />
+                {photoError && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{photoError}</div>}
+                {data.fotos.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nenhuma foto tirada ainda nesta O.S.</div>}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: '8px' }}>
+                  {data.fotos.map(f => {
+                    const isImage = f.mimetype.startsWith('image/');
+                    const imageFotos = data.fotos.filter(x => x.mimetype.startsWith('image/'));
+                    const imgIdx = isImage ? imageFotos.findIndex(x => x.id === f.id) : -1;
+                    return (
+                      <button
+                        key={f.id}
+                        onClick={() => isImage ? setLightboxIndex(imgIdx) : window.open(f.file_url, '_blank', 'noopener,noreferrer')}
+                        style={{ display: 'block', position: 'relative', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', aspectRatio: '1', background: 'rgba(255,255,255,0.03)', padding: 0, cursor: 'pointer' }}
+                      >
+                        {isImage ? (
+                          <img src={f.file_url} alt="Foto da O.S." style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        ) : (
+                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={22} color="var(--text-muted)" /></div>
+                        )}
+                        <div style={{ position: 'absolute', bottom: '3px', right: '3px', display: 'flex', gap: '2px' }} title={`Drive: ${f.gdrive_status} · WhatsApp: ${f.whatsapp_status} · Softsystem: ${f.softsystem_status}`}>
+                          {[f.gdrive_status, f.whatsapp_status, f.softsystem_status].map((s, i) => (
+                            <span key={i} style={{ width: '6px', height: '6px', borderRadius: '50%', background: s === 'done' ? '#34d399' : s === 'failed' ? '#ef4444' : (s === 'sem_telefone' || s === 'nao_enviar') ? '#94a3b8' : '#f59e0b', boxShadow: '0 0 0 1px rgba(0,0,0,0.4)' }} />
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {lightboxIndex !== null && data && (
+        <PhotoLightbox
+          photos={data.fotos.filter(f => f.mimetype.startsWith('image/'))}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onIndexChange={setLightboxIndex}
+        />
+      )}
     </div>
   );
 };
@@ -732,8 +1071,8 @@ const ReportPanel: React.FC<{ stages: { key: string; label: string }[]; defaultE
 export const MobileBoard: React.FC<{
   board: BoardData | null; loading: boolean; stageFilter: string; setStageFilter: (k: string) => void;
   isAdmin: boolean; onOpenTech: (name: string) => void; showEmpresa: boolean;
-  onOpenCell: (tecnico: string, stage: string, label: string) => void;
-}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell }) => {
+  onOpenCell: (tecnico: string, stage: string, label: string) => void; onChangeStatus?: ChangeStatusFn;
+}> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell, onChangeStatus }) => {
   const stages = board?.stages || [];
   const stageKeys = stageFilter ? [stageFilter] : stages.map(s => s.key);
 
@@ -753,10 +1092,10 @@ export const MobileBoard: React.FC<{
     // grade, resolve.
     <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
       {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
-      <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-primary)', display: 'flex', gap: '6px', overflowX: 'auto', padding: '2px 0 8px', WebkitOverflowScrolling: 'touch', touchAction: 'pan-x' }}>
-        <StageChip label={`Todos · ${board?.total_open ?? 0}`} active={!stageFilter} onClick={() => setStageFilter('')} />
+      <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-primary)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', padding: '2px 0 8px' }}>
+        <StageChip label="Todos" count={board?.total_open ?? 0} active={!stageFilter} onClick={() => setStageFilter('')} />
         {stages.map(st => (
-          <StageChip key={st.key} label={`${st.label} · ${board?.totals?.[st.key] ?? 0}`} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
+          <StageChip key={st.key} label={st.label} count={board?.totals?.[st.key] ?? 0} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
         ))}
       </div>
 
@@ -775,7 +1114,7 @@ export const MobileBoard: React.FC<{
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {items.map(({ card, stageKey }) => (
-                <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} />
+                <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} onChangeStatus={onChangeStatus} />
               ))}
               {shown > items.length && (
                 stageFilter ? (
@@ -795,40 +1134,63 @@ export const MobileBoard: React.FC<{
   );
 };
 
-const StageChip: React.FC<{ label: string; active: boolean; onClick: () => void; color?: string; Icon?: LucideIcon }> = ({ label, active, onClick, color, Icon }) => {
+const StageChip: React.FC<{ label: string; count: number; active: boolean; onClick: () => void; color?: string; Icon?: LucideIcon }> = ({ label, count, active, onClick, color, Icon }) => {
   // Cor do estágio sempre aparece (não só quando selecionado) - senão os chips ficam todos cinzas e
-  // iguais, difícil de bater o olho e achar "Não aprovado" ou "Entrada" rapidamente na lista do celular.
+  // iguais, difícil de bater o olho e achar "Não aprovado" ou "Entrada" rapidamente na lista do
+  // celular. Grade de 2 colunas com largura igual (em vez de "pill" que quebra linha torto,
+  // pedido do usuário 29/09/2026): texto à esquerda, contador à direita, tudo alinhado.
   const c = color || 'var(--accent-primary)';
   return (
     <button
       onClick={onClick}
       style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center', gap: '5px', padding: '6px 12px 6px 10px', borderRadius: '999px',
+        display: 'flex', alignItems: 'center', gap: '6px', width: '100%', boxSizing: 'border-box',
+        padding: '7px 10px', borderRadius: '8px', minWidth: 0,
         fontSize: '12px', fontWeight: 700, cursor: 'pointer',
         background: active ? `${c}2E` : `${c}14`,
         color: active ? c : 'var(--text-main)',
         border: `1.5px solid ${active ? c : `${c}55`}`,
-        whiteSpace: 'nowrap',
       }}
     >
       {Icon && <Icon size={13} color={c} style={{ flexShrink: 0 }} />}
-      {label}
+      <span style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ flexShrink: 0, color: c, fontWeight: 800 }}>{count}</span>
     </button>
   );
 };
 
-const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: string; showEmpresa: boolean; showStage: boolean }> = ({ card, stageLabel, color, showEmpresa, showStage }) => {
+const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: string; showEmpresa: boolean; showStage: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, stageLabel, color, showEmpresa, showStage, onChangeStatus }) => {
   const dias = card.dias_no_estagio ?? 0;
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
   return (
-    <div style={{ padding: '9px 12px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `3px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+    <div
+      onClick={() => setShowDetail(true)}
+      style={{ position: 'relative', padding: '9px 12px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `3px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, cursor: 'pointer' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', minWidth: 0 }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
         <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
           <TipoOsBadge tipo={card.tipo_os} />
           <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
+          {onChangeStatus && (
+            <button
+              ref={btnRef}
+              onClick={(e) => { e.stopPropagation(); setAnchorRect(btnRef.current!.getBoundingClientRect()); }}
+              title="Mudar status"
+              style={{ width: '34px', height: '34px', padding: 0, borderRadius: '7px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px', lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+            >⋮</button>
+          )}
         </span>
       </div>
+      {anchorRect && onChangeStatus && (
+        <StatusMenu
+          anchorRect={anchorRect}
+          onClose={() => setAnchorRect(null)}
+          onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
+        />
+      )}
       {card.equipamento && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{card.equipamento}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', marginTop: '2px', flexWrap: 'wrap' }}>
         <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500 }}>{dias === 0 ? 'hoje no estágio' : `${dias}d no estágio`}</span>
@@ -836,6 +1198,274 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: strin
           {showStage && <span style={{ color: color || 'var(--text-muted)', fontWeight: 700 }}>{stageLabel}</span>}
           {showEmpresa && <span>{EMPRESA_LABEL[card.empresa] || card.empresa}</span>}
         </span>
+      </div>
+      {showDetail && <OsDetailModal codos={card.codos} onClose={() => setShowDetail(false)} />}
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- busca (quadro administrativo + Portal do Técnico)
+
+export interface SearchResultCard extends BoardCard {
+  tecnico?: string;
+  stage_label?: string;
+}
+
+// Caixa de busca por O.S., cliente ou equipamento - mesmo componente usado no quadro administrativo
+// (TechBoard) e no Portal do Técnico (TechnicianPortal.tsx), cada um passando sua própria função de
+// busca (endpoints diferentes: /os-board/search vs /technician-portal/search).
+export const SearchBar: React.FC<{ query: string; onQueryChange: (q: string) => void; placeholder?: string }> = ({ query, onQueryChange, placeholder }) => (
+  <div style={{ position: 'relative', flex: '1 1 220px', minWidth: '140px', maxWidth: '360px' }}>
+    <Search size={14} color="var(--text-muted)" style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+    <input
+      value={query}
+      onChange={e => onQueryChange(e.target.value)}
+      placeholder={placeholder || 'Buscar O.S., cliente ou equipamento...'}
+      style={{
+        width: '100%', boxSizing: 'border-box', padding: '7px 10px 7px 30px', fontSize: '12.5px', fontWeight: 600,
+        borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.14))',
+        background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)',
+      }}
+    />
+    {query && (
+      <button
+        onClick={() => onQueryChange('')}
+        title="Limpar busca"
+        style={{ position: 'absolute', right: '6px', top: '50%', transform: 'translateY(-50%)', width: '20px', height: '20px', borderRadius: '5px', border: 'none', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      ><X size={13} /></button>
+    )}
+  </div>
+);
+
+// Lista de resultados (achatada, sem agrupar por técnico/estágio - mostra os dois como legenda no
+// cartão) - reaproveita MobileOsRow pra ficar visualmente igual ao resto do quadro.
+export const SearchResultsList: React.FC<{ results: SearchResultCard[]; loading: boolean; showEmpresa: boolean; showTecnico: boolean; onChangeStatus?: ChangeStatusFn }> = ({ results, loading, showEmpresa, showTecnico, onChangeStatus }) => {
+  if (loading) {
+    return <div style={{ padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Buscando…</div>;
+  }
+  if (results.length === 0) {
+    return <div style={{ padding: '30px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhuma O.S. em aberto encontrada com esse termo.</div>;
+  }
+  return (
+    <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
+      <div style={{ border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+        {results.map(card => (
+          <div key={`${card.empresa}-${card.codos}`}>
+            {showTecnico && (
+              <div style={{ padding: '6px 12px 0', fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)' }}>{titleCase(card.tecnico || '')}</div>
+            )}
+            <MobileOsRow card={card} stageLabel={card.stage_label || ''} color={STAGE_COLORS[(card as any).stage] } showEmpresa={showEmpresa} showStage onChangeStatus={onChangeStatus} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- envio rápido de foto/arquivo de O.S.
+
+// Atalho pedido pelo usuário em 05/10/2026: antes só dava pra tirar foto depois de abrir o detalhe
+// de uma O.S. específica no quadro. Esse modal fica disponível direto na barra lateral (ver Sidebar
+// "Fotos de O.S."), sem precisar achar o cartão da O.S. primeiro - digita o número (ou nome/
+// equipamento), confirma qual é, e manda quantas fotos/arquivos quiser de uma vez (câmera ou
+// escolhendo vários arquivos do computador/celular). Cada arquivo sobe e aparece com seu próprio
+// status assim que termina - nunca espera os outros pra mostrar progresso.
+interface QuickUploadFileState {
+  key: string; file: File; status: 'uploading' | 'done' | 'error'; error?: string; result?: OsFotoItem;
+}
+
+export const OsPhotoQuickUploadModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResultCard[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<SearchResultCard | null>(null);
+  const [files, setFiles] = useState<QuickUploadFileState[]>([]);
+  const [internalDoc, setInternalDoc] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const filePickerRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!query.trim() || selected) { setResults([]); return; }
+    let cancelled = false;
+    setSearching(true);
+    const handle = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({ q: query.trim() });
+        const isTechnician = !!localStorage.getItem('tech_token');
+        const data = isTechnician
+          ? await techApiFetch(`/search?${qs.toString()}`)
+          : await apiFetch(`/os-board/search?${qs.toString()}`);
+        if (!cancelled) setResults(data.results || []);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 350);
+    return () => { cancelled = true; clearTimeout(handle); };
+  }, [query, selected]);
+
+  const uploadOne = async (key: string, file: File, codos: number, sendToCustomer: boolean) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const result = await uploadOsPhoto(codos, formData, sendToCustomer);
+      setFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'done', result } : f));
+    } catch (err: any) {
+      setFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'error', error: err?.message || 'Falha ao enviar' } : f));
+    }
+  };
+
+  const addFiles = (fileList: FileList | null) => {
+    if (!fileList || !fileList.length || !selected) return;
+    const codos = selected.codos;
+    const sendToCustomer = !internalDoc;
+    const toAdd = Array.from(fileList).map((file, i) => ({
+      key: `${Date.now()}_${i}_${file.name}`, file, status: 'uploading' as const,
+    }));
+    setFiles(prev => [...toAdd, ...prev]);
+    toAdd.forEach(item => uploadOne(item.key, item.file, codos, sendToCustomer));
+    setInternalDoc(false);
+  };
+
+  // Depois que termina de subir, ficava sem nenhum "pronto!" claro (pedido do usuário em
+  // 05/10/2026: "fica meio vago e nao sabemos se deu certo") - esse resumo só aparece quando
+  // TODOS os arquivos da fila já terminaram (sucesso ou falha), nunca enquanto algum ainda sobe.
+  const doneCount = files.filter(f => f.status === 'done').length;
+  const errorCount = files.filter(f => f.status === 'error').length;
+  const allSettled = files.length > 0 && files.every(f => f.status !== 'uploading');
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '480px', maxHeight: '82vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', borderRadius: '12px', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.1))', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)' }}>Enviar foto/arquivo de uma O.S.</div>
+          <button onClick={onClose} style={iconBtn}><X size={16} /></button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {!selected && (
+            <>
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>Número da O.S., nome do cliente ou equipamento</div>
+                <SearchBar query={query} onQueryChange={setQuery} placeholder="Ex.: 33160" />
+              </div>
+              {query.trim() && (
+                searching ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Buscando…</div>
+                ) : results.length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Nenhuma O.S. em aberto encontrada com esse termo.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {results.map(card => (
+                      <button
+                        key={`${card.empresa}-${card.codos}`}
+                        onClick={() => { setSelected(card); setQuery(''); setResults([]); }}
+                        style={{ textAlign: 'left', padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'var(--bg-secondary, rgba(255,255,255,0.03))', cursor: 'pointer' }}
+                      >
+                        <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+                          #{card.codos} · {card.cliente ? titleCase(card.cliente) : 'Cliente não identificado'}
+                        </div>
+                        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                          {card.equipamento || 'Sem equipamento'} · {EMPRESA_LABEL[card.empresa] || card.empresa}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
+              )}
+            </>
+          )}
+
+          {selected && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderRadius: '8px', background: 'rgba(0,230,153,0.08)', border: '1px solid rgba(0,230,153,0.25)' }}>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>
+                    O.S. #{selected.codos} · {selected.cliente ? titleCase(selected.cliente) : 'Cliente não identificado'}
+                  </div>
+                  <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    {selected.equipamento || 'Sem equipamento'} · {EMPRESA_LABEL[selected.empresa] || selected.empresa}
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setSelected(null); setFiles([]); }}
+                  style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-muted)', background: 'transparent', border: '1px solid var(--border-color, rgba(255,255,255,0.16))', borderRadius: '6px', padding: '5px 9px', cursor: 'pointer', flexShrink: 0 }}
+                >Trocar</button>
+              </div>
+
+              <InternalDocToggle checked={internalDoc} onChange={setInternalDoc} />
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  onClick={() => cameraInputRef.current?.click()}
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '8px', padding: '10px', cursor: 'pointer' }}
+                >
+                  <Camera size={15} /> Tirar foto
+                </button>
+                <button
+                  onClick={() => filePickerRef.current?.click()}
+                  style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', border: '1px solid var(--border-color, rgba(255,255,255,0.16))', borderRadius: '8px', padding: '10px', cursor: 'pointer' }}
+                >
+                  <ImageIcon size={15} /> Escolher arquivos
+                </button>
+              </div>
+              <input
+                ref={cameraInputRef} type="file" accept="image/*" capture="environment"
+                onChange={e => { addFiles(e.target.files); if (cameraInputRef.current) cameraInputRef.current.value = ''; }}
+                style={{ display: 'none' }}
+              />
+              <input
+                ref={filePickerRef} type="file" accept="image/*,application/pdf" multiple
+                onChange={e => { addFiles(e.target.files); if (filePickerRef.current) filePickerRef.current.value = ''; }}
+                style={{ display: 'none' }}
+              />
+
+              {files.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {files.map(f => (
+                    <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'var(--bg-secondary, rgba(255,255,255,0.03))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))' }}>
+                      {f.status === 'uploading' && <Loader2 size={15} className="animate-spin" color="var(--text-muted)" />}
+                      {f.status === 'done' && <CheckCircle2 size={15} color="#34d399" />}
+                      {f.status === 'error' && <XCircle size={15} color="#ef4444" />}
+                      <div style={{ flex: 1, minWidth: 0, fontSize: '12px', fontWeight: 600, color: 'var(--text-main)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {f.file.name}
+                      </div>
+                      <div style={{ fontSize: '11px', color: f.status === 'error' ? '#f87171' : 'var(--text-muted)', flexShrink: 0 }}>
+                        {f.status === 'uploading' ? 'Enviando…' : f.status === 'done' ? (f.result?.whatsapp_status === 'nao_enviar' ? 'Salvo (não enviado ao cliente)' : 'Enviado') : (f.error || 'Falhou')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {allSettled && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: '14px', borderRadius: '10px', textAlign: 'center', background: errorCount === 0 ? 'rgba(52,211,153,0.1)' : 'rgba(239,68,68,0.08)', border: `1px solid ${errorCount === 0 ? 'rgba(52,211,153,0.3)' : 'rgba(239,68,68,0.25)'}` }}>
+                  {errorCount === 0 ? (
+                    <>
+                      <CheckCircle2 size={28} color="#34d399" style={{ margin: '0 auto' }} />
+                      <div style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        Pronto! {doneCount === 1 ? '1 arquivo enviado' : `${doneCount} arquivos enviados`} na O.S. #{selected.codos}.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle size={28} color="#ef4444" style={{ margin: '0 auto' }} />
+                      <div style={{ fontSize: '13.5px', fontWeight: 800, color: 'var(--text-main)' }}>
+                        {doneCount > 0 ? `${doneCount} enviado(s), mas ${errorCount} falhou(aram).` : `Falha ao enviar ${errorCount === 1 ? 'o arquivo' : 'os arquivos'}.`} Tenta de novo?
+                      </div>
+                    </>
+                  )}
+                  <button
+                    onClick={() => { setSelected(null); setFiles([]); }}
+                    style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', fontWeight: 700, color: '#04140d', background: 'var(--accent-primary, #00e699)', border: 'none', borderRadius: '8px', padding: '10px 18px', cursor: 'pointer' }}
+                  >
+                    Concluir
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -854,18 +1484,34 @@ const headCell = (scale: number): React.CSSProperties => ({
   overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
 });
 
-const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmpresa: boolean }> = ({ card, color, scale, showEmpresa }) => {
+const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmpresa: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, color, scale, showEmpresa, onChangeStatus }) => {
   const dias = card.dias_no_estagio ?? 0;
   // parada há muito tempo no mesmo estágio: chama atenção
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
   return (
-    <div style={{
-      borderRadius: '6px', padding: `${4 * scale}px ${6 * scale}px`, background: 'rgba(255,255,255,0.04)',
-      borderLeft: `3px solid ${aging || color || '#64748b'}`, minWidth: 0, overflow: 'hidden',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', fontSize: `${10.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)' }}>
-        <span>#{card.codos}</span>
-        <TipoOsBadge tipo={card.tipo_os} scale={scale} />
+    <div
+      onClick={() => setShowDetail(true)}
+      title="Ver histórico e peças desta O.S."
+      style={{
+        position: 'relative', borderRadius: '6px', padding: `${4 * scale}px ${6 * scale}px`, background: 'rgba(255,255,255,0.04)',
+        borderLeft: `3px solid ${aging || color || '#64748b'}`, minWidth: 0, overflow: 'visible', cursor: 'pointer',
+      }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', fontSize: `${10.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', minWidth: 0 }}>
+        <span style={{ flexShrink: 0 }}>#{card.codos}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', minWidth: 0 }}>
+          <TipoOsBadge tipo={card.tipo_os} scale={scale} />
+          {onChangeStatus && (
+            <button
+              ref={btnRef}
+              onClick={(e) => { e.stopPropagation(); setAnchorRect(btnRef.current!.getBoundingClientRect()); }}
+              title="Mudar status"
+              style={{ width: `${Math.max(16 * scale, 28)}px`, height: `${Math.max(16 * scale, 28)}px`, flexShrink: 0, padding: 0, borderRadius: '6px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: `${Math.max(10 * scale, 15)}px`, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >⋮</button>
+          )}
+        </span>
       </div>
       <div style={{ fontSize: `${9.5 * scale}px`, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={card.cliente || ''}>
         {card.cliente ? titleCase(card.cliente) : '—'}
@@ -879,7 +1525,119 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
         <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{dias === 0 ? 'hoje' : `${dias}d`}</span>
         <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{fmtDate(card.data_entrada)}{showEmpresa ? ` · ${(EMPRESA_LABEL[card.empresa] || card.empresa).slice(0, 4)}` : ''}</span>
       </div>
+      {anchorRect && onChangeStatus && (
+        <StatusMenu
+          anchorRect={anchorRect}
+          onClose={() => setAnchorRect(null)}
+          onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
+        />
+      )}
+      {showDetail && <OsDetailModal codos={card.codos} onClose={() => setShowDetail(false)} />}
     </div>
+  );
+};
+
+// Menuzinho flutuante com os 3 status que o técnico pode definir - usado tanto no cartão da grade
+// (OsCard) quanto na linha da lista (MobileOsRow).
+const STATUS_LABELS: Record<number, string> = { 6: 'Aguardando retirada', 11: 'Sem conserto', 13: 'Sem defeito' };
+
+// Flutua via portal direto no <body>, posicionado em 'fixed' pelas coordenadas reais do botão que
+// abriu - nunca fica preso/cortado por nenhum contêiner com overflow:hidden no meio do caminho
+// (já tentei "furar" isso ajustando overflow container por container - achado em produção,
+// 29/09/2026, que sempre sobrava algum nível intermediário cortando o menu; só resolveu de vez
+// saindo inteiramente da árvore de recorte).
+// Confirmado em produção (30/09/2026): dentro do app instalado pelo Google Play (TWA), window.prompt
+// E window.confirm não disparam diálogo nenhum - o clique simplesmente não faz nada visível (o app
+// fica esperando uma resposta de UI nativa que esse ambiente não sabe mostrar). Por isso o menu
+// inteiro (escolher status, perguntar o motivo do "sem conserto", confirmar) é resolvido só com UI
+// própria dentro do mesmo portal, nunca com diálogo nativo do navegador.
+const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (status: number, label: string, obs?: string) => void }> = ({ anchorRect, onClose, onPick }) => {
+  const [step, setStep] = useState<'menu' | 'motivo' | 'confirm'>('menu');
+  const [pendingKey, setPendingKey] = useState<number | null>(null);
+  const [obsText, setObsText] = useState('');
+
+  useEffect(() => {
+    if (step !== 'menu') return; // com o textarea/confirmação aberta, clique fora não deve fechar sozinho
+    const onDocClick = () => onClose();
+    // "capture" pra fechar antes de qualquer outro onClick da página processar o clique de fora
+    document.addEventListener('click', onDocClick, true);
+    return () => document.removeEventListener('click', onDocClick, true);
+  }, [onClose, step]);
+
+  const choose = (key: number) => {
+    setPendingKey(key);
+    // "Sem conserto" é o único cujo texto ao cliente muda com o motivo (ver
+    // AutomationService.sem_conserto_motivo, no backend) - pergunta antes de confirmar. Opcional:
+    // sem motivo, vai a mensagem padrão, sem detalhe.
+    setStep(key === 11 ? 'motivo' : 'confirm');
+  };
+
+  const confirm = () => {
+    if (pendingKey == null) return;
+    onPick(pendingKey, STATUS_LABELS[pendingKey], pendingKey === 11 ? (obsText.trim() || undefined) : undefined);
+  };
+
+  const menuWidth = step === 'menu' ? 170 : 220;
+  const spaceBelow = window.innerHeight - anchorRect.bottom;
+  const openUpward = spaceBelow < 220 && anchorRect.top > 220;
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    left: Math.max(8, Math.min(anchorRect.right - menuWidth, window.innerWidth - menuWidth - 8)),
+    ...(openUpward ? { bottom: window.innerHeight - anchorRect.top + 4 } : { top: anchorRect.bottom + 4 }),
+    zIndex: 9999, background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.18))',
+    borderRadius: '8px', boxShadow: '0 6px 18px rgba(0,0,0,0.4)', overflow: 'hidden', width: `${menuWidth}px`,
+  };
+
+  const btnStyle: React.CSSProperties = { display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', cursor: 'pointer' };
+  const cancelStyle: React.CSSProperties = { display: 'block', width: '100%', textAlign: 'center', padding: '8px', fontSize: '11px', color: 'var(--text-muted)', background: 'transparent', border: 'none', cursor: 'pointer' };
+
+  let body: React.ReactNode;
+  if (step === 'menu') {
+    body = (
+      <>
+        {TECH_STATUS_OPTIONS.map(opt => (
+          <button key={opt.key} onClick={() => choose(opt.key)} style={btnStyle}>{STATUS_LABELS[opt.key]}</button>
+        ))}
+        <button onClick={onClose} style={cancelStyle}>Cancelar</button>
+      </>
+    );
+  } else if (step === 'motivo') {
+    body = (
+      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-main)' }}>Motivo (opcional)</div>
+        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Aparece resumido na mensagem pro cliente.</div>
+        <textarea
+          autoFocus
+          value={obsText}
+          onChange={e => setObsText(e.target.value)}
+          rows={3}
+          style={{ width: '100%', boxSizing: 'border-box', resize: 'none', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12.5px', padding: '6px 8px', fontFamily: 'inherit' }}
+        />
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={() => setStep('menu')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>Voltar</button>
+          <button onClick={() => setStep('confirm')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: 'pointer' }}>Continuar</button>
+        </div>
+      </div>
+    );
+  } else {
+    body = (
+      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
+          Marcar como "{pendingKey != null ? STATUS_LABELS[pendingKey] : ''}"?
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={() => setStep(pendingKey === 11 ? 'motivo' : 'menu')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>Voltar</button>
+          <button onClick={confirm} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: 'pointer' }}>Confirmar</button>
+        </div>
+      </div>
+    );
+  }
+
+  return createPortal(
+    <div onClick={e => e.stopPropagation()} style={style}>
+      {body}
+    </div>,
+    document.body
   );
 };
 

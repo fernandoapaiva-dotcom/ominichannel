@@ -400,6 +400,7 @@ class OsBoardOrder(Base):
     cod_tipo_os: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     equipamento: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     situacao_evento: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)  # último evento (CODTIPOEVENTOOS)
+    situacao_obs: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # Observação do evento que gerou a situação atual - permite distinguir "N/A" (ajuste interno) mesmo com o quadro fiel ao Softsystem, ver os_board_followup_service._list_due_orcamento
     ultimo_evento_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     finalizada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     paga: Mapped[bool] = mapped_column(Boolean, default=False)  # condição de pagamento preenchida = já efetivada
@@ -424,7 +425,115 @@ class OsBoardEvent(Base):
     loja: Mapped[int] = mapped_column(Integer, default=1)
     codos: Mapped[int] = mapped_column(Integer, index=True)
     cod_evento: Mapped[int] = mapped_column(Integer)
+    obs: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     data: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
+class OsBoardItem(Base):
+    """Peças/produtos lançados na O.S. (ITENSORDEMSERVICO no Softsystem) - só leitura, espelhado
+    pelo vigia igual os eventos (ver db_watcher._board_items). Usado na tela de detalhe da O.S. no
+    quadro (web e Portal do Técnico), pra mostrar o que foi indicado/trocado no atendimento."""
+    __tablename__ = "os_board_items"
+    __table_args__ = (
+        Index("ix_os_board_items_key", "tenant_id", "empresa", "loja", "codos"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    descricao: Mapped[str] = mapped_column(String(255))
+    quantidade: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    preco: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+
+class SoftsystemPendingWrite(Base):
+    """
+    Pedido de escrita no Softsystem (Firebird) ainda não executado. O backend roda na nuvem e não
+    alcança o Firebird da loja (rede local, sem rota externa) - só o vigia (tools/os_db_watcher/)
+    consegue, porque roda dentro da própria loja. Então uma mudança de status feita por fora do
+    Softsystem (ex.: Portal do Técnico) não escreve direto: só enfileira aqui, e o vigia lê essa
+    fila (poll_pending_writes) e executa de verdade no Firebird, confirmando (ou reportando falha)
+    de volta via /os-handler/pending-writes/{id}/ack.
+    """
+    __tablename__ = "softsystem_pending_writes"
+    __table_args__ = (
+        Index("ix_softsystem_pending_writes_lookup", "empresa", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))            # "servweld" | "centrooeste"
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    cod_evento: Mapped[int] = mapped_column(Integer)            # CODTIPOEVENTOOS a gravar
+    obs: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    requested_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)  # nome do técnico
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending | done | failed
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    erro: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+
+class OsBoardPhoto(Base):
+    """Foto tirada pelo atendente/técnico direto no sistema pra uma O.S. (equipamento na recepção,
+    defeito, etc.) - complementa as peças (OsBoardItem). Ao subir: fica salva localmente,
+    sobe pro Google Drive da loja, é enviada ao cliente da O.S. no WhatsApp, e enfileira o anexo
+    de volta na aba "Arquivos" da O.S. no Softsystem (ver SoftsystemPendingFileAttach) - os três
+    envios são melhor esforço, cada um com seu próprio status, nenhum bloqueia os outros nem a
+    resposta ao atendente/técnico que tirou a foto."""
+    __tablename__ = "os_board_photos"
+    __table_args__ = (
+        Index("ix_os_board_photos_key", "tenant_id", "empresa", "loja", "codos"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    file_url: Mapped[str] = mapped_column(String(500))  # /uploads/xxx.jpg
+    mimetype: Mapped[str] = mapped_column(String(100), default="image/jpeg")
+    original_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    uploaded_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)  # nome de quem tirou
+    gdrive_file_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    gdrive_status: Mapped[str] = mapped_column(String(20), default="pending")   # pending | done | failed
+    whatsapp_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | done | failed | sem_telefone
+    softsystem_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | done | failed
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SoftsystemPendingFileAttach(Base):
+    """
+    Pedido de anexar um arquivo na aba "Arquivos" da O.S. no Softsystem, ainda não executado.
+    Mesma lógica de fila do SoftsystemPendingWrite (o backend roda na nuvem e não alcança a pasta
+    de rede da loja nem o Firebird direto - só o vigia consegue, porque roda dentro da própria
+    loja). Diferença: aqui o vigia não só grava uma linha no Firebird (ARQUIVOSORDEMSERVICO), mas
+    também COPIA o arquivo pra pasta de rede que o Softsystem espera (ver poll_pending_file_attachs
+    e config.json/pasta_arquivos), renomeando pro padrão que o próprio Softsystem usa: "Ordem
+    Serviço {loja} {codos} {AAAAMMDD} {HHMMSS}.{extensão}" (confirmado em produção em 05/10/2026,
+    testando um anexo manual pela tela do Softsystem em O.S. #1964/Centro-Oeste e #33160/Servweld).
+    """
+    __tablename__ = "softsystem_pending_file_attaches"
+    __table_args__ = (
+        Index("ix_softsystem_pending_file_attaches_lookup", "empresa", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    photo_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("os_board_photos.id", ondelete="CASCADE"), nullable=True)
+    empresa: Mapped[str] = mapped_column(String(30))            # "servweld" | "centrooeste"
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    source_path: Mapped[str] = mapped_column(String(500))       # caminho local do arquivo no próprio servidor (mesma VM do vigia)
+    descricao: Mapped[str] = mapped_column(String(100))         # nome mostrado na tela "Arquivos" do Softsystem
+    extensao: Mapped[str] = mapped_column(String(10))
+    operador: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending | done | failed
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    processado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    erro: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
 
 
 class ClientDocument(Base):
