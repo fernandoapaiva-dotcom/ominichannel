@@ -1,0 +1,25 @@
+{
+  "short_name": "Técnico",
+  "name": "OminiChannel Técnico",
+  "description": "Quadro de Ordens de Serviço para técnicos: acompanhe suas O.S., mude o status pra Aguardando Retirada, Sem Conserto ou Sem Defeito.",
+  "icons": [
+    {
+      "src": "/tecnico-icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/tecnico-icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "id": "/tecnico",
+  "start_url": "/tecnico",
+  "scope": "/tecnico",
+  "background_color": "#0a0f1d",
+  "theme_color": "#00e699",
+  "display": "standalone",
+  "orientation": "portrait"
+}

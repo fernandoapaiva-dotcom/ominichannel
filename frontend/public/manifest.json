@@ -1,6 +1,8 @@
 {
+  "id": "/",
   "short_name": "OminiChannel",
   "name": "OminiChannel WhatsApp & Atendimento",
+  "description": "Painel de atendimento via WhatsApp: conversas, ordens de serviço e automações da Servweld/Servsolda em um só lugar.",
   "icons": [
     {
       "src": "/favicon.svg",
