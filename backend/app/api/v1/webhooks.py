@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.models.models import (
     WhatsAppNumber, Contact, Conversation, Message, ConversationMemory,
     ConversationStatus, MessageSender, MessageType, WhatsAppGroup, User, UserRole, TransferLog,
-    AuthorizedTechnician, CalendarEvent, ClientDocument
+    AuthorizedTechnician, CalendarEvent, ClientDocument, OsBoardOrder
 )
 
 from app.services.evolution_service import evolution_service
@@ -1060,6 +1060,13 @@ async def receive_evolution_webhook(
 
     # Handle CONTACTS_UPDATE / CONTACTS_UPSERT (Phone address book synced or updated on mobile)
     if event_type in ["contacts.update", "contacts.upsert", "contacts_update", "contacts_upsert"]:
+        # Temporariamente desativado: o full-resync de contatos ao reconectar um numero dispara
+        # milhares desses eventos, e o loop abaixo faz uma consulta LIKE '%...%' (sem indice) por
+        # contato - vira gargalo de CPU/IO que trava o backend inteiro. Reativar so depois de
+        # otimizar a consulta (ex.: indexar/normalizar telefone e evitar LIKE com wildcard a
+        # esquerda). Sem isso, nome/foto do contato so deixam de ser enriquecidos via agenda do
+        # celular - nao afeta mensagens nem o funcionamento do bot.
+        return {"status": "success", "event": event_type, "updated_contacts": 0, "skipped": True}
         contacts_raw = payload.get("data") or data
         if not isinstance(contacts_raw, list):
             contacts_raw = [contacts_raw] if isinstance(contacts_raw, dict) else []
@@ -2773,6 +2780,42 @@ async def receive_evolution_webhook(
     # replies without ever sending the PDF - confirmed in production: a real customer's reply
     # sat there unanswered because their conversation had attendant interaction on it.
     pending_os_marker = conversation.assunto_atual or ""
+    if not is_group and pending_os_marker.startswith("CONFIRM_OS_APPROVAL:"):
+        # Achado em produção (30/09/2026), O.S. #1899: o cliente nunca respondeu SIM/NÃO por
+        # aqui - a loja finalizou a O.S. direto no Softsystem (com OBS "N/A", nem passou pelo
+        # fluxo de aprovação do WhatsApp). Sem essa checagem, toda mensagem seguinte do cliente
+        # ("bom dia", uma foto, qualquer coisa não reconhecida como SIM/NÃO) caía em AMBIGUA e
+        # o sistema ficava recolocando "você aprova a execução do serviço da O.S. #1899...?" -
+        # o marcador nunca era limpo porque só é limpo quando o PRÓPRIO cliente responde SIM/NÃO
+        # por aqui. Antes de reperguntar, confere se a O.S. já saiu do "aguardando aprovação" no
+        # quadro (fiel ao Softsystem, ver os_board.py) - se saiu, ou se o evento mais recente é
+        # um "N/A" (correção manual, não é resposta de verdade), solta o marcador e trata a
+        # mensagem como normal, sem reperguntar nada sobre uma aprovação que já não faz sentido.
+        os_numero_check = pending_os_marker.split(":", 1)[1].split("|", 1)[0]
+        try:
+            codos_check = int(os_numero_check)
+        except ValueError:
+            codos_check = None
+        if codos_check is not None:
+            board_row_check = (await db.execute(select(OsBoardOrder).where(
+                OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos_check
+            ))).scalars().first()
+            obs_check = (board_row_check.situacao_obs or "").strip().lower() if board_row_check else ""
+            is_stale = (
+                not board_row_check or
+                board_row_check.situacao_evento != 3 or  # EVENTO_ORC_AGUARDANDO_APROVACAO
+                obs_check in ("n/a", "na")
+            )
+            if is_stale:
+                logger.info(
+                    f"[OS HANDLER APROVAÇÃO] O.S. #{codos_check} não está mais aguardando aprovação no "
+                    f"quadro (situacao_evento={board_row_check.situacao_evento if board_row_check else None}, "
+                    f"obs='{obs_check}') - soltando marcador CONFIRM_OS_APPROVAL sem reperguntar."
+                )
+                conversation.assunto_atual = "Atendimento Concierge"
+                await db.commit()
+                pending_os_marker = ""
+
     if not is_group and (pending_os_marker.startswith("CONFIRM_OS_PDF:") or pending_os_marker.startswith("CONFIRM_OS_APPROVAL:")):
         from app.services.automation_service import automation_service
         classification = await automation_service.classify_confirmation_intent(db, tenant_id, text_content)

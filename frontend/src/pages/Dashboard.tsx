@@ -15,7 +15,7 @@ import { CalendarModal } from '../components/CalendarModal';
 
 import { DepartmentBar } from '../components/DepartmentBar';
 import { MobileBottomNav } from '../components/MobileBottomNav';
-import { TechBoard } from '../components/TechBoard';
+import { TechBoard, OsPhotoQuickUploadModal } from '../components/TechBoard';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
@@ -713,7 +713,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
                     if (!replaced && (m.id < 0 || m.status === 'sending') && m.remetente === newMsg.remetente) {
                       const c1 = (m.conteudo || '').split('|')[0].trim();
                       const c2 = (newMsg.conteudo || '').split('|')[0].trim();
-                      if (c1 === c2 || m.tipo === 'audio' || newMsg.tipo === 'audio' || sendingCount === 1) {
+                      // Pra midia, c1 e um blob: local (preview otimista) e c2 e o caminho /uploads/
+                      // do servidor - nunca batem por texto. Sem isso, mandar 2 anexos em sequencia
+                      // (ou um anexo logo depois de outro envio que ainda nao confirmou) deixava mais
+                      // de uma pratinha "enviando" pendente ao mesmo tempo, o fallback de "so sobrou
+                      // 1 pendente" parava de valer, e a previa local ficava grudada na tela junto
+                      // com a mensagem real (mesma midia aparecendo 2x - ver relato de 05/10/2026).
+                      const mFile = (m.dados_adicionais as any)?.original_filename || (m.dados_adicionais as any)?.file_name;
+                      const newFile = (newMsg.dados_adicionais as any)?.original_filename || (newMsg.dados_adicionais as any)?.file_name;
+                      const fileMatch = Boolean(mFile) && Boolean(newFile) && mFile === newFile && m.tipo === newMsg.tipo;
+                      if (c1 === c2 || fileMatch || m.tipo === 'audio' || newMsg.tipo === 'audio' || sendingCount === 1) {
                         replaced = true;
                         return newMsg;
                       }
@@ -1120,6 +1129,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [isChatListCollapsed, setIsChatListCollapsed] = useState(false);
 
   const [isMainSidebarCollapsed, setIsMainSidebarCollapsed] = useState(false);
+  const [showQuickPhotoUpload, setShowQuickPhotoUpload] = useState(false);
 
   return (
     <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100dvh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
@@ -1228,7 +1238,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           setActiveTab('chats');
         }}
         onRefreshConversations={fetchConversations}
+        onQuickPhotoUpload={() => setShowQuickPhotoUpload(true)}
       />
+      {showQuickPhotoUpload && <OsPhotoQuickUploadModal onClose={() => setShowQuickPhotoUpload(false)} />}
 
       {(activeTab === 'chats' || activeTab === 'groups') && (
         <div style={{ flex: 1, minWidth: 0, width: '100%', maxWidth: '100%', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
@@ -1364,6 +1376,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         pendingBadgeCount={pendingBadgeCount}
         groupPendingBadgeCount={groupPendingBadgeCount}
         user={user}
+        onQuickPhotoUpload={() => setShowQuickPhotoUpload(true)}
       />
 
       {/* Global Real-time WhatsApp Sync Progress Taskbar */}

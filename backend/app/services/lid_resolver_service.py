@@ -10,7 +10,7 @@ import asyncpg
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Contact
+from app.models.models import Contact, Conversation, Message
 
 logger = logging.getLogger("lid_resolver_service")
 
@@ -357,6 +357,41 @@ async def resolve_and_bind_contact(
                 contact.dados_adicionais = c_extra
         if resolved_pic and not contact.foto_perfil_url:
             contact.foto_perfil_url = resolved_pic
+
+    # Funde um contato "fantasma" que ficou pra trás de uma resolução de LID que falhou antes (ver
+    # comentário grande em resolve_lid_info sobre o cache de falha) - a falha some do cache depois
+    # de um tempo e a resolução funciona na tentativa seguinte, mas SEM isto aqui o sistema só
+    # passava a usar o contato certo dali em diante, deixando o fantasma (e a conversa dele) presos
+    # pro resto da vida - cliente bifurcado em duas conversas na mesma central (achado em produção,
+    # 29/09/2026 - Ludimila Coferpa, Vendas e E-commerce). Só roda quando ACABAMOS de resolver esse
+    # LID com sucesso pra um telefone real e o contato que vamos usar já é o do telefone real (não
+    # o fantasma), senão entraria em loop de fundir com ele mesmo.
+    if is_lid and real_phone.startswith("55") and contact.telefone == real_phone:
+        phantom_stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id,
+            Contact.id != contact.id,
+            or_(Contact.telefone == clean_digits, Contact.dados_adicionais.like(f'%"{clean_digits}"%'))
+        )
+        phantom = (await session.execute(phantom_stmt)).scalars().first()
+        if phantom:
+            logger.warning(f"[LID MERGE] Contato fantasma #{phantom.id} (LID {clean_digits}) fundido no contato real #{contact.id} ({real_phone}, tenant {tenant_id})")
+            phantom_convs = (await session.execute(select(Conversation).where(Conversation.contact_id == phantom.id))).scalars().all()
+            for pconv in phantom_convs:
+                existing_conv = (await session.execute(select(Conversation).where(
+                    Conversation.contact_id == contact.id, Conversation.whatsapp_number_id == pconv.whatsapp_number_id
+                ))).scalars().first()
+                if existing_conv:
+                    # Já existe uma conversa do contato real nesse mesmo departamento - só migra as
+                    # mensagens do fantasma pra ela (fica tudo numa thread só) e descarta a duplicata.
+                    await session.execute(
+                        Message.__table__.update().where(Message.conversation_id == pconv.id).values(conversation_id=existing_conv.id)
+                    )
+                    await session.delete(pconv)
+                else:
+                    pconv.contact_id = contact.id
+            await session.flush()
+            await session.delete(phantom)
+            await session.flush()
 
     # Non-blocking background avatar caching so DB transactions complete instantly
     target_pic = resolved_pic or profile_pic_url or contact.foto_perfil_url

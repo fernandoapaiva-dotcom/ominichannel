@@ -131,7 +131,7 @@ DEFAULT_AUTOMATION_CONFIG: Dict[str, Any] = {
             "match_mode": "any",
             "keywords": ["qual o pix", "chave pix", "como pagar", "dados bancarios", "pix da loja"],
             "reply_type": "single",
-            "reply_text": "📌 *Dados Oficiais para Pagamento via Pix:*\nChave: contato@servweld.com.br\nFavorecido: SERVWELD / SERVSOLDA\n\nPor favor, envie o comprovante nesta conversa para confirmação.",
+            "reply_text": "📌 *Dados Oficiais para Pagamento via Pix:*\nChave (CNPJ): 11.504.286/0001-69\nFavorecido: SERVWELD\n\nPor favor, envie o comprovante nesta conversa para confirmação.",
             "reply_sequence": [],
             "typing_delay_ms": 2000
         }

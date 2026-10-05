@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { LogOut, RefreshCw, User as UserIcon } from 'lucide-react';
 import { techApiFetch } from '../services/techApi';
-import { MobileBoard, BoardGrid, BoardData } from '../components/TechBoard';
+import { MobileBoard, BoardGrid, BoardData, ChangeStatusFn, SearchBar, SearchResultsList, SearchResultCard } from '../components/TechBoard';
 
 interface TechnicianMe {
   id: number;
@@ -45,7 +45,11 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
       window.removeEventListener('orientationchange', onResize);
     };
   }, []);
-  const useMobileLayout = isNarrow && !isLandscape;
+  // Diferente do quadro administrativo (TechBoard.tsx): aqui usa a lista (rolagem só pra baixo)
+  // sempre que a tela é estreita, mesmo deitada - nunca a grade com colunas lado a lado. Pedido
+  // explícito do usuário (29/09/2026): o técnico "arrastar pro lado" pra ver outro status não é
+  // intuitivo; rolar pra baixo é.
+  const useMobileLayout = isNarrow;
 
   const [zoom, setZoomState] = useState<number>(() => {
     try {
@@ -85,9 +89,55 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   }, [load]);
   useEffect(() => { setStageFilter(''); }, [tab]);
 
+  // Busca por número da O.S., cliente ou equipamento (pedido do usuário, 29/09/2026) - some com o
+  // quadro normal enquanto tem texto digitado. escopo segue a aba atual (meus/geral), igual o resto
+  // da tela.
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResultCard[]>([]);
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setSearchResults([]); return; }
+    setSearching(true);
+    const handle = window.setTimeout(() => {
+      const qs = new URLSearchParams({ q, escopo: tab === 'meus' ? 'meus' : 'geral' });
+      if (empresa) qs.set('empresa', empresa);
+      techApiFetch(`/search?${qs.toString()}`)
+        .then(data => setSearchResults(data.results || []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [query, tab, empresa]);
+
   const handleLogout = () => {
     localStorage.removeItem('tech_token');
     onLogout();
+  };
+
+  // Achado em produção (30/09/2026): dentro do app instalado pelo Google Play (TWA), window.alert
+  // não aparece - o toque no botão de status "não fazia nada" porque a confirmação (window.confirm,
+  // já removida - agora quem confirma é o próprio StatusMenu, ver TechBoard.tsx) e o aviso de
+  // sucesso/erro (window.alert) dependiam de diálogo nativo que esse ambiente não mostra. Toast
+  // próprio substitui os dois.
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 3500);
+    return () => window.clearTimeout(t);
+  }, [toast]);
+
+  // Só disponível na aba "Minhas O.S." - no "Quadro Geral" o técnico está vendo O.S. de outras
+  // pessoas, não faz sentido mudar status por lá (o backend também bloqueia, ver
+  // technician_update_os_status: só deixa se a O.S. bate com o nome do técnico logado).
+  const handleChangeStatus: ChangeStatusFn = async (codos, _empresa, status, label, obs) => {
+    try {
+      const res = await techApiFetch('/os/status', { method: 'POST', body: JSON.stringify({ codos, status, obs }) });
+      setToast(res.message || 'Status atualizado.');
+      load();
+    } catch (err: any) {
+      setToast(err?.message || 'Não foi possível mudar o status.');
+    }
   };
 
   return (
@@ -143,6 +193,9 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
               >{e.label}</button>
             ))}
           </div>
+          <div style={{ padding: '0 16px 10px', flexShrink: 0 }}>
+            <SearchBar query={query} onQueryChange={setQuery} />
+          </div>
         </>
       ) : (
         // Paisagem: altura de sobra é curta (celular deitado) - usuário reportou que o cabeçalho em
@@ -178,6 +231,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
               >{e.label}</button>
             ))}
           </div>
+          <SearchBar query={query} onQueryChange={setQuery} placeholder="Buscar..." />
           <div style={{ flex: 1 }} />
           <button onClick={() => { setLoading(true); load(); }} title="Atualizar" style={{ width: '28px', height: '28px', borderRadius: '7px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
@@ -200,7 +254,15 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
       )}
 
       <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, padding: '0 16px 16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {useMobileLayout ? (
+        {query.trim() ? (
+          <SearchResultsList
+            results={searchResults}
+            loading={searching}
+            showEmpresa={!empresa}
+            showTecnico={tab === 'geral'}
+            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
+          />
+        ) : useMobileLayout ? (
           <MobileBoard
             board={board}
             loading={loading}
@@ -210,6 +272,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             onOpenTech={() => {}}
             showEmpresa={!empresa}
             onOpenCell={() => {}}
+            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
           />
         ) : (
           <BoardGrid
@@ -219,9 +282,16 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             isAdmin={false}
             showEmpresa={!empresa}
             onOpenCell={() => {}}
+            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
           />
         )}
       </div>
+
+      {toast && (
+        <div style={{ position: 'fixed', left: '50%', bottom: '20px', transform: 'translateX(-50%)', zIndex: 10000, maxWidth: 'calc(100% - 32px)', padding: '10px 16px', borderRadius: '10px', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', boxShadow: '0 6px 18px rgba(0,0,0,0.4)', color: 'var(--text-main)', fontSize: '12.5px', fontWeight: 700, textAlign: 'center' }}>
+          {toast}
+        </div>
+      )}
     </div>
   );
 };

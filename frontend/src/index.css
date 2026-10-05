@@ -264,9 +264,16 @@ button {
    MOBILE LAYOUT — WhatsApp-style (≤ 768px)
    ═══════════════════════════════════════════ */
 @media (max-width: 768px) {
-  /* Full-height, no scroll on body */
+  /* Full-height, no scroll on body. 100vh primeiro, de propósito: em navegador/WebView
+     antigo que não entende a unidade "dvh" (achado em produção, 02/10/2026 - celular com
+     Android 9/Chrome mais velho dentro do app TWA do Portal do Técnico: a tela toda ficava
+     em branco porque "height: 100dvh" não era reconhecido e a altura ficava indefinida),
+     a declaração inválida é ignorada e fica valendo o 100vh de cima - só é sobrescrita pelo
+     100dvh (melhor, ajusta com teclado/barra do navegador) em quem já suporta. */
   html, body, #root {
+    height: 100vh !important;
     height: 100dvh !important;
+    max-height: 100vh !important;
     max-height: 100dvh !important;
     width: 100% !important;
     max-width: 100vw !important;
@@ -279,7 +286,9 @@ button {
     flex-direction: column !important;
     width: 100% !important;
     max-width: 100vw !important;
+    height: 100vh !important;
     height: 100dvh !important;
+    max-height: 100vh !important;
     max-height: 100dvh !important;
     overflow: hidden !important;
     position: relative !important;
@@ -310,22 +319,82 @@ button {
   }
 
   /* ── Department Bar (tabs) ─────────────── */
-  /* Compact horizontal tab strip, not big square cards */
-  .dept-bar-mobile {
-    display: flex !important;
+  /* Compact horizontal tab strip, not big square cards. O container de verdade é
+     .dept-bar-outer (não .dept-bar-mobile, que não existia em lugar nenhum do JSX -
+     por isso essas regras nunca pegavam e os botões ficavam no tamanho de card do
+     desktop, 78x72px, espremidos e desorganizados no mobile). */
+  .dept-bar-outer {
     overflow-x: auto !important;
     -webkit-overflow-scrolling: touch !important;
     scrollbar-width: none !important;
-    padding: 0 12px !important;
-    height: 44px !important;
-    min-height: 44px !important;
-    max-height: 44px !important;
+    padding: 6px 10px !important;
+    height: 48px !important;
+    min-height: 48px !important;
+    max-height: 48px !important;
     gap: 6px !important;
-    align-items: center !important;
-    border-bottom: 1px solid var(--border-color) !important;
-    background: var(--bg-secondary) !important;
   }
-  .dept-bar-mobile::-webkit-scrollbar { display: none !important; }
+  .dept-bar-outer::-webkit-scrollbar { display: none !important; }
+
+  /* Pílula compacta (como já estava previsto em tabBtnStyle, só nunca usado) no lugar
+     do card grande de desktop - altura fixa, largura pelo conteúdo, nada de ícone+nome
+     empilhados verticalmente ocupando 72px de altura. */
+  .dept-bar-btn {
+    width: auto !important;
+    height: 34px !important;
+    flex-direction: row !important;
+    padding: 0 12px !important;
+    border-radius: 17px !important;
+    gap: 6px !important;
+  }
+  .dept-bar-btn span {
+    max-width: 90px !important;
+  }
+
+  /* ── Chat header action toolbar (Fechar Protocolo, Transferir, Fixar, etc.) ──
+     No desktop essa barra fica inline no cabeçalho. No mobile ela some por padrão (era
+     isso que comia a altura das mensagens, quebrando em 2-3 linhas) e só aparece como
+     menu suspenso quando o botão de 3 pontinhos (.chat-header-toolbar-trigger) é tocado -
+     igual o WhatsApp faz com o cabeçalho enxuto + menu de overflow. */
+  .chat-header-toolbar-trigger {
+    display: flex !important;
+  }
+
+  .chat-header-toolbar-backdrop {
+    display: block !important;
+  }
+
+  .chat-header-toolbar {
+    display: none !important;
+  }
+
+  .chat-header-toolbar.chat-header-toolbar-open {
+    display: flex !important;
+    position: absolute !important;
+    top: calc(100% + 4px) !important;
+    right: 10px !important;
+    left: 10px !important;
+    background-color: #0f172a !important;
+    border: 1px solid rgba(0, 230, 153, 0.3) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 16px 36px rgba(0,0,0,0.85) !important;
+    padding: 10px !important;
+    z-index: 1000 !important;
+    flex-wrap: wrap !important;
+    justify-content: flex-start !important;
+    max-width: none !important;
+  }
+
+  /* ── Chat header: mais compacto no mobile, pra sobrar altura pras mensagens ── */
+  .chat-area-header {
+    padding: 6px 10px !important;
+    min-height: 0 !important;
+  }
+  /* "Atendente: Fulano" é útil no desktop, mas no celular só ocupa uma segunda linha
+     inteira pra repetir algo que já dá pra ver abrindo a conversa - corta aqui, mantém
+     o telefone (que é o dado realmente novo de relance). */
+  .chat-header-atendente {
+    display: none !important;
+  }
 
   /* ── Chat List ─────────────────────────── */
   .chat-list-column {
@@ -477,12 +546,19 @@ button {
     align-items: center !important;
   }
 
-  .chat-input-textarea {
+  /* O textarea fica dentro de uma div wrapper (position:relative, pro sublinhado de
+     destaque) - é ESSA div que precisa do order/flex/width pra quebrar linha no form
+     flexível, não o textarea (que não é filho direto do .chat-input-form). */
+  .chat-input-wrapper {
     width: 100% !important;
     min-width: 100% !important;
     max-width: 100% !important;
     flex: 1 1 100% !important;
     order: 1 !important;
+  }
+
+  .chat-input-textarea {
+    width: 100% !important;
     font-size: 13.5px !important;
     min-height: 42px !important;
     padding: 8px 12px !important;

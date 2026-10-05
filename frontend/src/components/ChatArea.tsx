@@ -3,7 +3,7 @@ import {
   Send, UserCheck, Headphones, ArrowRightLeft, Bot, Phone, Building,
   AlertCircle, AlertTriangle, Paperclip, X, FileText, Image as ImageIcon, Video, Music, Download, UploadCloud, Eye, ArrowLeft, Camera,
   ChevronLeft, ChevronRight, ChevronDown, Clock, Check, CheckCheck, Pencil, RefreshCw, Upload, MapPin,
-  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, CornerDownRight, Info, Star,
+  QrCode, Share2, Zap, Plus, PanelLeftOpen, PanelLeftClose, CornerUpRight, Reply, Smile, Copy, MoreHorizontal, MoreVertical, CornerDownRight, Info, Star,
   Lock, Unlock, Pin, ZoomIn, ZoomOut, RotateCw, Maximize2, ExternalLink, Calendar, Users, User as UserIcon, AtSign, MessageSquare,
   Globe, Navigation, PhoneMissed, PhoneIncoming, PhoneOutgoing, CalendarPlus
 } from 'lucide-react';
@@ -273,6 +273,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 }) => {
   const [showThreadDropdown, setShowThreadDropdown] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showMobileToolbar, setShowMobileToolbar] = useState(false);
 
   // WhatsApp-style Message Actions, Multi-Select & Forwarding State
   const [activeActionMenuMsgId, setActiveActionMenuMsgId] = useState<number | null>(null);
@@ -2851,10 +2852,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 backgroundColor: 'rgba(0, 0, 0, 0.2)'
               }}>
                 {cleanDigits && (
-                  <a
-                    href={`https://wa.me/${cleanDigits}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Conversar com o contato DENTRO do próprio sistema - achado em produção em
+                      // 05/10/2026: isso mandava pro wa.me (abria o WhatsApp externo), tirando o
+                      // atendente do painel em vez de abrir/criar a conversa aqui. Reaproveita
+                      // handleStartDirectChat (mesma função do "Conversar com participante" em
+                      // grupos): acha a conversa já existente com esse telefone ou cria uma nova.
+                      handleStartDirectChat(cleanDigits, contactName);
+                    }}
                     style={{
                       padding: '10px 8px',
                       display: 'flex',
@@ -2864,15 +2871,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                       fontSize: '12px',
                       fontWeight: '600',
                       color: '#10b981',
-                      textDecoration: 'none',
+                      background: 'transparent',
+                      border: 'none',
                       borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+                      cursor: 'pointer',
                       transition: 'background 0.15s ease'
                     }}
                     onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(16, 185, 129, 0.15)'}
                     onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
                     <MessageSquare size={14} /> Conversar
-                  </a>
+                  </button>
                 )}
                 <button
                   type="button"
@@ -3761,7 +3770,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      <div style={{
+      <div className="chat-area-header" style={{
         padding: '8px 16px',
         minHeight: '64px',
         height: 'auto',
@@ -3956,7 +3965,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <div style={{ display: 'flex', gap: '8px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px', alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={11} /> {formatWhatsAppPhone(conversation.contact?.telefone)}</span>
                 {conversation.assigned_user_name && (
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
+                  <span className="chat-header-atendente" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#60a5fa', fontWeight: '600' }}>
                     <UserCheck size={11} /> Atendente: {conversation.assigned_user_name}
                   </span>
                 )}
@@ -3979,8 +3988,42 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
+        {/* Mobile-only trigger: abre a barra de ações toda como menu suspenso (igual aos 3 pontinhos
+            do WhatsApp), em vez de ocupar linha(s) inteiras no cabeçalho - ver .chat-header-toolbar-*
+            no CSS mobile. Some no desktop, onde a barra já aparece inline normalmente. */}
+        <button
+          type="button"
+          className="chat-header-toolbar-trigger"
+          onClick={() => setShowMobileToolbar(v => !v)}
+          style={{
+            display: 'none',
+            height: '32px',
+            width: '32px',
+            padding: 0,
+            background: 'rgba(255, 255, 255, 0.08)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: '50%',
+            color: 'var(--text-main)',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0
+          }}
+          title="Mais ações"
+        >
+          <MoreVertical size={16} />
+        </button>
+
+        {showMobileToolbar && (
+          <div
+            className="chat-header-toolbar-backdrop"
+            onClick={() => setShowMobileToolbar(false)}
+            style={{ display: 'none', position: 'fixed', inset: 0, zIndex: 999 }}
+          />
+        )}
+
         {/* Right Section: Action Buttons Toolbar (Fully responsive, wrapped, and complete) */}
-        <div style={{
+        <div className={`chat-header-toolbar${showMobileToolbar ? ' chat-header-toolbar-open' : ''}`} style={{
           display: 'flex',
           gap: '5px',
           alignItems: 'center',
@@ -6437,7 +6480,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               );
             })()}
             
-            <div style={{ flex: 1, position: 'relative', minWidth: 0, backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+            <div className="chat-input-wrapper" style={{ flex: 1, position: 'relative', minWidth: 0, backgroundColor: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
             {/* Camada de destaque: fica ATRAS do textarea e desenha o sublinhado ondulado
                 vermelho sob as palavras que o corretor reconhece como erradas. O textarea
                 nao consegue estilizar palavras isoladas, entao o texto e espelhado aqui

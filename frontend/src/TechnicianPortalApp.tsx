@@ -16,6 +16,15 @@ export const TechnicianPortalApp: React.FC = () => {
   const [me, setMe] = useState<TechnicianMe | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Troca o manifesto da aba principal pelo do técnico (nome, ícone e start_url próprios) - sem
+  // isso, instalar/gerar o app (TWA/"Adicionar à tela inicial") a partir de /tecnico pegava o
+  // manifesto do sistema administrativo, com o start_url errado.
+  useEffect(() => {
+    const link = document.querySelector('link[rel="manifest"]');
+    if (link) link.setAttribute('href', '/tecnico-manifest.json');
+    document.title = 'OminiChannel Técnico';
+  }, []);
+
   const checkAuth = async () => {
     const token = localStorage.getItem('tech_token');
     if (!token) {

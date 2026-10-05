@@ -46,6 +46,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, Depends
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
@@ -55,7 +56,8 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.models import (
     Conversation, ConversationStatus, Message, MessageSender, MessageType,
-    WhatsAppNumber, AuthorizedTechnician, CalendarEvent, ClientDocument
+    WhatsAppNumber, AuthorizedTechnician, CalendarEvent, ClientDocument, SoftsystemPendingWrite,
+    SoftsystemPendingFileAttach
 )
 from app.services.lid_resolver_service import resolve_and_bind_contact
 from app.services.automation_service import automation_service, normalize_text, get_greeting
@@ -318,13 +320,30 @@ async def send_and_log_text(
         instance_name=instance_name, number=phone, text=msg_content, pre_send_check=pre_send_check
     )
     if isinstance(send_res, dict) and send_res.get("skipped"):
-        return  # dispensada na última hora: nada foi enviado, nada a registrar
+        return True  # dispensada na última hora: nada foi enviado, nada a registrar
+
+    # Antes disso, qualquer resposta (até uma falha de verdade, ex.: circuit-breaker anti-ban) virava
+    # "sent" no chat - o operador via a mensagem como entregue sem nunca ter saído de verdade
+    # (achado em produção, 29/09/2026: aviso de "finalizada" da O.S. #1815 aparecia no sistema mas
+    # nunca chegou no WhatsApp do cliente). Uma retentativa, mesmo padrão já usado pro PDF em
+    # deliver_late_pdf - só marca "sent" se a Evolution API confirmar de verdade.
+    success = isinstance(send_res, dict) and send_res.get("success")
+    if not success:
+        logger.warning(f"[OS HANDLER INGEST] Falha ao enviar texto pra {phone}, tentando de novo: {send_res}")
+        send_res = await evolution_service.send_text_message(
+            instance_name=instance_name, number=phone, text=msg_content, pre_send_check=pre_send_check
+        )
+        success = isinstance(send_res, dict) and send_res.get("success")
+
+    if not success:
+        logger.error(f"[OS HANDLER INGEST] Falha ao enviar texto pra {phone} após 2 tentativas: {send_res}")
+
     saved_msg = Message(
         conversation_id=conversation.id,
         remetente=MessageSender.SISTEMA,
         conteudo=msg_content,
         tipo=MessageType.TEXTO,
-        status="sent",
+        status="sent" if success else "failed",
         whatsapp_msg_id=extract_evolution_msg_id(send_res) if isinstance(send_res, dict) else None,
         timestamp=datetime.utcnow()
     )
@@ -343,11 +362,12 @@ async def send_and_log_text(
             "remetente": MessageSender.SISTEMA.value,
             "conteudo": msg_content,
             "tipo": MessageType.TEXTO.value,
-            "status": "sent",
+            "status": "sent" if success else "failed",
             "timestamp": saved_msg.timestamp.isoformat() + "Z",
             "agent_name": "Automação OS"
         }
     )
+    return success
 
 
 async def flag_unrecognized_document(
@@ -934,10 +954,11 @@ async def deliver_late_pdf(
     """
     The info+confirmation texts for this O.S. were already sent (by whichever watcher got
     there first) - this call is just the PDF showing up in the shared folder afterwards.
-    If the customer hasn't answered the confirmation yet, quietly attach the real path to
-    the pending marker (it goes out the normal way once they reply). Otherwise (already
-    confirmed/declined, or a human took over) send it now as a standalone courtesy follow-up
-    - nothing about the info/fee texts gets repeated either way.
+    Sent right away as a standalone courtesy follow-up as soon as it's found, regardless of
+    whether the customer already answered - nothing about the info/fee texts gets repeated
+    either way. If the customer hasn't answered the confirmation yet, the real path is also
+    recorded on the pending marker (still needed later for the technician/group notification
+    when they do reply).
     """
     if (conversation.assunto_atual or "").startswith(pending_prefix):
         if pending_prefix == "CONFIRM_OS_PDF:":
@@ -957,8 +978,6 @@ async def deliver_late_pdf(
             os_numero = parts[0] if len(parts) > 0 else str(codos)
             tecnico_phone = parts[2] if len(parts) > 2 else ""
             conversation.assunto_atual = f"CONFIRM_OS_APPROVAL:{os_numero}|{saved_rel_path}|{tecnico_phone}"
-        await db.commit()
-        return True
 
     abs_path = os.path.join("uploads", saved_rel_path)
     with open(abs_path, "rb") as f:
@@ -1016,9 +1035,11 @@ async def ingest_db_event_common(
     razao_social: Optional[str] = None
 ):
     # Ajuste interno: quando o campo "Observação" do evento no Softsystem é só "N/A"/"NA"
-    # (maiúsculo ou minúsculo, sem mais nada no campo), é a loja corrigindo um evento lançado
-    # errado no sistema - não uma mudança de verdade pro cliente. Pedido explícito do usuário
-    # em 24/09/2026: não disparar mensagem nenhuma nesse caso, independente do tipo do evento.
+    # (maiúsculo ou minúsculo, sem mais nada no campo), não dispara NENHUMA mensagem direta pro
+    # cliente sobre esse evento específico - pedido explícito do usuário em 24/09/2026 e reafirmado
+    # em 28/09/2026: vale pra qualquer tipo de evento. Isso é só sobre a mensagem: o quadro (situação
+    # da O.S.) sempre espelha o Softsystem fielmente, com ou sem "N/A" - ver db_watcher._board_events
+    # e os_board.sync_board (O.S. #1676/#1704, 28/09/2026).
     if str(obs or "").strip().lower() in ("n/a", "na"):
         logger.info(
             f"[OS DB EVENT] O.S. #{codos}, evento tipo {cod_tipo_evento}: Observação = '{obs}' - "
@@ -1433,3 +1454,93 @@ async def ingest_nfe_document(
 
     logger.info(f"[NFE DOCUMENT] Nota fiscal #{doc.numero_nota} registrada (contact_id={contact_id}, cnpj={doc.cnpj}, chave={chave_acesso}).")
     return {"status": "success", "id": doc.id, "contact_id": contact_id}
+
+
+@router.get("/pending-writes", dependencies=[Depends(verify_os_handler_key)])
+async def list_pending_writes(empresa: str, db: AsyncSession = Depends(get_db)):
+    """
+    Chamado pelo vigia (tools/os_db_watcher/poll_pending_writes): pedidos de escrita no Softsystem
+    ainda não executados (ex.: mudança de status feita no Portal do Técnico - ver
+    technician_portal.technician_update_os_status). O backend só enfileira porque não alcança o
+    Firebird da loja direto; quem grava de verdade é o vigia, rodando dentro da rede da loja.
+    """
+    rows = (await db.execute(
+        select(SoftsystemPendingWrite).where(
+            SoftsystemPendingWrite.empresa == empresa, SoftsystemPendingWrite.status == "pending"
+        ).order_by(SoftsystemPendingWrite.criado_em)
+    )).scalars().all()
+    return {
+        "writes": [
+            {"id": r.id, "loja": r.loja, "codos": r.codos, "cod_evento": r.cod_evento, "obs": r.obs}
+            for r in rows
+        ]
+    }
+
+
+class PendingWriteAckIn(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+
+@router.post("/pending-writes/{write_id}/ack", dependencies=[Depends(verify_os_handler_key)])
+async def ack_pending_write(write_id: int, payload: PendingWriteAckIn, db: AsyncSession = Depends(get_db)):
+    """Confirma (ou reporta falha) de uma escrita que o vigia acabou de executar no Firebird."""
+    row = await db.get(SoftsystemPendingWrite, write_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Pedido de escrita não encontrado.")
+    row.status = "done" if payload.success else "failed"
+    row.processado_em = datetime.utcnow()
+    row.erro = payload.error
+    await db.commit()
+    if not payload.success:
+        logger.error(f"[PENDING WRITE] Falha ao gravar no Softsystem - O.S. #{row.codos} evento {row.cod_evento}: {payload.error}")
+    return {"status": "success"}
+
+
+@router.get("/pending-file-attaches", dependencies=[Depends(verify_os_handler_key)])
+async def list_pending_file_attaches(empresa: str, db: AsyncSession = Depends(get_db)):
+    """
+    Chamado pelo vigia (poll_pending_file_attachs): fotos/arquivos de O.S. tirados no sistema
+    (câmera do atendente/técnico - ver app/services/os_board_photo_service.py) ainda não anexados
+    na aba "Arquivos" da O.S. no Softsystem.
+    """
+    rows = (await db.execute(
+        select(SoftsystemPendingFileAttach).where(
+            SoftsystemPendingFileAttach.empresa == empresa, SoftsystemPendingFileAttach.status == "pending"
+        ).order_by(SoftsystemPendingFileAttach.criado_em)
+    )).scalars().all()
+    return {
+        "attaches": [
+            {
+                "id": r.id, "loja": r.loja, "codos": r.codos, "source_path": r.source_path,
+                "descricao": r.descricao, "extensao": r.extensao, "operador": r.operador,
+            }
+            for r in rows
+        ]
+    }
+
+
+class PendingFileAttachAckIn(BaseModel):
+    success: bool
+    error: Optional[str] = None
+
+
+@router.post("/pending-file-attaches/{attach_id}/ack", dependencies=[Depends(verify_os_handler_key)])
+async def ack_pending_file_attach(attach_id: int, payload: PendingFileAttachAckIn, db: AsyncSession = Depends(get_db)):
+    """Confirma (ou reporta falha) de um anexo de O.S. que o vigia acabou de gravar no Softsystem."""
+    row = await db.get(SoftsystemPendingFileAttach, attach_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Pedido de anexo não encontrado.")
+    row.status = "done" if payload.success else "failed"
+    row.processado_em = datetime.utcnow()
+    row.erro = payload.error
+    await db.commit()
+    if row.photo_id:
+        from app.models.models import OsBoardPhoto
+        photo = await db.get(OsBoardPhoto, row.photo_id)
+        if photo:
+            photo.softsystem_status = "done" if payload.success else "failed"
+            await db.commit()
+    if not payload.success:
+        logger.error(f"[PENDING FILE ATTACH] Falha ao anexar arquivo no Softsystem - O.S. #{row.codos}: {payload.error}")
+    return {"status": "success"}
