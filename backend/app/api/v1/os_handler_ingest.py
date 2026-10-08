@@ -42,7 +42,7 @@ import base64
 import asyncio
 import logging
 import difflib
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException, Depends
@@ -1156,6 +1156,34 @@ async def ingest_db_event_common(
         return {"status": "queued", "flow": "abertura", "natureza": natureza, "codos": codos, "conversation_id": conversation.id}
 
     if cod_tipo_evento == EVENTO_ORC_AGUARDANDO_APROVACAO:
+        # Esse evento "Orçamento Enviado" pode ter vindo de duas origens: (a) alguém mudou o
+        # status direto na tela do Softsystem (fluxo original, abaixo) ou (b) o nosso próprio
+        # os_report_service.approve_report já gravou esse MESMO evento no Firebird (fila
+        # SoftsystemPendingWrite) depois de já ter mandado o PDF+pergunta de aprovação direto, na
+        # hora da aprovação - sem essa checagem, o vigia detecta o evento que a gente mesmo
+        # gravou como se fosse novo/externo e dispara dispatch_orcamento_messages de novo,
+        # duplicando a mensagem pro cliente (achado em produção em 07/10/2026, O.S. #1966/#1942:
+        # cliente recebeu o PDF 2x) E sobrescrevendo o marcador CONFIRM_OS_APPROVAL com um
+        # pdf_rel_path vazio (esse disparo aqui não conhece o PDF que a gente já mandou), fazendo
+        # o aviso pro grupo "SERV - SOLICITAÇÃO DE O.S." e pro técnico falhar depois, quando o
+        # cliente responde SIM/NÃO (notify_os_approval_result não acha o arquivo).
+        recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
+        our_own_write = (await db.execute(select(SoftsystemPendingWrite).where(
+            SoftsystemPendingWrite.codos == codos,
+            SoftsystemPendingWrite.write_type == "evento",
+            SoftsystemPendingWrite.cod_evento == EVENTO_ORC_AGUARDANDO_APROVACAO,
+            SoftsystemPendingWrite.status == "done",
+            SoftsystemPendingWrite.processado_em.isnot(None),
+            SoftsystemPendingWrite.processado_em >= recent_cutoff,
+        ).order_by(SoftsystemPendingWrite.processado_em.desc()))).scalars().first()
+        if our_own_write:
+            logger.info(
+                f"[OS DB EVENT] O.S. #{codos}: evento 'Orçamento Enviado' já foi disparado pelo "
+                f"nosso próprio fluxo (approve_report, escrita #{our_own_write.id}) - pulando "
+                f"disparo duplicado do fluxo antigo."
+            )
+            return {"status": "skipped_own_dispatch", "codos": codos}
+
         async with _os_dispatch_lock:
             # See the identical comment in the EVENTO_ENTRADA branch above - refresh is
             # required here too, for the same reason.
@@ -1208,6 +1236,28 @@ async def ingest_db_event_common(
         ))
         logger.info(f"[OS DB EVENT] Resultado do orçamento da O.S. #{codos} notificado (aprovado={aprovado})")
         return {"status": "queued", "flow": "approval_result", "codos": codos, "conversation_id": conversation.id}
+
+    # Esse evento pode ter sido gravado pedindo supressão explícita do aviso (ex.: Portal do
+    # Técnico marcando "Finalizada" a partir de "Sem reparo"/"Desmanche e Descarte" - controle
+    # interno da loja, não é progresso de verdade pro cliente acompanhar - pedido do usuário em
+    # 07/10/2026). Mesmo padrão de checagem via SoftsystemPendingWrite já usado acima pro evento
+    # "Orçamento Enviado", mas aqui olhando a flag suppress_customer_notice em vez do tipo do evento.
+    recent_cutoff = datetime.utcnow() - timedelta(minutes=5)
+    suppressed_write = (await db.execute(select(SoftsystemPendingWrite).where(
+        SoftsystemPendingWrite.codos == codos,
+        SoftsystemPendingWrite.write_type == "evento",
+        SoftsystemPendingWrite.cod_evento == cod_tipo_evento,
+        SoftsystemPendingWrite.status == "done",
+        SoftsystemPendingWrite.suppress_customer_notice.is_(True),
+        SoftsystemPendingWrite.processado_em.isnot(None),
+        SoftsystemPendingWrite.processado_em >= recent_cutoff,
+    ).order_by(SoftsystemPendingWrite.processado_em.desc()))).scalars().first()
+    if suppressed_write:
+        logger.info(
+            f"[OS DB EVENT] O.S. #{codos}: evento tipo {cod_tipo_evento} com aviso suprimido "
+            f"(escrita #{suppressed_write.id}, controle interno) - não manda mensagem pro cliente."
+        )
+        return {"status": "suppressed", "codos": codos, "cod_tipo_evento": cod_tipo_evento}
 
     # Qualquer outro tipo de evento: aviso simples de progresso, se houver um configurado.
     msg = await automation_service.build_evento_message(
@@ -1471,7 +1521,7 @@ async def list_pending_writes(empresa: str, db: AsyncSession = Depends(get_db)):
     )).scalars().all()
     return {
         "writes": [
-            {"id": r.id, "loja": r.loja, "codos": r.codos, "cod_evento": r.cod_evento, "obs": r.obs}
+            {"id": r.id, "loja": r.loja, "codos": r.codos, "write_type": r.write_type, "cod_evento": r.cod_evento, "obs": r.obs, "requested_by": r.requested_by}
             for r in rows
         ]
     }

@@ -14,18 +14,18 @@ import difflib
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.os_board import build_board_data
+from app.api.v1.os_board import build_board_data, EVENT_LABELS
 from app.api.v1.technicians import clean_phone_digits
 from app.core.database import get_db
 from app.core.security import create_technician_access_token, get_current_technician, get_password_hash, verify_password
-from app.models.models import AuthorizedTechnician, OsBoardOrder, SoftsystemPendingWrite
+from app.models.models import AuthorizedTechnician, OsBoardOrder, OsTechnicianNote, SoftsystemPendingWrite
 from app.services.automation_service import normalize_text
 
 logger = logging.getLogger("technician_portal")
@@ -148,6 +148,42 @@ async def technician_my_orders(
     return {**board, "technicians": matched, "totals": totals, "total_open": total_open}
 
 
+@router.get("/my-notes")
+async def technician_my_notes(
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """Observações/lembretes ativos deixados pro técnico logado, em qualquer O.S. - pedido do
+    usuário em 07/10/2026, mesmo casamento de nome por aproximação já usado em /my-orders."""
+    rows = (await db.execute(select(OsTechnicianNote).where(
+        OsTechnicianNote.tenant_id == tech.tenant_id, OsTechnicianNote.resolved_at.is_(None)
+    ).order_by(OsTechnicianNote.criado_em.desc()))).scalars().all()
+    tech_name_norm = normalize_text(tech.nome)
+    matched = [n for n in rows if _matches_technician(n.tecnico, tech_name_norm)]
+    return {"notes": [
+        {"id": n.id, "codos": n.codos, "mensagem": n.mensagem, "criado_por": n.criado_por, "criado_em": n.criado_em.isoformat()}
+        for n in matched
+    ]}
+
+
+@router.get("/order/{codos}/notes")
+async def technician_order_notes(
+    codos: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db)
+):
+    """Observações ativas dessa O.S. específica - mesmo formato de os_board.list_order_notes,
+    pra mostrar na tela de detalhe quando o técnico abre a própria O.S."""
+    rows = (await db.execute(select(OsTechnicianNote).where(
+        OsTechnicianNote.tenant_id == tech.tenant_id, OsTechnicianNote.codos == codos,
+        OsTechnicianNote.resolved_at.is_(None)
+    ).order_by(OsTechnicianNote.criado_em.desc()))).scalars().all()
+    return [
+        {"id": n.id, "mensagem": n.mensagem, "tecnico": n.tecnico, "criado_por": n.criado_por, "criado_em": n.criado_em.isoformat()}
+        for n in rows
+    ]
+
+
 @router.get("/search")
 async def technician_search(
     q: str,
@@ -198,18 +234,116 @@ async def technician_upload_order_photo(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-# Estágios que o técnico pode definir pelo app - restrito a só estes três, pedido explícito do
-# usuário em 29/09/2026. De propósito, de fora dessa lista: "Avaliação"/"Execução"/"Aguardando
-# peça" (fluxo normal, lançado no Softsystem), "Orçamento enviado" (é o atendente que manda o
-# orçamento), "Aprovado"/"Não aprovado" (só o cliente decide, respondendo no WhatsApp) e
-# "Desmanche e Descarte" (só automático, por prazo vencido) - ver os_board_followup_service.py e
-# ingest_db_event_common.
-TECHNICIAN_ALLOWED_STATUSES: Dict[int, str] = {
-    6: "Aguardando retirada",
-    11: "Sem conserto",
-    13: "Sem defeito",
-}
+class SendReportRequest(BaseModel):
+    internal_note: str
+    customer_message: str
+
+
+class RejectReportRequest(BaseModel):
+    reason: str
+
+
+@router.get("/order/{codos}/report")
+async def technician_get_order_report(
+    codos: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+):
+    """Rascunho pendente de revisão - ver os_board.get_order_report."""
+    from app.services.os_report_service import get_pending_draft
+    draft = await get_pending_draft(tech.tenant_id, codos)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Nenhum rascunho pendente pra essa O.S.")
+    return draft
+
+
+@router.post("/order/{codos}/draft-report")
+async def technician_draft_order_report(
+    codos: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+):
+    """Rascunho do laudo técnico + mensagem pro cliente - ver os_board.draft_order_report."""
+    from app.services.os_report_service import generate_report_draft
+    try:
+        return await generate_report_draft(tech.tenant_id, codos)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/reject-report")
+async def technician_reject_order_report(
+    codos: int,
+    payload: RejectReportRequest,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+):
+    """Reprova o rascunho com um motivo e pede nova versão - ver os_board.reject_order_report."""
+    from app.services.os_report_service import reject_report
+    try:
+        return await reject_report(tech.tenant_id, codos, payload.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/send-report")
+async def technician_send_order_report(
+    codos: int,
+    payload: SendReportRequest,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+):
+    """Aprova e envia o relatório (já revisado pelo técnico) pro cliente - ver os_board.send_order_report."""
+    from app.services.os_report_service import approve_report
+    try:
+        return await approve_report(
+            tech.tenant_id, codos, payload.internal_note, payload.customer_message, tech.nome or "Técnico"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+EVENTO_ENTRADA = 1
+EVENTO_AVALIACAO = 2
+EVENTO_EXECUCAO = 4
 EVENTO_AGUARDANDO_RETIRADA = 6
+EVENTO_FINALIZADA = 7
+EVENTO_AGUARDANDO_PECA = 8
+EVENTO_SEM_CONSERTO = 11
+EVENTO_SEM_DEFEITO = 13
+EVENTO_DESCARTE = 14
+EVENTO_APROVADO = 15
+
+# Transições permitidas pelo app, por ESTÁGIO ATUAL da O.S. - expandido em 07/10/2026 (antes só
+# tinha 3 opções fixas, iguais em qualquer estágio). De propósito, sem entrada pra "Orçamento
+# enviado" (3), "Aguardando retirada" (6), "Não aprovado"/"Não autorizada" (16/12) e "Finalizada"
+# (7) como ORIGEM - o técnico não tem nenhuma ação disponível a partir desses estágios (confirmado
+# com o usuário).
+TECHNICIAN_ALLOWED_TRANSITIONS: Dict[int, List[int]] = {
+    EVENTO_ENTRADA: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO],
+    EVENTO_AVALIACAO: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO],
+    EVENTO_APROVADO: [EVENTO_EXECUCAO, EVENTO_AGUARDANDO_PECA, EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_AGUARDANDO_PECA: [EVENTO_EXECUCAO],
+    EVENTO_EXECUCAO: [EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_SEM_CONSERTO: [EVENTO_FINALIZADA],
+    EVENTO_SEM_DEFEITO: [EVENTO_FINALIZADA],
+    EVENTO_DESCARTE: [EVENTO_FINALIZADA],
+}
+
+STATUS_LABELS: Dict[int, str] = {
+    EVENTO_EXECUCAO: "Execução",
+    EVENTO_AGUARDANDO_PECA: "Aguardando peça",
+    EVENTO_AGUARDANDO_RETIRADA: "Aguardando retirada",
+    EVENTO_SEM_CONSERTO: "Sem conserto",
+    EVENTO_SEM_DEFEITO: "Sem defeito",
+    EVENTO_FINALIZADA: "Finalizada",
+}
+
+# Transições que gravam o evento no Softsystem só pra controle interno/auditoria da loja - SEM
+# mandar a mensagem automática padrão pro cliente (ver SoftsystemPendingWrite.suppress_customer_notice
+# e o bloco correspondente em ingest_db_event_common). Pedido do usuário em 07/10/2026: "sem
+# reparo/desmanche e descarte -> finalizada, não manda recado pro cliente".
+SILENT_TRANSITIONS = {
+    (EVENTO_SEM_CONSERTO, EVENTO_FINALIZADA),
+    (EVENTO_SEM_DEFEITO, EVENTO_FINALIZADA),
+    (EVENTO_DESCARTE, EVENTO_FINALIZADA),
+}
 
 
 class UpdateOsStatusRequest(BaseModel):
@@ -232,9 +366,6 @@ async def technician_update_os_status(
     resultado - se a escrita falhar de verdade no Softsystem, o próximo ciclo do vigia corrige
     sozinho (sync_board_empresa lê o Firebird de novo e sobrescreve).
     """
-    if payload.status not in TECHNICIAN_ALLOWED_STATUSES:
-        raise HTTPException(status_code=422, detail="Status inválido para alteração pelo Portal do Técnico.")
-
     res = await db.execute(select(OsBoardOrder).where(
         OsBoardOrder.tenant_id == tech.tenant_id, OsBoardOrder.codos == payload.codos
     ))
@@ -242,21 +373,46 @@ async def technician_update_os_status(
     if not orders:
         raise HTTPException(status_code=404, detail=f"O.S. #{payload.codos} não encontrada no quadro.")
 
+    # Qualquer técnico autorizado pode mudar o status de uma O.S. de outro técnico (pedido do
+    # usuário em 07/10/2026 - cobertura em imprevistos, folga do técnico titular etc.) - a
+    # restrição por "é minha O.S.?" foi removida. Em troca, quem mudou fica sempre registrado:
+    # SoftsystemPendingWrite.requested_by (nossa auditoria) E o campo OPERADOR de verdade no
+    # Softsystem (ver tools/os_db_watcher/db_watcher.py::poll_pending_writes), nunca mais um
+    # literal fixo "PORTAL_TECNICO" sem saber quem foi.
     tech_name_norm = normalize_text(tech.nome)
     order = next((o for o in orders if _matches_technician(o.tecnico or "", tech_name_norm) or _matches_technician(o.tecnico2 or "", tech_name_norm)), None)
     if order is None:
-        raise HTTPException(status_code=403, detail="Essa O.S. não está atribuída a você.")
+        order = orders[0]
 
-    # Ressalva pedida pelo usuário (29/09/2026): não deixa marcar "Aguardando retirada" numa O.S.
-    # sem nada lançado (sem histórico de peças/mão de obra) - não faz sentido dizer que o
-    # equipamento está pronto pra retirada se nada foi de fato registrado nela. valor_total é a
-    # soma dos itens da O.S. (ITENSORDEMSERVICO, ver os_db_watcher._board_valores) - a melhor
-    # aproximação disponível aqui pra "tem peça/mão de obra lançada", já que o backend não alcança
-    # o Firebird pra conferir ao vivo.
+    estagio_atual = order.situacao_evento
+    permitidos = TECHNICIAN_ALLOWED_TRANSITIONS.get(estagio_atual, [])
+    if payload.status not in permitidos:
+        nome_atual = EVENT_LABELS.get(estagio_atual, f"estágio {estagio_atual}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"O.S. #{payload.codos} está em \"{nome_atual}\" - não é possível mudar pra esse status a partir daí pelo app."
+        )
+
+    # Ressalva pedida pelo usuário (29/09/2026, reforçada em 07/10/2026): não deixa marcar
+    # "Aguardando retirada" numa O.S. sem nada lançado (sem histórico de peças/mão de obra) - não
+    # faz sentido dizer que o equipamento está pronto pra retirada se nada foi de fato registrado
+    # nela. valor_total é a soma dos itens da O.S. (ITENSORDEMSERVICO, ver
+    # os_db_watcher._board_valores) - a melhor aproximação disponível aqui, já que o backend não
+    # alcança o Firebird pra conferir ao vivo.
     if payload.status == EVENTO_AGUARDANDO_RETIRADA and not order.valor_total:
         raise HTTPException(
             status_code=422,
             detail=f"O.S. #{payload.codos} está sem peças/mão de obra lançadas - não é possível marcar como Aguardando retirada."
+        )
+
+    # Ressalva pedida pelo usuário em 07/10/2026: pulando direto de "Aprovado" pra "Aguardando
+    # retirada" (sem passar pela Execução) precisa de uma observação de verdade explicando o que
+    # foi feito - não pode cair no texto fixo genérico, já que não existe nenhum outro registro do
+    # que foi executado nesse caminho mais curto.
+    if estagio_atual == EVENTO_APROVADO and payload.status == EVENTO_AGUARDANDO_RETIRADA and not (payload.obs or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Pulando direto de \"Aprovado\" pra \"Aguardando retirada\", é obrigatório preencher uma observação explicando o que foi feito."
         )
 
     # A observação vai crua pro Softsystem (é dela que o "Sem conserto" tira o {motivo} da
@@ -267,6 +423,7 @@ async def technician_update_os_status(
     db.add(SoftsystemPendingWrite(
         tenant_id=tech.tenant_id, empresa=order.empresa, loja=order.loja, codos=order.codos,
         cod_evento=payload.status, obs=obs, requested_by=tech.nome,
+        suppress_customer_notice=(estagio_atual, payload.status) in SILENT_TRANSITIONS,
     ))
     order.situacao_evento = payload.status
     order.ultimo_evento_em = now
@@ -276,5 +433,5 @@ async def technician_update_os_status(
 
     return {
         "status": "success",
-        "message": f"O.S. #{payload.codos} marcada como \"{TECHNICIAN_ALLOWED_STATUSES[payload.status]}\". Enviando pro Softsystem...",
+        "message": f"O.S. #{payload.codos} marcada como \"{STATUS_LABELS.get(payload.status, payload.status)}\". Enviando pro Softsystem...",
     }

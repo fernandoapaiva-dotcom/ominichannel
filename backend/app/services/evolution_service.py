@@ -410,8 +410,14 @@ class EvolutionService:
         skip_anti_ban_pacing: bool = False,
         pre_send_check=None
     ) -> Dict[str, Any]:
-        # Circuit Breaker check for high-probation instances (instancia_vendas)
-        if instance_name in ["instancia_vendas"]:
+        # Circuit Breaker check for high-probation instances (instancia_vendas) - não se aplica a
+        # GRUPO (@g.us): o limite horário existe pra evitar disparo em massa pra clientes (risco real
+        # de ban da linha), não pra avisos internos num grupo que esse número já participa - achado em
+        # produção em 07/10/2026 (grupo do financeiro/vendas "não recebia mensagem": na instância de
+        # vendas, se o atendimento normal de clientes já tivesse batido 35 textos na hora, até um aviso
+        # pro próprio grupo interno ficava bloqueado por esse disjuntor, mesmo sem nenhum risco de ban).
+        is_group_target = "@g.us" in str(number)
+        if instance_name in ["instancia_vendas"] and not is_group_target:
             if not self._check_hourly_circuit_breaker(instance_name, max_per_hour=35):
                 logger.warning(f"🚨 [ESCUDO ANTI-BAN] Envio para {number} suspenso pelo circuit-breaker da {instance_name} (limite horário excedido).")
                 return {"success": False, "error": "Disjuntor de segurança anti-ban ativado: limite horário de disparos atingido para proteger a linha."}

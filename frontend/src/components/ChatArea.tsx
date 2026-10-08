@@ -1244,8 +1244,25 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       const compressed = await compressImageIfNeeded(file);
       let newMsg;
       if (compressed.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
-        // Arquivo grande: sobe em partes de 1 MB, cada uma com nova tentativa própria
-        newMsg = await apiUploadChunked(`/conversations/${convId}/media`, compressed, (idx === 0 && captionText) ? captionText : undefined);
+        // Arquivo grande: sobe em partes de 1 MB, várias ao mesmo tempo (ver apiUploadChunked).
+        // onProgress atualiza a % na mesma bolha "sending" - sem isso o atendente não via nenhum
+        // sinal de vida durante o upload inteiro e achava que tinha travado (pedido do usuário em
+        // 05/10/2026, depois de reportar "fica lá um tempão sem mexer").
+        const onChunkProgress = (sent: number, totalChunks: number) => {
+          if (!onOptimisticMessageAdded) return;
+          const pct = Math.round((sent / totalChunks) * 100);
+          onOptimisticMessageAdded({
+            id: tempId,
+            conversation_id: convId,
+            remetente: 'atendente',
+            conteudo: (idx === 0 && captionText) ? `${localUrl}|${captionText}` : localUrl,
+            tipo: tipo as any,
+            timestamp: nowIso,
+            status: 'sending',
+            dados_adicionais: { original_filename: file.name, file_name: file.name, upload_progress_pct: pct }
+          } as unknown as Message, tempId);
+        };
+        newMsg = await apiUploadChunked(`/conversations/${convId}/media`, compressed, (idx === 0 && captionText) ? captionText : undefined, onChunkProgress);
       } else {
         const formData = new FormData();
         formData.append('file', compressed);
@@ -2750,7 +2767,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {displayFileName}
                 </div>
                 <div style={{ fontSize: '11px', color: msg.status === 'failed' ? '#ef4444' : 'var(--text-muted)', marginTop: '2px', fontWeight: msg.status === 'failed' ? 700 : 400 }}>
-                  {msg.status === 'sending' || msg.status === 'pending' ? 'Enviando...' : msg.status === 'failed' ? '⚠️ Falha no envio' : 'Clique para ver detalhes'}
+                  {msg.status === 'sending' || msg.status === 'pending'
+                    ? ((msg.dados_adicionais as any)?.upload_progress_pct != null ? `Enviando... ${(msg.dados_adicionais as any).upload_progress_pct}%` : 'Enviando...')
+                    : msg.status === 'failed' ? '⚠️ Falha no envio' : 'Clique para ver detalhes'}
                 </div>
               </div>
             </div>

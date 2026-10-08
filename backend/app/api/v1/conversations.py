@@ -2467,7 +2467,8 @@ async def upload_media_chunk(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
     if index < 0 or total < 1 or index >= total or total > 400:
-        raise HTTPException(status_code=400, detail="Parte inválida")
+        logger.warning(f"[MEDIA CHUNK] Parte inválida - conversation_id={conversation_id} upload_id={upload_id} index={index} total={total}")
+        raise HTTPException(status_code=400, detail=f"Parte inválida (index={index}, total={total})")
 
     data = await chunk.read()
     if len(data) > 8 * 1024 * 1024:
@@ -3059,10 +3060,10 @@ async def suggest_reply_for_conversation(
     if last_customer_text:
         try:
             from app.services.rag_service import rag_service
-            rag_res = await rag_service.query_relevant_context(current_user.tenant_id, last_customer_text)
+            rag_res = await rag_service.search_context(current_user.tenant_id, last_customer_text)
             rag_context = rag_res if isinstance(rag_res, str) else ""
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[RAG] Falha ao buscar contexto pra sugestão de resposta (conversa {conversation_id}): {e}")
 
     history_dicts = [
         {"remetente": getattr(m.remetente, 'value', str(m.remetente)), "conteudo": m.conteudo or ""}
@@ -3142,10 +3143,10 @@ async def copilot_chat_for_conversation(
         customer_msgs = [m for m in conv.messages if str(m.remetente).lower() == "cliente"]
         if customer_msgs:
             search_query += f" {customer_msgs[-1].conteudo or ''}"
-        rag_res = await rag_service.query_relevant_context(current_user.tenant_id, search_query)
+        rag_res = await rag_service.search_context(current_user.tenant_id, search_query)
         rag_context = rag_res if isinstance(rag_res, str) else ""
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[RAG] Falha ao buscar contexto pro Copiloto IA (conversa {conversation_id}): {e}")
 
     history_dicts = [
         {"remetente": getattr(m.remetente, 'value', str(m.remetente)), "conteudo": m.conteudo or ""}

@@ -16,6 +16,12 @@ logger = logging.getLogger("gemini_service")
 # classify_store_info_intent etc.) continua usando a IA normalmente.
 AI_CONCIERGE_FREEFORM_ENABLED = False
 
+# Dois consumidores de cota que rodavam em TODA mensagem/escalação e não agregavam muito
+# valor no dia a dia (vs. roteamento de setor e o Copiloto Técnico, que ficam ligados) -
+# desligados a pedido do usuário pra sobrar cota pro que importa mais.
+ONBOARDING_SUMMARY_ENABLED = False
+AUDIO_TRANSCRIPTION_ENABLED = False
+
 # =========================================================================
 # CENTRALIZED CUSTOMER NAME SANITIZATION & ANTI-HALLUCINATION DIRECTIVES
 # =========================================================================
@@ -486,7 +492,10 @@ class GeminiService:
                 "- FORNEÇA AJUDA TÉCNICA APROFUNDADA, DIAGNÓSTICOS DE DEFEITOS, ROTEIROS DE TESTE E DADOS DE MANUAIS / DIAGRAMAS ELETRÔNICOS.\n"
                 "- Auxilie em: medições com multímetro (tensão, diodo, continuidade), interpretação de códigos de erro (ex: falhas de barramento DC, erro 11, IGBTs, resistores de gate, fontes auxiliares +15V/-15V/+5V, sensores Hall, relés de pré-carga, optoacopladores).\n"
                 "- Identifique pinagens de conectores (ex: J18, J19), estado de chicotes e oriente o passo a passo seguro para o conserto do equipamento.\n"
-                "- Seja um Orientador Técnico Master experiente, técnico e prático de bancada.\n"
+                "- Seja um Orientador Técnico Master experiente, técnico e prático de bancada - converse como um ENGENHEIRO de equipamentos de solda que entende o universo inteiro (MIG/MAG, TIG DC, TIG AC/DC, inversores, retificadores, transformadores, oxicombustível, corte plasma, spotter/repuxadeira, carregador de bateria, regulador de gás, maçarico, tartaruga, alimentador de arame, ponteadeira) de ponta a ponta: arquitetura, princípio de funcionamento, terminologia correta, componentes típicos e modos de falha comuns.\n"
+                "- Se o técnico pedir um diagrama, esquema elétrico, manual ou documento específico de um equipamento (ex: 'manda o diagrama da LHN 240', 'tem o manual da MDC?'), preencha o campo \"documento_solicitado\" com os termos de busca (marca, modelo e tipo de documento) e avise no texto da resposta que o arquivo vem em seguida. Se não tiver certeza de qual documento, deixe \"documento_solicitado\" como null e pergunte qual marca/modelo exato.\n"
+                "- 📚 DOIS NÍVEIS DE CONHECIMENTO NA BASE RAG - trate cada um com a confiança certa: (1) DOCUMENTOS DE FUNDAMENTOS (fonte tipo \"Fundamentos — <categoria>\", sem marca/modelo específico): princípios gerais de engenharia da categoria do equipamento (como um MIG/MAG funciona, arquitetura de um inversor, o que é IGBT/barramento DC, defeitos típicos da categoria) - pode e deve usar esse conhecimento com confiança e profundidade, é conhecimento de engenharia consolidado, não é alucinação; (2) MANUAIS DE MARCA/MODELO ESPECÍFICO (fonte com nome de arquivo real do fabricante): fatos concretos de UM equipamento exato (pinagem, valor de componente, código de erro daquele modelo) - aqui a regra de ouro abaixo vale sempre.\n"
+                "- 🚫 ANTI-ALUCINAÇÃO DE COMPONENTE/MODELO (achado em produção em 07/10/2026 - a IA descreveu um componente que a máquina do técnico NÃO TEM, misturando um modelo parecido): cada trecho da BASE DE CONHECIMENTO RAG abaixo vem marcado com \"[Fonte: nome_do_arquivo]\" na frente. ANTES de citar qualquer componente, pinagem, valor de tensão/resistência ou passo de teste ESPECÍFICO DE UM MODELO, confira que a fonte citada é EXPLICITAMENTE do mesmo MODELO que o técnico perguntou (confira o número do modelo no nome do arquivo, não só a família/marca - ex: \"LHN 220\" não é \"LHN 240\"). Se nenhuma fonte recuperada bater com o modelo exato perguntado, ou se o modelo não ficou claro na pergunta, NÃO GENERALIZE um fato específico de modelo nem complete com suposição de equipamento parecido - diga claramente que não tem o manual desse modelo específico na base e peça pro técnico confirmar marca/modelo (ou peça o documento via \"documento_solicitado\"). Isso NÃO impede responder com os princípios gerais da categoria (nível 1 acima) enquanto confirma o modelo exato.\n"
                 "=========================================================================================\n"
             )
         else:
@@ -541,6 +550,7 @@ class GeminiService:
             "  \"transferir_setor\": null,\n"
             "  \"enviar_localizacao\": false,\n"
             "  \"enviar_pix\": false,\n"
+            "  \"documento_solicitado\": null,\n"
             "  \"dados_extraidos\": {\n"
             "    \"nome_cliente\": null,\n"
             "    \"resumo_necessidade\": \"resumo do que o cliente precisa\"\n"
@@ -584,7 +594,10 @@ class GeminiService:
 
         # Anti-Loop & Anti-Spam Fallback Shield:
         # Se o protocolo já foi anunciado ou se já houve mensagens anteriores, NUNCA repete saudação de boas-vindas.
-        if not should_announce_protocol or not had_empty_history:
+        if is_technician_or_admin:
+            fallback_text = "Recebi sua mensagem! A IA de apoio técnico está temporariamente indisponível (erro de conexão) — tenta de novo em instantes."
+            escalar_apos_falha = False
+        elif not should_announce_protocol or not had_empty_history:
             fallback_text = "Recebi sua mensagem! Já estou encaminhando seu atendimento para a nossa equipe dar continuidade. Um momento, por favor!"
             escalar_apos_falha = True
         else:
@@ -599,10 +612,11 @@ class GeminiService:
             "transferir_setor": None,
             "nova_memoria": memory_summary or "",
             "finalizar_conversa": False,
-            "enviar_localizacao": False
+            "enviar_localizacao": False,
+            "documento_solicitado": None
         }
 
-        if not client or not AI_CONCIERGE_FREEFORM_ENABLED:
+        if not client or (not is_technician_or_admin and not AI_CONCIERGE_FREEFORM_ENABLED):
             return default_res
 
         models_to_try = [primary_model] if primary_model in ["gemini-3.1-flash-lite", "gemini-3.6-flash"] else ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
@@ -653,6 +667,7 @@ class GeminiService:
                 transferir_setor = None
                 enviar_localizacao = False
                 enviar_pix = False
+                documento_solicitado = None
                 nova_memoria = memory_summary or ""
 
                 if isinstance(parsed_json, dict):
@@ -663,6 +678,8 @@ class GeminiService:
                     transferir_setor = parsed_json.get("transferir_setor") or None
                     enviar_localizacao = bool(parsed_json.get("enviar_localizacao"))
                     enviar_pix = bool(parsed_json.get("enviar_pix"))
+                    if is_technician_or_admin:
+                        documento_solicitado = parsed_json.get("documento_solicitado") or None
                     
                     dados_ext = parsed_json.get("dados_extraidos") or {}
                     if isinstance(dados_ext, dict):
@@ -724,6 +741,7 @@ class GeminiService:
                     "finalizar_conversa": False,
                     "enviar_localizacao": enviar_localizacao,
                     "enviar_pix": enviar_pix,
+                    "documento_solicitado": documento_solicitado,
                     "contexto_enviado": contexto_atendimento
                 }
 
@@ -830,11 +848,12 @@ class GeminiService:
         if task_type == "defect_inspection":
             image_prompt = (
                 "Você é um técnico especialista em equipamentos de solda e corte da empresa Servweld.\n"
-                "Analise detalhadamente a foto do equipamento ou peça enviada pelo cliente.\n"
+                "Analise detalhadamente a foto do equipamento, placa ou peça enviada.\n"
                 "Identifique:\n"
-                "1. O tipo de equipamento, componente ou peça visível (tocha, cabo, bocal, máquina, etc.).\n"
+                "1. O tipo de equipamento, componente ou peça visível (tocha, cabo, bocal, placa, transistor, IGBT, conector, máquina, etc.) - inclua marca/modelo/código de peça se estiver legível na foto.\n"
                 "2. Quaisquer defeitos visíveis, danos, rompimentos, queimaduras, desgaste ou anomalias.\n"
-                "3. Um diagnóstico técnico inicial claro em 2 a 3 frases com a recomendação prática.\n"
+                "3. Se a foto mostrar um display de multímetro, osciloscópio ou painel da máquina com algum valor/código de erro visível, leia e transcreva exatamente o valor/código mostrado.\n"
+                "4. Um diagnóstico técnico inicial claro em 2 a 3 frases com a recomendação prática (ex: próxima medição a fazer, componente a verificar).\n"
                 "Se a imagem estiver totalmente ilegível, escura, corrompida ou não for de equipamento/ferramenta, retorne: [IMAGEM_ILEGIVEL]"
             )
         else:
@@ -1200,6 +1219,206 @@ class GeminiService:
                 await asyncio.sleep(0.3)
 
         return f"Olá! Recebi sua mensagem e já estou verificando o seu caso para te ajudar."
+
+    async def generate_customer_diagnostic_report(
+        self,
+        customer_name: str,
+        codos: int,
+        equipamento: str,
+        pecas: List[Dict[str, Any]],
+        valor_total: Optional[float],
+        tecnico_notas: Optional[str] = None,
+        rag_context: Optional[str] = None,
+        reject_reason: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Texto do DIAGNÓSTICO TÉCNICO que vai no corpo do PDF de orçamento entregue ao cliente -
+        não é mais uma mensagem de chat/WhatsApp (corrigido em 07/10/2026: o PDF saía com "Olá,
+        tudo bem?" e pergunta de aprovação dentro do texto, só repetindo em prosa o que já tava
+        na tabela de peças). Pedido do usuário: o diagnóstico deve ter a MESMA profundidade
+        técnica do Copiloto Técnico (explicar causa provável do defeito, serviço realizado,
+        cuidados futuros) em vez de só "identificamos necessidade de troca de X" genérico -
+        grounded nos manuais técnicos (RAG) quando disponíveis. A saudação/pergunta de aprovação
+        viram mensagens de WhatsApp fixas, separadas, mandadas junto com o PDF (ver
+        os_report_service.approve_report) - não fazem mais parte deste texto.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+        clean_name = sanitize_customer_name(customer_name)
+
+        pecas_text = "\n".join(
+            f"- {p.get('descricao', '')} (qtd: {p.get('quantidade') or 1})"
+            for p in pecas
+        ) or "(nenhuma peça/serviço lançado ainda)"
+        rag_prompt = f"\nMANUAIS TÉCNICOS RELACIONADOS (RAG):\n{rag_context}\n" if rag_context else ""
+        reject_prompt = (
+            f"\nAJUSTE PEDIDO POR QUEM REVISOU A VERSÃO ANTERIOR: {reject_reason}\n"
+            "Leve esse pedido em conta ao reescrever o texto.\n"
+            if reject_reason else ""
+        )
+
+        prompt = (
+            "Você é um engenheiro técnico da Servweld/Servsolda (Equipamentos de Solda, Corte e "
+            "Assistência Técnica) escrevendo a seção 'Diagnóstico' de um PDF de orçamento formal "
+            "entregue ao cliente - NÃO é uma mensagem de chat/WhatsApp (sem saudação, sem perguntar "
+            "se o cliente aprova - isso é tratado em outra parte do processo), é texto de relatório "
+            "técnico mesmo.\n\n"
+            f"{CUSTOMER_NAME_ANTI_HALLUCINATION_DIRECTIVE}\n"
+            "DUAS REGRAS DIFERENTES, não confunda:\n"
+            "1) Sobre OS FATOS DESTE ATENDIMENTO (o que foi encontrado nesta O.S., quais peças, "
+            "histórico específico do cliente): use APENAS os dados abaixo. NUNCA invente peças, "
+            "valores ou histórico que não estejam explícitos.\n"
+            "2) Sobre CONHECIMENTO TÉCNICO GERAL do tipo de equipamento/defeito (por que esse "
+            "componente costuma falhar, o mecanismo da falha, cuidados padrão de manutenção "
+            "preventiva): aqui você DEVE explicar com profundidade técnica real - use os manuais "
+            "(RAG) quando disponíveis, ou conhecimento de engenharia consolidado sobre esse tipo de "
+            "equipamento/componente. É isso que dá valor ao diagnóstico - não escreva só "
+            "'identificamos a necessidade de troca de X' sem explicar o porquê técnico.\n\n"
+            f"O.S.: #{codos}\n"
+            f"EQUIPAMENTO: {equipamento or 'não informado'}\n"
+            f"NOTAS DO TÉCNICO (se houver): {tecnico_notas or '(técnico não deixou observação além das peças lançadas)'}\n"
+            f"PEÇAS/SERVIÇOS LANÇADOS NESTA O.S.:\n{pecas_text}\n"
+            f"{rag_prompt}"
+            f"{reject_prompt}\n"
+            "IMPORTANTE - confira o que está realmente lançado acima antes de escrever: nem toda "
+            "O.S. envolve troca de peça física. Às vezes é só prestação de serviço (ex: limpeza, "
+            "calibração, revisão, diagnóstico, assistência técnica) sem nenhuma peça substituída - "
+            "nesse caso NÃO invente uma peça com defeito nem explique 'causa de falha de peça' que "
+            "não existe; descreva o que foi verificado/executado no atendimento.\n\n"
+            "ESCREVA o texto do Diagnóstico, em português, em registro técnico/terceira pessoa "
+            "('foi constatado...', 'identificamos...', 'o equipamento apresentava...'), cobrindo:\n"
+            "1. O que foi constatado no equipamento, baseado nos dados acima.\n"
+            "2. SE houver peça física lançada: a causa técnica provável do problema e por que essa "
+            "peça precisou ser substituída/reparada - explicação de engenharia de verdade, não "
+            "genérica. SE for só serviço/mão de obra (sem peça física): o que foi verificado, "
+            "testado ou executado no equipamento, e o resultado encontrado.\n"
+            "3. O serviço realizado ou a ser realizado.\n"
+            "4. Se fizer sentido pro tipo de atendimento, uma orientação curta de cuidado futuro pro "
+            "cliente evitar problemas semelhantes.\n"
+            "NÃO inclua saudação, NÃO liste peças/valores (já aparecem numa tabela separada do "
+            "PDF), NÃO pergunte se o cliente aprova. NÃO use notação matemática/LaTeX (nunca "
+            "escreva algo como '$V_{CE}$' ou '$V_{GE}$') nem símbolos de fórmula - escreva grandezas "
+            "técnicas por extenso ou em texto simples (ex: 'tensão Coletor-Emissor (VCE)', não "
+            "'$V_{CE}$'). NÃO use markdown (sem **negrito**, # títulos etc.) - texto corrido simples. "
+            "Retorne APENAS o texto corrido do diagnóstico, sem introduções nem comentários."
+        )
+
+        if not client:
+            return (
+                f"Equipamento {equipamento or ''} recebido para análise técnica referente à O.S. "
+                f"#{codos}. {pecas_text}"
+            )
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as e:
+                logger.warning(f"Error generating customer diagnostic report with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return (
+            f"Equipamento {equipamento or ''} recebido para análise técnica referente à O.S. "
+            f"#{codos}. {pecas_text}"
+        )
+
+    async def generate_internal_diagnostic_note(
+        self,
+        codos: int,
+        equipamento: str,
+        pecas: List[Dict[str, Any]],
+        tecnico_notas: Optional[str] = None,
+        rag_context: Optional[str] = None,
+        reject_reason: Optional[str] = None,
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None
+    ) -> str:
+        """
+        Laudo técnico INTERNO (não é mensagem pro cliente) - vai direto pro campo "Observação"
+        da O.S. no Softsystem (EQUIPORDEMSERVICO.OBS, até 2000 caracteres). Descreve o problema
+        encontrado a partir das peças/componentes lançados, em registro técnico de terceira
+        pessoa, sem saudação nem tom de atendimento. Corrige bug achado em produção em
+        07/10/2026 (O.S. #1987): antes esse campo recebia por engano o MESMO texto da mensagem
+        pro cliente (generate_customer_diagnostic_report) - usuário apontou que o campo
+        Observação é pra descrever o defeito técnico, não repetir a conversa com o cliente.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        primary_model = tenant_gemini_model_name or "gemini-3.1-flash-lite"
+
+        pecas_text = "\n".join(
+            f"- {p.get('descricao', '')} (qtd: {p.get('quantidade') or 1})"
+            for p in pecas
+        ) or "(nenhuma peça/serviço lançado ainda)"
+        rag_prompt = f"\nMANUAIS TÉCNICOS RELACIONADOS (RAG):\n{rag_context}\n" if rag_context else ""
+        reject_prompt = (
+            f"\nAJUSTE PEDIDO POR QUEM REVISOU A VERSÃO ANTERIOR: {reject_reason}\n"
+            "Leve esse pedido em conta ao reescrever o laudo.\n"
+            if reject_reason else ""
+        )
+        fallback = (
+            f"Diagnóstico com base nos itens lançados: {pecas_text}" if pecas else
+            "Diagnóstico técnico em elaboração."
+        )
+
+        prompt = (
+            "Você é um técnico da Servweld (Equipamentos de Solda, Corte e Assistência Técnica) "
+            "escrevendo o LAUDO TÉCNICO INTERNO de uma O.S., que vai direto pro campo 'Observação' "
+            "da ordem de serviço no sistema Softsystem - é um registro técnico interno pra outros "
+            "técnicos e pro histórico do equipamento, NÃO é uma mensagem pro cliente.\n\n"
+            "REGRA MAIS IMPORTANTE: Use APENAS os dados abaixo. NUNCA invente causas técnicas, peças "
+            "ou valores que não estejam explícitos. Se as notas do técnico forem vagas, descreva só o "
+            "que os itens lançados já indicam, sem inventar o motivo exato da falha. Nem toda O.S. "
+            "envolve troca de peça física - às vezes é só prestação de serviço (limpeza, calibração, "
+            "revisão, diagnóstico); nesse caso descreva o que foi verificado/executado, sem forçar "
+            "uma narrativa de 'peça com defeito' que não existe nos dados.\n\n"
+            f"O.S.: #{codos}\n"
+            f"EQUIPAMENTO: {equipamento or 'não informado'}\n"
+            f"NOTAS DO TÉCNICO (se houver): {tecnico_notas or '(técnico não deixou observação além das peças lançadas)'}\n"
+            f"PEÇAS/SERVIÇOS LANÇADOS:\n{pecas_text}\n"
+            f"{rag_prompt}"
+            f"{reject_prompt}\n"
+            "ESCREVA um laudo técnico curto (até uns 500 caracteres, direto ao ponto), em português, "
+            "em terceira pessoa / registro técnico (ex: 'Constatado...', 'Identificada necessidade "
+            "de...', 'Equipamento apresentava...'). SEM saudação, SEM se dirigir ao cliente, SEM "
+            "perguntar nada - é uma anotação técnica interna, não uma conversa. SEM notação "
+            "matemática/LaTeX (nunca '$V_{CE}$') nem markdown (sem **negrito**) - texto simples. "
+            "Retorne APENAS o texto do laudo, sem introduções nem comentários."
+        )
+
+        if not client:
+            return fallback
+
+        models_to_try = [primary_model]
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
+
+        for m_name in models_to_try:
+            try:
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=m_name,
+                    contents=prompt
+                )
+                if response and response.text:
+                    return response.text.strip()[:2000]
+            except Exception as e:
+                logger.warning(f"Error generating internal diagnostic note with '{m_name}': {e}")
+                await asyncio.sleep(0.3)
+
+        return fallback
 
     async def generate_copilot_consultation(
         self,

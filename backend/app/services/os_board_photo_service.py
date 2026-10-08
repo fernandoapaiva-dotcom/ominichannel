@@ -127,13 +127,17 @@ async def _is_first_in_recent_batch(tenant_id: int, codos: int, exclude_photo_id
         return not count
 
 
-def _build_caption(is_first: bool, is_image: bool, nome: str, codos: int, filename: str) -> str:
-    if is_image:
+def _build_caption(is_first: bool, media_type: str, nome: str, codos: int, filename: str) -> str:
+    if media_type == "image":
         if is_first:
             return f"📷 Olá, {nome}! Segue uma foto do seu equipamento na nossa assistência técnica (O.S. *#{codos}*)."
         return ""  # 2ª+ foto da mesma leva: sem legenda repetida, a imagem já fala por si
+    if media_type == "video":
+        if is_first:
+            return f"🎥 Olá, {nome}! Segue um vídeo do seu equipamento na nossa assistência técnica (O.S. *#{codos}*)."
+        return ""
     # Documento (PDF, ex. nota fiscal de garantia, manual, etc.) - sempre identifica o que é, porque
-    # ao contrário de uma foto, sem isso o cliente não sabe do que se trata.
+    # ao contrário de uma foto/vídeo, sem isso o cliente não sabe do que se trata.
     if is_first:
         return f"📄 Olá, {nome}! Segue um documento referente à sua Ordem de Serviço *#{codos}*: {filename}"
     return f"📄 {filename}"
@@ -162,9 +166,9 @@ async def _send_whatsapp(photo_id: int, tenant_id: int, order: dict, file_path: 
             b64 = base64.b64encode(f.read()).decode("utf-8")
 
         primeiro_nome = (order.get("contato_nome") or "Cliente").strip().split()[0].title()
-        media_type = "image" if mimetype.startswith("image/") else "document"
+        media_type = "image" if mimetype.startswith("image/") else ("video" if mimetype.startswith("video/") else "document")
         is_first = await _is_first_in_recent_batch(tenant_id, order["codos"], photo_id)
-        caption = _build_caption(is_first, media_type == "image", primeiro_nome, order["codos"], original_filename or "arquivo")
+        caption = _build_caption(is_first, media_type, primeiro_nome, order["codos"], original_filename or "arquivo")
         send_res = await evolution_service.send_media_message(
             instance_name=wn.instancia_evolution_api, number=phone, media_type=media_type,
             mimetype=mimetype, media=b64, file_name=original_filename or "foto.jpg",
@@ -192,7 +196,7 @@ async def _send_whatsapp(photo_id: int, tenant_id: int, order: dict, file_path: 
             msg = Message(
                 conversation_id=conversation.id, remetente=MessageSender.SISTEMA,
                 conteudo=f"/{file_path.replace(os.sep, '/')}",
-                tipo=MessageType.IMAGEM if media_type == "image" else MessageType.ARQUIVO,
+                tipo=MessageType.IMAGEM if media_type == "image" else (MessageType.VIDEO if media_type == "video" else MessageType.ARQUIVO),
                 status="sent", whatsapp_msg_id=extract_evolution_msg_id(send_res), timestamp=datetime.utcnow(),
             )
             db.add(msg)

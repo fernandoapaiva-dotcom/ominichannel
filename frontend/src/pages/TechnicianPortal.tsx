@@ -1,7 +1,48 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { LogOut, RefreshCw, User as UserIcon } from 'lucide-react';
+import { LogOut, RefreshCw, User as UserIcon, Bell } from 'lucide-react';
 import { techApiFetch } from '../services/techApi';
-import { MobileBoard, BoardGrid, BoardData, ChangeStatusFn, SearchBar, SearchResultsList, SearchResultCard } from '../components/TechBoard';
+import { MobileBoard, BoardGrid, BoardData, ChangeStatusFn, SearchBar, SearchResultsList, SearchResultCard, colorForTechnician, titleCase } from '../components/TechBoard';
+
+interface MyNote { id: number; codos: number; mensagem: string; criado_por: string; criado_em: string }
+
+// Letreiro com os recados pendentes pro técnico logado - mesmo estilo "breaking news" do Quadro
+// Geral (NotesTicker, em TechBoard.tsx), pedido do usuário em 07/10/2026 ("esses recados eu quero
+// passando igual o app principal fica mais elegante"). Fonte de dados é só a deste técnico
+// (myNotes, já carregado/repolido pelo componente pai), por isso não precisa de fetch/WS próprio.
+const MyNotesTicker: React.FC<{ notes: MyNote[] }> = ({ notes }) => {
+  if (notes.length === 0) return null;
+
+  const totalChars = notes.reduce((sum, n) => sum + n.mensagem.length + n.criado_por.length + 25, 0);
+  const duration = Math.max(20, Math.round(totalChars * 0.13));
+
+  const renderItems = (keyPrefix: string) => notes.map(n => (
+    <span key={`${keyPrefix}-${n.id}`} style={{ paddingRight: '36px' }}>
+      <span style={{ color: 'var(--text-muted, #94a3b8)', fontWeight: 700 }}>O.S. #{n.codos}:</span>
+      {' '}{n.mensagem}
+      <span style={{ color: 'var(--text-muted, #94a3b8)', fontWeight: 400 }}>
+        {' — '}<b style={{ color: colorForTechnician(n.criado_por) }}>{titleCase(n.criado_por)}</b>, {new Date(n.criado_em).toLocaleDateString('pt-BR')}
+      </span>
+      <span style={{ color: 'var(--text-muted, #94a3b8)' }}>     •</span>
+    </span>
+  ));
+
+  return (
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 20001, height: '34px', background: 'rgba(15,23,42,0.97)', borderTop: '1px solid rgba(250,204,21,0.4)', display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', padding: '0 12px', height: '100%', background: '#b91c1c', color: '#fff', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <Bell size={12} /> Avisos
+      </div>
+      <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', position: 'relative', height: '100%' }}>
+        <div
+          className="animate-ticker"
+          style={{ display: 'inline-block', whiteSpace: 'nowrap', fontSize: '12.5px', fontWeight: 600, color: '#e2e8f0', lineHeight: '34px', animationDuration: `${duration}s` }}
+        >
+          <span style={{ paddingRight: '70px' }}>{renderItems('a')}</span>
+          <span style={{ paddingRight: '70px' }}>{renderItems('b')}</span>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 interface TechnicianMe {
   id: number;
@@ -65,6 +106,16 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
 
   useEffect(() => {
     techApiFetch('/me').then(setMe).catch(() => {});
+  }, []);
+
+  // Observações/lembretes que o dono deixou pro técnico logado, em qualquer O.S. - pedido do
+  // usuário em 07/10/2026 ("no app dele aparecem todas, quantas tiverem").
+  const [myNotes, setMyNotes] = useState<{ id: number; codos: number; mensagem: string; criado_por: string; criado_em: string }[]>([]);
+  useEffect(() => {
+    const loadNotes = () => techApiFetch('/my-notes').then(data => setMyNotes(data?.notes || [])).catch(() => {});
+    loadNotes();
+    const interval = window.setInterval(loadNotes, 60000);
+    return () => window.clearInterval(interval);
   }, []);
 
   const load = useCallback(async () => {
@@ -146,6 +197,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
     // padrão (região interna com overflow, não a página inteira) também é usado no retrato agora, em
     // vez do scroll nativo da página que não deu certo.
     <div style={{ height: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary)', boxSizing: 'border-box', overflow: 'hidden' }}>
+      <MyNotesTicker notes={myNotes} />
       {useMobileLayout ? (
         // Retrato: sobra altura de sobra, cabeçalho em 3 linhas confortáveis pro dedo.
         <>
@@ -260,7 +312,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             loading={searching}
             showEmpresa={!empresa}
             showTecnico={tab === 'geral'}
-            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
+            onChangeStatus={handleChangeStatus}
           />
         ) : useMobileLayout ? (
           <MobileBoard
@@ -272,7 +324,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             onOpenTech={() => {}}
             showEmpresa={!empresa}
             onOpenCell={() => {}}
-            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
+            onChangeStatus={handleChangeStatus}
           />
         ) : (
           <BoardGrid
@@ -282,7 +334,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
             isAdmin={false}
             showEmpresa={!empresa}
             onOpenCell={() => {}}
-            onChangeStatus={tab === 'meus' ? handleChangeStatus : undefined}
+            onChangeStatus={handleChangeStatus}
           />
         )}
       </div>

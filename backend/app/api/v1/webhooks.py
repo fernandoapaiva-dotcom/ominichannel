@@ -5,6 +5,9 @@ import uuid
 import os
 import re
 import time
+import shutil
+import mimetypes
+import unicodedata
 import httpx
 from typing import Optional, Dict, Any, Set
 from datetime import datetime, timedelta
@@ -25,13 +28,13 @@ from app.models.models import (
 
 from app.services.evolution_service import evolution_service
 from app.services.whatsapp_sync_service import whatsapp_sync_service
-from app.services.gemini_service import gemini_service, sanitize_customer_name, is_bot_or_menu_message
+from app.services.gemini_service import gemini_service, sanitize_customer_name, is_bot_or_menu_message, AUDIO_TRANSCRIPTION_ENABLED, ONBOARDING_SUMMARY_ENABLED
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 from app.services.protocol_service import generate_daily_protocol
 from app.services.distribution_service import distribution_service
 from app.services.business_hours_service import business_hours_service
-from app.api.v1.conversations import generate_bacen_pix_string, extract_evolution_msg_id
+from app.api.v1.conversations import generate_bacen_pix_string, extract_evolution_msg_id, MEDIA_BY_URL_THRESHOLD_BYTES
 from app.api.websockets import manager as ws_manager
 from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
 from app.services.whatsapp_sync_service import parse_quoted_context
@@ -570,6 +573,10 @@ def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
                 pass
     return None
 
+TECH_TRIGGER_WORD = "tecnico"
+TECH_SESSION_SECONDS = 3600
+
+
 async def check_is_authorized_technician_or_admin(db: AsyncSession, tenant_id: int, phone_number: str) -> tuple[bool, Optional[str]]:
     if not phone_number:
         return False, None
@@ -605,6 +612,242 @@ async def check_is_authorized_technician_or_admin(db: AsyncSession, tenant_id: i
 
 async def assign_least_busy_attendant(db: AsyncSession, tenant_id: int, whatsapp_number_id: int) -> Optional[User]:
     return await distribution_service.assign_least_loaded_attendant(db, tenant_id, whatsapp_number_id)
+
+
+_PAGE_SEARCH_STOPWORDS = {
+    "para", "com", "uma", "umas", "uns", "como", "qual", "onde", "esta", "essa", "esse",
+    "manda", "mandar", "envia", "enviar", "tem", "tenho", "voce", "pode", "preciso",
+    "quero", "documento", "arquivo", "manual", "favor", "por",
+}
+
+
+_DIAGRAM_INTENT_WORDS = ("esquema", "esquemas", "diagrama", "diagramas", "circuito", "circuitos", "eletrico", "eletrica", "eletricos", "eletricas")
+
+
+def _fold(text: str) -> str:
+    """Sem acento, minúsculo - pra comparar 'elétrico' com 'eletrico' sem errar."""
+    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii').lower()
+
+
+def _stem5(word: str) -> str:
+    """Primeiros 5 caracteres (já sem acento) - cobre a maioria dos plurais/variações do
+    português sem precisar de um stemmer de verdade (ex: 'esquema'/'esquemas', 'eletrico'/
+    'eletricos' viram o mesmo radical 'esque'/'eletr')."""
+    return _fold(word)[:5]
+
+
+_DIAGRAM_INTENT_STEMS = {_stem5(w) for w in _DIAGRAM_INTENT_WORDS}
+
+
+def _wants_diagram(text: str) -> bool:
+    stems = {_stem5(w) for w in re.findall(r'[a-zA-Zà-úÀ-Ú]{4,}', text)}
+    return bool(stems & _DIAGRAM_INTENT_STEMS)
+
+
+def _is_toc_like_page(page_text: str) -> bool:
+    """Página de sumário: muitas linhas 'Título ..... N' (líder de pontos até o número)."""
+    return len(re.findall(r'\.{4,}\s*\d{1,3}\s*\n', page_text)) >= 3
+
+
+def _page_shows_number(page_text: str, printed_number: int) -> bool:
+    """Confere se o rodapé/cabeçalho da página bate com o número impresso (ex: '- 20 -', '20')."""
+    return bool(re.search(rf'(?<!\d){printed_number}(?!\d)', page_text[-80:]) or re.search(rf'(?<!\d){printed_number}(?!\d)', page_text[:80]))
+
+
+def _find_relevant_pdf_page(pdf_path: str, search_terms: str) -> Optional[dict]:
+    """
+    Em vez de mandar o PDF inteiro (manual pode ter dezenas de páginas), acha a página certa e
+    renderiza SÓ ela como imagem. Pedido do usuário em 07/10/2026.
+
+    Duas estratégias, nessa ordem:
+    1. Usa o próprio SUMÁRIO do manual (quase todo manual tem um) - acha a linha "Esquemas
+       Elétricos ..... 20", pega o número impresso, confere o rodapé da página pra achar o índice
+       real no PDF (pode ter offset por causa de capa/sumário não numerados). Muito mais confiável
+       que contar palavra solta: tentativa inicial (só contagem de palavras) encontrava a PRÓPRIA
+       página do sumário como "mais relevante", porque ela repete as palavras-chave nos títulos
+       das seções, sem ser o conteúdo de verdade (achado em produção em 07/10/2026, manual da ESAB
+       LHN 240 - devolvia a página do índice em vez do esquema elétrico de fato).
+    2. Se não achar sumário usável, cai pra contagem de palavras por página, mas IGNORANDO
+       páginas que parecem sumário (muita linha com líder de pontos).
+    """
+    try:
+        import pymupdf as fitz
+    except ImportError:
+        return None
+
+    words = [w for w in re.findall(r'[a-zA-Zà-úÀ-Ú]{4,}', search_terms.lower()) if _fold(w) not in _PAGE_SEARCH_STOPWORDS]
+    word_stems = {_stem5(w) for w in words}
+    if not word_stems:
+        return None
+
+    try:
+        doc = fitz.open(pdf_path)
+        try:
+            if doc.page_count == 0 or doc.page_count > 120:
+                return None  # vazio ou grande demais pra varrer rápido - manda o PDF inteiro mesmo
+
+            page_texts = [doc[i].get_text() for i in range(doc.page_count)]
+            toc_like_idx = {i for i, t in enumerate(page_texts) if _is_toc_like_page(t)}
+
+            # Estratégia 1: sumário
+            target_idx = None
+            for i in toc_like_idx:
+                for line in page_texts[i].split("\n"):
+                    m = re.match(r'^\s*\d*\.?\s*([A-Za-zà-úÀ-Ú][A-Za-zà-úÀ-Ú\s]{3,60}?)\.{4,}\s*(\d{1,3})\s*$', line)
+                    if not m:
+                        continue
+                    title, printed_num = m.group(1), int(m.group(2))
+                    title_stems = {_stem5(tw) for tw in re.findall(r'[a-zA-Zà-úÀ-Ú]{4,}', title)}
+                    if len(title_stems & word_stems) == 0:
+                        continue
+                    # offset entre número impresso e índice real do PDF (capa/sumário sem numeração)
+                    for offset in range(0, 6):
+                        candidate = printed_num - 1 - offset
+                        if 0 <= candidate < doc.page_count and candidate not in toc_like_idx and _page_shows_number(page_texts[candidate], printed_num):
+                            target_idx = candidate
+                            break
+                    if target_idx is None and 0 <= printed_num - 1 < doc.page_count:
+                        target_idx = printed_num - 1  # sem confirmar rodapé, melhor palpite mesmo assim
+                    if target_idx is not None:
+                        break
+                if target_idx is not None:
+                    break
+
+            # Estratégia 2: contagem de palavras, pulando páginas de sumário. Exige pelo menos 2
+            # palavras batendo (não 1) - uma palavra genérica tipo "elétrico" aparece até em
+            # avisos de segurança padrão, sem ser a página certa. Achado em produção em
+            # 07/10/2026: pedido do esquema da LHN 242 (que só tem catálogo de peças indexado,
+            # sem manual com esquema de verdade) mandou a página de SEGURANÇA por engano - com
+            # esse mínimo mais alto, cai pra "não achei" e manda o documento inteiro em vez de
+            # arriscar uma página errada.
+            #
+            # Antes de contar, descarta radicais que aparecem em quase toda página do documento
+            # (cabeçalho/rodapé repetido, ex: o nome da marca "ESAB" em todo canto) - isso não é
+            # sinal de conteúdo, é ruído que inflava a pontuação de QUALQUER página. Achado em
+            # produção em 07/10/2026 (mesmo caso da LHN 242: "esab" sozinho já dava pontuação 2
+            # junto com "eletrico", fazendo a página de segurança passar no mínimo por engano).
+            folded_pages = [_fold(t) for t in page_texts]
+            non_toc_count = max(1, len(folded_pages) - len(toc_like_idx))
+            specific_stems = {
+                stem for stem in word_stems
+                if sum(1 for i, ft in enumerate(folded_pages) if i not in toc_like_idx and stem in ft) / non_toc_count < 0.5
+            }
+
+            if target_idx is None and specific_stems:
+                best_score = 0
+                for i, folded_text in enumerate(folded_pages):
+                    if i in toc_like_idx:
+                        continue
+                    score = sum(1 for stem in specific_stems if stem in folded_text)
+                    if score > best_score:
+                        best_score, target_idx = score, i
+                if best_score < 2:
+                    target_idx = None
+
+            if target_idx is None:
+                return None
+
+            pix = doc[target_idx].get_pixmap(dpi=200)
+            png_bytes = pix.tobytes("png")
+            return {"page_number": target_idx + 1, "total_pages": doc.page_count, "png_bytes": png_bytes}
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.warning(f"[COPILOTO TECNICO] Falha ao procurar página relevante em {pdf_path}: {e}")
+        return None
+
+
+async def send_technician_requested_document(
+    tenant_id: int,
+    department_id: int,
+    search_terms: str,
+    instance_name: str,
+    number: str
+) -> Optional[str]:
+    """
+    Copilot Técnico pediu um documento específico (diagrama/manual). Procura o melhor
+    arquivo indexado no RAG (via source_path salvo na metadata), copia pra uploads/ e manda
+    pelo WhatsApp (URL se grande, base64 se pequeno - mesmo padrão de conversations.py).
+    Retorna o titulo do documento enviado, ou None se nada foi encontrado/enviado.
+    """
+    try:
+        candidates = await rag_service.find_document(tenant_id, search_terms, department_id=department_id, top_k=3)
+        best = next((c for c in candidates if c.get("source_path") and os.path.isfile(c["source_path"])), None)
+        if not best:
+            logger.info(f"[COPILOTO TECNICO] Nenhum arquivo encontrado para '{search_terms}'.")
+            return None
+
+        source_path = best["source_path"]
+        fname = best.get("filename") or os.path.basename(source_path)
+        mimetype = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        media_type = "image" if mimetype.startswith("image/") else "document"
+        caption = best.get("titulo") or fname
+
+        os.makedirs("uploads", exist_ok=True)
+        ext = os.path.splitext(fname)[1]
+        unique_fn = f"doctec_{uuid.uuid4().hex}{ext}"
+        dest_path = os.path.join("uploads", unique_fn)
+
+        # Se for PDF, tenta achar e mandar só a página relevante (em vez do manual inteiro).
+        page_hit = _find_relevant_pdf_page(source_path, search_terms) if mimetype == "application/pdf" else None
+
+        # Técnico queria especificamente um esquema/diagrama, mas nem achou a página nem o
+        # arquivo encontrado parece ser isso de fato (ex: só achou catálogo de peças) - em vez de
+        # mandar algo errado sem avisar (o que gerava reclamação de "alucinação"), avisa que não
+        # tem o esquema pra esse modelo em vez de empurrar um documento parecido mas diferente.
+        # Pedido do usuário em 07/10/2026: "quando ele não tiver, ele avisa também né?"
+        if _wants_diagram(search_terms) and not page_hit and not _wants_diagram(caption):
+            aviso = (
+                f"Não encontrei um esquema elétrico/diagrama específico pra esse modelo na nossa base de manuais. "
+                f"O que tenho disponível é: *{caption}* - quer que eu mande esse mesmo assim, ou prefere que eu veja outra coisa?"
+            )
+            await evolution_service.send_text_message(instance_name=instance_name, number=number, text=aviso)
+            logger.info(f"[COPILOTO TECNICO] Esquema pedido mas não encontrado pra '{search_terms}' - avisado em vez de mandar '{caption}' sem contexto.")
+            return None
+
+        if page_hit:
+            unique_fn = f"doctec_{uuid.uuid4().hex}_p{page_hit['page_number']}.png"
+            dest_path = os.path.join("uploads", unique_fn)
+            with open(dest_path, "wb") as f:
+                f.write(page_hit["png_bytes"])
+            mimetype, media_type = "image/png", "image"
+            fname = f"{os.path.splitext(fname)[0]} - pagina {page_hit['page_number']}.png"
+            caption = f"{caption} (página {page_hit['page_number']} de {page_hit['total_pages']} - peça o manual completo se precisar de mais páginas)"
+            logger.info(f"[COPILOTO TECNICO] Enviando só a página {page_hit['page_number']}/{page_hit['total_pages']} de {os.path.basename(source_path)}.")
+        else:
+            shutil.copyfile(source_path, dest_path)
+        size_bytes = os.path.getsize(dest_path)
+
+        def _ok(res: dict) -> bool:
+            return bool(res.get("success", False) or res.get("key") or res.get("id") or res.get("status") in ["PENDING", "SENT", "DELIVERED", 200, 201])
+
+        send_res = None
+        if size_bytes > MEDIA_BY_URL_THRESHOLD_BYTES:
+            public_base = os.getenv("PUBLIC_BASE_URL", "https://ominichannel.duckdns.org").rstrip("/")
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name, number=number, media_type=media_type, mimetype=mimetype,
+                media=f"{public_base}/uploads/{unique_fn}", file_name=fname,
+                caption=caption, skip_anti_ban_pacing=True
+            )
+            if not _ok(send_res):
+                logger.warning(f"[COPILOTO TECNICO] Envio por URL falhou; tentando base64...")
+                send_res = None
+        if send_res is None:
+            with open(dest_path, "rb") as f:
+                base64_data = base64.b64encode(f.read()).decode("utf-8")
+            send_res = await evolution_service.send_media_message(
+                instance_name=instance_name, number=number, media_type=media_type, mimetype=mimetype,
+                media=base64_data, file_name=fname, caption=caption, skip_anti_ban_pacing=True
+            )
+
+        if _ok(send_res):
+            logger.info(f"[COPILOTO TECNICO] Documento enviado: {caption}")
+            return caption
+        logger.warning(f"[COPILOTO TECNICO] Falha ao enviar documento '{search_terms}': {send_res}")
+        return None
+    except Exception as e:
+        logger.error(f"[COPILOTO TECNICO] Erro buscando/enviando documento '{search_terms}': {e}")
+        return None
 
 
 def _build_os_pdf_filename(os_numero, client_name: Optional[str]) -> str:
@@ -2309,8 +2552,44 @@ async def receive_evolution_webhook(
     is_tech, tech_name = await check_is_authorized_technician_or_admin(db, tenant_id, phone_number)
     if is_tech:
         conversation.protocol_number = None
+        # Copiloto Técnico gerencia a resposta sozinho (ignora escalação/atendente) - mas toda a
+        # seção de resposta de IA mais abaixo só roda se status==COM_IA. Uma conversa de técnico
+        # podia ficar presa em COM_HUMANO (de um atendimento humano anterior, ex: o próprio técnico
+        # também é atendente) e nunca mais receber resposta nenhuma, nem o aviso da palavra-chave.
+        # Achado em produção em 06/10/2026 (Fernando Aragão testando, conversa #1875).
+        conversation.status = ConversationStatus.COM_IA
     elif not conversation.protocol_number:
         conversation.protocol_number = await generate_daily_protocol(db, tenant_id)
+
+    # Copiloto Técnico: só consome IA se o técnico "ativou" a sessão digitando a palavra-chave
+    # (pode vir junto com a pergunta, ex: "tecnico, minha smashweld tá com erro X") ou se já tem
+    # uma sessão ativa (desliza 1h a cada mensagem). Sem isso, o número de técnico ficaria
+    # acionando o Gemini em TODA mensagem, mesmo sem precisar de ajuda - gastando cota à toa
+    # (pedido explícito do usuário). Timeout por inatividade é silencioso de propósito: não avisa
+    # que a sessão encerrou, só para de responder até a próxima vez que digitarem a palavra.
+    tech_session_should_respond = False
+    tech_session_is_fresh_trigger = False
+    normalized_tech_msg = ""
+    if is_tech:
+        normalized_tech_msg = unicodedata.normalize('NFKD', (text_content or '')).encode('ascii', 'ignore').decode('ascii').strip().lower()
+        is_trigger_word = normalized_tech_msg.startswith(TECH_TRIGGER_WORD)
+
+        extra_tech = dict(conversation.dados_adicionais or {})
+        session_until_raw = extra_tech.get("tech_session_until")
+        now_tech = datetime.utcnow()
+        session_active = False
+        if session_until_raw:
+            try:
+                session_active = now_tech < datetime.fromisoformat(session_until_raw)
+            except Exception:
+                session_active = False
+
+        if is_trigger_word or session_active:
+            tech_session_should_respond = True
+            tech_session_is_fresh_trigger = is_trigger_word and not session_active
+            extra_tech["tech_session_until"] = (now_tech + timedelta(seconds=TECH_SESSION_SECONDS)).isoformat()
+            conversation.dados_adicionais = extra_tech
+            flag_modified(conversation, "dados_adicionais")
 
     # Reset inactivity warning flags and restart timer
     extra = dict(conversation.dados_adicionais or {})
@@ -2671,7 +2950,16 @@ async def receive_evolution_webhook(
     _pending_confirmation_flow = pending_os_or_transfer_marker.startswith(
         ("CONFIRM_OS_PDF:", "CONFIRM_OS_APPROVAL:", "CONFIRM_TRANSFER:")
     )
-    if msg_type == MessageType.AUDIO and media_bytes and (conversation.status == ConversationStatus.COM_IA or _pending_confirmation_flow) and not is_group and not is_internal_company_number and not is_bot_echo:
+    if not AUDIO_TRANSCRIPTION_ENABLED and msg_type == MessageType.AUDIO and media_bytes and not is_group and not is_bot_echo:
+        # Transcrição desligada (economiza cota de IA) - só avisa que chegou um áudio, sem tentar entender o conteúdo.
+        no_transcribe_caption = "🎙️ _Áudio recebido (transcrição automática desativada)._"
+        if saved_media_url:
+            text_content = f"{saved_media_url}|{no_transcribe_caption}"
+        else:
+            target_obj = message_obj.get("audioMessage") or {}
+            fallback_url = target_obj.get("url") or target_obj.get("directPath") or ""
+            text_content = f"{fallback_url}|{no_transcribe_caption}" if fallback_url else no_transcribe_caption
+    elif AUDIO_TRANSCRIPTION_ENABLED and msg_type == MessageType.AUDIO and media_bytes and (conversation.status == ConversationStatus.COM_IA or _pending_confirmation_flow) and not is_group and not is_internal_company_number and not is_bot_echo:
         try:
             dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
             audio_transcription = await gemini_service.process_audio_message(
@@ -2711,6 +2999,34 @@ async def receive_evolution_webhook(
                         text_content = new_caption
         except Exception as audio_err:
             logger.error(f"Error transcribing customer audio note lazily: {audio_err}")
+
+    # Copiloto Técnico: quando o técnico manda uma foto (componente, placa, display de
+    # multímetro), a IA "olha" a foto de verdade (process_image_message/defect_inspection)
+    # em vez de só ver a legenda - combina com a legenda que o técnico digitou, se tiver.
+    if img_msg and msg_type == MessageType.IMAGEM and media_bytes and is_tech and tech_session_should_respond and not is_group and not is_internal_company_number and not is_bot_echo:
+        try:
+            dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
+            image_analysis = await gemini_service.process_image_message(
+                image_bytes=media_bytes,
+                mime_type="image/jpeg",
+                task_type="defect_inspection",
+                tenant_gemini_api_key=dec_sets.get("gemini_api_key"),
+                tenant_gemini_model_name=dec_sets.get("gemini_model_name")
+            )
+            analysis_ok = isinstance(image_analysis, dict) and image_analysis.get("success") and image_analysis.get("description")
+            if analysis_ok:
+                vision_text = f"📷 *Análise da Foto (IA):*\n_{image_analysis['description']}_"
+            elif isinstance(image_analysis, dict):
+                vision_text = f"📷 _{image_analysis.get('fallback_message') or 'Não foi possível analisar a foto.'}_"
+            else:
+                vision_text = None
+
+            if vision_text:
+                existing_caption = text_content.split("|", 1)[1].strip() if "|" in text_content else ""
+                combined_caption = f"{existing_caption}\n\n{vision_text}" if existing_caption else vision_text
+                text_content = f"{saved_media_url}|{combined_caption}" if saved_media_url else combined_caption
+        except Exception as img_err:
+            logger.error(f"Error analyzing technician bench photo: {img_err}")
 
     msg_dt = extract_message_datetime(data)
 
@@ -2982,7 +3298,7 @@ async def receive_evolution_webhook(
         has_attendant_messages
     )
 
-    if is_human_handled:
+    if is_human_handled and not is_tech:
         text_lower = (text_content or "").lower()
         explicit_ai_keywords = ["falar com ia", "reativar ia", "chamar ia", "iniciar ia", "menu ia"]
         is_explicit_ai = any(k in text_lower for k in explicit_ai_keywords)
@@ -3374,7 +3690,46 @@ async def receive_evolution_webhook(
                 })
             )
 
-        if is_tech:
+        # Default - só os ramos de cliente (is_pending_transfer / else mais abaixo) recalculam isso
+        # de verdade a partir do histórico; os 3 ramos de técnico nunca anunciam protocolo (nem tem
+        # protocol_number, é forçado None lá em cima), então o default já serve. Sem isso, UnboundLocalError
+        # na checagem de protocolo mais abaixo (achado em produção em 06/10/2026, Fernando Aragão).
+        protocol_already_announced = False
+
+        if is_tech and not tech_session_should_respond:
+            # Sem sessão ativa e não digitou a palavra de ativação - avisa sem gastar IA.
+            logger.info(f"[COPILOTO TECNICO] {tech_name} ({phone_number}) sem sessão ativa - pedindo ativação sem chamar o Gemini.")
+            ai_output = {
+                "resposta": f"👋 Oi{' ' + tech_name if tech_name else ''}! Pra falar com o apoio técnico por IA, digite *{TECH_TRIGGER_WORD}* (fica ativo por 1h de uso contínuo).",
+                "escalar_humano": False,
+                "transferir_setor": None,
+                "enviar_localizacao": False,
+                "enviar_pix": False,
+                "documento_solicitado": None,
+                "nova_memoria": memory_summary or ""
+            }
+        elif is_tech and normalized_tech_msg == TECH_TRIGGER_WORD:
+            # Só a palavra de ativação sozinha, sem pergunta junto - saudação fixa, sem gastar
+            # IA. Vale tanto pra sessão nova quanto renovando uma já ativa (ex: técnico digita
+            # "tecnico" de novo só pra confirmar) - nunca manda a palavra crua pra IA responder
+            # como se fosse uma pergunta de verdade (achado em produção em 07/10/2026: Fernando
+            # digitou "tecnico" com sessão já ativa e a IA "alucinou" tentando interpretar a
+            # palavra sozinha como se fosse um pedido de transferência de atendimento).
+            logger.info(f"[COPILOTO TECNICO] Palavra de ativação de {tech_name} ({phone_number}) - {'sessão nova' if tech_session_is_fresh_trigger else 'sessão já ativa, só confirmando'}.")
+            if tech_session_is_fresh_trigger:
+                greeting = f"👋 E aí{', ' + tech_name if tech_name else ''}! Sessão de apoio técnico iniciada (ativa por 1h). Me conta o que está acontecendo com o equipamento — pode mandar foto também, eu analiso."
+            else:
+                greeting = f"👋 Sessão já ativa{', ' + tech_name if tech_name else ''}! Pode perguntar."
+            ai_output = {
+                "resposta": greeting,
+                "escalar_humano": False,
+                "transferir_setor": None,
+                "enviar_localizacao": False,
+                "enviar_pix": False,
+                "documento_solicitado": None,
+                "nova_memoria": memory_summary or ""
+            }
+        elif is_tech:
             logger.info(f"[COPILOTO TECNICO] Atendimento direto ao técnico autorizado/admin {tech_name} ({phone_number}) no modo Master.")
             ai_output = await gemini_service.generate_concierge_response(
                 customer_name=tech_name or "Técnico",
@@ -3705,6 +4060,7 @@ async def receive_evolution_webhook(
         enviar_pix = ai_output.get("enviar_pix", False)
         escalar_humano = ai_output.get("escalar_humano", False) if not is_tech else False
         nova_memoria = ai_output.get("nova_memoria", "")
+        documento_solicitado = ai_output.get("documento_solicitado") if is_tech else None
 
         # Guarantee Protocol Number is sent ONLY AND EXCLUSIVELY ONCE per conversation/protocol!
         extra = dict(conversation.dados_adicionais or {})
@@ -3984,15 +4340,25 @@ async def receive_evolution_webhook(
                     has_onboarding_for_proto = True
 
             if not has_onboarding_for_proto:
-                # Generate structured Onboarding Summary with Provenance Tracking (Tarefa 2)
-                onboarding_summary = await gemini_service.generate_onboarding_summary(
-                    customer_name=contact.nome or "Cliente",
-                    protocol_number=conversation.protocol_number or "S/N",
-                    department_name=whatsapp_number.nome_departamento,
-                    messages_history=history + [{"remetente": "cliente", "conteudo": text_content}],
-                    tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
-                    tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
-                )
+                if ONBOARDING_SUMMARY_ENABLED:
+                    # Generate structured Onboarding Summary with Provenance Tracking (Tarefa 2)
+                    onboarding_summary = await gemini_service.generate_onboarding_summary(
+                        customer_name=contact.nome or "Cliente",
+                        protocol_number=conversation.protocol_number or "S/N",
+                        department_name=whatsapp_number.nome_departamento,
+                        messages_history=history + [{"remetente": "cliente", "conteudo": text_content}],
+                        tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+                        tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
+                    )
+                else:
+                    # Resumo gerado por IA desligado (economiza cota) - cartão simples com os dados que já temos.
+                    onboarding_summary = (
+                        f"📋 *RESUMO DE ONBOARDING*\n\n"
+                        f"*Cliente:* {contact.nome or 'Cliente'}\n"
+                        f"*Protocolo:* {conversation.protocol_number or 'S/N'}\n"
+                        f"*Setor:* {whatsapp_number.nome_departamento}\n"
+                        f"*Última mensagem:* {(text_content or '')[:200]}"
+                    )
 
                 # Create pinned system transfer card with Onboarding Summary
                 sys_escalate_msg = Message(
@@ -4040,6 +4406,26 @@ async def receive_evolution_webhook(
             text=formatted_ai_text
         )
         _conversation_ai_timestamps[conversation.id] = time.time()
+
+        # Copiloto Técnico: se a IA pediu um documento/diagrama específico, busca e manda em seguida
+        if documento_solicitado:
+            sent_titulo = await send_technician_requested_document(
+                tenant_id=tenant_id,
+                department_id=whatsapp_number.id,
+                search_terms=documento_solicitado,
+                instance_name=instance_name,
+                number=target_dest
+            )
+            if sent_titulo:
+                doc_sent_msg = Message(
+                    conversation_id=conversation.id,
+                    remetente=MessageSender.IA,
+                    conteudo=f"📎 Documento enviado: {sent_titulo}",
+                    tipo=MessageType.TEXTO,
+                    timestamp=datetime.utcnow()
+                )
+                db.add(doc_sent_msg)
+                await db.commit()
 
         # Dispatch Native WhatsApp Location Card right below the text reply
         if should_send_location:

@@ -98,6 +98,8 @@ async def init_db():
             "ALTER TABLE calendar_events ADD COLUMN whatsapp_instance VARCHAR(100);",
             "ALTER TABLE calendar_events ADD COLUMN contact_name VARCHAR(200);",
             "ALTER TABLE calendar_events ADD COLUMN contact_phone VARCHAR(50);",
+            "ALTER TABLE os_board_orders ADD COLUMN equip_obs_raw TEXT;",
+            "ALTER TABLE softsystem_pending_writes ADD COLUMN suppress_customer_notice BOOLEAN DEFAULT 0;",
         ]
         for sql in migrations:
             try:

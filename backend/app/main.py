@@ -37,7 +37,10 @@ from app.services.whatsapp_reconciliation_service import start_whatsapp_reconcil
 from app.services.backup_service import start_backup_scheduler_loop
 from app.services.daily_backup_drive_service import start_daily_drive_backup_loop
 from app.services.os_board_followup_service import start_os_board_followup_loop
+from app.services.os_technician_note_service import start_technician_note_followup_loop
 from app.services.failed_message_retry_service import start_failed_message_retry_loop
+from app.services.os_report_autodraft_service import start_report_autodraft_loop
+from app.services.rag_service import start_rag_index_warmer_loop
 
 import mimetypes
 
@@ -110,6 +113,25 @@ async def lifespan(app: FastAPI):
     # usuário, depois de precisar reenviar na mão as mensagens das O.S. #1815 e #33156).
     failed_retry_task = asyncio.create_task(start_failed_message_retry_loop())
 
+    # Rascunho automático do relatório de diagnóstico+orçamento pro WhatsApp do técnico (ver
+    # app/services/os_report_autodraft_service.py) - ligado em 07/10/2026, pedido do usuário pra
+    # não precisar abrir o sistema: o técnico só lança as peças no Softsystem e recebe o rascunho
+    # pronto pra aprovar com um "sim" direto no WhatsApp.
+    report_autodraft_task = asyncio.create_task(start_report_autodraft_loop())
+
+    # Cobrança automática das observações/lembretes que o dono deixa numa O.S. pro técnico
+    # responsável (ex.: "a peça chegou") - ver app/services/os_technician_note_service.py.
+    # Mesmo ritmo de 8h-18h do followup de cliente acima. Ligado em 07/10/2026, pedido do
+    # usuário ("pra não deixar o técnico esquecer").
+    technician_note_followup_task = asyncio.create_task(start_technician_note_followup_loop())
+
+    # Mantém o cache de índice do RAG (busca-por-nome-de-modelo) sempre quente em segundo plano -
+    # ver rag_service.start_rag_index_warmer_loop(). Ligado em 08/10/2026: técnico reclamou que a
+    # IA demorava (medido: 181s) pra responder pergunta com número de modelo - sem esse
+    # aquecedor, o cache ainda expiraria a cada 10min e o próximo usuário pegaria a reconstrução
+    # (~90s) na cara.
+    rag_warmer_task = asyncio.create_task(start_rag_index_warmer_loop())
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual).
     #
@@ -165,6 +187,9 @@ async def lifespan(app: FastAPI):
     if os_board_followup_task:
         os_board_followup_task.cancel()
     failed_retry_task.cancel()
+    report_autodraft_task.cancel()
+    technician_note_followup_task.cancel()
+    rag_warmer_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")

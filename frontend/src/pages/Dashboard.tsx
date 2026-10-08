@@ -801,6 +801,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
           } else if (payload.type === 'OS_BOARD_UPDATE') {
             // Quadro de técnicos: uma O.S. mudou de estágio no Softsystem
             window.dispatchEvent(new CustomEvent('os-board-update'));
+          } else if (payload.type === 'TECH_NOTE_UPDATE') {
+            // Observação pro técnico criada/resolvida - atualiza o letreiro na hora
+            window.dispatchEvent(new CustomEvent('tech-note-update'));
           } else if (payload.type === 'MESSAGE_STATUS_UPDATE') {
             setConversations(prev => prev.map(c => {
               if (c.id === payload.conversation_id) {

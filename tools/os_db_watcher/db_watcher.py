@@ -955,6 +955,33 @@ def _board_equipamentos(cur, keys: set) -> dict:
     return out
 
 
+def _board_equip_obs(cur, keys: set) -> dict:
+    """Observação que o próprio técnico escreve na tela da O.S. (EQUIPORDEMSERVICO.OBS, aba
+    Equipamentos do Softsystem) descrevendo o problema/correção - usada como entrada pro laudo
+    da IA (os_report_service.py). Pedido do usuário em 07/10/2026: quando a O.S. é só mão de
+    obra/serviço (sem peça física pra 'dar a dica' sozinha pra IA), ele escreve a direção do
+    problema ali, a IA lê, reelabora um laudo melhor e GRAVA POR CIMA (substitui, não acrescenta -
+    diferente do mecanismo write_type='nota_defeito' já existente, que só acrescenta)."""
+    out = {}
+    if not keys:
+        return out
+    codos = sorted({c for _, c in keys})
+    for i in range(0, len(codos), 500):
+        chunk = codos[i:i + 500]
+        marks = ",".join("?" for _ in chunk)
+        cur.execute(f"""
+            SELECT LOJA, CODOS, OBS
+            FROM EQUIPORDEMSERVICO
+            WHERE CODOS IN ({marks})
+            ORDER BY LOJA, CODOS
+        """, tuple(chunk))
+        for loja, codos_, obs in cur.fetchall():
+            if (loja, codos_) in out or not obs:
+                continue
+            out[(loja, codos_)] = obs.strip()
+    return out
+
+
 def _board_events(cur, keys: set) -> dict:
     """O quadro espelha o Softsystem fielmente, sem exceção - o que muda por lá tem que aparecer
     aqui igual (e vice-versa: mudanças feitas pelo nosso sistema, como aprovação por WhatsApp, se
@@ -978,6 +1005,7 @@ def _board_events(cur, keys: set) -> dict:
 def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
     keys = {(r[0], r[1]) for r in order_rows}
     equips = _board_equipamentos(cur, keys)
+    equip_obs = _board_equip_obs(cur, keys)
     events = _board_events(cur, keys)
     valores = _board_valores(cur, keys)
     itens_por_os = _board_itens(cur, keys)
@@ -999,6 +1027,7 @@ def _board_payload(cur, empresa_key: str, order_rows: list) -> dict:
             "venda_codigo": venda_codigo,
             "valor_total": valores.get((loja, codos)),
             "forma_pagamento": forma_pag,
+            "equip_obs": equip_obs.get((loja, codos)),
         })
         for ev_data, cod, obs in events.get((loja, codos), []):
             evs.append({"loja": loja, "codos": codos, "cod_evento": cod, "obs": obs, "data": ev_data.isoformat()})
@@ -1032,6 +1061,14 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
             max_alt = cur.fetchone()[0]
             cur.execute("SELECT MAX(DATA) FROM EVENTOSORDEMSERVICO")
             max_evt = cur.fetchone()[0]
+            # Lançar peça/mão de obra sozinho (sem mudar status, sem gerar evento) NÃO bate
+            # ORDEMSERVICO.DATAALTERACAO nem EVENTOSORDEMSERVICO - achado em produção em
+            # 07/10/2026 testando a O.S. #1942 (peças lançadas pelo Softsystem de verdade, mas
+            # a O.S. nunca apareceu como "mudada" pros dois cursores acima, ficou invisível pro
+            # quadro). ITENSORDEMSERVICO.DATACADASTRO (data de criação de cada item) é o único
+            # jeito de detectar isso incrementalmente.
+            cur.execute("SELECT MAX(DATACADASTRO) FROM ITENSORDEMSERVICO")
+            max_itens = cur.fetchone()[0]
 
             if not board.get("backfilled"):
                 backfill_from = datetime.now() - timedelta(days=BOARD_BACKFILL_DAYS)
@@ -1048,6 +1085,7 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
                 board["backfilled"] = True
                 board["cursor_alt"] = str(max_alt) if max_alt else None
                 board["cursor_evt"] = str(max_evt) if max_evt else None
+                board["cursor_itens"] = str(max_itens) if max_itens else None
                 save_state(state)
                 logger.info(f"[{empresa_key}] Quadro de técnicos: carga inicial concluída.")
                 return
@@ -1055,10 +1093,13 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
             default_cursor = datetime.now() - timedelta(days=1)
             cursor_alt = datetime.fromisoformat(board["cursor_alt"]) if board.get("cursor_alt") else default_cursor
             cursor_evt = datetime.fromisoformat(board["cursor_evt"]) if board.get("cursor_evt") else default_cursor
+            cursor_itens = datetime.fromisoformat(board["cursor_itens"]) if board.get("cursor_itens") else default_cursor
             changed = set()
             cur.execute("SELECT LOJA, CODOS FROM ORDEMSERVICO WHERE DATAALTERACAO > ?", (cursor_alt,))
             changed.update((r[0], r[1]) for r in cur.fetchall())
             cur.execute("SELECT LOJA, CODOS FROM EVENTOSORDEMSERVICO WHERE DATA > ?", (cursor_evt,))
+            changed.update((r[0], r[1]) for r in cur.fetchall())
+            cur.execute("SELECT LOJA, CODOS FROM ITENSORDEMSERVICO WHERE DATACADASTRO > ?", (cursor_itens,))
             changed.update((r[0], r[1]) for r in cur.fetchall())
             if changed:
                 codos = sorted({c for _, c in changed})
@@ -1074,6 +1115,7 @@ def sync_board_empresa(config: dict, empresa_key: str, empresa_cfg: dict, state:
                 logger.info(f"[{empresa_key}] Quadro de técnicos: {len(rows)} O.S. atualizada(s).")
             board["cursor_alt"] = str(max_alt) if max_alt else board.get("cursor_alt")
             board["cursor_evt"] = str(max_evt) if max_evt else board.get("cursor_evt")
+            board["cursor_itens"] = str(max_itens) if max_itens else board.get("cursor_itens")
             save_state(state)
         finally:
             tra.commit()
@@ -1090,6 +1132,20 @@ def _ack_pending_write(config: dict, write_id: int, success: bool, error: Option
         )
     except Exception as e:
         logger.error(f"Falha ao confirmar pro backend a escrita pendente #{write_id}: {e}")
+
+
+def _sanitize_for_firebird(text: Optional[str]) -> str:
+    """
+    A conexão com esse Firebird usa charset=WIN1252 (ver db_connect) - texto com emoji ou outros
+    caracteres fora do Windows-1252 (ex: relatório escrito pela IA, que usa emoji de propósito pro
+    WhatsApp) quebra a escrita com UnicodeEncodeError ('charmap' codec can't encode...), e a
+    escrita falhava calada (só ficava "failed" na fila, sem avisar ninguém). Troca cada caractere
+    não suportado por "?" em vez de travar - mantém o resto do texto legível. Achado em produção em
+    07/10/2026 (O.S. #1987/#1310/#1868, rascunho de relatório automático).
+    """
+    if not text:
+        return ""
+    return text.encode("cp1252", errors="replace").decode("cp1252")
 
 
 def poll_pending_writes(config: dict, empresa_key: str, empresa_cfg: dict):
@@ -1120,24 +1176,76 @@ def poll_pending_writes(config: dict, empresa_key: str, empresa_cfg: dict):
     try:
         for w in writes:
             write_id = w["id"]
-            loja, codos, cod_evento, obs = w["loja"], w["codos"], w["cod_evento"], w.get("obs")
+            loja, codos, obs = w["loja"], w["codos"], _sanitize_for_firebird(w.get("obs"))
+            write_type = w.get("write_type") or "evento"
+            cod_evento = w.get("cod_evento")
+            # Nome de quem pediu a mudança (técnico do Portal, ou "SISTEMA" pros avisos
+            # automáticos) - grava no OPERADOR de verdade em vez do literal fixo de antes, pra dar
+            # auditoria nativa no Softsystem (quem mudou, e quando - DATA já é CURRENT_TIMESTAMP).
+            # Pedido do usuário em 07/10/2026, junto com liberar qualquer técnico mudar O.S. de outro.
+            operador = (w.get("requested_by") or "PORTAL_TECNICO").strip()[:30] or "PORTAL_TECNICO"
             try:
                 tra, cur = write_cursor(con)
                 try:
-                    cur.execute(
-                        "INSERT INTO EVENTOSORDEMSERVICO (LOJA, CODOS, DATA, CODTIPOEVENTOOS, OBS, OPERADOR) "
-                        "VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)",
-                        (loja, codos, cod_evento, obs or "", "PORTAL_TECNICO")
-                    )
-                    cur.execute(
-                        "UPDATE ORDEMSERVICO SET DATAALTERACAO = CURRENT_TIMESTAMP WHERE LOJA=? AND CODOS=?",
-                        (loja, codos)
-                    )
+                    if write_type == "nota_defeito":
+                        # Acrescenta no campo "Observação" da O.S. (coluna OBS, VARCHAR(2000)), SEM
+                        # mudar a etapa - usado pra avisos automáticos (ex.: WhatsApp do cliente
+                        # inválido) e pro rascunho de relatório da IA. Campo CORRIGIDO em 07/10/2026:
+                        # a escrita ia pra DEFEITO (VARCHAR(255), campo pequeno de defeito do
+                        # equipamento) por engano - o campo real "Observação" que aparece na tela do
+                        # Softsystem é OBS, bem maior (2000 chars). Usuário confirmou testando digitar
+                        # direto em OBS. 14 O.S. tiveram DEFEITO corrompido por essa escrita errada
+                        # antes da correção (ver backfill/limpeza feita junto com esse deploy).
+                        cur.execute("SELECT FIRST 1 OBS FROM EQUIPORDEMSERVICO WHERE LOJA=? AND CODOS=?", (loja, codos))
+                        existing_row = cur.fetchone()
+                        existing_len = len(existing_row[0]) if existing_row and existing_row[0] else 0
+                        prefix = f"\r\n[{operador} {datetime.now().strftime('%d/%m/%Y %H:%M')}] "
+                        max_total = 2000
+                        room = max_total - existing_len - len(prefix)
+                        if room < 20:
+                            logger.warning(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} sem espaço no campo de observação (já tem {existing_len}/2000 caracteres) - pulando.")
+                            tra.rollback()
+                            _ack_pending_write(config, write_id, False, f"Campo de observação cheio ({existing_len}/2000 caracteres)")
+                            continue
+                        obs_fit = obs if len(obs) <= room else (obs[:max(0, room - 3)] + "...")
+                        nota = prefix + obs_fit
+                        cur.execute(
+                            "UPDATE EQUIPORDEMSERVICO SET OBS = COALESCE(OBS, '') || ? WHERE LOJA=? AND CODOS=?",
+                            (nota, loja, codos)
+                        )
+                    elif write_type == "nota_defeito_replace":
+                        # Substitui o campo Observação inteiro (não acrescenta) - usado só pelo
+                        # laudo final da IA (os_report_service.approve_report): o técnico escreve
+                        # uma nota crua ali (ex.: "igbt em curto, troquei os 4"), o sistema LÊ essa
+                        # nota (ver db_watcher._board_equip_obs / sync_board_empresa) como entrada
+                        # pro laudo, a IA reelabora um texto melhor e grava por cima - pedido
+                        # explícito do usuário em 07/10/2026 ("a IA capta a informação do que
+                        # escrevi, refaz o texto e escreve por cima do que escrevi melhorado").
+                        nota = obs[:2000]
+                        cur.execute(
+                            "UPDATE EQUIPORDEMSERVICO SET OBS = ? WHERE LOJA=? AND CODOS=?",
+                            (nota, loja, codos)
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO EVENTOSORDEMSERVICO (LOJA, CODOS, DATA, CODTIPOEVENTOOS, OBS, OPERADOR) "
+                            "VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?)",
+                            (loja, codos, cod_evento, obs or "", operador)
+                        )
+                        cur.execute(
+                            "UPDATE ORDEMSERVICO SET DATAALTERACAO = CURRENT_TIMESTAMP WHERE LOJA=? AND CODOS=?",
+                            (loja, codos)
+                        )
                     tra.commit()
                 except Exception:
                     tra.rollback()
                     raise
-                logger.info(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} -> evento {cod_evento} gravado no Softsystem.")
+                if write_type == "nota_defeito":
+                    logger.info(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} -> nota gravada no campo de observação.")
+                elif write_type == "nota_defeito_replace":
+                    logger.info(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} -> campo de observação substituído pelo laudo da IA.")
+                else:
+                    logger.info(f"[{empresa_key}] Escrita pendente #{write_id}: O.S. #{codos} -> evento {cod_evento} gravado no Softsystem.")
                 _ack_pending_write(config, write_id, True, None)
             except Exception as e:
                 logger.error(f"[{empresa_key}] Escrita pendente #{write_id}: falha ao gravar O.S. #{codos} no Softsystem: {e}")

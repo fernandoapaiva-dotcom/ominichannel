@@ -411,6 +411,12 @@ class OsBoardOrder(Base):
     valor_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # soma dos itens da O.S. (ITENSORDEMSERVICO) - referência, não é o fechamento contábil oficial
     forma_pagamento: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)  # CONDPAG.DESCRICAO
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    report_draft_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # rascunho automático já mandado pro técnico aprovar (ver os_report_autodraft_service) - só uma vez por O.S.
+    # Observação que o técnico escreveu na própria tela da O.S. no Softsystem (EQUIPORDEMSERVICO.OBS,
+    # espelhada pelo vigia - ver db_watcher._board_equip_obs). Usada como entrada do laudo da IA
+    # (os_report_service._gather_os_context) - essencial quando a O.S. é só mão de obra/serviço, sem
+    # peça física pra "dar a dica" sozinha pro texto. Pedido do usuário em 07/10/2026.
+    equip_obs_raw: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class OsBoardEvent(Base):
@@ -448,6 +454,76 @@ class OsBoardItem(Base):
     preco: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
 
+class OsReportDraft(Base):
+    """
+    Rascunho vivo do laudo/orçamento de uma O.S., gerado pela IA a partir das peças lançadas
+    (ver os_report_service.generate_report_draft) e aguardando revisão humana antes de
+    qualquer coisa ser gravada no Softsystem ou mandada pro cliente. Guarda DOIS textos
+    distintos - erro corrigido em 07/10/2026, antes só existia um texto (mensagem pro
+    cliente) que ia por engano também pro campo Observação do Softsystem, que precisa de uma
+    descrição técnica interna, não uma cópia da conversa com o cliente:
+      - internal_note: laudo técnico (baseado nas peças/componentes lançados) -> grava no
+        campo Observação do Softsystem (EQUIPORDEMSERVICO.OBS) quando aprovado.
+      - customer_message: diagnóstico + orçamento em tom de atendimento -> vai pro PDF
+        mandado ao cliente quando aprovado.
+    `enviado_em` NULL = ainda pendente de revisão/aprovação; uma vez aprovado e enviado
+    (os_report_service.approve_report) fica marcado e não é mais tocado - uma nova rodada de
+    peças lançadas depois disso gera outro ciclo (controlado por
+    OsBoardOrder.report_draft_sent_at, reiniciado manualmente quando for o caso).
+    """
+    __tablename__ = "os_report_drafts"
+    __table_args__ = (
+        Index("ux_os_report_drafts_key", "tenant_id", "empresa", "loja", "codos", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    internal_note: Mapped[str] = mapped_column(Text)
+    customer_message: Mapped[str] = mapped_column(Text)
+    reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    revisao: Mapped[int] = mapped_column(Integer, default=1)
+    gerado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    aprovado_por: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    aprovado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    enviado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class OsTechnicianNote(Base):
+    """
+    Recado/lembrete que o dono deixa numa O.S. específica, direcionado ao técnico responsável
+    por ela (ex.: "a peça chegou, 07/10") - pedido do usuário em 07/10/2026: aparece no
+    letreiro do Quadro de Técnicos e na lista do Portal do Técnico, e é reenviado por WhatsApp
+    de 2 em 2 dias (os_technician_note_service.py) até ser marcado como resolvido - "pra não
+    deixar ele esquecer". Resolução é SEMPRE manual (o dono marca), nunca automática - diferente
+    de OsBoardOrder.last_nudge_at (cobrança de cliente), que resolve sozinho quando o evento
+    muda no Softsystem; aqui não existe esse sinal, então precisa do campo resolved_at explícito.
+    `tecnico` é nome livre (mesmo padrão de OsBoardOrder.tecnico, sem FK) - resolvido pro
+    telefone via resolve_tecnico_phone_by_name (os_handler_ingest.py) na hora de mandar o
+    WhatsApp, e comparado via _matches_technician (technician_portal.py) pro Portal do Técnico
+    filtrar só as notas dele.
+    """
+    __tablename__ = "os_technician_notes"
+    __table_args__ = (
+        Index("ix_os_technician_notes_lookup", "tenant_id", "resolved_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    tecnico: Mapped[str] = mapped_column(String(80))
+    mensagem: Mapped[str] = mapped_column(Text)
+    criado_por: Mapped[str] = mapped_column(String(80))
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_nudge_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+
+
 class SoftsystemPendingWrite(Base):
     """
     Pedido de escrita no Softsystem (Firebird) ainda não executado. O backend roda na nuvem e não
@@ -467,9 +543,34 @@ class SoftsystemPendingWrite(Base):
     empresa: Mapped[str] = mapped_column(String(30))            # "servweld" | "centrooeste"
     loja: Mapped[int] = mapped_column(Integer, default=1)
     codos: Mapped[int] = mapped_column(Integer, index=True)
-    cod_evento: Mapped[int] = mapped_column(Integer)            # CODTIPOEVENTOOS a gravar
-    obs: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # "evento" (padrão): INSERT em EVENTOSORDEMSERVICO, muda a etapa da O.S. (cod_evento obrigatório).
+    # "nota_defeito": ACRESCENTA obs em EQUIPORDEMSERVICO.OBS (campo "Observação" na tela do
+    # Softsystem, VARCHAR(2000) - corrigido em 07/10/2026, antes ia por engano pro DEFEITO
+    # VARCHAR(255)), SEM mudar etapa nenhuma (cod_evento ignorado) - usado pra avisos automáticos
+    # do sistema (ex.: WhatsApp do cliente inválido) que não podem arriscar mudar o status real
+    # da O.S. no Softsystem por engano.
+    # "nota_defeito_replace": SUBSTITUI o OBS inteiro (não acrescenta) - só o laudo final da IA
+    # usa (os_report_service.approve_report): o técnico escreve uma nota crua na Observação, o
+    # sistema lê (OsBoardOrder.equip_obs_raw, ver db_watcher._board_equip_obs) como entrada do
+    # laudo, e a versão reelaborada pela IA grava por cima - pedido do usuário em 07/10/2026.
+    write_type: Mapped[str] = mapped_column(String(20), default="evento")
+    cod_evento: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # CODTIPOEVENTOOS a gravar (só write_type="evento")
+    # Text (sem limite) e não String(500): write_type="evento" grava num campo de verdade
+    # limitado no Firebird (EVENTOSORDEMSERVICO.OBS) e por isso o chamador já corta em 500 na
+    # origem (EVENTOSORDEMSERVICO.OBS é VARCHAR(255) de verdade, achado em 07/10/2026 testando
+    # a O.S. #1987 - o limite presumido de 500 fazia a gravação do evento falhar sempre, em
+    # silêncio): mas write_type="nota_defeito" vai pro OBS de EQUIPORDEMSERVICO (até 2000 chars)
+    # e relatórios da IA passam de 255 caracteres fácil - limitar aqui cortaria o laudo no meio
+    # da frase.
+    obs: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requested_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)  # nome do técnico
+    # True pra write_type="evento" que deve gravar no Softsystem (controle interno/auditoria) SEM
+    # disparar a mensagem automática padrão pro cliente (ver AutomationService.build_evento_message,
+    # chamada em ingest_db_event_common) - pedido do usuário em 07/10/2026: "sem reparo/desmanche
+    # e descarte -> finalizada, não manda recado pro cliente, só controle interno da loja". O
+    # evento 7 (Finalizada) TEM um template padrão configurado (DEFAULT_AUTOMATIONS) que mandaria
+    # "Agradecemos a confiança..." sem essa supressão.
+    suppress_customer_notice: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending | done | failed
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     processado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

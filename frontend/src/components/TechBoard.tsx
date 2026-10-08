@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import {
   ArrowLeft, Download, FileText, Monitor, RefreshCw, X, Clock,
   Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
-  Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight,
+  Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight, Video, Paperclip, Sparkles, Bell, Menu,
   type LucideIcon,
 } from 'lucide-react';
 import { apiFetch, apiUpload } from '../services/api';
@@ -33,10 +33,28 @@ export interface BoardCard {
 // TECHNICIAN_ALLOWED_STATUSES no backend) - só passado como prop quando faz sentido (aba "Minhas
 // O.S.", nunca no quadro administrativo nem no "Quadro Geral").
 export const TECH_STATUS_OPTIONS: { key: number; short: string }[] = [
+  { key: 4, short: 'Execução' },
+  { key: 8, short: 'Aguard. Peça' },
   { key: 6, short: 'Retirada' },
   { key: 13, short: 'S/ Defeito' },
   { key: 11, short: 'S/ Conserto' },
+  { key: 7, short: 'Finalizada' },
 ];
+
+// Transições permitidas pelo app, por CHAVE de estágio atual (mesma chave usada nas células do
+// quadro - ver BoardData.stages/BOARD_STAGES no backend) - expandido em 07/10/2026, mesmo mapa
+// do backend (technician_portal.TECHNICIAN_ALLOWED_TRANSITIONS), só que indexado por chave de
+// string em vez de código numérico porque é isso que já está disponível em cada card renderizado
+// (sem precisar saber se "sem_reparo" é código 11 ou 13 - as duas vão pro mesmo lugar: Finalizada).
+const STAGE_KEY_ALLOWED_TRANSITIONS: Record<string, number[]> = {
+  entrada: [11, 13],
+  avaliacao: [11, 13],
+  aprovado: [4, 8, 6],
+  peca: [4],
+  execucao: [6],
+  sem_reparo: [7],
+  descarte: [7],
+};
 export type ChangeStatusFn = (codos: number, empresa: string, status: number, label: string, obs?: string) => void;
 export interface BoardCell { count: number; cards: BoardCard[] }
 export interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
@@ -69,7 +87,7 @@ interface OsOrderDetail {
   codos: number; empresa: string; cliente?: string | null; equipamento?: string | null;
   tecnico?: string | null; tecnico2?: string | null; data_entrada?: string | null;
   tipo_os?: string | null; situacao: string; stage: string;
-  valor_total?: number | null; forma_pagamento?: string | null;
+  valor_total?: number | null; forma_pagamento?: string | null; tecnico_nota?: string | null;
   historico: (TimelineItem & { obs?: string | null })[];
   pecas: OsPecaItem[];
   fotos: OsFotoItem[];
@@ -132,7 +150,18 @@ const fmtDateTime = (iso?: string | null) => {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
-const titleCase = (s: string) => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+export const titleCase = (s: string) => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
+
+// Cor fixa por técnico (sempre a mesma pro mesmo nome, determinístico) - pedido do usuário em
+// 07/10/2026: "tudo amarelo fica ruim, cada um com uma cor percebe melhor" no letreiro de
+// observações. Paleta escolhida pra ter bom contraste em fundo escuro.
+const TECHNICIAN_COLORS = ['#fde047', '#60a5fa', '#34d399', '#f472b6', '#a78bfa', '#fb923c', '#22d3ee', '#4ade80', '#fca5a5', '#38bdf8'];
+export const colorForTechnician = (name: string): string => {
+  const norm = (name || '').trim().toUpperCase();
+  let hash = 0;
+  for (let i = 0; i < norm.length; i++) hash = (hash * 31 + norm.charCodeAt(i)) >>> 0;
+  return TECHNICIAN_COLORS[hash % TECHNICIAN_COLORS.length];
+};
 const toInputDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 interface Props {
@@ -310,6 +339,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
   return (
     <div style={wrapperStyle}>
+      <NotesTicker />
       {/* Cabeçalho */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', marginBottom: '12px' }}>
         {!tvMode && onBack && (
@@ -516,7 +546,7 @@ export const BoardGrid: React.FC<{
               const cell = tech.cells[st.key] || { count: 0, cards: [] };
               return (
                 <div key={st.key} style={{ padding: `${4 * scale}px`, borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRight: '1px solid var(--border-color, rgba(255,255,255,0.05))', display: 'flex', flexDirection: 'column', gap: `${3 * scale}px`, minHeight: `${44 * scale}px`, minWidth: 0 }}>
-                  {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={showEmpresa} onChangeStatus={onChangeStatus} />)}
+                  {cell.cards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} stageKey={st.key} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa={showEmpresa} onChangeStatus={onChangeStatus} />)}
                   {cell.count > cell.cards.length && (
                     <button
                       onClick={() => onOpenCell(tech.name, st.key, st.label)}
@@ -573,7 +603,7 @@ const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empre
           {!error && cards === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Carregando…</div>}
           {cards && cards.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Nenhuma O.S. nesta célula.</div>}
           {cards && cards.map(card => (
-            <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} />
+            <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} stageKey={stage} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} />
           ))}
         </div>
       </div>
@@ -621,6 +651,34 @@ const uploadOsPhoto = (codos: number, formData: FormData, sendToCustomer: boolea
   formData.append('send_to_customer', sendToCustomer ? 'true' : 'false');
   const isTechnician = !!localStorage.getItem('tech_token');
   return isTechnician ? techApiUpload(`/order/${codos}/photos`, formData) : apiUpload(`/os-board/order/${codos}/photos`, formData);
+};
+
+// Laudo técnico (vai pro campo Observação do Softsystem) + mensagem pro cliente (vai no PDF),
+// gerados pela IA a partir do que já está lançado na O.S. (peças/mão de obra + nota do técnico) -
+// ver backend/app/services/os_report_service.py. getOsReport busca um rascunho já pronto (gerado
+// sozinho pela varredura automática); draftOsReport gera/regenera do zero; rejectOsReport reprova
+// com um motivo e pede nova versão; sendOsReport aprova e manda de verdade (PDF pro cliente +
+// grava no Softsystem).
+const getOsReport = (codos: number) => {
+  const isTechnician = !!localStorage.getItem('tech_token');
+  return isTechnician ? techApiFetch(`/order/${codos}/report`) : apiFetch(`/os-board/order/${codos}/report`);
+};
+
+const draftOsReport = (codos: number) => {
+  const isTechnician = !!localStorage.getItem('tech_token');
+  return isTechnician ? techApiFetch(`/order/${codos}/draft-report`, { method: 'POST' }) : apiFetch(`/os-board/order/${codos}/draft-report`, { method: 'POST' });
+};
+
+const rejectOsReport = (codos: number, reason: string) => {
+  const isTechnician = !!localStorage.getItem('tech_token');
+  const body = JSON.stringify({ reason });
+  return isTechnician ? techApiFetch(`/order/${codos}/reject-report`, { method: 'POST', body }) : apiFetch(`/os-board/order/${codos}/reject-report`, { method: 'POST', body });
+};
+
+const sendOsReport = (codos: number, internalNote: string, customerMessage: string) => {
+  const isTechnician = !!localStorage.getItem('tech_token');
+  const body = JSON.stringify({ internal_note: internalNote, customer_message: customerMessage });
+  return isTechnician ? techApiFetch(`/order/${codos}/send-report`, { method: 'POST', body }) : apiFetch(`/os-board/order/${codos}/send-report`, { method: 'POST', body });
 };
 
 // Checkbox compartilhado pelos dois pontos de upload (OsDetailModal e OsPhotoQuickUploadModal) -
@@ -681,6 +739,22 @@ const PhotoLightbox: React.FC<{ photos: OsFotoItem[]; index: number; onClose: ()
   );
 };
 
+// Cada bloco do detalhe da O.S. (Histórico, Peças, Observações, Fotos...) ganha um fundo
+// intercalado entre a cor primária (verde) e secundária (azul) do app - pedido do usuário em
+// 07/10/2026: "para ele ver melhor as coisas... intercalando para ele saber quando acaba uma e
+// inicia a outra". Só decide a cor; quem decide QUAL variante cada bloco leva é a sequência de
+// chamadas a nextSectionVariant() em OsDetailModal (pulando os blocos escondidos pro técnico, pra
+// alternância continuar certa mesmo com seções condicionais no meio).
+const SECTION_TINT = {
+  primary: { background: 'rgba(0,230,153,0.045)', border: 'rgba(0,230,153,0.16)' },
+  secondary: { background: 'rgba(96,165,250,0.05)', border: 'rgba(96,165,250,0.18)' },
+};
+const Section: React.FC<{ variant: 'primary' | 'secondary'; children: React.ReactNode }> = ({ variant, children }) => (
+  <div style={{ background: SECTION_TINT[variant].background, border: `1px solid ${SECTION_TINT[variant].border}`, borderRadius: '10px', padding: '12px 14px' }}>
+    {children}
+  </div>
+);
+
 const InternalDocToggle: React.FC<{ checked: boolean; onChange: (v: boolean) => void }> = ({ checked, onChange }) => (
   <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '11.5px', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px 0' }}>
     <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} style={{ marginTop: '2px', flexShrink: 0 }} />
@@ -691,11 +765,121 @@ const InternalDocToggle: React.FC<{ checked: boolean; onChange: (v: boolean) => 
 const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos, onClose }) => {
   const [data, setData] = useState<OsOrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [mediaFiles, setMediaFiles] = useState<QuickUploadFileState[]>([]);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [internalDoc, setInternalDoc] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const cameraPhotoRef = useRef<HTMLInputElement>(null);
+  const cameraVideoRef = useRef<HTMLInputElement>(null);
+  const filePickerRef = useRef<HTMLInputElement>(null);
+  const sendingRef = useRef(false);
+  const [internalNote, setInternalNote] = useState<string | null>(null);
+  const [customerMessage, setCustomerMessage] = useState<string | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportSending, setReportSending] = useState(false);
+  const [reportRejecting, setReportRejecting] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportSent, setReportSent] = useState(false);
+  const [showRejectInput, setShowRejectInput] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [techNotes, setTechNotes] = useState<{ id: number; mensagem: string; tecnico: string; criado_por: string; criado_em: string }[]>([]);
+  const [newNoteText, setNewNoteText] = useState('');
+  const [addingNote, setAddingNote] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [resolvingNoteId, setResolvingNoteId] = useState<number | null>(null);
+  const isTechnicianUser = !!localStorage.getItem('tech_token');
+
+  const loadTechNotes = async () => {
+    try {
+      const res = await (isTechnicianUser ? techApiFetch(`/order/${codos}/notes`) : apiFetch(`/os-board/order/${codos}/notes`));
+      setTechNotes(res || []);
+    } catch {
+      // silencioso - não é crítico pra abrir a O.S.
+    }
+  };
+
+  const handleAddNote = async () => {
+    if (!newNoteText.trim() || addingNote) return;
+    setAddingNote(true);
+    setNoteError(null);
+    try {
+      const body = JSON.stringify({ mensagem: newNoteText.trim() });
+      await apiFetch(`/os-board/order/${codos}/notes`, { method: 'POST', body });
+      setNewNoteText('');
+      await loadTechNotes();
+    } catch (err: any) {
+      setNoteError(err?.message || 'Não foi possível adicionar a observação.');
+    } finally {
+      setAddingNote(false);
+    }
+  };
+
+  const handleResolveNote = async (noteId: number) => {
+    if (resolvingNoteId) return;
+    setResolvingNoteId(noteId);
+    try {
+      await apiFetch(`/os-board/notes/${noteId}/resolve`, { method: 'POST' });
+      await loadTechNotes();
+    } catch (err: any) {
+      setNoteError(err?.message || 'Não foi possível marcar como resolvido.');
+    } finally {
+      setResolvingNoteId(null);
+    }
+  };
+
+  const handleDraftReport = async () => {
+    setReportError(null);
+    setReportLoading(true);
+    try {
+      const res = await draftOsReport(codos);
+      setInternalNote(res.internal_note);
+      setCustomerMessage(res.customer_message);
+      setReportSent(false);
+      setShowRejectInput(false);
+    } catch (err: any) {
+      setReportError(err?.message || 'Não foi possível gerar o rascunho.');
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  const handleRejectReport = async () => {
+    if (!rejectReason.trim()) return;
+    setReportError(null);
+    setReportRejecting(true);
+    try {
+      const res = await rejectOsReport(codos, rejectReason.trim());
+      setInternalNote(res.internal_note);
+      setCustomerMessage(res.customer_message);
+      setRejectReason('');
+      setShowRejectInput(false);
+    } catch (err: any) {
+      setReportError(err?.message || 'Não foi possível reprovar e gerar nova versão.');
+    } finally {
+      setReportRejecting(false);
+    }
+  };
+
+  const handleSendReport = async () => {
+    // Trava síncrona (useRef, não o estado reportSending) contra clique duplo - achado em
+    // produção em 07/10/2026 (O.S. #1966 mandou o PDF 2x pro cliente): como a aprovação agora
+    // responde rápido (segundo plano, não trava mais a tela esperando o WhatsApp), um duplo
+    // clique rápido passava antes do React re-renderizar o botão desabilitado (setState é
+    // assíncrono/batched - não bloqueia a chamada seguinte na mesma "volta" do event loop).
+    if (!internalNote || !customerMessage || sendingRef.current) return;
+    sendingRef.current = true;
+    setReportError(null);
+    setReportSending(true);
+    try {
+      await sendOsReport(codos, internalNote, customerMessage);
+      setReportSent(true);
+    } catch (err: any) {
+      setReportError(err?.message || 'Não foi possível enviar o relatório.');
+    } finally {
+      setReportSending(false);
+      sendingRef.current = false;
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -707,27 +891,55 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
         if (!cancelled) setError(err?.message || 'Não foi possível carregar o detalhe da O.S.');
       }
     })();
+    loadTechNotes();
     return () => { cancelled = true; };
   }, [codos]);
 
-  const handlePhotoSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (cameraInputRef.current) cameraInputRef.current.value = '';
-    if (!file) return;
-    setPhotoError(null);
-    setUploadingPhoto(true);
-    const sendToCustomer = !internalDoc;
+  // Se a varredura automática já gerou um rascunho pra essa O.S., mostra ele direto - sem
+  // precisar clicar em "Gerar com IA" (pedido do usuário: fluxo rápido, revisar e aprovar/
+  // reprovar assim que abre a O.S.).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await getOsReport(codos);
+        if (!cancelled && res) {
+          setInternalNote(res.internal_note);
+          setCustomerMessage(res.customer_message);
+        }
+      } catch {
+        // Sem rascunho pendente - normal, mantém o botão manual "Gerar com IA".
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [codos]);
+
+  // Foto/vídeo/arquivo (pedido do usuário em 07/10/2026: ele via só "Tirar foto" aqui e achou que a
+  // função de mandar multimídia pro cliente, já implementada antes, tinha sumido - na verdade só
+  // faltava deixar visível/completo igual ao menuzinho de status, ver StatusMenu) - cada item sobe
+  // em paralelo e aparece com o próprio status, sem esperar os outros terminarem.
+  const uploadMediaOne = async (key: string, file: File, sendToCustomer: boolean) => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const newPhoto = await uploadOsPhoto(codos, formData, sendToCustomer);
-      setData(prev => prev ? { ...prev, fotos: [newPhoto, ...prev.fotos] } : prev);
+      const result = await uploadOsPhoto(codos, formData, sendToCustomer);
+      setMediaFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'done', result } : f));
+      setData(prev => prev ? { ...prev, fotos: [result, ...prev.fotos] } : prev);
     } catch (err: any) {
-      setPhotoError(err?.message || 'Não foi possível enviar a foto.');
-    } finally {
-      setUploadingPhoto(false);
-      setInternalDoc(false);
+      setMediaFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'error', error: err?.message || 'Falha ao enviar' } : f));
     }
+  };
+
+  const addMediaFiles = (fileList: FileList | null) => {
+    if (!fileList || !fileList.length) return;
+    setPhotoError(null);
+    const sendToCustomer = !internalDoc;
+    const toAdd = Array.from(fileList).map((file, i) => ({
+      key: `${Date.now()}_${i}_${file.name}`, file, status: 'uploading' as const,
+    }));
+    setMediaFiles(prev => [...toAdd, ...prev]);
+    toAdd.forEach(item => uploadMediaOne(item.key, item.file, sendToCustomer));
+    setInternalDoc(false);
   };
 
   useEffect(() => {
@@ -735,6 +947,12 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  // Zera a cada render e só avança quando a seção realmente aparece na tela (o "&&" de uma seção
+  // escondida pro técnico nunca chama isso) - garante que a alternância primária/secundária seja
+  // sempre contínua nos blocos visíveis, não importa quais ficam de fora pra cada tipo de usuário.
+  let sectionCount = 0;
+  const nextSectionVariant = (): 'primary' | 'secondary' => (sectionCount++ % 2 === 0 ? 'primary' : 'secondary');
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -764,7 +982,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                 )}
               </div>
 
-              <div>
+              <Section variant={nextSectionVariant()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                   <Clock size={14} /> Histórico
                 </div>
@@ -780,9 +998,9 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                     </div>
                   ))}
                 </div>
-              </div>
+              </Section>
 
-              <div>
+              <Section variant={nextSectionVariant()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                   <Package size={14} /> Peças
                 </div>
@@ -803,32 +1021,211 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                     <span style={{ color: 'var(--accent-primary, #00e699)' }}>{formatMoney(data.valor_total)}</span>
                   </div>
                 )}
-              </div>
+              </Section>
 
-              <div>
+              {/* Pedido do usuário em 07/10/2026: essa seção "lota e confunde" o técnico - fica só
+                  pro admin revisar/aprovar o laudo (mesma modal, aberta a partir do Quadro
+                  administrativo); o técnico só lança peça/observação, que já alimentam a IA. */}
+              {!isTechnicianUser && (
+              <Section variant={nextSectionVariant()}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
-                    <ImageIcon size={14} /> Fotos
+                    <Sparkles size={14} /> Relatório pro Cliente
                   </div>
+                  {!internalNote && (() => {
+                    // Botão só fica ativo se já tem algo lançado pra IA trabalhar em cima (peça ou
+                    // nota do técnico no campo Observação) - pedido do usuário em 07/10/2026: numa
+                    // O.S. recém-aberta ("Entrada", nada lançado ainda) o botão ativo era só
+                    // "sujeira" na tela, convite a gerar relatório vazio/sem sentido.
+                    const fed = data.pecas.length > 0 || !!(data.tecnico_nota && data.tecnico_nota.trim());
+                    const disabled = reportLoading || !fed;
+                    return (
+                      <button
+                        onClick={handleDraftReport}
+                        disabled={disabled}
+                        title={fed ? undefined : 'Lance uma peça ou a observação do técnico na O.S. antes de gerar o relatório.'}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: fed ? 'var(--accent-primary, #00e699)' : 'var(--text-muted)', background: fed ? 'rgba(0,230,153,0.1)' : 'rgba(148,163,184,0.08)', border: `1px solid ${fed ? 'rgba(0,230,153,0.3)' : 'rgba(148,163,184,0.2)'}`, borderRadius: '8px', padding: '6px 10px', cursor: disabled ? 'default' : 'pointer', opacity: reportLoading ? 0.6 : 1 }}
+                      >
+                        {reportLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                        {reportLoading ? 'Gerando…' : 'Gerar com IA'}
+                      </button>
+                    );
+                  })()}
+                </div>
+                {reportError && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{reportError}</div>}
+                {!internalNote && !reportLoading && !reportError && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {(data.pecas.length > 0 || !!(data.tecnico_nota && data.tecnico_nota.trim()))
+                      ? 'A IA monta o laudo técnico e o diagnóstico/orçamento a partir das peças lançadas - você revisa, edita e aprova (ou reprova com um motivo) antes de qualquer coisa ir pro cliente ou pro Softsystem.'
+                      : 'Lance uma peça ou escreva a observação do técnico na O.S. (campo Observação, no Softsystem) pra liberar o relatório.'}
+                  </div>
+                )}
+                {internalNote && customerMessage && !reportSent && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Laudo técnico (vai pro Softsystem)</div>
+                      <textarea
+                        value={internalNote}
+                        onChange={e => setInternalNote(e.target.value)}
+                        rows={4}
+                        style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12.5px', padding: '8px 10px', fontFamily: 'inherit', lineHeight: 1.5 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Mensagem pro cliente (vai no PDF)</div>
+                      <textarea
+                        value={customerMessage}
+                        onChange={e => setCustomerMessage(e.target.value)}
+                        rows={7}
+                        style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12.5px', padding: '8px 10px', fontFamily: 'inherit', lineHeight: 1.5 }}
+                      />
+                    </div>
+                    {showRejectInput && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '8px', borderRadius: '8px', background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)' }}>
+                        <input
+                          value={rejectReason}
+                          onChange={e => setRejectReason(e.target.value)}
+                          placeholder="Por que não está bom? (a IA reelabora com isso)"
+                          style={{ width: '100%', boxSizing: 'border-box', borderRadius: '6px', border: '1px solid rgba(248,113,113,0.3)', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12px', padding: '7px 9px', fontFamily: 'inherit' }}
+                        />
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <button onClick={() => { setShowRejectInput(false); setRejectReason(''); }} disabled={reportRejecting} style={{ flex: 1, padding: '7px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                            Cancelar
+                          </button>
+                          <button onClick={handleRejectReport} disabled={reportRejecting || !rejectReason.trim()} style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '7px', borderRadius: '6px', border: 'none', background: '#f87171', color: '#2b0a0a', fontSize: '11px', fontWeight: 800, cursor: reportRejecting ? 'default' : 'pointer', opacity: reportRejecting ? 0.7 : 1 }}>
+                            {reportRejecting ? <Loader2 size={13} className="animate-spin" /> : null}
+                            {reportRejecting ? 'Reelaborando…' : 'Confirmar reprovação'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {!showRejectInput && (
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        <button onClick={handleDraftReport} disabled={reportLoading} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>
+                          Gerar de novo
+                        </button>
+                        <button onClick={() => setShowRejectInput(true)} disabled={reportSending} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid rgba(248,113,113,0.3)', background: 'transparent', color: '#f87171', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>
+                          Reprovar
+                        </button>
+                        <button onClick={handleSendReport} disabled={reportSending || !internalNote.trim() || !customerMessage.trim()} style={{ flex: 1.3, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: reportSending ? 'default' : 'pointer', opacity: reportSending ? 0.7 : 1 }}>
+                          {reportSending ? <Loader2 size={13} className="animate-spin" /> : null}
+                          {reportSending ? 'Enviando…' : 'Aprovar e enviar pro cliente'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {reportSent && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--accent-primary, #00e699)', fontWeight: 700, padding: '8px', background: 'rgba(0,230,153,0.08)', borderRadius: '8px' }}>
+                    <CheckCircle2 size={14} /> Aprovado! Enviando pro cliente e gravando no Softsystem em segundo plano - pode fechar e seguir pra próxima O.S.
+                  </div>
+                )}
+              </Section>
+              )}
+
+              <Section variant={nextSectionVariant()}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <Bell size={14} /> Observações pro Técnico
+                </div>
+                {noteError && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{noteError}</div>}
+                {techNotes.length === 0 && (
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nenhuma observação pendente nesta O.S.</div>
+                )}
+                {techNotes.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '8px' }}>
+                    {techNotes.map(n => (
+                      <div key={n.id} style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(250,204,21,0.08)', border: '1px solid rgba(250,204,21,0.25)' }}>
+                        <div style={{ fontSize: '12.5px', color: 'var(--text-main)' }}>
+                          {n.mensagem}
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {n.criado_por} · {new Date(n.criado_em).toLocaleDateString('pt-BR')}
+                          </div>
+                        </div>
+                        {!isTechnicianUser && (
+                          <button
+                            onClick={() => handleResolveNote(n.id)}
+                            disabled={resolvingNoteId === n.id}
+                            style={{ flexShrink: 0, fontSize: '11px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'transparent', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '6px', padding: '4px 8px', cursor: resolvingNoteId === n.id ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            {resolvingNoteId === n.id ? '...' : 'Resolvido'}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!isTechnicianUser && (
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <input
+                      value={newNoteText}
+                      onChange={e => setNewNoteText(e.target.value)}
+                      placeholder="Ex: a peça chegou"
+                      style={{ flex: 1, boxSizing: 'border-box', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12px', padding: '7px 9px', fontFamily: 'inherit' }}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAddNote(); }}
+                    />
+                    <button
+                      onClick={handleAddNote}
+                      disabled={addingNote || !newNoteText.trim()}
+                      style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '6px', padding: '0 12px', cursor: addingNote ? 'default' : 'pointer', opacity: addingNote ? 0.6 : 1 }}
+                    >
+                      {addingNote ? <Loader2 size={13} className="animate-spin" /> : 'Adicionar'}
+                    </button>
+                  </div>
+                )}
+              </Section>
+
+              <Section variant={nextSectionVariant()}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <ImageIcon size={14} /> Fotos e Vídeos
+                </div>
+                {/* Pedido do usuário em 07/10/2026: ele não via mais onde mandar foto/vídeo direto
+                    pro cliente (já existia, só estava "escondido" atrás de um único botão de
+                    câmera) - agora os 3 botões (igual ao menuzinho de status) deixam explícito que
+                    dá pra mandar foto, vídeo ou qualquer arquivo, e o aviso abaixo deixa claro que
+                    isso já vai pro WhatsApp do cliente, a não ser que marque como documento interno. */}
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
                   <button
-                    onClick={() => cameraInputRef.current?.click()}
-                    disabled={uploadingPhoto}
-                    style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '8px', padding: '6px 10px', cursor: uploadingPhoto ? 'default' : 'pointer', opacity: uploadingPhoto ? 0.6 : 1 }}
-                  >
-                    {uploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <Camera size={14} />}
-                    {uploadingPhoto ? 'Enviando…' : 'Tirar foto'}
-                  </button>
-                  <input
-                    ref={cameraInputRef} type="file" accept="image/*" capture="environment"
-                    onChange={handlePhotoSelected} style={{ display: 'none' }}
-                  />
+                    onClick={() => cameraPhotoRef.current?.click()}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '8px', padding: '8px 6px', cursor: 'pointer' }}
+                  ><Camera size={14} /> Foto</button>
+                  <button
+                    onClick={() => cameraVideoRef.current?.click()}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.1)', border: '1px solid rgba(0,230,153,0.3)', borderRadius: '8px', padding: '8px 6px', cursor: 'pointer' }}
+                  ><Video size={14} /> Vídeo</button>
+                  <button
+                    onClick={() => filePickerRef.current?.click()}
+                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: 'var(--text-main)', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', border: '1px solid var(--border-color, rgba(255,255,255,0.16))', borderRadius: '8px', padding: '8px 6px', cursor: 'pointer' }}
+                  ><Paperclip size={14} /> Arquivo</button>
+                  <input ref={cameraPhotoRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); if (cameraPhotoRef.current) cameraPhotoRef.current.value = ''; }} />
+                  <input ref={cameraVideoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); if (cameraVideoRef.current) cameraVideoRef.current.value = ''; }} />
+                  {/* accept só com image/video (sem application/pdf): é o que faz o Chrome/Android abrir a
+                      galeria de fotos direto, sem o menu "Escolha uma ação" (Câmera/Câmera Filmadora/
+                      Arquivos) - misturar um tipo não-mídia nesse accept é o que derruba pro seletor
+                      genérico antigo. Pedido do usuário em 07/10/2026 ("não ficou legal" aquele menu). */}
+                  <input ref={filePickerRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); if (filePickerRef.current) filePickerRef.current.value = ''; }} />
+                </div>
+                <div style={{ fontSize: '11px', color: internalDoc ? 'var(--text-muted)' : 'var(--accent-primary, #00e699)', fontWeight: 600, marginBottom: '6px' }}>
+                  {internalDoc ? '🔒 Vai ficar só no Drive/Softsystem, não vai pro cliente.' : '📤 Isso vai direto pro WhatsApp do cliente.'}
                 </div>
                 <InternalDocToggle checked={internalDoc} onChange={setInternalDoc} />
+                {mediaFiles.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', margin: '6px 0' }}>
+                    {mediaFiles.map(f => (
+                      <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                        {f.status === 'uploading' && <Loader2 size={12} className="animate-spin" />}
+                        {f.status === 'done' && <span style={{ color: 'var(--accent-primary)' }}>✓</span>}
+                        {f.status === 'error' && <span style={{ color: '#ef4444' }}>✗</span>}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {photoError && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{photoError}</div>}
-                {data.fotos.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nenhuma foto tirada ainda nesta O.S.</div>}
+                {data.fotos.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nenhuma foto ou vídeo ainda nesta O.S.</div>}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))', gap: '8px' }}>
                   {data.fotos.map(f => {
                     const isImage = f.mimetype.startsWith('image/');
+                    const isVideo = f.mimetype.startsWith('video/');
                     const imageFotos = data.fotos.filter(x => x.mimetype.startsWith('image/'));
                     const imgIdx = isImage ? imageFotos.findIndex(x => x.id === f.id) : -1;
                     return (
@@ -840,7 +1237,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                         {isImage ? (
                           <img src={f.file_url} alt="Foto da O.S." style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                         ) : (
-                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={22} color="var(--text-muted)" /></div>
+                          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{isVideo ? <Video size={22} color="var(--text-muted)" /> : <FileText size={22} color="var(--text-muted)" />}</div>
                         )}
                         <div style={{ position: 'absolute', bottom: '3px', right: '3px', display: 'flex', gap: '2px' }} title={`Drive: ${f.gdrive_status} · WhatsApp: ${f.whatsapp_status} · Softsystem: ${f.softsystem_status}`}>
                           {[f.gdrive_status, f.whatsapp_status, f.softsystem_status].map((s, i) => (
@@ -851,7 +1248,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                     );
                   })}
                 </div>
-              </div>
+              </Section>
             </>
           )}
         </div>
@@ -1075,6 +1472,14 @@ export const MobileBoard: React.FC<{
 }> = ({ board, loading, stageFilter, setStageFilter, isAdmin, onOpenTech, showEmpresa, onOpenCell, onChangeStatus }) => {
   const stages = board?.stages || [];
   const stageKeys = stageFilter ? [stageFilter] : stages.map(s => s.key);
+  // Pedido do usuário em 07/10/2026: a grade de 11 chips de estágio tomava a tela quase inteira,
+  // sobrando só uma fresta pra ver as O.S. de verdade - "ficou horrível, super apertado". Agora
+  // fica recolhido por padrão (só uma barra com o filtro atual) e só abre a grade cheia quando o
+  // técnico toca nela; escolher um estágio já fecha sozinho, pra sobrar tela pra lista.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const activeLabel = stageFilter ? (stages.find(s => s.key === stageFilter)?.label || stageFilter) : 'Todos';
+  const activeCount = stageFilter ? (board?.totals?.[stageFilter] ?? 0) : (board?.total_open ?? 0);
+  const activeColor = stageFilter ? (STAGE_COLORS[stageFilter] || 'var(--accent-primary)') : 'var(--accent-primary)';
 
   const rows = (board?.technicians || [])
     .map(tech => {
@@ -1091,30 +1496,56 @@ export const MobileBoard: React.FC<{
     // wrapper + o container de scroll) a lista não rolava no celular; achatado num nível só, como a
     // grade, resolve.
     <div style={{ flex: 1, overflow: 'auto', WebkitOverflowScrolling: 'touch', touchAction: 'pan-y', overscrollBehavior: 'contain' }}>
-      {/* filtro de estágio: como 8 colunas não cabem lado a lado, escolhe-se uma por vez (ou "Todos") */}
-      <div style={{ position: 'sticky', top: 0, zIndex: 2, background: 'var(--bg-primary)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', padding: '2px 0 8px' }}>
-        <StageChip label="Todos" count={board?.total_open ?? 0} active={!stageFilter} onClick={() => setStageFilter('')} />
-        {stages.map(st => (
-          <StageChip key={st.key} label={st.label} count={board?.totals?.[st.key] ?? 0} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => setStageFilter(st.key)} />
-        ))}
+      {/* filtro de estágio recolhível: fechado por padrão (só a barra com o filtro atual), abre a
+          grade de chips por cima da lista quando tocado, e fecha sozinho ao escolher um estágio -
+          pedido do usuário em 07/10/2026 ("campo de visão minúsculo" -> depois "super apertado"
+          com a grade cheia sempre aberta tomando a tela toda). */}
+      <div style={{ position: 'sticky', top: 0, zIndex: 3, background: 'var(--bg-primary)', padding: '2px 0 10px' }}>
+        <button
+          onClick={() => setFiltersOpen(v => !v)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: '10px', width: '100%', boxSizing: 'border-box',
+            padding: '11px 14px', borderRadius: '10px', cursor: 'pointer',
+            background: `${activeColor}1F`, border: `1.5px solid ${activeColor}55`,
+          }}
+        >
+          <Menu size={18} color={activeColor} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, textAlign: 'left', fontSize: '14px', fontWeight: 800, color: activeColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {activeLabel} <span style={{ fontWeight: 700, opacity: 0.85 }}>({activeCount})</span>
+          </span>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', flexShrink: 0 }}>{filtersOpen ? 'Fechar ▲' : 'Filtrar ▾'}</span>
+        </button>
+        {filtersOpen && (
+          <div style={{ marginTop: '8px', padding: '10px', borderRadius: '12px', background: 'var(--bg-secondary, #0f1824)', border: '1px solid var(--border-color, rgba(255,255,255,0.1))', boxShadow: '0 8px 24px rgba(0,0,0,0.35)', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+            <StageChip label="Todos" count={board?.total_open ?? 0} active={!stageFilter} onClick={() => { setStageFilter(''); setFiltersOpen(false); }} />
+            {stages.map(st => (
+              <StageChip key={st.key} label={st.label} count={board?.totals?.[st.key] ?? 0} color={STAGE_COLORS[st.key]} Icon={STAGE_ICONS[st.key]} active={stageFilter === st.key} onClick={() => { setStageFilter(st.key); setFiltersOpen(false); }} />
+            ))}
+          </div>
+        )}
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
         {board && rows.length === 0 && !loading && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '14px' }}>Nenhuma O.S. neste filtro.</div>
         )}
-        {rows.map(({ tech, items, shown }) => (
-          <div key={tech.name} style={{ border: '1px solid var(--border-color, rgba(255,255,255,0.08))', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
+        {rows.map(({ tech, items, shown }) => {
+          // Cada técnico com sua cor fixa (mesma do letreiro de avisos) - pedido do usuário em
+          // 07/10/2026: "você nem consegue distinguir quando muda de um técnico pra outro" - a barra
+          // grossa colorida + cabeçalho maior deixa a troca de técnico óbvia rolando a lista.
+          const techColor = colorForTechnician(tech.name);
+          return (
+          <div key={tech.name} style={{ border: `1px solid ${techColor}40`, borderRadius: '12px', overflow: 'hidden', background: 'var(--bg-secondary, rgba(255,255,255,0.02))' }}>
             <div
               onClick={() => { if (isAdmin) onOpenTech(tech.name); }}
-              style={{ padding: '10px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-primary, #0b1220)', cursor: isAdmin ? 'pointer' : 'default' }}
+              style={{ padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', background: `${techColor}1F`, borderLeft: `5px solid ${techColor}`, cursor: isAdmin ? 'pointer' : 'default' }}
             >
-              <span style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-main)' }}>{titleCase(tech.name)}</span>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 700 }}>{shown} {stageFilter ? 'nesse estágio' : 'em aberto'}</span>
+              <span style={{ fontSize: '17px', fontWeight: 800, color: techColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{titleCase(tech.name)}</span>
+              <span style={{ flexShrink: 0, fontSize: '12.5px', color: 'var(--text-main)', fontWeight: 800, background: 'rgba(255,255,255,0.08)', padding: '4px 10px', borderRadius: '999px' }}>{shown} {stageFilter ? 'nesse estágio' : 'em aberto'}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {items.map(({ card, stageKey }) => (
-                <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} onChangeStatus={onChangeStatus} />
+                <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={stages.find(s => s.key === stageKey)?.label || stageKey} stageKey={stageKey} color={STAGE_COLORS[stageKey]} showEmpresa={showEmpresa} showStage={!stageFilter} onChangeStatus={onChangeStatus} />
               ))}
               {shown > items.length && (
                 stageFilter ? (
@@ -1128,7 +1559,8 @@ export const MobileBoard: React.FC<{
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -1144,22 +1576,22 @@ const StageChip: React.FC<{ label: string; count: number; active: boolean; onCli
     <button
       onClick={onClick}
       style={{
-        display: 'flex', alignItems: 'center', gap: '6px', width: '100%', boxSizing: 'border-box',
-        padding: '7px 10px', borderRadius: '8px', minWidth: 0,
-        fontSize: '12px', fontWeight: 700, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: '8px', width: '100%', boxSizing: 'border-box',
+        minHeight: '46px', padding: '9px 12px', borderRadius: '10px', minWidth: 0,
+        fontSize: '13.5px', fontWeight: 700, cursor: 'pointer',
         background: active ? `${c}2E` : `${c}14`,
         color: active ? c : 'var(--text-main)',
         border: `1.5px solid ${active ? c : `${c}55`}`,
       }}
     >
-      {Icon && <Icon size={13} color={c} style={{ flexShrink: 0 }} />}
-      <span style={{ flex: 1, minWidth: 0, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <span style={{ flexShrink: 0, color: c, fontWeight: 800 }}>{count}</span>
+      {Icon && <Icon size={15} color={c} style={{ flexShrink: 0 }} />}
+      <span style={{ flex: 1, minWidth: 0, textAlign: 'left', lineHeight: 1.2, wordBreak: 'break-word' }}>{label}</span>
+      <span style={{ flexShrink: 0, color: c, fontWeight: 800, fontSize: '15px' }}>{count}</span>
     </button>
   );
 };
 
-const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: string; showEmpresa: boolean; showStage: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, stageLabel, color, showEmpresa, showStage, onChangeStatus }) => {
+const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; stageKey: string; color?: string; showEmpresa: boolean; showStage: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, stageLabel, stageKey, color, showEmpresa, showStage, onChangeStatus }) => {
   const dias = card.dias_no_estagio ?? 0;
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
@@ -1168,18 +1600,17 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: strin
   return (
     <div
       onClick={() => setShowDetail(true)}
-      style={{ position: 'relative', padding: '9px 12px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `3px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, cursor: 'pointer' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', minWidth: 0 }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
-        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+      style={{ position: 'relative', padding: '13px 14px', borderTop: '1px solid var(--border-color, rgba(255,255,255,0.06))', borderLeft: `4px solid ${aging || color || '#64748b'}`, display: 'flex', flexDirection: 'column', gap: '5px', minWidth: 0, cursor: 'pointer' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
+        <span style={{ fontSize: '14.5px', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1.3, minWidth: 0, wordBreak: 'break-word' }}>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
+        <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '7px' }}>
           <TipoOsBadge tipo={card.tipo_os} />
-          <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
           {onChangeStatus && (
             <button
               ref={btnRef}
               onClick={(e) => { e.stopPropagation(); setAnchorRect(btnRef.current!.getBoundingClientRect()); }}
               title="Mudar status"
-              style={{ width: '34px', height: '34px', padding: 0, borderRadius: '7px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '18px', lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+              style={{ width: '38px', height: '38px', padding: 0, borderRadius: '8px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px', lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
             >⋮</button>
           )}
         </span>
@@ -1187,13 +1618,16 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; color?: strin
       {anchorRect && onChangeStatus && (
         <StatusMenu
           anchorRect={anchorRect}
+          codos={card.codos}
+          stageKey={stageKey}
           onClose={() => setAnchorRect(null)}
           onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
         />
       )}
-      {card.equipamento && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{card.equipamento}</div>}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', fontSize: '11px', marginTop: '2px', flexWrap: 'wrap' }}>
-        <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 500 }}>{dias === 0 ? 'hoje no estágio' : `${dias}d no estágio`}</span>
+      {card.equipamento && <div style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.3 }}>{card.equipamento}</div>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '12px', marginTop: '2px', flexWrap: 'wrap' }}>
+        <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 600 }}>{dias === 0 ? 'hoje no estágio' : `${dias}d no estágio`}</span>
+        <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
         <span style={{ display: 'flex', gap: '8px', color: 'var(--text-muted)' }}>
           {showStage && <span style={{ color: color || 'var(--text-muted)', fontWeight: 700 }}>{stageLabel}</span>}
           {showEmpresa && <span>{EMPRESA_LABEL[card.empresa] || card.empresa}</span>}
@@ -1254,7 +1688,7 @@ export const SearchResultsList: React.FC<{ results: SearchResultCard[]; loading:
             {showTecnico && (
               <div style={{ padding: '6px 12px 0', fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)' }}>{titleCase(card.tecnico || '')}</div>
             )}
-            <MobileOsRow card={card} stageLabel={card.stage_label || ''} color={STAGE_COLORS[(card as any).stage] } showEmpresa={showEmpresa} showStage onChangeStatus={onChangeStatus} />
+            <MobileOsRow card={card} stageLabel={card.stage_label || ''} stageKey={(card as any).stage || ''} color={STAGE_COLORS[(card as any).stage] } showEmpresa={showEmpresa} showStage onChangeStatus={onChangeStatus} />
           </div>
         ))}
       </div>
@@ -1484,7 +1918,7 @@ const headCell = (scale: number): React.CSSProperties => ({
   overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
 });
 
-const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmpresa: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, color, scale, showEmpresa, onChangeStatus }) => {
+const OsCard: React.FC<{ card: BoardCard; stageKey: string; color?: string; scale: number; showEmpresa: boolean; onChangeStatus?: ChangeStatusFn }> = ({ card, stageKey, color, scale, showEmpresa, onChangeStatus }) => {
   const dias = card.dias_no_estagio ?? 0;
   // parada há muito tempo no mesmo estágio: chama atenção
   const aging = dias >= 15 ? '#ef4444' : dias >= 7 ? '#f59e0b' : null;
@@ -1528,6 +1962,8 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
       {anchorRect && onChangeStatus && (
         <StatusMenu
           anchorRect={anchorRect}
+          codos={card.codos}
+          stageKey={stageKey}
           onClose={() => setAnchorRect(null)}
           onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
         />
@@ -1537,9 +1973,13 @@ const OsCard: React.FC<{ card: BoardCard; color?: string; scale: number; showEmp
   );
 };
 
-// Menuzinho flutuante com os 3 status que o técnico pode definir - usado tanto no cartão da grade
+// Menuzinho flutuante com os status disponíveis (varia por estágio - ver
+// STAGE_KEY_ALLOWED_TRANSITIONS) - usado tanto no cartão da grade
 // (OsCard) quanto na linha da lista (MobileOsRow).
-const STATUS_LABELS: Record<number, string> = { 6: 'Aguardando retirada', 11: 'Sem conserto', 13: 'Sem defeito' };
+const STATUS_LABELS: Record<number, string> = {
+  4: 'Execução', 6: 'Aguardando retirada', 7: 'Finalizada', 8: 'Aguardando peça',
+  11: 'Sem conserto', 13: 'Sem defeito',
+};
 
 // Flutua via portal direto no <body>, posicionado em 'fixed' pelas coordenadas reais do botão que
 // abriu - nunca fica preso/cortado por nenhum contêiner com overflow:hidden no meio do caminho
@@ -1551,33 +1991,80 @@ const STATUS_LABELS: Record<number, string> = { 6: 'Aguardando retirada', 11: 'S
 // fica esperando uma resposta de UI nativa que esse ambiente não sabe mostrar). Por isso o menu
 // inteiro (escolher status, perguntar o motivo do "sem conserto", confirmar) é resolvido só com UI
 // própria dentro do mesmo portal, nunca com diálogo nativo do navegador.
-const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (status: number, label: string, obs?: string) => void }> = ({ anchorRect, onClose, onPick }) => {
+const StatusMenu: React.FC<{ anchorRect: DOMRect; codos: number; stageKey: string; onClose: () => void; onPick: (status: number, label: string, obs?: string) => void }> = ({ anchorRect, codos, stageKey, onClose, onPick }) => {
   const [step, setStep] = useState<'menu' | 'motivo' | 'confirm'>('menu');
   const [pendingKey, setPendingKey] = useState<number | null>(null);
   const [obsText, setObsText] = useState('');
+  const allowedKeys = STAGE_KEY_ALLOWED_TRANSITIONS[stageKey] || [];
+  const availableOptions = TECH_STATUS_OPTIONS.filter(opt => allowedKeys.includes(opt.key));
+  // Pulando direto de "Aprovado" pra "Aguardando retirada" (sem passar pela Execução), a
+  // observação vira obrigatória - pedido do usuário em 07/10/2026: precisa explicar o que foi
+  // feito, já que não existe outro registro desse caminho mais curto.
+  const obsRequired = stageKey === 'aprovado' && pendingKey === 6;
+  // Anexo de foto/vídeo ao mudar status (pedido do usuário em 07/10/2026): fica registrado nos
+  // arquivos da O.S. no Softsystem e vai pro cliente, mesmo pipeline do upload rápido já existente
+  // (uploadOsPhoto -> handle_os_photo_upload: Drive + WhatsApp + Softsystem, em paralelo).
+  const [mediaFiles, setMediaFiles] = useState<QuickUploadFileState[]>([]);
+  const midiaCameraPhotoRef = useRef<HTMLInputElement>(null);
+  const midiaCameraVideoRef = useRef<HTMLInputElement>(null);
+  const midiaFilePickerRef = useRef<HTMLInputElement>(null);
+
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (step !== 'menu') return; // com o textarea/confirmação aberta, clique fora não deve fechar sozinho
-    const onDocClick = () => onClose();
-    // "capture" pra fechar antes de qualquer outro onClick da página processar o clique de fora
+    // BUG encontrado em produção em 07/10/2026 (técnico relatou "cliquei em todos os botões e
+    // nenhum funcionou"): esse listener fica no document em fase de CAPTURA, que roda ANTES do
+    // evento chegar no alvo - ou seja, roda antes até do próprio onClick do botão de opção lá
+    // dentro do menu. Sem checar se o clique foi DENTRO do menu, ele fechava (onClose) a cada
+    // toque em QUALQUER botão da própria lista, inclusive os de status - o stopPropagation() no
+    // wrapper do menu não adianta nada aqui porque é fase de bolha (bubble), e a fase de captura
+    // no document já rodou antes disso. Com o containment check abaixo, só fecha quando o clique
+    // realmente aconteceu fora do menu.
+    const onDocClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose();
+    };
     document.addEventListener('click', onDocClick, true);
     return () => document.removeEventListener('click', onDocClick, true);
   }, [onClose, step]);
 
   const choose = (key: number) => {
     setPendingKey(key);
-    // "Sem conserto" é o único cujo texto ao cliente muda com o motivo (ver
-    // AutomationService.sem_conserto_motivo, no backend) - pergunta antes de confirmar. Opcional:
-    // sem motivo, vai a mensagem padrão, sem detalhe.
-    setStep(key === 11 ? 'motivo' : 'confirm');
+    // "Sem conserto" pergunta o motivo (opcional - vira o {motivo} da mensagem ao cliente, ver
+    // AutomationService.sem_conserto_motivo). "Aprovado" -> "Aguardando retirada" (pulando a
+    // Execução) também pergunta, mas aqui é OBRIGATÓRIO (ver obsRequired acima).
+    const needsObsStep = key === 11 || (stageKey === 'aprovado' && key === 6);
+    setStep(needsObsStep ? 'motivo' : 'confirm');
+  };
+
+  const uploadMediaOne = async (key: string, file: File) => {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const result = await uploadOsPhoto(codos, formData, true);
+      setMediaFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'done', result } : f));
+    } catch (err: any) {
+      setMediaFiles(prev => prev.map(f => f.key === key ? { ...f, status: 'error', error: err?.message || 'Falha ao enviar' } : f));
+    }
+  };
+
+  const addMediaFiles = (fileList: FileList | null) => {
+    if (!fileList || !fileList.length) return;
+    const toAdd = Array.from(fileList).map((file, i) => ({
+      key: `${Date.now()}_${i}_${file.name}`, file, status: 'uploading' as const,
+    }));
+    setMediaFiles(prev => [...prev, ...toAdd]);
+    toAdd.forEach(item => uploadMediaOne(item.key, item.file));
   };
 
   const confirm = () => {
     if (pendingKey == null) return;
-    onPick(pendingKey, STATUS_LABELS[pendingKey], pendingKey === 11 ? (obsText.trim() || undefined) : undefined);
+    if (obsRequired && !obsText.trim()) return;
+    const sendsObs = pendingKey === 11 || obsRequired;
+    onPick(pendingKey, STATUS_LABELS[pendingKey], sendsObs ? (obsText.trim() || undefined) : undefined);
   };
 
-  const menuWidth = step === 'menu' ? 170 : 220;
+  const menuWidth = step === 'menu' ? 170 : 240;
   const spaceBelow = window.innerHeight - anchorRect.bottom;
   const openUpward = spaceBelow < 220 && anchorRect.top > 220;
   const style: React.CSSProperties = {
@@ -1595,7 +2082,7 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (
   if (step === 'menu') {
     body = (
       <>
-        {TECH_STATUS_OPTIONS.map(opt => (
+        {availableOptions.map(opt => (
           <button key={opt.key} onClick={() => choose(opt.key)} style={btnStyle}>{STATUS_LABELS[opt.key]}</button>
         ))}
         <button onClick={onClose} style={cancelStyle}>Cancelar</button>
@@ -1604,8 +2091,10 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (
   } else if (step === 'motivo') {
     body = (
       <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-main)' }}>Motivo (opcional)</div>
-        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Aparece resumido na mensagem pro cliente.</div>
+        <div style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-main)' }}>Motivo {obsRequired ? '(obrigatório)' : '(opcional)'}</div>
+        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+          {obsRequired ? 'Explique o que foi feito - vai pro registro interno da O.S.' : 'Aparece resumido na mensagem pro cliente.'}
+        </div>
         <textarea
           autoFocus
           value={obsText}
@@ -1615,18 +2104,46 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (
         />
         <div style={{ display: 'flex', gap: '6px' }}>
           <button onClick={() => setStep('menu')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>Voltar</button>
-          <button onClick={() => setStep('confirm')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: 'pointer' }}>Continuar</button>
+          <button
+            onClick={() => { if (!obsRequired || obsText.trim()) setStep('confirm'); }}
+            disabled={obsRequired && !obsText.trim()}
+            style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: (obsRequired && !obsText.trim()) ? 'var(--border-color, rgba(255,255,255,0.18))' : 'var(--accent-primary)', color: (obsRequired && !obsText.trim()) ? 'var(--text-muted)' : '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: (obsRequired && !obsText.trim()) ? 'not-allowed' : 'pointer' }}
+          >Continuar</button>
         </div>
       </div>
     );
   } else {
+    // Confirmação + anexo de mídia na MESMA tela (pedido do usuário em 07/10/2026: a etapa
+    // separada só pra "pular" deixava o fluxo lento pra quem não quer anexar nada) - os botões de
+    // foto/vídeo ficam compactos ao lado do "Confirmar", nunca bloqueando quem só quer confirmar.
+    const btnMini: React.CSSProperties = { flex: 1, padding: '6px 4px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'rgba(255,255,255,0.04)', color: 'var(--text-main)', fontSize: '10px', fontWeight: 700, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' };
     body = (
-      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      <div style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-main)' }}>
           Marcar como "{pendingKey != null ? STATUS_LABELS[pendingKey] : ''}"?
         </div>
         <div style={{ display: 'flex', gap: '6px' }}>
-          <button onClick={() => setStep(pendingKey === 11 ? 'motivo' : 'menu')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>Voltar</button>
+          <button onClick={() => midiaCameraPhotoRef.current?.click()} style={btnMini}><Camera size={14} />Foto</button>
+          <button onClick={() => midiaCameraVideoRef.current?.click()} style={btnMini}><Video size={14} />Vídeo</button>
+          <button onClick={() => midiaFilePickerRef.current?.click()} style={btnMini}><Paperclip size={14} />Arquivo</button>
+        </div>
+        <input ref={midiaCameraPhotoRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); e.target.value = ''; }} />
+        <input ref={midiaCameraVideoRef} type="file" accept="video/*" capture="environment" style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); e.target.value = ''; }} />
+        <input ref={midiaFilePickerRef} type="file" accept="image/*,video/*" multiple style={{ display: 'none' }} onChange={e => { addMediaFiles(e.target.files); e.target.value = ''; }} />
+        {mediaFiles.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '80px', overflowY: 'auto' }}>
+            {mediaFiles.map(f => (
+              <div key={f.key} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                {f.status === 'uploading' && <Loader2 size={12} className="animate-spin" />}
+                {f.status === 'done' && <span style={{ color: 'var(--accent-primary)' }}>✓</span>}
+                {f.status === 'error' && <span style={{ color: '#ef4444' }}>✗</span>}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file.name}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button onClick={() => setStep((pendingKey === 11 || obsRequired) ? 'motivo' : 'menu')} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer' }}>Voltar</button>
           <button onClick={confirm} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: 'pointer' }}>Confirmar</button>
         </div>
       </div>
@@ -1634,10 +2151,77 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; onClose: () => void; onPick: (
   }
 
   return createPortal(
-    <div onClick={e => e.stopPropagation()} style={style}>
+    <div ref={menuRef} onClick={e => e.stopPropagation()} style={style}>
       {body}
     </div>,
     document.body
+  );
+};
+
+// --------------------------------------------------------------------------- letreiro de observações
+
+interface TickerNote {
+  id: number;
+  codos: number;
+  tecnico: string;
+  mensagem: string;
+  criado_em: string;
+}
+
+// Barra fixa no rodapé do Quadro Geral com as observações ativas deixadas pros técnicos (ex.: "a
+// peça chegou") - pedido do usuário em 07/10/2026, estilo "breaking news" de telejornal, sempre
+// visível (oculta sozinha quando não há nada pendente). Atualiza na hora via o mesmo WebSocket que
+// já avisa o resto do quadro (TECH_NOTE_UPDATE -> evento 'tech-note-update', ver Dashboard.tsx),
+// com uma releitura periódica de segurança.
+const NotesTicker: React.FC = () => {
+  const [notes, setNotes] = useState<TickerNote[]>([]);
+
+  const load = useCallback(() => {
+    apiFetch('/os-board/notes/ticker').then(data => setNotes(data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    load();
+    const onUpdate = () => load();
+    window.addEventListener('tech-note-update', onUpdate);
+    const interval = window.setInterval(load, 60000);
+    return () => {
+      window.removeEventListener('tech-note-update', onUpdate);
+      window.clearInterval(interval);
+    };
+  }, [load]);
+
+  if (notes.length === 0) return null;
+
+  const totalChars = notes.reduce((sum, n) => sum + n.mensagem.length + n.tecnico.length + 25, 0);
+  const duration = Math.max(20, Math.round(totalChars * 0.13));
+
+  const renderItems = (keyPrefix: string) => notes.map(n => (
+    <span key={`${keyPrefix}-${n.id}`} style={{ paddingRight: '36px' }}>
+      <b style={{ color: colorForTechnician(n.tecnico) }}>{titleCase(n.tecnico)}</b>
+      {' — '}
+      <span style={{ color: 'var(--text-muted, #94a3b8)', fontWeight: 700 }}>O.S. #{n.codos}:</span>
+      {' '}{n.mensagem}
+      <span style={{ color: 'var(--text-muted, #94a3b8)', fontWeight: 400 }}> ({new Date(n.criado_em).toLocaleDateString('pt-BR')})</span>
+      <span style={{ color: 'var(--text-muted, #94a3b8)' }}>     •</span>
+    </span>
+  ));
+
+  return (
+    <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 20001, height: '34px', background: 'rgba(15,23,42,0.97)', borderTop: '1px solid rgba(250,204,21,0.4)', display: 'flex', alignItems: 'center', overflow: 'hidden' }}>
+      <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px', padding: '0 12px', height: '100%', background: '#b91c1c', color: '#fff', fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <Bell size={12} /> Avisos
+      </div>
+      <div style={{ flex: 1, overflow: 'hidden', whiteSpace: 'nowrap', position: 'relative', height: '100%' }}>
+        <div
+          className="animate-ticker"
+          style={{ display: 'inline-block', whiteSpace: 'nowrap', fontSize: '12.5px', fontWeight: 600, color: '#e2e8f0', lineHeight: '34px', animationDuration: `${duration}s` }}
+        >
+          <span style={{ paddingRight: '70px' }}>{renderItems('a')}</span>
+          <span style={{ paddingRight: '70px' }}>{renderItems('b')}</span>
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -1703,7 +2287,7 @@ const TvCarousel: React.FC<{
                 <div style={{ fontSize: fs(13), fontWeight: 800, color: STAGE_COLORS[st.key] || 'var(--text-muted)', marginTop: '2px' }}>{cell.count}</div>
               </div>
               <div style={{ flex: 1, overflowY: 'auto', padding: `${6 * scale}px`, display: 'flex', flexDirection: 'column', gap: `${5 * scale}px` }}>
-                {visibleCards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
+                {visibleCards.map(card => <OsCard key={`${card.empresa}-${card.codos}`} card={card} stageKey={st.key} color={STAGE_COLORS[st.key]} scale={scale} showEmpresa />)}
                 {cell.count > cell.cards.length && tech && (
                   <button
                     onClick={() => onOpenCell(tech.name, st.key, st.label)}

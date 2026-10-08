@@ -54,12 +54,25 @@ class FatalUploadError extends Error {}
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-async function authorizedPost(endpoint: string, body: BodyInit, isJson: boolean): Promise<Response> {
+// Achado em produção em 05/10/2026: fetch() não tem timeout nenhum por padrão - numa conexão
+// instável (ex.: internet lenta/oscilando da loja), uma parte do upload podia travar a conexão
+// sem nunca falhar nem ter sucesso, e o navegador ficava esperando pra sempre ("carregando..."
+// infinito) - a lógica de nova tentativa nunca disparava porque a Promise nunca resolvia nem
+// rejeitava. Timeout força a falha depois de um tempo razoável, pra entrar no circuito de retry.
+const UPLOAD_REQUEST_TIMEOUT_MS = 60000;
+
+async function authorizedPost(endpoint: string, body: BodyInit, isJson: boolean, timeoutMs = UPLOAD_REQUEST_TIMEOUT_MS): Promise<Response> {
   const token = localStorage.getItem('token');
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (isJson) headers['Content-Type'] = 'application/json';
-  return fetch(`${getApiBase()}${endpoint}`, { method: 'POST', headers, body });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${getApiBase()}${endpoint}`, { method: 'POST', headers, body, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function readErrorDetail(response: Response, fallback: string): Promise<string> {
@@ -75,17 +88,39 @@ async function readErrorDetail(response: Response, fallback: string): Promise<st
  * parte é seguro (o servidor sobrescreve). O passo final só repete em falha de rede/502/503, nunca em 504,
  * para não mandar o mesmo arquivo duas vezes ao cliente.
  */
+// 32 caracteres hexadecimais (0-9a-f) - o backend exige esse formato exato pro upload_id
+// (_UPLOAD_ID_RE em conversations.py). Achado em produção em 05/10/2026: em navegadores sem
+// crypto.randomUUID (ou fora de contexto seguro), o uploadId caía no modo alternativo
+// `${Date.now()}${Math.random()}`, que inclui um PONTO decimal do Math.random() - não é hex
+// válido, o backend recusava com "upload_id inválido" e o PDF nunca saía do lugar. Gera os 32
+// dígitos hex na mão, sem depender de nenhuma API que possa faltar.
+function randomHex32(): string {
+  if (crypto.randomUUID) return crypto.randomUUID().replace(/-/g, '');
+  let s = '';
+  for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s;
+}
+
+// Quantas partes sobem AO MESMO TEMPO. Achado em produção em 05/10/2026: subir uma parte de
+// cada vez, esperando a anterior terminar pra só então começar a próxima, multiplicava o atraso
+// de ida-e-volta de cada requisição (TLS, Cloudflare Tunnel, etc.) pelo número de partes - num
+// arquivo de 10 MB (10 partes) isso significava 10 round-trips sequenciais. Com isso,
+// CHUNK_CONCURRENCY partes sobem em paralelo, cada "trabalhador" pega a próxima parte livre assim
+// que termina a sua - pedido explícito do usuário ("tem que ser 1000x mais rápido").
+const CHUNK_CONCURRENCY = 4;
+
 export async function apiUploadChunked(
   endpointBase: string,
   file: File,
   caption?: string,
   onProgress?: (sent: number, total: number) => void
 ) {
-  const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}${Math.random()}`).replace(/-/g, '').padEnd(32, '0').slice(0, 32).toLowerCase();
+  const uploadId = randomHex32().toLowerCase();
   const total = Math.max(1, Math.ceil(file.size / UPLOAD_CHUNK_BYTES));
   const CHUNK_DELAYS_MS = [0, 1500, 3000, 6000, 10000];
+  let sentCount = 0;
 
-  for (let index = 0; index < total; index++) {
+  const uploadOneChunk = async (index: number) => {
     const blob = file.slice(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
     let done = false;
     let lastError = 'Falha de conexão ao enviar o arquivo.';
@@ -116,8 +151,29 @@ export async function apiUploadChunked(
       }
     }
     if (!done) throw new Error(lastError);
-    if (onProgress) onProgress(index + 1, total);
-  }
+    sentCount++;
+    if (onProgress) onProgress(sentCount, total);
+  };
+
+  // Pool simples: N "trabalhadores" rodando ao mesmo tempo, cada um pega o próximo índice livre
+  // assim que termina o seu - pára todo mundo no primeiro erro definitivo (sessão expirada, parte
+  // rejeitada de vez), mas deixa os já em andamento terminarem antes de propagar o erro.
+  let nextIndex = 0;
+  let firstError: any = null;
+  const worker = async () => {
+    while (!firstError) {
+      const myIndex = nextIndex++;
+      if (myIndex >= total) return;
+      try {
+        await uploadOneChunk(myIndex);
+      } catch (err) {
+        if (!firstError) firstError = err;
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, total) }, () => worker()));
+  if (firstError) throw firstError;
 
   const completeBody = JSON.stringify({
     upload_id: uploadId,
@@ -168,11 +224,18 @@ export async function apiUpload(endpoint: string, formData: FormData) {
       await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
     }
     try {
-      response = await fetch(`${getApiBase()}${endpoint}`, {
-        method: 'POST',
-        headers,
-        body: formData
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), UPLOAD_REQUEST_TIMEOUT_MS);
+      try {
+        response = await fetch(`${getApiBase()}${endpoint}`, {
+          method: 'POST',
+          headers,
+          body: formData,
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       lastNetworkError = false;
     } catch (err: any) {
       response = null;

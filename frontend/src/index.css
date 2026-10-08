@@ -214,6 +214,14 @@ button {
   animation: spin 1s linear infinite;
 }
 
+@keyframes tickerScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-ticker {
+  animation: tickerScroll linear infinite;
+}
+
 @keyframes pulseGlow {
   0% { box-shadow: 0 0 0 0 rgba(0, 230, 153, 0.4); }
   70% { box-shadow: 0 0 0 10px rgba(0, 230, 153, 0); }

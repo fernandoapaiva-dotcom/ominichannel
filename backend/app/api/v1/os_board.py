@@ -14,6 +14,7 @@ Regras combinadas com a loja:
     CODORCAMENTO) no Softsystem (já efetivadas/devolvidas ao cliente) não entram no quadro - ficam só na auditoria.
   - Um quadro só para as duas empresas (Servweld e Centro-Oeste), com filtro por empresa.
 """
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -28,7 +29,7 @@ from app.api.websockets import manager as ws_manager
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.models.models import OsBoardOrder, OsBoardEvent, OsBoardItem, OsBoardPhoto, User, UserRole, WhatsAppNumber
+from app.models.models import OsBoardOrder, OsBoardEvent, OsBoardItem, OsBoardPhoto, OsTechnicianNote, User, UserRole, WhatsAppNumber
 from app.api.v1.os_handler_ingest import verify_os_handler_key, TIPO_OS_LABEL
 from app.services.os_board_photo_service import handle_os_photo_upload
 
@@ -138,6 +139,7 @@ class BoardOrderIn(BaseModel):
     contato_nome: Optional[str] = None
     valor_total: Optional[float] = None
     forma_pagamento: Optional[str] = None
+    equip_obs: Optional[str] = None
 
 
 class BoardEventIn(BaseModel):
@@ -222,6 +224,7 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
             row.contato_nome = _clean(o.contato_nome, 120)
         row.valor_total = o.valor_total
         row.forma_pagamento = _clean(o.forma_pagamento, 60)
+        row.equip_obs_raw = _clean(o.equip_obs, 2000)
         row.atualizado_em = now
 
     # ---- eventos: substitui integralmente o histórico das O.S. tocadas neste lote (o vigia sempre
@@ -278,11 +281,21 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
     # ---- peças/itens: substitui integralmente a lista das O.S. tocadas (mesma lógica dos eventos -
     # o vigia sempre manda a lista completa de cada O.S. que tocou, então um item removido/corrigido
     # no Softsystem também some/corrige aqui, em vez de só acumular pra sempre).
-    for i in range(0, len(codos_list), 500):
-        chunk = codos_list[i:i + 500]
-        await db.execute(delete(OsBoardItem).where(
-            OsBoardItem.tenant_id == tenant_id, OsBoardItem.empresa == empresa, OsBoardItem.codos.in_(chunk)
-        ))
+    # BUG encontrado em produção em 07/10/2026 (O.S. #1416 perdeu peça e mão de obra da tela): esse
+    # delete filtrava só por empresa+codos, sem LOJA - uma O.S. de outra loja da mesma empresa com o
+    # mesmo número de código apagava as peças desta aqui, e o insert seguinte só repunha as peças da
+    # loja que realmente veio no payload, deixando esta pra sempre sem nada. Agora escopado por loja.
+    touched_by_loja: Dict[int, set] = {}
+    for loja, codos in touched:
+        touched_by_loja.setdefault(loja, set()).add(codos)
+    for loja, codos_set in touched_by_loja.items():
+        chunk_codos = sorted(codos_set)
+        for i in range(0, len(chunk_codos), 500):
+            chunk = chunk_codos[i:i + 500]
+            await db.execute(delete(OsBoardItem).where(
+                OsBoardItem.tenant_id == tenant_id, OsBoardItem.empresa == empresa,
+                OsBoardItem.loja == loja, OsBoardItem.codos.in_(chunk)
+            ))
     for it in payload.itens:
         db.add(OsBoardItem(
             tenant_id=tenant_id, empresa=empresa, loja=it.loja, codos=it.codos,
@@ -323,6 +336,19 @@ async def sync_board(payload: BoardSyncIn, db: AsyncSession = Depends(get_db)):
             await ws_manager.broadcast_to_tenant(tenant_id, {"type": "OS_BOARD_UPDATE", "empresa": empresa})
         except Exception as err:
             logger.debug(f"[OS BOARD] broadcast falhou: {err}")
+
+    # Dispara a geração do rascunho da IA NA HORA que as peças/observação chegam, em vez de
+    # esperar a varredura periódica (até 3 min antes) - pedido do usuário em 07/10/2026
+    # ("terminei de lançar, fui lá no sistema e ele ainda não tinha gerado... tem que ser só o
+    # tempo de mudar de sistema"). Só tenta pras O.S. que vieram no payload.orders deste lote
+    # (não pras que só tiveram evento) - são as que podem ter mudado valor_total/peças/observação.
+    try:
+        from app.services.os_report_autodraft_service import try_draft_one
+        for o in payload.orders:
+            asyncio.create_task(try_draft_one(tenant_id, o.codos))
+    except Exception as err:
+        logger.debug(f"[OS BOARD] Disparo em tempo real do rascunho falhou: {err}")
+
     return {"status": "ok", "orders": len(payload.orders), "events": new_events}
 
 
@@ -582,6 +608,7 @@ async def _order_detail(db: AsyncSession, tenant_id: int, codos: int) -> Dict[st
         "stage": _stage_of(order),
         "valor_total": order.valor_total,
         "forma_pagamento": order.forma_pagamento,
+        "tecnico_nota": order.equip_obs_raw,
         "historico": [
             {"evento": EVENT_LABELS.get(e.cod_evento, str(e.cod_evento)), "cod": e.cod_evento, "data": _iso(e.data), "obs": e.obs}
             for e in evs
@@ -636,6 +663,179 @@ async def upload_order_photo(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+class SendReportRequest(BaseModel):
+    internal_note: str
+    customer_message: str
+
+
+class RejectReportRequest(BaseModel):
+    reason: str
+
+
+@router.get("/order/{codos}/report")
+async def get_order_report(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Rascunho pendente de revisão (se a varredura automática já gerou um) - permite abrir a
+    O.S. e já achar o laudo pronto pra aprovar/reprovar, sem precisar clicar em nada antes."""
+    from app.services.os_report_service import get_pending_draft
+    draft = await get_pending_draft(current_user.tenant_id, codos)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Nenhum rascunho pendente pra essa O.S.")
+    return draft
+
+
+@router.post("/order/{codos}/draft-report")
+async def draft_order_report(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Rascunho do laudo técnico (campo Observação) + mensagem pro cliente (PDF), montados pela IA
+    a partir do que já está lançado na O.S. (peças/mão de obra + nota do técnico) - ver
+    os_report_service.py. Só gera os textos pra revisão; nada é enviado/gravado aqui.
+    """
+    from app.services.os_report_service import generate_report_draft
+    try:
+        return await generate_report_draft(current_user.tenant_id, codos)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/reject-report")
+async def reject_order_report(
+    codos: int,
+    payload: RejectReportRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Reprova o rascunho atual com um motivo - a IA reelabora os dois textos levando o motivo
+    em conta e devolve uma nova versão pra revisão."""
+    from app.services.os_report_service import reject_report
+    try:
+        return await reject_report(current_user.tenant_id, codos, payload.reason)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/send-report")
+async def send_order_report(
+    codos: int,
+    payload: SendReportRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Aprova o rascunho (já revisado/editado por um humano): gera o PDF e manda pro cliente,
+    grava o laudo técnico no campo Observação e o evento "Orçamento Enviado" de volta no
+    Softsystem de verdade."""
+    from app.services.os_report_service import approve_report
+    try:
+        return await approve_report(
+            current_user.tenant_id, codos, payload.internal_note, payload.customer_message,
+            current_user.nome or "Atendente"
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+class CreateTechnicianNoteRequest(BaseModel):
+    mensagem: str
+
+
+@router.get("/order/{codos}/notes")
+async def list_order_notes(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Observações ativas (não resolvidas) dessa O.S. - pra mostrar na tela de detalhe."""
+    rows = (await db.execute(select(OsTechnicianNote).where(
+        OsTechnicianNote.tenant_id == current_user.tenant_id, OsTechnicianNote.codos == codos,
+        OsTechnicianNote.resolved_at.is_(None)
+    ).order_by(OsTechnicianNote.criado_em.desc()))).scalars().all()
+    return [
+        {"id": n.id, "mensagem": n.mensagem, "tecnico": n.tecnico, "criado_por": n.criado_por, "criado_em": n.criado_em.isoformat()}
+        for n in rows
+    ]
+
+
+@router.post("/order/{codos}/notes")
+async def create_order_note(
+    codos: int,
+    payload: CreateTechnicianNoteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Cria uma observação/lembrete nessa O.S. pro técnico responsável por ela - pedido do
+    usuário em 07/10/2026 (ex.: "a peça chegou"). Aparece no letreiro do quadro, na lista do
+    Portal do Técnico dele, e é reenviada por WhatsApp de 2 em 2 dias até ser marcada como
+    resolvida (ver os_technician_note_service.py)."""
+    order = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == current_user.tenant_id, OsBoardOrder.codos == codos
+    ))).scalars().first()
+    if not order:
+        raise HTTPException(status_code=404, detail=f"O.S. #{codos} não encontrada no quadro")
+    if not order.tecnico:
+        raise HTTPException(status_code=422, detail=f"O.S. #{codos} não tem técnico responsável definido")
+    if not payload.mensagem or not payload.mensagem.strip():
+        raise HTTPException(status_code=422, detail="Mensagem não pode ser vazia")
+
+    note = OsTechnicianNote(
+        tenant_id=current_user.tenant_id, empresa=order.empresa, loja=order.loja, codos=codos,
+        tecnico=order.tecnico, mensagem=payload.mensagem.strip(), criado_por=current_user.nome or "Atendente",
+    )
+    db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    try:
+        await ws_manager.broadcast_to_tenant(current_user.tenant_id, {"type": "TECH_NOTE_UPDATE"})
+    except Exception as err:
+        logger.debug(f"[OS BOARD] broadcast de nota falhou: {err}")
+    return {"id": note.id, "mensagem": note.mensagem, "tecnico": note.tecnico, "criado_por": note.criado_por, "criado_em": note.criado_em.isoformat()}
+
+
+@router.post("/notes/{note_id}/resolve")
+async def resolve_technician_note(
+    note_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Marca a observação como resolvida - para a cobrança automática de 2 em 2 dias e some do
+    letreiro/Portal do Técnico. Sempre manual (pedido explícito do usuário)."""
+    note = (await db.execute(select(OsTechnicianNote).where(
+        OsTechnicianNote.id == note_id, OsTechnicianNote.tenant_id == current_user.tenant_id
+    ))).scalars().first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Observação não encontrada")
+    note.resolved_at = datetime.utcnow()
+    note.resolved_by = current_user.nome or "Atendente"
+    await db.commit()
+    try:
+        await ws_manager.broadcast_to_tenant(current_user.tenant_id, {"type": "TECH_NOTE_UPDATE"})
+    except Exception as err:
+        logger.debug(f"[OS BOARD] broadcast de nota resolvida falhou: {err}")
+    return {"status": "resolved", "id": note_id}
+
+
+@router.get("/notes/ticker")
+async def list_ticker_notes(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Todas as observações ativas do tenant (qualquer empresa/técnico) - alimenta o letreiro
+    do Quadro de Técnicos. Mais antiga primeiro, pra não sumir da fila antes de ser vista."""
+    rows = (await db.execute(select(OsTechnicianNote).where(
+        OsTechnicianNote.tenant_id == current_user.tenant_id, OsTechnicianNote.resolved_at.is_(None)
+    ).order_by(OsTechnicianNote.criado_em.asc()))).scalars().all()
+    return [
+        {"id": n.id, "codos": n.codos, "tecnico": n.tecnico, "mensagem": n.mensagem, "criado_em": n.criado_em.isoformat()}
+        for n in rows
+    ]
 
 
 @router.get("/search")
