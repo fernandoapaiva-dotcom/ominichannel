@@ -1,0 +1,9 @@
+feat: barra de abas de modulos no topo, estilo Chrome
+
+Barra horizontal fixa no topo do Dashboard (so desktop - mobile ja tem o
+MobileBottomNav) com uma aba por modulo (WhatsApp, Assistencia Tecnica,
+Configuracoes se admin) - clicar troca na hora, sem precisar voltar pra tela
+inicial de blocos primeiro. Pedido do usuario depois de ver a tela de modulos:
+"trabalha mais rapido" que ficar voltando pro meio.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>

@@ -17,6 +17,7 @@ import { DepartmentBar } from '../components/DepartmentBar';
 import { MobileBottomNav } from '../components/MobileBottomNav';
 import { TechBoard, OsPhotoQuickUploadModal } from '../components/TechBoard';
 import { ModuleHome } from '../components/ModuleHome';
+import { ModuleTabBar } from '../components/ModuleTabBar';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
@@ -1138,6 +1139,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
   return (
     <div className="dashboard-layout" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100dvh', overflow: 'hidden', backgroundColor: 'var(--bg-primary)' }}>
+      <ModuleTabBar user={user} activeTab={activeTab} onSelectModule={setActiveTab} />
       {showNotificationPrompt && (
         <div className="dashboard-notification-banner" style={{
           flexShrink: 0,

@@ -309,6 +309,12 @@ button {
     display: none !important;
   }
 
+  /* ── Barra de abas de módulos (estilo Chrome) é só pra desktop - mobile já tem o
+     MobileBottomNav cuidando da navegação, duplicar ocuparia espaço precioso de tela. ── */
+  .module-tab-bar {
+    display: none !important;
+  }
+
   /* ── Show mobile bottom navigation bar ── */
   .mobile-bottom-nav {
     display: flex !important;
