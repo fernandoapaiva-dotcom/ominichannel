@@ -504,6 +504,65 @@ async def get_board(
     return await build_board_data(db, current_user.tenant_id, empresa, days_open, cards_per_cell)
 
 
+@router.get("/dashboard")
+async def get_board_dashboard(
+    empresa: Optional[str] = Query(None, description="servweld | centrooeste | (vazio = as duas)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Ranking de quem mais finalizou O.S. no mês ("funcionário do mês") - pedido do usuário em
+    08/10/2026, pro Painel do Fluxo dentro de Assistência Técnica. Só o ranking - o resto do
+    painel (status x técnico) já vem do GET /board normal, que o frontend já carrega; não faz
+    sentido reconstruir esse mesmo agrupamento de novo aqui. Usa o mesmo critério de "finalizada"
+    já usado no relatório por técnico (GET /technician): evento oficial (finalizada_em) OU já
+    efetivada (paga/venda) sem o evento 7 ter chegado do Softsystem, usando a entrada como
+    referência nesse segundo caso.
+    """
+    tenant_id = current_user.tenant_id
+
+    now = now_brt()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Só precisa olhar O.S. com alguma chance de ter sido finalizada neste mês - restringe a
+    # consulta ao banco em vez de puxar o histórico inteiro pra filtrar em Python.
+    candidates = (await db.execute(select(OsBoardOrder).where(
+        OsBoardOrder.tenant_id == tenant_id, *_empresa_filter(empresa),
+        or_(
+            OsBoardOrder.finalizada_em >= month_start,
+            and_(
+                OsBoardOrder.data_entrada >= month_start,
+                or_(OsBoardOrder.paga.is_(True), OsBoardOrder.venda_codigo.isnot(None)),
+            ),
+        ),
+    ))).scalars().all()
+
+    leaderboard_counts: Dict[str, int] = {}
+    for o in candidates:
+        efetivada = _efetivada(o)
+        efetivada_sem_evento = efetivada and not o.finalizada_em
+        entered_this_month = bool(o.data_entrada and o.data_entrada >= month_start)
+        finished_this_month = bool(o.finalizada_em and o.finalizada_em >= month_start) or (efetivada_sem_evento and entered_this_month)
+        if not finished_this_month:
+            continue
+        name = o.tecnico or NO_TECH_LABEL
+        if name == NO_TECH_LABEL:
+            continue
+        leaderboard_counts[name] = leaderboard_counts.get(name, 0) + 1
+
+    leaderboard = sorted(
+        [{"tecnico": k, "finalizadas": v} for k, v in leaderboard_counts.items()],
+        key=lambda r: -r["finalizadas"]
+    )
+
+    meses_pt = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto",
+                "Setembro", "Outubro", "Novembro", "Dezembro"]
+    return {
+        "leaderboard": leaderboard,
+        "leaderboard_month_label": f"{meses_pt[now.month - 1]}/{now.year}",
+    }
+
+
 @router.get("/cell")
 async def get_board_cell(
     tecnico: str = Query(..., description="Nome do técnico como está no Softsystem, ou 'SEM TÉCNICO'"),

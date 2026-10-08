@@ -227,6 +227,25 @@ button {
   70% { box-shadow: 0 0 0 10px rgba(0, 230, 153, 0); }
   100% { box-shadow: 0 0 0 0 rgba(0, 230, 153, 0); }
 }
+
+/* Destaque do técnico líder no painel do fluxo/Modo TV - pedido do usuário em 08/10/2026
+   ("funcionário do mês"). */
+@keyframes leaderGlow {
+  0% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.45); }
+  70% { box-shadow: 0 0 0 16px rgba(251, 191, 36, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); }
+}
+.leader-glow-card {
+  animation: leaderGlow 2.2s ease-out infinite;
+}
+@keyframes trophyBounce {
+  0%, 100% { transform: translateY(0) rotate(-4deg); }
+  50% { transform: translateY(-4px) rotate(4deg); }
+}
+.trophy-bounce {
+  display: inline-block;
+  animation: trophyBounce 1.6s ease-in-out infinite;
+}
 .pulse-online {
   width: 8px;
   height: 8px;

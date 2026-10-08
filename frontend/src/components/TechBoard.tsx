@@ -4,8 +4,10 @@ import {
   ArrowLeft, Download, FileText, Monitor, RefreshCw, X, Clock,
   Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
   Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight, Video, Paperclip, Sparkles, Bell, Menu,
+  BarChart3,
   type LucideIcon,
 } from 'lucide-react';
+import { TechDashboard } from './TechDashboard';
 import { apiFetch, apiUpload } from '../services/api';
 import { techApiFetch, techApiUpload } from '../services/techApi';
 import { User } from '../types';
@@ -64,6 +66,8 @@ export interface BoardData {
   totals: Record<string, number>;
   total_open: number;
   generated_at: string;
+  leaderboard?: { tecnico: string; finalizadas: number }[];
+  leaderboard_month_label?: string;
 }
 interface TimelineItem { evento: string; cod: number; data: string }
 interface DetailOrder {
@@ -185,10 +189,15 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
   // Modo TV: carrossel passando por um técnico de cada vez (em vez da grade estática, onde os técnicos
   // de baixo ficavam escondidos - ninguém rola a tela sozinho de longe). CAROUSEL_MS por técnico.
+  // Um slide a mais no final do giro é o Painel do Fluxo (gráficos + ranking do mês) - pedido do
+  // usuário em 08/10/2026 ("aplica no modo TV também pra aparecer").
   const CAROUSEL_MS = 60000;
   const [carouselIndex, setCarouselIndex] = useState(0);
   const techCount = board?.technicians.length || 0;
-  const activeIndex = techCount > 0 ? ((carouselIndex % techCount) + techCount) % techCount : 0;
+  const totalSlides = techCount + 1;
+  const rawSlideIndex = techCount > 0 ? ((carouselIndex % totalSlides) + totalSlides) % totalSlides : 0;
+  const isDashboardSlide = techCount > 0 && rawSlideIndex === techCount;
+  const activeIndex = isDashboardSlide ? 0 : rawSlideIndex;
   useEffect(() => {
     if (!tvMode || techCount <= 1) return;
     const t = window.setTimeout(() => setCarouselIndex(i => i + 1), CAROUSEL_MS);
@@ -243,6 +252,11 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   // Relatório em PDF (só admin)
   const [reportOpen, setReportOpen] = useState(false);
 
+  // Painel do Fluxo (gráficos + ranking "funcionário do mês") - pedido do usuário em 08/10/2026.
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [leaderboard, setLeaderboard] = useState<{ tecnico: string; finalizadas: number }[]>([]);
+  const [leaderboardMonth, setLeaderboardMonth] = useState('');
+
   // Busca por número da O.S., cliente ou equipamento (pedido do usuário, 29/09/2026) - substitui o
   // quadro normal enquanto tem texto digitado, igual o Portal do Técnico (TechnicianPortal.tsx).
   const [searchQuery, setSearchQuery] = useState('');
@@ -274,6 +288,13 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       const data = await apiFetch(`/os-board/board?${qs.toString()}`);
       setBoard(data);
       setError(null);
+      // Ranking do mês - busca junto (payload leve) pra já estar pronto quando o Modo TV girar
+      // pro slide do painel, sem precisar esperar mais uma chamada na hora.
+      const dashQs = new URLSearchParams();
+      if (empresa) dashQs.set('empresa', empresa);
+      apiFetch(`/os-board/dashboard?${dashQs.toString()}`)
+        .then(d => { setLeaderboard(d.leaderboard || []); setLeaderboardMonth(d.leaderboard_month_label || ''); })
+        .catch(() => {});
     } catch (err: any) {
       setError(err?.message || 'Não foi possível carregar o quadro.');
     } finally {
@@ -388,6 +409,9 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
             <button onClick={() => setReportOpen(true)} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
               <FileText size={15} /> {isAdmin ? 'Relatórios' : 'Lista de O.S.'}
             </button>
+            <button onClick={() => setDashboardOpen(true)} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
+              <BarChart3 size={15} /> Painel
+            </button>
             <button onClick={enterTv} style={{ ...iconBtn, width: 'auto', padding: '0 12px', gap: '6px', display: 'flex', alignItems: 'center', fontSize: '12px', fontWeight: 700 }}>
               <Monitor size={15} /> Modo TV
             </button>
@@ -403,13 +427,24 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       )}
 
       {/* Modo TV: nome do técnico em destaque - é a informação que quem está de longe, na oficina, precisa achar primeiro */}
-      {tvMode && board && techCount > 0 && (
+      {tvMode && board && techCount > 0 && !isDashboardSlide && (
         <div style={{ textAlign: 'center', margin: '2px 0 14px', flexShrink: 0 }}>
           <div style={{ fontSize: fs(46), fontWeight: 900, color: 'var(--accent-primary)', letterSpacing: '0.5px', lineHeight: 1.1 }}>
             {titleCase(board.technicians[activeIndex].name)}
           </div>
           <div style={{ fontSize: fs(14), color: 'var(--text-muted)', fontWeight: 700, marginTop: '4px' }}>
             Técnico {activeIndex + 1} de {techCount} · {board.technicians[activeIndex].total_open} O.S. em aberto
+          </div>
+        </div>
+      )}
+
+      {tvMode && board && isDashboardSlide && (
+        <div style={{ textAlign: 'center', margin: '2px 0 14px', flexShrink: 0 }}>
+          <div style={{ fontSize: fs(34), fontWeight: 900, color: 'var(--accent-primary)', letterSpacing: '0.5px', lineHeight: 1.1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+            <BarChart3 size={34} /> Painel do Fluxo
+          </div>
+          <div style={{ fontSize: fs(14), color: 'var(--text-muted)', fontWeight: 700, marginTop: '4px' }}>
+            Status das O.S. e destaque do mês
           </div>
         </div>
       )}
@@ -424,6 +459,8 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
       {/* Quadro: carrossel (TV), busca, lista por técnico (tela estreita) ou grade (desktop) */}
       {!tvMode && searchQuery.trim() ? (
         <SearchResultsList results={searchResults} loading={searching} showEmpresa={!empresa} showTecnico />
+      ) : tvMode && isDashboardSlide && board ? (
+        <TechDashboard board={{ ...board, leaderboard, leaderboard_month_label: leaderboardMonth }} tvMode />
       ) : tvMode ? (
         <TvCarousel
           board={board}
@@ -477,6 +514,14 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
       {reportOpen && (
         <ReportPanel stages={stages} defaultEmpresa={empresa} isAdmin={isAdmin} onClose={() => setReportOpen(false)} />
+      )}
+
+      {dashboardOpen && board && (
+        <div onClick={() => setDashboardOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 30000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '980px', maxHeight: '88vh', display: 'flex', flexDirection: 'column', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', borderRadius: '12px', padding: '16px 18px' }}>
+            <TechDashboard board={{ ...board, leaderboard, leaderboard_month_label: leaderboardMonth }} onClose={() => setDashboardOpen(false)} />
+          </div>
+        </div>
       )}
     </div>
   );
