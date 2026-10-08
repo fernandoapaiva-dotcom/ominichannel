@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { LayoutGrid, MessageSquare, Users, Settings, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download, Camera } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, LogOut, Bot, ChevronLeft, ChevronRight, Contact as ContactIcon, Sun, Moon, Bell, CheckCircle2, X, MessageCircle, AlertCircle, Filter, CheckCheck, Download, Camera } from 'lucide-react';
 import { User, Conversation } from '../types';
 import { apiFetch } from '../services/api';
 
 interface SidebarProps {
   user: User;
-  activeTab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos';
-  setActiveTab: (tab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos') => void;
+  activeTab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'home';
+  setActiveTab: (tab: 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'home') => void;
   onLogout: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -57,6 +57,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const toggleTheme = () => {
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
+
+  // Pedido do usuário em 08/10/2026 ("o menu lateral ficou sobrecarregado com todas as
+  // funções"): o menu só mostra os ícones do módulo em que a pessoa está - WhatsApp
+  // (chats/grupos/clientes) não aparece dentro de Assistência Técnica e vice-versa. O botão de
+  // Configurações saiu daqui de vez - agora só é acessível pela tela de módulos (home).
+  const isWhatsappSection = activeTab === 'chats' || activeTab === 'groups' || activeTab === 'contacts' || activeTab === 'segmentation';
+  const isTecnicosSection = activeTab === 'tecnicos';
 
   // Helper: check if conversation is pending a response from this attendant
   const isConversationPendingForAttendant = (conv: Conversation): boolean => {
@@ -515,32 +522,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Footer Actions */}
+        {/* Footer Actions - Configurações saiu daqui, só fica acessível pela tela de módulos
+            (home), restrita a admin - pedido do usuário em 08/10/2026. */}
         <div style={{
           padding: '10px 16px',
           borderTop: '1px solid var(--border-color)',
           backgroundColor: 'rgba(0,0,0,0.2)',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between'
+          justifyContent: 'flex-end'
         }}>
-          <button
-            onClick={() => { setShowAvatarMenu(false); setActiveTab('admin'); }}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: 'var(--text-muted)',
-              fontSize: '12px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              cursor: 'pointer'
-            }}
-          >
-            <Settings size={14} />
-            <span>Configurações</span>
-          </button>
-
           <button
             onClick={() => { setShowAvatarMenu(false); onLogout(); }}
             style={{
@@ -626,7 +617,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Compact Navigation Icons — with labels for mobile bottom nav */}
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {/* Módulos — volta pra tela inicial de blocos */}
+          <button
+            onClick={() => setActiveTab('home')}
+            title="Módulos"
+            style={{
+              width: '32px',
+              height: '32px',
+              borderRadius: 'var(--radius-md)',
+              background: 'transparent',
+              color: 'var(--text-muted)',
+              border: '1px solid transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              flexDirection: 'column',
+              gap: '2px',
+            }}
+          >
+            <LayoutGrid size={18} />
+            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Módulos</span>
+          </button>
+
           {/* Chats */}
+          {isWhatsappSection && (
           <button
             onClick={() => setActiveTab('chats')}
             title="Conversas com Clientes"
@@ -671,8 +686,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </button>
+          )}
 
           {/* Groups */}
+          {isWhatsappSection && (
           <button
             onClick={() => setActiveTab('groups')}
             title="Grupos & Comunidades WhatsApp"
@@ -717,8 +734,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </span>
             )}
           </button>
+          )}
 
           {/* Contacts */}
+          {isWhatsappSection && (
           <button
             onClick={() => setActiveTab('contacts')}
             title="Histórico de Clientes"
@@ -740,33 +759,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <ContactIcon size={18} />
             <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Clientes</span>
           </button>
-
-          {/* Quadro de técnicos */}
-          <button
-            onClick={() => setActiveTab('tecnicos')}
-            title="Quadro de Técnicos"
-            style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: 'var(--radius-md)',
-              background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
-              color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
-              border: activeTab === 'tecnicos' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              flexDirection: 'column',
-              gap: '2px',
-            }}
-          >
-            <LayoutGrid size={18} />
-            <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Técnicos</span>
-          </button>
+          )}
 
           {/* Foto/arquivo rápido de O.S. - atalho pedido em 05/10/2026 pra não precisar abrir uma
-              O.S. específica antes de poder anexar foto. */}
-          {onQuickPhotoUpload && (
+              O.S. específica antes de poder anexar foto. Só faz sentido dentro de Assistência. */}
+          {isTecnicosSection && onQuickPhotoUpload && (
             <button
               onClick={onQuickPhotoUpload}
               title="Enviar foto/arquivo de uma O.S."
@@ -787,31 +784,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Camera size={18} />
               <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Foto O.S.</span>
-            </button>
-          )}
-
-          {/* Admin */}
-          {user.role === 'admin' && (
-            <button
-              onClick={() => setActiveTab('admin')}
-              title="Configurações do Sistema"
-              style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: 'var(--radius-md)',
-                background: activeTab === 'admin' ? 'rgba(0, 230, 153, 0.15)' : 'transparent',
-                color: activeTab === 'admin' ? 'var(--accent-primary)' : 'var(--text-muted)',
-                border: activeTab === 'admin' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid transparent',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                flexDirection: 'column',
-                gap: '2px',
-              }}
-            >
-              <Settings size={18} />
-              <span className="mobile-nav-label" style={{ fontSize: '9px', fontWeight: '600', lineHeight: 1, display: 'none' }}>Config</span>
             </button>
           )}
         </nav>
@@ -975,6 +947,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Main Navigation */}
       <nav style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(6px, 1vh, 14px)' }}>
+        {/* Módulos — volta pra tela inicial de blocos */}
+        <button
+          onClick={() => setActiveTab('home')}
+          title="Módulos"
+          style={{
+            width: 'clamp(34px, 4.3vh, 44px)',
+            height: 'clamp(34px, 4.3vh, 44px)',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(255, 255, 255, 0.04)',
+            color: 'var(--text-muted)',
+            border: '1px solid var(--border-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.15s ease'
+          }}
+        >
+          <LayoutGrid size={22} />
+        </button>
+
+        {isWhatsappSection && (
         <button
           onClick={() => setActiveTab('chats')}
           title="Conversas com Clientes"
@@ -1016,7 +1010,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           )}
         </button>
+        )}
 
+        {isWhatsappSection && (
         <button
           onClick={() => setActiveTab('groups')}
           title="Grupos & Comunidades WhatsApp"
@@ -1058,7 +1054,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </span>
           )}
         </button>
+        )}
 
+        {isWhatsappSection && (
         <button
           onClick={() => setActiveTab('contacts')}
           title="Histórico de Clientes"
@@ -1078,28 +1076,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <ContactIcon size={22} />
         </button>
+        )}
 
-        <button
-          onClick={() => setActiveTab('tecnicos')}
-          title="Quadro de Técnicos"
-          style={{
-            width: 'clamp(34px, 4.3vh, 44px)',
-            height: 'clamp(34px, 4.3vh, 44px)',
-            borderRadius: 'var(--radius-md)',
-            background: activeTab === 'tecnicos' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
-            color: activeTab === 'tecnicos' ? 'var(--accent-primary)' : 'var(--text-muted)',
-            border: activeTab === 'tecnicos' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid var(--border-color)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease'
-          }}
-        >
-          <LayoutGrid size={22} />
-        </button>
-
-        {onQuickPhotoUpload && (
+        {isTecnicosSection && onQuickPhotoUpload && (
           <button
             onClick={onQuickPhotoUpload}
             title="Enviar foto/arquivo de uma O.S."
@@ -1121,6 +1100,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         )}
 
+        {isWhatsappSection && (
         <button
           onClick={() => setActiveTab('segmentation')}
           title="Segmentação & Filtros"
@@ -1139,26 +1119,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <Filter size={22} />
         </button>
-
-        {user.role === 'admin' && (
-          <button
-            onClick={() => setActiveTab('admin')}
-            title="Configurações do Sistema"
-            style={{
-              width: 'clamp(34px, 4.3vh, 44px)',
-              height: 'clamp(34px, 4.3vh, 44px)',
-              borderRadius: 'var(--radius-md)',
-              background: activeTab === 'admin' ? 'rgba(0, 230, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)',
-              color: activeTab === 'admin' ? 'var(--accent-primary)' : 'var(--text-muted)',
-              border: activeTab === 'admin' ? '1px solid rgba(0, 230, 153, 0.3)' : '1px solid var(--border-color)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer'
-            }}
-          >
-            <Settings size={22} />
-          </button>
         )}
       </nav>
 

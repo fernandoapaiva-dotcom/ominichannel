@@ -16,6 +16,7 @@ import { CalendarModal } from '../components/CalendarModal';
 import { DepartmentBar } from '../components/DepartmentBar';
 import { MobileBottomNav } from '../components/MobileBottomNav';
 import { TechBoard, OsPhotoQuickUploadModal } from '../components/TechBoard';
+import { ModuleHome } from '../components/ModuleHome';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
@@ -31,15 +32,16 @@ interface DashboardProps {
 }
  
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos'>(() => {
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'home'>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const t = params.get('tab');
-      if (t === 'admin' || t === 'groups' || t === 'contacts' || t === 'segmentation' || t === 'tecnicos') {
+      if (t === 'admin' || t === 'chats' || t === 'groups' || t === 'contacts' || t === 'segmentation' || t === 'tecnicos') {
         return t as any;
       }
     } catch {}
-    return 'chats';
+    // Sem ?tab= na URL, entra na tela de módulos em vez de ir direto pras conversas.
+    return 'home';
   });
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
@@ -1228,6 +1230,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       )}
 
       <div style={{ flex: 1, minHeight: 0, width: '100%', display: 'flex', overflow: 'hidden' }}>
+      {activeTab === 'home' ? (
+        <ModuleHome user={user} onSelectModule={setActiveTab} />
+      ) : (
+      <>
       <Sidebar
         user={user}
         activeTab={activeTab}
@@ -1328,11 +1334,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
       )}
 
       {activeTab === 'tecnicos' && (
-        <TechBoard user={user} onBack={() => setActiveTab('chats')} />
+        <TechBoard user={user} onBack={() => setActiveTab('home')} />
       )}
 
       {activeTab === 'admin' && (
-        <AdminPanel initialNumbers={whatsappNumbers} onRefreshNumbers={fetchNumbers} onBack={() => setActiveTab('chats')} />
+        <AdminPanel initialNumbers={whatsappNumbers} onRefreshNumbers={fetchNumbers} onBack={() => setActiveTab('home')} />
+      )}
+      </>
       )}
       </div>
 
