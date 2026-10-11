@@ -308,6 +308,10 @@ class OsTechnicianCopilotMessage(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     technician_id: Mapped[int] = mapped_column(Integer, ForeignKey("authorized_technicians.id", ondelete="CASCADE"), index=True)
+    # Agrupa as mensagens numa "conversa" só, igual o Claude.ai (menu lateral com histórico + botão
+    # "Nova conversa") - pedido do usuário em 11/10/2026. Um UUID curto gerado no primeiro POST
+    # /copilot/ask sem thread_id (nova conversa) ou recebido do front (conversa já existente).
+    thread_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True, index=True)
     remetente: Mapped[str] = mapped_column(String(20))  # 'tecnico' | 'assistente'
     conteudo: Mapped[str] = mapped_column(Text)
     # Preenchidos só quando a resposta do assistente encontrou um documento relevante (ver

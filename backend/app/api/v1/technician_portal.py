@@ -14,6 +14,7 @@ import difflib
 import logging
 import os
 import re
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -451,11 +452,13 @@ async def technician_update_os_status(
 
 class CopilotAskRequest(BaseModel):
     mensagem: str
+    thread_id: Optional[str] = None  # vazio/None = nova conversa
 
 
 def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
     return {
         "id": m.id,
+        "thread_id": m.thread_id,
         "remetente": m.remetente,
         "conteudo": m.conteudo,
         "documento_titulo": m.documento_titulo,
@@ -464,23 +467,55 @@ def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
     }
 
 
-@router.get("/copilot/messages")
-async def copilot_messages(
+@router.get("/copilot/threads")
+async def copilot_threads(
     tech: AuthorizedTechnician = Depends(get_current_technician),
     db: AsyncSession = Depends(get_db),
 ):
-    """Histórico do Copiloto - persiste entre sessões, igual um chat de verdade (não é um Q&A
-    avulso que esquece tudo ao fechar o app)."""
+    """
+    Lista de conversas do técnico, mais recente primeiro - pro menu lateral estilo Claude.ai
+    (pedido do usuário em 11/10/2026). O título de cada conversa é a primeira pergunta dele
+    nela (como o Claude.ai também faz), não existe uma tabela de "thread" própria - é só um
+    agrupamento por thread_id em cima das mensagens mesmo.
+    """
     res = await db.execute(
         select(OsTechnicianCopilotMessage)
         .where(
             OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
             OsTechnicianCopilotMessage.technician_id == tech.id,
+            OsTechnicianCopilotMessage.thread_id.isnot(None),
         )
-        .order_by(OsTechnicianCopilotMessage.id.desc())
-        .limit(100)
+        .order_by(OsTechnicianCopilotMessage.id.asc())
     )
-    return [_copilot_message_out(m) for m in reversed(res.scalars().all())]
+    threads: Dict[str, Dict[str, Any]] = {}
+    for m in res.scalars().all():
+        t = threads.setdefault(m.thread_id, {"thread_id": m.thread_id, "titulo": None, "ultima_em": None})
+        if t["titulo"] is None and m.remetente == "tecnico":
+            t["titulo"] = m.conteudo[:60] + ("…" if len(m.conteudo) > 60 else "")
+        t["ultima_em"] = m.criado_em.isoformat() if m.criado_em else None
+    out = list(threads.values())
+    out.sort(key=lambda t: t["ultima_em"] or "", reverse=True)
+    return out
+
+
+@router.get("/copilot/threads/{thread_id}/messages")
+async def copilot_thread_messages(
+    thread_id: str,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """Mensagens de UMA conversa - persiste entre sessões, igual um chat de verdade (não é um
+    Q&A avulso que esquece tudo ao fechar o app)."""
+    res = await db.execute(
+        select(OsTechnicianCopilotMessage)
+        .where(
+            OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+            OsTechnicianCopilotMessage.technician_id == tech.id,
+            OsTechnicianCopilotMessage.thread_id == thread_id,
+        )
+        .order_by(OsTechnicianCopilotMessage.id.asc())
+    )
+    return [_copilot_message_out(m) for m in res.scalars().all()]
 
 
 @router.post("/copilot/ask")
@@ -493,19 +528,23 @@ async def copilot_ask(
     if not mensagem:
         raise HTTPException(status_code=422, detail="Mensagem vazia.")
 
+    thread_id = (payload.thread_id or "").strip() or uuid.uuid4().hex[:20]
+
     db.add(OsTechnicianCopilotMessage(
-        tenant_id=tech.tenant_id, technician_id=tech.id, remetente="tecnico", conteudo=mensagem,
+        tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=thread_id, remetente="tecnico", conteudo=mensagem,
     ))
     await db.commit()
 
-    # Últimas mensagens dão contexto de conversa pro Gemini (mesmo padrão do antigo copiloto do
-    # WhatsApp) - sem isso cada pergunta seria tratada isolada, sem lembrar o que já foi
-    # perguntado antes na mesma conversa.
+    # Últimas mensagens DESSA conversa dão contexto pro Gemini (mesmo padrão do antigo copiloto
+    # do WhatsApp) - sem isso cada pergunta seria tratada isolada, sem lembrar o que já foi
+    # perguntado antes na mesma conversa. Escopado por thread_id - uma conversa nova (ex: outro
+    # equipamento) não herda contexto de uma conversa antiga sem relação.
     hist_res = await db.execute(
         select(OsTechnicianCopilotMessage)
         .where(
             OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
             OsTechnicianCopilotMessage.technician_id == tech.id,
+            OsTechnicianCopilotMessage.thread_id == thread_id,
         )
         .order_by(OsTechnicianCopilotMessage.id.desc())
         .limit(10)
@@ -551,7 +590,7 @@ async def copilot_ask(
             logger.error(f"[COPILOTO PORTAL] Falha buscando documento pra '{search_terms}': {e}")
 
     assistant_msg = OsTechnicianCopilotMessage(
-        tenant_id=tech.tenant_id, technician_id=tech.id, remetente="assistente", conteudo=resposta_texto,
+        tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=thread_id, remetente="assistente", conteudo=resposta_texto,
         documento_titulo=documento_titulo, documento_source_path=documento_source_path,
     )
     db.add(assistant_msg)
