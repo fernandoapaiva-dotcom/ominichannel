@@ -77,6 +77,25 @@ STABILITY_INTERVAL = 2.0
 PROTECTED_START = dtime(7, 50)
 PROTECTED_END = dtime(18, 0)
 
+# Teto máximo de tempo por arquivo (3 minutos). Evita que um PDF pesado, corrompido
+# ou loop infinito de OCR trave o processo da noite inteira.
+FILE_TIMEOUT_SECONDS = 180
+HEARTBEAT_PATH = "/tmp/rag_watcher_heartbeat"
+
+
+def _touch_heartbeat():
+    try:
+        with open(HEARTBEAT_PATH, "w") as f:
+            f.write(str(datetime.utcnow().timestamp()))
+    except Exception:
+        pass
+
+
+async def _heartbeat_loop():
+    while True:
+        _touch_heartbeat()
+        await asyncio.sleep(30)
+
 
 def _now_brt() -> datetime:
     # Servidor roda em UTC - mesma conversão usada em os_board_followup_service._now_brt().
@@ -223,9 +242,17 @@ async def _night_drain_loop():
                 PENDING_SET.discard(path)
                 if not os.path.exists(path):
                     continue
+                _touch_heartbeat()
                 try:
                     logger.info(f"[TREINANDO] {marca} / {modelo} / {fname}")
-                    await ingest_one_file(path, marca, modelo, fname, tenant_id, use_ocr=True)
+                    await asyncio.wait_for(
+                        ingest_one_file(path, marca, modelo, fname, tenant_id, use_ocr=True),
+                        timeout=FILE_TIMEOUT_SECONDS
+                    )
+                    _mark_done(path)
+                    _touch_heartbeat()
+                except asyncio.TimeoutError:
+                    logger.warning(f"[TIMEOUT] Arquivo excedeu {FILE_TIMEOUT_SECONDS}s, pulando para não travar: {path}")
                     _mark_done(path)
                 except Exception as e:
                     logger.error(f"[ERRO] Falha processando (janela livre) {path}: {e}")
@@ -234,7 +261,7 @@ async def _night_drain_loop():
                 logger.info("[JANELA LIVRE] Fila esvaziada")
             elif not _in_night_window():
                 logger.info(f"[JANELA LIVRE] Horário comercial começou - {len(PENDING_QUEUE)} arquivo(s) ainda na fila, retomando depois")
-        await asyncio.sleep(120)
+        await asyncio.sleep(5)
 
 
 async def _reconcile_backlog_loop(tenant_id: int, interval_seconds: int = 300):
@@ -299,6 +326,7 @@ async def main():
     observer.start()
     drain_task = asyncio.create_task(_night_drain_loop())
     reconcile_task = asyncio.create_task(_reconcile_backlog_loop(tenant_id))
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
     logger.info(
         f"Observador rodando. Aguardando arquivos novos... "
         f"(treinamento roda fora do horário comercial - 18h às 07h50 em dia útil, sem corte em "
@@ -310,6 +338,7 @@ async def main():
     finally:
         drain_task.cancel()
         reconcile_task.cancel()
+        heartbeat_task.cancel()
         observer.stop()
         observer.join()
 

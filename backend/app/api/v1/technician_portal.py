@@ -12,6 +12,7 @@ acesso via POST /change-pin, antes de usar o resto do portal.
 """
 import difflib
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -21,12 +22,18 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fastapi import Response
+
 from app.api.v1.os_board import build_board_data, EVENT_LABELS
 from app.api.v1.technicians import clean_phone_digits
+from app.api.v1.webhooks import _wants_diagram
 from app.core.database import get_db
 from app.core.security import create_technician_access_token, get_current_technician, get_password_hash, verify_password
-from app.models.models import AuthorizedTechnician, OsBoardOrder, OsTechnicianNote, SoftsystemPendingWrite
+from app.models.models import AuthorizedTechnician, OsBoardOrder, OsTechnicianCopilotMessage, OsTechnicianNote, SoftsystemPendingWrite
 from app.services.automation_service import normalize_text
+from app.services.gemini_service import gemini_service
+from app.services.rag_service import rag_service
+from app.services.settings_service import settings_service
 
 logger = logging.getLogger("technician_portal")
 router = APIRouter(prefix="/technician-portal", tags=["Portal do Técnico"])
@@ -435,3 +442,149 @@ async def technician_update_os_status(
         "status": "success",
         "message": f"O.S. #{payload.codos} marcada como \"{STATUS_LABELS.get(payload.status, payload.status)}\". Enviando pro Softsystem...",
     }
+
+
+# Copiloto do técnico DENTRO do portal (chat com histórico, estilo Claude) - pedido do usuário em
+# 11/10/2026: desligar o apoio técnico por IA no WhatsApp (ver TECH_WHATSAPP_AI_DISABLED em
+# webhooks.py) e substituir por esse chat in-app. Documentos encontrados abrem só em visualização
+# embutida (GET /copilot/document/{id}) - nunca como arquivo baixável/anexo.
+
+class CopilotAskRequest(BaseModel):
+    mensagem: str
+
+
+def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
+    return {
+        "id": m.id,
+        "remetente": m.remetente,
+        "conteudo": m.conteudo,
+        "documento_titulo": m.documento_titulo,
+        "tem_documento": bool(m.documento_source_path),
+        "criado_em": m.criado_em.isoformat() if m.criado_em else None,
+    }
+
+
+@router.get("/copilot/messages")
+async def copilot_messages(
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """Histórico do Copiloto - persiste entre sessões, igual um chat de verdade (não é um Q&A
+    avulso que esquece tudo ao fechar o app)."""
+    res = await db.execute(
+        select(OsTechnicianCopilotMessage)
+        .where(
+            OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+            OsTechnicianCopilotMessage.technician_id == tech.id,
+        )
+        .order_by(OsTechnicianCopilotMessage.id.desc())
+        .limit(100)
+    )
+    return [_copilot_message_out(m) for m in reversed(res.scalars().all())]
+
+
+@router.post("/copilot/ask")
+async def copilot_ask(
+    payload: CopilotAskRequest,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    mensagem = (payload.mensagem or "").strip()
+    if not mensagem:
+        raise HTTPException(status_code=422, detail="Mensagem vazia.")
+
+    db.add(OsTechnicianCopilotMessage(
+        tenant_id=tech.tenant_id, technician_id=tech.id, remetente="tecnico", conteudo=mensagem,
+    ))
+    await db.commit()
+
+    # Últimas mensagens dão contexto de conversa pro Gemini (mesmo padrão do antigo copiloto do
+    # WhatsApp) - sem isso cada pergunta seria tratada isolada, sem lembrar o que já foi
+    # perguntado antes na mesma conversa.
+    hist_res = await db.execute(
+        select(OsTechnicianCopilotMessage)
+        .where(
+            OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+            OsTechnicianCopilotMessage.technician_id == tech.id,
+        )
+        .order_by(OsTechnicianCopilotMessage.id.desc())
+        .limit(10)
+    )
+    recent = list(reversed(hist_res.scalars().all()))
+    history = [{"remetente": m.remetente, "conteudo": m.conteudo} for m in recent[:-1]]  # sem a que acabou de entrar
+
+    rag_context = await rag_service.search_context(tenant_id=tech.tenant_id, query=mensagem, department_id=0)
+    decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tech.tenant_id)
+
+    ai_output = await gemini_service.generate_concierge_response(
+        customer_name=tech.nome,
+        department_name=tech.departamento or "Assistência Técnica",
+        user_message=mensagem,
+        conversation_history=history,
+        memory_summary=None,
+        rag_context=rag_context,
+        available_departments=[],
+        available_attendants=[],
+        protocol_number=None,
+        should_announce_protocol=False,
+        is_technician_or_admin=True,
+        customer_phone=None,
+        tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+        tenant_gemini_model_name=decrypted_settings.get("gemini_model_name"),
+    )
+
+    resposta_texto = (ai_output or {}).get("resposta") or "Não consegui gerar uma resposta agora, tenta de novo."
+    documento_titulo = None
+    documento_source_path = None
+
+    search_terms = (ai_output or {}).get("documento_solicitado")
+    if search_terms:
+        try:
+            candidates = await rag_service.find_document(tech.tenant_id, search_terms, department_id=0, top_k=3)
+            doc = next((c for c in candidates if c.get("source_path") and os.path.exists(c["source_path"])), None)
+            if doc:
+                documento_titulo = doc.get("titulo") or doc.get("filename")
+                documento_source_path = doc["source_path"]
+            elif _wants_diagram(search_terms):
+                resposta_texto += "\n\n⚠️ Não encontrei esse esquema/diagrama específico na base - tenta descrever o modelo com mais detalhes."
+        except Exception as e:
+            logger.error(f"[COPILOTO PORTAL] Falha buscando documento pra '{search_terms}': {e}")
+
+    assistant_msg = OsTechnicianCopilotMessage(
+        tenant_id=tech.tenant_id, technician_id=tech.id, remetente="assistente", conteudo=resposta_texto,
+        documento_titulo=documento_titulo, documento_source_path=documento_source_path,
+    )
+    db.add(assistant_msg)
+    await db.commit()
+    await db.refresh(assistant_msg)
+
+    return _copilot_message_out(assistant_msg)
+
+
+@router.get("/copilot/document/{message_id}")
+async def copilot_document(
+    message_id: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    PDF embutido pra visualização - nunca como anexo baixável (pedido explícito do usuário em
+    11/10/2026: o conhecimento técnico fica só dentro do sistema). Content-Disposition "inline"
+    some com o botão de download nativo do visualizador do navegador, mas não é DRM de verdade -
+    é o limite razoável do que dá pra fazer num visualizador embutido de navegador.
+    """
+    res = await db.execute(select(OsTechnicianCopilotMessage).where(
+        OsTechnicianCopilotMessage.id == message_id,
+        OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+        OsTechnicianCopilotMessage.technician_id == tech.id,
+    ))
+    msg = res.scalar_one_or_none()
+    if not msg or not msg.documento_source_path:
+        raise HTTPException(status_code=404, detail="Documento não encontrado.")
+    if not os.path.exists(msg.documento_source_path):
+        raise HTTPException(status_code=404, detail="Arquivo não está mais disponível.")
+
+    with open(msg.documento_source_path, "rb") as f:
+        content = f.read()
+
+    return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": "inline"})

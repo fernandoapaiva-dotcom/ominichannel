@@ -35,6 +35,33 @@ export async function techApiFetch(endpoint: string, options: RequestInit = {}) 
   return response.json();
 }
 
+// Busca um PDF (ou outro binário) autenticado com o tech_token, devolvendo um Blob - usado pelo
+// visualizador embutido do Copiloto (TechCopilot.tsx): o <iframe> não consegue mandar o header
+// Authorization sozinho, então o front busca o arquivo aqui e monta um object URL local pra
+// passar pro iframe, sem nunca expor um link público/baixável do documento.
+export async function techApiFetchBlob(endpoint: string): Promise<Blob> {
+  const token = localStorage.getItem('tech_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`${getApiBase()}${endpoint}`, { headers });
+  } catch (err: any) {
+    throw new Error('Falha ao conectar com o servidor. Verifique sua internet.');
+  }
+
+  if (response.status === 401) {
+    localStorage.removeItem('tech_token');
+    window.location.href = '/tecnico';
+    throw new Error('Sessão expirada');
+  }
+  if (!response.ok) {
+    throw new Error('Não foi possível abrir o documento.');
+  }
+  return response.blob();
+}
+
 // Espelha apiUpload (services/api.ts) mas com a sessão do técnico (tech_token) - usado pra subir
 // foto de O.S. direto pela câmera do app do técnico (ver OsDetailModal em TechBoard.tsx).
 export async function techApiUpload(endpoint: string, formData: FormData) {

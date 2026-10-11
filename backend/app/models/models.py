@@ -296,6 +296,27 @@ class AuthorizedTechnician(Base):
     def has_pin(self) -> bool:
         return bool(self.pin_hash)
 
+
+# Copiloto do técnico DENTRO do Portal do Técnico (chat com histórico, estilo Claude) - pedido do
+# usuário em 11/10/2026: desligar o atendimento técnico por IA no WhatsApp (conhecimento técnico
+# só fica acessível de dentro do sistema, não solto no celular pessoal) e substituir por esse chat
+# in-app, com os documentos encontrados abrindo só pra visualização embutida, nunca como anexo
+# baixável - ver GET /technician-portal/copilot/document/{message_id}.
+class OsTechnicianCopilotMessage(Base):
+    __tablename__ = "os_technician_copilot_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    technician_id: Mapped[int] = mapped_column(Integer, ForeignKey("authorized_technicians.id", ondelete="CASCADE"), index=True)
+    remetente: Mapped[str] = mapped_column(String(20))  # 'tecnico' | 'assistente'
+    conteudo: Mapped[str] = mapped_column(Text)
+    # Preenchidos só quando a resposta do assistente encontrou um documento relevante (ver
+    # rag_service.find_document) - o front pede o PDF embutido via document_id, nunca um link direto.
+    documento_titulo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    documento_source_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 # Continuous Improvement / Feedback Loop Table (correcoes_ia)
 class AICorrection(Base):
     __tablename__ = "correcoes_ia"
@@ -668,3 +689,192 @@ class ClientDocument(Base):
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     contact: Mapped[Optional["Contact"]] = relationship("Contact")
+
+
+class LojaParametrosCusto(Base):
+    """
+    Parametrização de custo operacional e regime tributário por loja.
+    Servweld (Lucro Presumido) vs Centro Oeste (Simples Nacional).
+    """
+    __tablename__ = "loja_parametros_custo"
+    __table_args__ = (
+        Index("ix_loja_parametros_custo_empresa", "tenant_id", "empresa", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))  # "servweld" | "centrooeste"
+    regime_tributario: Mapped[str] = mapped_column(String(30), default="lucro_presumido")  # "lucro_presumido" | "simples_nacional"
+    custo_fixo_operacional_pct: Mapped[float] = mapped_column(Float, default=12.0)  # ex: 12% overhead
+    despesas_variaveis_pct: Mapped[float] = mapped_column(Float, default=5.0)  # comissao, cartao
+    aliquota_imposto_saida_pct: Mapped[float] = mapped_column(Float, default=6.5)  # DAS ou aliquota efetiva
+    margem_lucro_padrao_pct: Mapped[float] = mapped_column(Float, default=35.0)  # margem alvo
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    atualizado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+
+class BalcaoFilaEspera(Base):
+    """
+    Fila de espera do balcão da loja física: produtos que clientes procuraram mas estavam esgotados.
+    Auditável de ponta a ponta com disparo automático de WhatsApp via Evolution API ao dar entrada na NF-e.
+    """
+    __tablename__ = "balcao_fila_espera"
+    __table_args__ = (
+        Index("ix_balcao_espera_status", "tenant_id", "empresa", "status"),
+        Index("ix_balcao_espera_produto", "tenant_id", "produto_ean", "produto_codigo"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30), default="servweld")  # "servweld" | "centrooeste"
+    cliente_nome: Mapped[str] = mapped_column(String(255))
+    cliente_telefone: Mapped[str] = mapped_column(String(50))  # WhatsApp com DDD
+    cliente_documento: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # CPF/CNPJ
+    produto_nome: Mapped[str] = mapped_column(String(255))
+    produto_codigo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # código Softsystem
+    produto_ean: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    quantidade_desejada: Mapped[float] = mapped_column(Float, default=1.0)
+    atendente_nome: Mapped[str] = mapped_column(String(100))
+    observacao: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="aguardando", index=True)  # aguardando | notificado | convertido | cancelado
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    notificado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    notificado_msg_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    conversa_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    compra_entrada_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    historico_auditoria: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # log textual estruturado
+
+
+class ComprasFornecedor(Base):
+    """
+    Fornecedores e Transportadoras cadastrados ou sincronizados com o Softsystem.
+    """
+    __tablename__ = "compras_fornecedores"
+    __table_args__ = (
+        Index("ix_compras_fornecedores_cnpj", "tenant_id", "cnpj", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    cnpj: Mapped[str] = mapped_column(String(20), index=True)
+    razao_social: Mapped[str] = mapped_column(String(255))
+    nome_fantasia: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    ie: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    telefone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    endereco_completo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    cidade: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    uf: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    softsystem_cod_servweld: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    softsystem_cod_centrooeste: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ComprasProdutoDePara(Base):
+    """
+    Mapeamento 'De-Para' de itens de fornecedores para itens padronizados do Softsystem.
+    """
+    __tablename__ = "compras_produto_depara"
+    __table_args__ = (
+        Index("ix_compras_depara_lookup", "tenant_id", "empresa", "fornecedor_cnpj", "codigo_fornecedor"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))  # "servweld" | "centrooeste"
+    fornecedor_cnpj: Mapped[str] = mapped_column(String(20), index=True)
+    codigo_fornecedor: Mapped[str] = mapped_column(String(50), index=True)
+    ean_fornecedor: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    descricao_fornecedor: Mapped[str] = mapped_column(String(255))
+    softsystem_prod_codigo: Mapped[str] = mapped_column(String(50), index=True)
+    softsystem_descricao: Mapped[str] = mapped_column(String(255))
+    softsystem_grupo: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    softsystem_subgrupo: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ComprasEntrada(Base):
+    """
+    Cabeçalho da NF-e de entrada importada.
+    """
+    __tablename__ = "compras_entradas"
+    __table_args__ = (
+        Index("ix_compras_entradas_chave", "tenant_id", "chave_acesso", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))  # "servweld" | "centrooeste"
+    chave_acesso: Mapped[str] = mapped_column(String(50), index=True)
+    numero_nf: Mapped[str] = mapped_column(String(30))
+    serie: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    data_emissao: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    fornecedor_cnpj: Mapped[str] = mapped_column(String(20))
+    fornecedor_nome: Mapped[str] = mapped_column(String(255))
+    transportadora_cnpj: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    transportadora_nome: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    valor_produtos: Mapped[float] = mapped_column(Float, default=0.0)
+    valor_frete_nota: Mapped[float] = mapped_column(Float, default=0.0)
+    valor_frete_extra_transportadora: Mapped[float] = mapped_column(Float, default=0.0)
+    tipo_rateio_frete: Mapped[str] = mapped_column(String(20), default="valor")  # "valor" | "peso"
+    valor_despesas_acessorias: Mapped[float] = mapped_column(Float, default=0.0)
+    valor_total_nota: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(30), default="rascunho", index=True)  # rascunho | confirmada | sincronizada
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    itens: Mapped[List["ComprasEntradaItem"]] = relationship("ComprasEntradaItem", back_populates="entrada", cascade="all, delete-orphan")
+
+
+class ComprasEntradaItem(Base):
+    """
+    Itens da NF-e com custos, impostos, rateio, margem e benchmark de mercado.
+    """
+    __tablename__ = "compras_entrada_itens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entrada_id: Mapped[int] = mapped_column(Integer, ForeignKey("compras_entradas.id", ondelete="CASCADE"), index=True)
+    numero_item: Mapped[int] = mapped_column(Integer)
+    codigo_fornecedor: Mapped[str] = mapped_column(String(50))
+    ean: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    descricao_fornecedor: Mapped[str] = mapped_column(String(255))
+    ncm: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    cfop: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    unidade: Mapped[str] = mapped_column(String(10), default="UN")
+    quantidade: Mapped[float] = mapped_column(Float)
+    valor_unitario: Mapped[float] = mapped_column(Float)
+    valor_total: Mapped[float] = mapped_column(Float)
+    
+    # Tributos
+    v_ipi: Mapped[float] = mapped_column(Float, default=0.0)
+    v_icms: Mapped[float] = mapped_column(Float, default=0.0)
+    v_icms_st: Mapped[float] = mapped_column(Float, default=0.0)
+    v_pis: Mapped[float] = mapped_column(Float, default=0.0)
+    v_cofins: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Custos e Precificação
+    frete_rateado: Mapped[float] = mapped_column(Float, default=0.0)
+    custo_fixo_rateado: Mapped[float] = mapped_column(Float, default=0.0)
+    custo_unitario_real: Mapped[float] = mapped_column(Float, default=0.0)
+    margem_lucro_pct: Mapped[float] = mapped_column(Float, default=35.0)
+    preco_venda_sugerido: Mapped[float] = mapped_column(Float, default=0.0)
+    preco_venda_final: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Benchmark internet
+    preco_mercado_min: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    preco_mercado_med: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    preco_mercado_max: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Vínculo Softsystem & Estoque
+    softsystem_prod_codigo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    softsystem_descricao: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    softsystem_grupo: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    softsystem_subgrupo: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    localizacao_estoque: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Sincronização
+    synced_softsystem: Mapped[bool] = mapped_column(Boolean, default=False)
+    synced_ecommerce: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    entrada: Mapped["ComprasEntrada"] = relationship("ComprasEntrada", back_populates="itens")
+

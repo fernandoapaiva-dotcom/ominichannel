@@ -575,6 +575,11 @@ def extract_amount_from_text(text: Optional[str]) -> Optional[float]:
 
 TECH_TRIGGER_WORD = "tecnico"
 TECH_SESSION_SECONDS = 3600
+# Desliga o apoio técnico por IA no WhatsApp inteiro (texto e foto) - pedido do usuário em
+# 11/10/2026: o conhecimento técnico (RAG/Gemini) passou a viver só dentro do Portal do Técnico
+# (Copiloto in-app, com histórico, documentos só pra visualização embutida), não solto no WhatsApp
+# pessoal do técnico. Reversível: True volta a ligar os dois pontos que checam essa flag.
+TECH_WHATSAPP_AI_DISABLED = True
 
 
 async def check_is_authorized_technician_or_admin(db: AsyncSession, tenant_id: int, phone_number: str) -> tuple[bool, Optional[str]]:
@@ -3003,7 +3008,7 @@ async def receive_evolution_webhook(
     # Copiloto Técnico: quando o técnico manda uma foto (componente, placa, display de
     # multímetro), a IA "olha" a foto de verdade (process_image_message/defect_inspection)
     # em vez de só ver a legenda - combina com a legenda que o técnico digitou, se tiver.
-    if img_msg and msg_type == MessageType.IMAGEM and media_bytes and is_tech and tech_session_should_respond and not is_group and not is_internal_company_number and not is_bot_echo:
+    if img_msg and msg_type == MessageType.IMAGEM and media_bytes and is_tech and not TECH_WHATSAPP_AI_DISABLED and tech_session_should_respond and not is_group and not is_internal_company_number and not is_bot_echo:
         try:
             dec_sets = await settings_service.get_tenant_decrypted_settings(db, tenant_id)
             image_analysis = await gemini_service.process_image_message(
@@ -3696,41 +3701,11 @@ async def receive_evolution_webhook(
         # na checagem de protocolo mais abaixo (achado em produção em 06/10/2026, Fernando Aragão).
         protocol_already_announced = False
 
-        if is_tech and not tech_session_should_respond:
-            # Sem sessão ativa e não digitou a palavra de ativação - avisa sem gastar IA.
-            logger.info(f"[COPILOTO TECNICO] {tech_name} ({phone_number}) sem sessão ativa - pedindo ativação sem chamar o Gemini.")
-            ai_output = {
-                "resposta": f"👋 Oi{' ' + tech_name if tech_name else ''}! Pra falar com o apoio técnico por IA, digite *{TECH_TRIGGER_WORD}* (fica ativo por 1h de uso contínuo).",
-                "escalar_humano": False,
-                "transferir_setor": None,
-                "enviar_localizacao": False,
-                "enviar_pix": False,
-                "documento_solicitado": None,
-                "nova_memoria": memory_summary or ""
-            }
-        elif is_tech and normalized_tech_msg == TECH_TRIGGER_WORD:
-            # Só a palavra de ativação sozinha, sem pergunta junto - saudação fixa, sem gastar
-            # IA. Vale tanto pra sessão nova quanto renovando uma já ativa (ex: técnico digita
-            # "tecnico" de novo só pra confirmar) - nunca manda a palavra crua pra IA responder
-            # como se fosse uma pergunta de verdade (achado em produção em 07/10/2026: Fernando
-            # digitou "tecnico" com sessão já ativa e a IA "alucinou" tentando interpretar a
-            # palavra sozinha como se fosse um pedido de transferência de atendimento).
-            logger.info(f"[COPILOTO TECNICO] Palavra de ativação de {tech_name} ({phone_number}) - {'sessão nova' if tech_session_is_fresh_trigger else 'sessão já ativa, só confirmando'}.")
-            if tech_session_is_fresh_trigger:
-                greeting = f"👋 E aí{', ' + tech_name if tech_name else ''}! Sessão de apoio técnico iniciada (ativa por 1h). Me conta o que está acontecendo com o equipamento — pode mandar foto também, eu analiso."
-            else:
-                greeting = f"👋 Sessão já ativa{', ' + tech_name if tech_name else ''}! Pode perguntar."
-            ai_output = {
-                "resposta": greeting,
-                "escalar_humano": False,
-                "transferir_setor": None,
-                "enviar_localizacao": False,
-                "enviar_pix": False,
-                "documento_solicitado": None,
-                "nova_memoria": memory_summary or ""
-            }
-        elif is_tech:
-            logger.info(f"[COPILOTO TECNICO] Atendimento direto ao técnico autorizado/admin {tech_name} ({phone_number}) no modo Master.")
+        if is_tech and not TECH_WHATSAPP_AI_DISABLED:
+            # Comportamento original (trigger word + sessão + Gemini/RAG) - só roda se alguém
+            # religar a flag TECH_WHATSAPP_AI_DISABLED lá em cima. Ver histórico do git pra
+            # restaurar os 3 ramos antigos (ativação/saudação/atendimento) se precisar voltar
+            # esse comportamento de verdade - hoje o caminho ativo é só o de baixo (redirect).
             ai_output = await gemini_service.generate_concierge_response(
                 customer_name=tech_name or "Técnico",
                 department_name=whatsapp_number.nome_departamento,
@@ -3747,6 +3722,24 @@ async def receive_evolution_webhook(
                 tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
                 tenant_gemini_model_name=decrypted_settings.get("gemini_model_name")
             )
+        elif is_tech:
+            # Copiloto técnico por WhatsApp DESLIGADO em 11/10/2026 (pedido do usuário): o
+            # conhecimento técnico (RAG + IA) passou a viver só dentro do Portal do Técnico
+            # (Copiloto, com histórico, documentos só pra visualização embutida) - ver
+            # technician_portal.py:/copilot/ask. Mantém o ramo "is_tech" aqui (não removeu a
+            # variável nem a detecção) só pra não tirar o forçar de status/protocolo que já
+            # acontece mais acima pra esses números - mas não gasta mais Gemini/RAG pra isso,
+            # só avisa onde procurar agora.
+            logger.info(f"[COPILOTO TECNICO] WhatsApp desativado - avisando {tech_name} ({phone_number}) pra usar o Portal do Técnico.")
+            ai_output = {
+                "resposta": f"👋{' ' + tech_name if tech_name else ''}! O apoio técnico por IA agora é só dentro do Portal do Técnico (app), na aba *Copiloto* - esse WhatsApp não responde mais pergunta técnica.",
+                "escalar_humano": False,
+                "transferir_setor": None,
+                "enviar_localizacao": False,
+                "enviar_pix": False,
+                "documento_solicitado": None,
+                "nova_memoria": memory_summary or ""
+            }
         elif is_pending_transfer:
             parts = conversation.assunto_atual.split(":", 2)
             target_id = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None

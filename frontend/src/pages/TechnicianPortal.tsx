@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { LogOut, RefreshCw, User as UserIcon, Bell } from 'lucide-react';
 import { techApiFetch } from '../services/techApi';
 import { MobileBoard, BoardGrid, BoardData, ChangeStatusFn, SearchBar, SearchResultsList, SearchResultCard, colorForTechnician, titleCase } from '../components/TechBoard';
+import { TechCopilot } from '../components/TechCopilot';
 
 interface MyNote { id: number; codos: number; mensagem: string; criado_por: string; criado_em: string }
 
@@ -63,7 +64,7 @@ const EMPRESAS: { key: string; label: string }[] = [
 
 export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) => {
   const [me, setMe] = useState<TechnicianMe | null>(null);
-  const [tab, setTab] = useState<'geral' | 'meus'>('meus');
+  const [tab, setTab] = useState<'geral' | 'meus' | 'copilot'>('meus');
   const [empresa, setEmpresa] = useState('');
   const [board, setBoard] = useState<BoardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -229,25 +230,33 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
               onClick={() => setTab('geral')}
               style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'geral' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'geral' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'geral' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
             >Quadro Geral</button>
+            <button
+              onClick={() => setTab('copilot')}
+              style={{ flex: 1, padding: '9px', fontSize: '13px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer', background: tab === 'copilot' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'copilot' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'copilot' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >🤖 Copiloto</button>
           </div>
 
-          <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px', flexShrink: 0 }}>
-            {EMPRESAS.map(e => (
-              <button
-                key={e.key || 'todas'}
-                onClick={() => setEmpresa(e.key)}
-                style={{
-                  padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', borderRadius: '8px',
-                  background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
-                  color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
-                  border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
-                }}
-              >{e.label}</button>
-            ))}
-          </div>
-          <div style={{ padding: '0 16px 10px', flexShrink: 0 }}>
-            <SearchBar query={query} onQueryChange={setQuery} />
-          </div>
+          {tab !== 'copilot' && (
+            <>
+              <div style={{ display: 'flex', gap: '4px', padding: '0 16px 10px', flexShrink: 0 }}>
+                {EMPRESAS.map(e => (
+                  <button
+                    key={e.key || 'todas'}
+                    onClick={() => setEmpresa(e.key)}
+                    style={{
+                      padding: '6px 12px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', borderRadius: '8px',
+                      background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
+                      color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
+                      border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
+                    }}
+                  >{e.label}</button>
+                ))}
+              </div>
+              <div style={{ padding: '0 16px 10px', flexShrink: 0 }}>
+                <SearchBar query={query} onQueryChange={setQuery} />
+              </div>
+            </>
+          )}
         </>
       ) : (
         // Paisagem: altura de sobra é curta (celular deitado) - usuário reportou que o cabeçalho em
@@ -267,23 +276,31 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
               onClick={() => setTab('geral')}
               style={{ padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', whiteSpace: 'nowrap', background: tab === 'geral' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'geral' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'geral' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
             >Quadro Geral</button>
+            <button
+              onClick={() => setTab('copilot')}
+              style={{ padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, borderRadius: '7px', cursor: 'pointer', whiteSpace: 'nowrap', background: tab === 'copilot' ? 'rgba(0,230,153,0.16)' : 'transparent', color: tab === 'copilot' ? 'var(--accent-primary)' : 'var(--text-muted)', border: `1px solid ${tab === 'copilot' ? 'rgba(0,230,153,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}` }}
+            >🤖 Copiloto</button>
           </div>
-          <div style={{ width: '1px', height: '18px', background: 'var(--border-color, rgba(255,255,255,0.12))', flexShrink: 0 }} />
-          <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-            {EMPRESAS.map(e => (
-              <button
-                key={e.key || 'todas'}
-                onClick={() => setEmpresa(e.key)}
-                style={{
-                  padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer', borderRadius: '7px', whiteSpace: 'nowrap',
-                  background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
-                  color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
-                  border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
-                }}
-              >{e.label}</button>
-            ))}
-          </div>
-          <SearchBar query={query} onQueryChange={setQuery} placeholder="Buscar..." />
+          {tab !== 'copilot' && (
+            <>
+              <div style={{ width: '1px', height: '18px', background: 'var(--border-color, rgba(255,255,255,0.12))', flexShrink: 0 }} />
+              <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                {EMPRESAS.map(e => (
+                  <button
+                    key={e.key || 'todas'}
+                    onClick={() => setEmpresa(e.key)}
+                    style={{
+                      padding: '6px 10px', fontSize: '11.5px', fontWeight: 700, cursor: 'pointer', borderRadius: '7px', whiteSpace: 'nowrap',
+                      background: empresa === e.key ? 'rgba(59,130,246,0.16)' : 'transparent',
+                      color: empresa === e.key ? '#60a5fa' : 'var(--text-muted)',
+                      border: `1px solid ${empresa === e.key ? 'rgba(59,130,246,0.4)' : 'var(--border-color, rgba(255,255,255,0.12))'}`,
+                    }}
+                  >{e.label}</button>
+                ))}
+              </div>
+              <SearchBar query={query} onQueryChange={setQuery} placeholder="Buscar..." />
+            </>
+          )}
           <div style={{ flex: 1 }} />
           <button onClick={() => { setLoading(true); load(); }} title="Atualizar" style={{ width: '28px', height: '28px', borderRadius: '7px', border: '1px solid var(--border-color, rgba(255,255,255,0.12))', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
             <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
@@ -306,7 +323,9 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
       )}
 
       <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, padding: '0 16px 16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {query.trim() ? (
+        {tab === 'copilot' ? (
+          <TechCopilot techName={me?.nome || 'Técnico'} />
+        ) : query.trim() ? (
           <SearchResultsList
             results={searchResults}
             loading={searching}
