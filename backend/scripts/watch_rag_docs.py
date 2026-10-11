@@ -77,9 +77,16 @@ STABILITY_INTERVAL = 2.0
 PROTECTED_START = dtime(7, 50)
 PROTECTED_END = dtime(18, 0)
 
-# Teto máximo de tempo por arquivo (3 minutos). Evita que um PDF pesado, corrompido
-# ou loop infinito de OCR trave o processo da noite inteira.
-FILE_TIMEOUT_SECONDS = 180
+# Teto máximo de tempo por arquivo. Evita que um PDF corrompido/loop infinito de OCR trave o
+# processo a noite inteira - mas achado em produção em 11/10/2026: 180s (3min) é tempo DEMAIS
+# curto pra um manual digitalizado de verdade com muitas páginas (ex: POWERMAX 65-85 - MANUAL DE
+# SERVIÇO.pdf, 24MB) - cada página escaneada sem texto precisa de uma chamada de OCR via Gemini
+# (alguns segundos cada), e um manual de 100+ páginas passa fácil de 3 minutos no total. Com o
+# timeout curto, esses manuais GRANDES E IMPORTANTES nunca terminavam de treinar e ficavam pra
+# sempre fora da base (pior ainda: o próprio timeout marcava o arquivo como "feito", nunca mais
+# tentava de novo - ver uso de _mark_done abaixo). A janela de treinamento é a noite inteira
+# (18h-7h50) sem mais nada disputando CPU, então vale a pena dar bem mais tempo por arquivo.
+FILE_TIMEOUT_SECONDS = 1800
 HEARTBEAT_PATH = "/tmp/rag_watcher_heartbeat"
 
 
@@ -242,6 +249,17 @@ async def _night_drain_loop():
                 PENDING_SET.discard(path)
                 if not os.path.exists(path):
                     continue
+                # "smd-codes" é um databook específico conhecido (catálogo de componentes
+                # eletrônicos genéricos, não um manual de equipamento - centenas de milhares de
+                # caracteres irrelevantes pro RAG) - continua bloqueado pelo nome. O corte
+                # genérico por tamanho (>10MB) que existia aqui foi removido em 11/10/2026: um
+                # manual real digitalizado passa fácil de 10MB (ex: POWERMAX 65-85, 24MB) e esse
+                # corte estava jogando fora manuais importantes de verdade, pra sempre (ver
+                # comentário do FILE_TIMEOUT_SECONDS acima).
+                if "smd-codes" in fname.lower():
+                    logger.warning(f"[PULANDO DATABOOK CONHECIDO] {path}")
+                    _mark_done(path)
+                    continue
                 _touch_heartbeat()
                 try:
                     logger.info(f"[TREINANDO] {marca} / {modelo} / {fname}")
@@ -252,8 +270,12 @@ async def _night_drain_loop():
                     _mark_done(path)
                     _touch_heartbeat()
                 except asyncio.TimeoutError:
-                    logger.warning(f"[TIMEOUT] Arquivo excedeu {FILE_TIMEOUT_SECONDS}s, pulando para não travar: {path}")
-                    _mark_done(path)
+                    # NÃO marca como feito - mesmo achado de produção (11/10/2026): marcar como
+                    # "concluído" um arquivo que só estourou o tempo o tirava da fila PRA SEMPRE,
+                    # mesmo sem ter sido realmente processado. Sem _mark_done aqui, a reconciliação
+                    # periódica bota ele de volta na fila sozinha pra tentar de novo na próxima
+                    # janela - pior caso é gastar mais uma noite nele, não perder o documento.
+                    logger.warning(f"[TIMEOUT] Arquivo excedeu {FILE_TIMEOUT_SECONDS}s, tenta de novo na próxima janela: {path}")
                 except Exception as e:
                     logger.error(f"[ERRO] Falha processando (janela livre) {path}: {e}")
                 await asyncio.sleep(0.3)
