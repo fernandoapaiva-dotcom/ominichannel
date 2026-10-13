@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 from typing import Optional
 
 logger = logging.getLogger("rag_service")
@@ -36,7 +37,7 @@ class RAGService:
         # cache nenhum. Técnico reclamou direto: "nem sabemos se está funcionando".
         self._doc_index_cache: dict = {}
         self._doc_index_cache_at: dict = {}
-        self._DOC_INDEX_TTL_SECONDS = 600
+        self._doc_index_lock = threading.Lock()
         # Cache em memória (global, fundamentos não variam por tenant na prática - só ~15
         # documentos fixos) dos chunks de categoria_geral=True usados por
         # _fundamentos_candidates(). Achado em produção em 08/10/2026, durante a verificação do
@@ -48,7 +49,6 @@ class RAGService:
         # dezenas, não pesa memória).
         self._fundamentos_cache: Optional[list] = None
         self._fundamentos_cache_at: float = 0
-        self._FUNDAMENTOS_TTL_SECONDS = 600
 
     def _ensure_client(self):
         if self.collection is not None:
@@ -120,12 +120,12 @@ class RAGService:
                     ids=[f"t{tenant_id}_{doc_id}"],
                     metadatas=[meta]
                 )
-            # Invalida o cache de _get_doc_index pra esse tenant - sem isso, um documento
-            # ingerido agora (ex: pelo vigia de pasta) só apareceria na busca-por-nome depois de
-            # até 10min (TTL do cache).
-            self._doc_index_cache.pop(int(tenant_id), None)
-            self._doc_index_cache_at.pop(int(tenant_id), None)
-            # Idem pro cache de fundamentos, caso o documento novo seja ele mesmo um fundamento
+            # NÃO invalida o cache de _get_doc_index aqui (fazia até 12/10/2026): apagar o cache
+            # obrigava a PRÓXIMA pergunta de usuário a reconstruir o índice inteiro na hora
+            # (60-550s na VM daquele dia). O documento novo entra na busca-por-nome no próximo
+            # ciclo do aquecedor; a busca semântica já enxerga ele agora.
+            # Cache de fundamentos é pequeno (poucas dezenas de chunks), esse pode invalidar
+            # direto, caso o documento novo seja ele mesmo um fundamento
             # (categoria_geral=True) - sem isso, um fundamento recém-ingerido só entraria na
             # busca depois de até 10min.
             if meta.get("categoria_geral"):
@@ -165,22 +165,32 @@ class RAGService:
         "arquitetura", "componente", "componentes", "principio", "princípio", "geral", "gerais",
     }
 
-    def _get_doc_index(self, tenant_id: int) -> list:
+    def _get_doc_index(self, tenant_id: int, refresh: bool = False) -> list:
         """
-        1 metadado representativo por DOCUMENTO (parent_doc_id), não por chunk - cacheado em
-        memória por _DOC_INDEX_TTL_SECONDS (10min). O scan paginado completo do acervo (caro,
-        181s medido em produção com o acervo de hoje) só roda quando o cache expira ou ainda não
-        existe, não a cada pergunta. Novo documento ingerido fica até 10min sem aparecer na
-        busca-por-nome (_rank_docs_by_model_number) - aceitável, a busca semântica normal já
-        enxerga ele antes disso; add_document() também invalida o cache direto, então uma
-        ingestão feita por este mesmo processo já atualiza na hora.
-        """
-        import time
-        now = time.time()
-        cached_at = self._doc_index_cache_at.get(tenant_id, 0)
-        if now - cached_at < self._DOC_INDEX_TTL_SECONDS and tenant_id in self._doc_index_cache:
-            return self._doc_index_cache[tenant_id]
+        1 metadado representativo por DOCUMENTO (parent_doc_id), não por chunk, cacheado em
+        memória. O scan paginado completo do acervo é caro (181s medido em produção) e SÓ roda
+        com refresh=True, chamado pelo aquecedor em segundo plano (start_rag_index_warmer_loop,
+        que também monta o primeiro índice logo após o boot). Pergunta de usuário sempre usa o
+        último índice pronto, mesmo que "velho" - e, nos primeiros minutos após o boot, antes do
+        primeiro ficar pronto, segue sem a busca-por-nome (só a semântica).
 
+        Achado em produção em 12/10/2026: com TTL de 10min + aquecedor a cada 8min, a conta só
+        fechava se a reconstrução levasse menos de 2min. Com a VM sem CPU (soft lockups do
+        hospedeiro) ela passou a levar 60-550s, o cache expirava ANTES do aquecedor renovar, e a
+        pergunta do técnico no Copiloto reconstruía o índice inteiro na hora - 109s, a Cloudflare
+        corta em 100s, técnico sem resposta. E como roda síncrono dentro de um endpoint async,
+        travava o backend INTEIRO junto. Documento novo leva até um ciclo do aquecedor pra entrar
+        na busca-por-nome - a busca semântica normal já enxerga ele antes disso.
+        """
+        if refresh:
+            with self._doc_index_lock:
+                return self._rebuild_doc_index(tenant_id)
+        if tenant_id not in self._doc_index_cache:
+            logger.info(f"[RAG] _get_doc_index: índice do tenant {tenant_id} ainda não ficou pronto - seguindo sem busca-por-nome")
+        return self._doc_index_cache.get(tenant_id, [])
+
+    def _rebuild_doc_index(self, tenant_id: int) -> list:
+        import time
         t0 = time.time()
         all_metas: list = []
         offset = 0
@@ -201,7 +211,7 @@ class RAGService:
 
         doc_list = list(seen_docs.values())
         self._doc_index_cache[tenant_id] = doc_list
-        self._doc_index_cache_at[tenant_id] = now
+        self._doc_index_cache_at[tenant_id] = time.time()
         logger.info(f"[RAG] _get_doc_index: reconstruído cache de {len(doc_list)} documentos (de {len(all_metas)} chunks) em {time.time()-t0:.1f}s")
         return doc_list
 
@@ -254,7 +264,7 @@ class RAGService:
 
         return sorted(seen_docs.values(), key=lambda x: (-x[0], x[1], -x[2]))
 
-    def _fundamentos_candidates(self, tenant_id: int, query: str, limit: int):
+    def _fundamentos_candidates(self, tenant_id: int, query: str, limit: int, refresh: bool = False):
         """
         Acha os trechos mais relevantes entre os documentos de FUNDAMENTOS (conhecimento geral
         de categoria, sem marca/modelo - ver ingest_fundamentos.py) por sobreposição de palavras
@@ -281,15 +291,16 @@ class RAGService:
             "quando", "qual", "quais", "porque", "pois", "ainda", "muito", "mais", "menos",
         }
         import time
-        now = time.time()
-        if self._fundamentos_cache is not None and (now - self._fundamentos_cache_at) < self._FUNDAMENTOS_TTL_SECONDS:
+        # Mesmo esquema do _get_doc_index (achado de 12/10/2026): pergunta de usuário usa o cache
+        # pronto, só o aquecedor (refresh=True) ou a primeira chamada depois do boot escaneiam.
+        if self._fundamentos_cache is not None and not refresh:
             docs, metas = self._fundamentos_cache
         else:
             got = self._chroma_call(self.collection.get, where={"categoria_geral": True}, include=["documents", "metadatas"])
             docs = got.get("documents", [])
             metas = got.get("metadatas", [])
             self._fundamentos_cache = (docs, metas)
-            self._fundamentos_cache_at = now
+            self._fundamentos_cache_at = time.time()
 
         def _stems(text: str) -> set:
             # Radical bem simples (6 primeiros caracteres) - sem isso, "inversor" (pergunta) não
@@ -548,7 +559,7 @@ class RAGService:
 rag_service = RAGService()
 
 
-async def start_rag_index_warmer_loop(tenant_ids: Optional[list] = None, interval_seconds: int = 480):
+async def start_rag_index_warmer_loop(tenant_ids: Optional[list] = None, interval_seconds: int = 1200):
     """
     Reconstrói _get_doc_index() (cache de metadados usado em _rank_docs_by_model_number, ver
     comentário no __init__) PROATIVAMENTE em segundo plano, antes do cache expirar sozinho -
@@ -558,6 +569,12 @@ async def start_rag_index_warmer_loop(tenant_ids: Optional[list] = None, interva
     cada 8min (menor que o TTL de 10min do cache), o cache nunca chega a expirar de verdade na
     frente de um usuário real - a reconstrução sempre acontece aqui, em background, não na
     resposta de ninguém.
+
+    Desde 12/10/2026 o cache não "expira" mais pra pergunta de usuário (ver _get_doc_index): o
+    aquecedor é o ÚNICO que reconstrói (refresh=True), então a pergunta nunca espera por isso,
+    por mais lenta que a reconstrução fique. Intervalo subiu de 8 pra 20min: agora TODO ciclo
+    reconstrói de verdade (antes metade pulava por cache ainda válido), e cada reconstrução
+    custa minutos de CPU numa VM que já está sem CPU sobrando.
     """
     import asyncio
     tenant_ids = tenant_ids or [1]
@@ -566,11 +583,11 @@ async def start_rag_index_warmer_loop(tenant_ids: Optional[list] = None, interva
         for tid in tenant_ids:
             try:
                 rag_service._ensure_client()
-                await asyncio.to_thread(rag_service._get_doc_index, tid)
+                await asyncio.to_thread(rag_service._get_doc_index, tid, True)
                 # Mesmo achado de 08/10/2026, pra um segundo gargalo descoberto depois deste
                 # primeiro fix: _fundamentos_candidates também escaneava o acervo inteiro sem
                 # cache (~3s por pergunta, toda pergunta). Aquece aqui também.
-                await asyncio.to_thread(rag_service._fundamentos_candidates, tid, "solda inversor", 1)
+                await asyncio.to_thread(rag_service._fundamentos_candidates, tid, "solda inversor", 1, True)
             except Exception as e:
                 logger.error(f"[RAG] Erro aquecendo cache de índice pro tenant {tid}: {e}")
             try:

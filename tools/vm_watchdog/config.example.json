@@ -1,0 +1,21 @@
+{
+  "vm_name": "",
+  "vm_ip": "192.168.15.8",
+  "vboxmanage_path": "C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe",
+  "health_url_local": "http://{ip}:8000/api/v1/health",
+  "health_url_public": "https://app.servweld.com.br/api/v1/health",
+  "check_timeout_seconds": 10,
+  "slow_threshold_seconds": 8,
+  "frozen_minutes": 4,
+  "backend_down_minutes": 15,
+  "acpi_wait_seconds": 90,
+  "cooldown_minutes": 15,
+  "max_actions_per_day": 4,
+  "alert": {
+    "enabled": false,
+    "evolution_url": "http://{ip}:8080",
+    "instance": "instancia_tecnica",
+    "number": "5561998334833",
+    "api_key": "COLOQUE_A_APIKEY_DA_EVOLUTION"
+  }
+}

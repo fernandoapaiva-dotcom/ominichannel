@@ -59,3 +59,9 @@ backend/test_*.py
 uploads/
 backend/uploads/
 
+
+# Vigia externo da VM (tools/vm_watchdog) - estado/log/segredo locais do PC hospedeiro
+tools/vm_watchdog/config.json
+tools/vm_watchdog/state.json
+tools/vm_watchdog/vm_watchdog.log
+tools/vm_watchdog/install.log
