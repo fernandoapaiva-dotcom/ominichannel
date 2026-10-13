@@ -980,8 +980,15 @@ class EvolutionService:
         remote_jid: Optional[str] = None,
         custom_base_url: Optional[str] = None,
         custom_api_key: Optional[str] = None,
-        full_message: Optional[Dict] = None
+        full_message: Optional[Dict] = None,
+        timeout: float = 25.0
     ) -> Optional[str]:
+        # timeout: era 8s fixo até 13/10/2026 - um PDF de ~10MB (contrato da Andressa Lima, conv
+        # #5000) levou 23s pra Evolution baixar+descriptografar (mais ainda quando o link do
+        # WhatsApp já expirou e ela precisa pedir pro celular reenviar a mídia). Estourava o tempo,
+        # o sistema guardava só o link .enc temporário e o arquivo "sumia" depois que ele expirava.
+        # 25s no webhook (não segurar demais a entrada da mensagem - o que falhar aqui, o
+        # media_recovery_service recupera depois em segundo plano); quem pede sob demanda passa mais.
         base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
         url = f"{base_url}/chat/getBase64FromMediaMessage/{instance_name}"
         key_obj: Dict[str, Any] = {
@@ -1000,19 +1007,22 @@ class EvolutionService:
         }
         client = self.get_client()
         try:
-            res = await client.post(url, json=payload, headers=headers, timeout=8.0)
+            res = await client.post(url, json=payload, headers=headers, timeout=timeout)
             if res.status_code in (200, 201):
                 data = res.json()
                 return data.get("base64")
             else:
                 # If from_me failed, try the inverse
                 key_obj["fromMe"] = not from_me
-                res2 = await client.post(url, json=payload, headers=headers, timeout=8.0)
+                res2 = await client.post(url, json=payload, headers=headers, timeout=timeout)
                 if res2.status_code in (200, 201):
                     data2 = res2.json()
                     return data2.get("base64")
+                logger.warning(f"Media base64 for msg {message_id} on {instance_name}: HTTP {res.status_code}/{res2.status_code} - {res2.text[:160]}")
         except Exception as e:
-            logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {e}")
+            # type(e) junto: httpx.ReadTimeout tem str() vazio - o log de 09/10 só dizia "...: " e
+            # não dava pra saber que era estouro de tempo.
+            logger.error(f"Error fetching media base64 for msg {message_id} on {instance_name}: {type(e).__name__}: {e}")
         return None
 
     async def mark_message_as_read(

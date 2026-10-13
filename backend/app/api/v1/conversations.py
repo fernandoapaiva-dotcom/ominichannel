@@ -1005,100 +1005,27 @@ async def get_message_media_stream(
     if failed_at_raw:
         try:
             failed_at = datetime.fromisoformat(failed_at_raw)
-            if (datetime.utcnow() - failed_at) < timedelta(hours=24):
+            # Era 24h até 13/10/2026 - mas um "falhou" aqui muitas vezes era só estouro de tempo
+            # (limite de 8s na busca), não link perdido de verdade, e o arquivo ficava travado como
+            # "indisponível" o dia inteiro. 1h ainda evita martelar a Evolution a cada clique.
+            if (datetime.utcnow() - failed_at) < timedelta(hours=1):
                 raise HTTPException(status_code=404, detail="Mídia não disponível (link do WhatsApp expirado)")
         except ValueError:
             pass
 
-    # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API
+    # If it's a WhatsApp mmg URL or missing local file, fetch from Evolution API (mesmo código da
+    # recuperação automática em segundo plano - ver media_recovery_service). 75s: a Evolution leva
+    # 20s+ num arquivo grande, mais ainda quando o link já expirou e ela pede o reenvio pro celular;
+    # fica abaixo dos 100s em que a Cloudflare corta a requisição.
     if msg.whatsapp_msg_id and msg.conversation and msg.conversation.whatsapp_number:
-        conv = msg.conversation
-        inst_name = conv.whatsapp_number.instancia_evolution_api or "instancia_financeiro"
-        remote_jid = conv.contact.telefone if conv.contact else None
-        if remote_jid and not remote_jid.endswith("@s.whatsapp.net") and not remote_jid.endswith("@g.us"):
-            remote_jid = f"{remote_jid}@g.us" if ("120363" in remote_jid or len(remote_jid) > 15) else f"{remote_jid}@s.whatsapp.net"
-
-        from_me = (msg.remetente == MessageSender.ATENDENTE.value or msg.remetente == "atendente" or msg.remetente == "ia")
-
-        instances_to_try = [inst_name] if inst_name else []
-
-        b64_data = None
-        for inst in instances_to_try:
-            try:
-                b64_data = await evolution_service.get_media_base64(
-                    instance_name=inst,
-                    message_id=msg.whatsapp_msg_id,
-                    from_me=from_me,
-                    remote_jid=remote_jid
-                )
-                if b64_data:
-                    break
-            except Exception as e:
-                logger.error(f"Error fetching base64 on {inst}: {e}")
-
-        if b64_data:
-            ext = ".png"
-            if msg.tipo == MessageType.VIDEO or msg.tipo == "video":
-                ext = ".mp4"
-            elif msg.tipo == MessageType.AUDIO or msg.tipo == "audio":
-                ext = ".ogg"
-            elif msg.tipo == MessageType.ARQUIVO or msg.tipo == "arquivo":
-                ext = ".pdf"
-            elif msg.tipo == MessageType.IMAGEM or msg.tipo == "imagem":
-                ext = ".jpeg"
-
-            try:
-                if "," in b64_data:
-                    raw_bytes = base64.b64decode(b64_data.split(",")[1])
-                else:
-                    raw_bytes = base64.b64decode(b64_data)
-
-                fname = f"{uuid.uuid4().hex}{ext}"
-                fpath = os.path.join(upload_dir, fname)
-                with open(fpath, "wb") as f:
-                    f.write(raw_bytes)
-
-                caption = ""
-                if "|" in raw:
-                    parts = [p.strip() for p in raw.split("|") if p.strip()]
-                    if len(parts) >= 3:
-                        orig_filename = orig_filename or parts[1]
-                        caption = "|".join(parts[2:])
-                    elif len(parts) == 2:
-                        if not orig_filename and "." in parts[1] and len(parts[1].split(".")[-1]) <= 6:
-                            orig_filename = parts[1]
-                        else:
-                            caption = parts[1]
-
-                if orig_filename and (msg.tipo in (MessageType.ARQUIVO, "arquivo") or orig_filename != fname):
-                    if caption:
-                        new_conteudo = f"/uploads/{fname}|{orig_filename}|{caption}"
-                    else:
-                        new_conteudo = f"/uploads/{fname}|{orig_filename}"
-                elif caption:
-                    new_conteudo = f"/uploads/{fname}|{caption}"
-                else:
-                    new_conteudo = f"/uploads/{fname}"
-
-                msg.conteudo = new_conteudo
-                if orig_filename:
-                    extra = dict(msg.dados_adicionais or {})
-                    extra["original_filename"] = orig_filename
-                    extra["file_name"] = orig_filename
-                    msg.dados_adicionais = extra
-                    from sqlalchemy.orm.attributes import flag_modified
-                    flag_modified(msg, "dados_adicionais")
-
-                await db.commit()
-
-                final_name = orig_filename or fname
-                return FileResponse(
-                    fpath,
-                    filename=final_name,
-                    headers={"Content-Disposition": f'inline; filename="{final_name}"'}
-                )
-            except Exception as e:
-                logger.error(f"Error caching media base64: {e}")
+        from app.services.media_recovery_service import recover_message_media
+        fpath, final_name = await recover_message_media(db, msg, timeout=75.0)
+        if fpath:
+            return FileResponse(
+                fpath,
+                filename=final_name,
+                headers={"Content-Disposition": f'inline; filename="{final_name}"'}
+            )
 
     # Fallback redirect if still external http
     if media_path.startswith("http") and not "mmg.whatsapp.net" in media_path:

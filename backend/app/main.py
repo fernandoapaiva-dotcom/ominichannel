@@ -42,6 +42,7 @@ from app.services.failed_message_retry_service import start_failed_message_retry
 from app.services.os_report_autodraft_service import start_report_autodraft_loop
 from app.services.rag_service import start_rag_index_warmer_loop
 from app.services.whatsapp_read_sync_service import start_whatsapp_read_sync_loop
+from app.services.media_recovery_service import start_media_recovery_loop
 
 import mimetypes
 
@@ -138,6 +139,11 @@ async def lifespan(app: FastAPI):
     # celular acumulava conversas "não lidas" que já tinham sido vistas/respondidas no sistema.
     whatsapp_read_sync_task = asyncio.create_task(start_whatsapp_read_sync_loop())
 
+    # Recuperação automática de mídia que chegou pelo WhatsApp mas não foi baixada (ver
+    # app/services/media_recovery_service.py) - ligado em 13/10/2026: o contrato em PDF de um
+    # cliente ficou "indisponível" no sistema porque a busca do arquivo estourou o tempo na chegada.
+    media_recovery_task = asyncio.create_task(start_media_recovery_loop())
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual).
     #
@@ -197,6 +203,7 @@ async def lifespan(app: FastAPI):
     technician_note_followup_task.cancel()
     rag_warmer_task.cancel()
     whatsapp_read_sync_task.cancel()
+    media_recovery_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")

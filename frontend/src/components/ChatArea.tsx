@@ -927,7 +927,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     toCheck.forEach(url => {
       setPdfAvailability(prev => ({ ...prev, [url]: 'checking' }));
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      // 90s (era 10s): quando o PDF ainda não foi salvo no servidor, o backend busca na Evolution
+      // API, que leva 20s+ num arquivo grande (até 75s, ver get_message_media) - com 10s a tela
+      // desistia antes e mostrava "indisponível" pra um arquivo que ia chegar (13/10/2026).
+      const timeoutId = setTimeout(() => controller.abort(), 90000);
       fetch(url, { signal: controller.signal })
         .then(res => setPdfAvailability(prev => ({ ...prev, [url]: res.ok ? 'ok' : 'unavailable' })))
         .catch(() => setPdfAvailability(prev => ({ ...prev, [url]: 'unavailable' })))
