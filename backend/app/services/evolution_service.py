@@ -1049,6 +1049,30 @@ class EvolutionService:
                 logger.error(f"[MARK_READ] Error marking message as read via instance {instance_name}: {e}")
                 return False
 
+    async def mark_messages_as_read(
+        self,
+        instance_name: str,
+        remote_jid: str,
+        message_ids: List[str],
+        custom_base_url: Optional[str] = None,
+        custom_api_key: Optional[str] = None
+    ) -> tuple:
+        """Igual a mark_message_as_read, mas com VÁRIAS mensagens do cliente num chamado só - usado
+        pela sincronização de lidas (whatsapp_read_sync_service). Devolve (ok, erro) pra quem chama
+        conseguir distinguir "instância desconectada" (para de insistir nela nessa rodada) de outros
+        erros."""
+        base_url, headers = self._get_headers_and_url(custom_base_url, custom_api_key)
+        url = f"{base_url}/chat/markMessageAsRead/{instance_name}"
+        payload = {"readMessages": [{"remoteJid": remote_jid, "fromMe": False, "id": mid} for mid in message_ids]}
+        async with httpx.AsyncClient() as client:
+            try:
+                res = await client.post(url, json=payload, headers=headers, timeout=10.0)
+                if res.status_code in (200, 201):
+                    return True, ""
+                return False, f"HTTP {res.status_code}: {res.text[:200]}"
+            except Exception as e:
+                return False, str(e)
+
     async def fetch_chat_history(
         self,
         instance_name: str,

@@ -41,6 +41,7 @@ from app.services.os_technician_note_service import start_technician_note_follow
 from app.services.failed_message_retry_service import start_failed_message_retry_loop
 from app.services.os_report_autodraft_service import start_report_autodraft_loop
 from app.services.rag_service import start_rag_index_warmer_loop
+from app.services.whatsapp_read_sync_service import start_whatsapp_read_sync_loop
 
 import mimetypes
 
@@ -132,6 +133,11 @@ async def lifespan(app: FastAPI):
     # (~90s) na cara.
     rag_warmer_task = asyncio.create_task(start_rag_index_warmer_loop())
 
+    # Sincronização contínua de "lida" sistema -> WhatsApp (ver
+    # app/services/whatsapp_read_sync_service.py) - ligado em 13/10/2026, pedido do usuário: o
+    # celular acumulava conversas "não lidas" que já tinham sido vistas/respondidas no sistema.
+    whatsapp_read_sync_task = asyncio.create_task(start_whatsapp_read_sync_loop())
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual).
     #
@@ -190,6 +196,7 @@ async def lifespan(app: FastAPI):
     report_autodraft_task.cancel()
     technician_note_followup_task.cancel()
     rag_warmer_task.cancel()
+    whatsapp_read_sync_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")
