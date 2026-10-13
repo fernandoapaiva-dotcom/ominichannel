@@ -24,6 +24,7 @@ Se o bibliotecário não tiver certeza, devolve None e a pergunta segue pra IA n
 conversa já incluído na busca, que também melhora a resposta dela).
 """
 import asyncio
+import json
 import logging
 import os
 import re
@@ -31,12 +32,15 @@ import unicodedata
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import DateTime, Integer, Text, delete, func, select
+from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.database import AsyncSessionLocal
+from app.core.database import AsyncSessionLocal, Base
 from app.models.models import PartsCatalogItem
 
 logger = logging.getLogger("librarian")
+
+MAX_OPTIONS = 6  # máximo de documentos numa lista de escolha
 
 # ---------------------------------------------------------------------------------------------
 # Texto
@@ -398,7 +402,7 @@ def pick_document(mensagem: str, ranked_docs: list) -> Tuple[Optional[dict], Lis
         return None, [], wanted
     cands.sort(key=lambda c: -c[0])
     best_score, best_type_hit, best = cands[0]
-    alts = [c[2] for c in cands[1:4] if c[0] >= best_score - 10]
+    alts = [c[2] for c in cands[1:MAX_OPTIONS] if c[0] >= best_score - 10]
     missing_type = wanted if (wanted and not best_type_hit) else None
     return best, alts, missing_type
 
@@ -423,13 +427,93 @@ def format_code_lookup_answer(parts: List[PartsCatalogItem]) -> str:
     return "\n".join(lines)
 
 
+def pretty_title(meta: dict) -> str:
+    """Nome legível do documento pra mostrar ao técnico: sem ".pdf", sem o caminho de pastas, sem
+    "__"/"_" do nome de arquivo, com a marca no fim quando ela não aparece no nome.
+    "HYPERTHERM / POWERMAX 45XP - MANUAL DE SERVICO.pdf" -> "POWERMAX 45XP - MANUAL DE SERVICO (Hypertherm)"."""
+    titulo = (meta.get("titulo") or "").strip()
+    segs = [x.strip() for x in titulo.split(" / ") if x.strip()] if titulo else []
+    marca = (meta.get("marca") or (segs[0] if len(segs) >= 2 else "")).strip()
+    partes = segs[1:] if len(segs) >= 2 else [meta.get("filename") or titulo or "Documento"]
+
+    def limpa(x: str) -> str:
+        x = re.sub(r"\.pdf$", "", x, flags=re.I).replace("__", " - ").replace("_", " ")
+        return re.sub(r"\s+", " ", x).strip(" -")
+
+    nome = " · ".join(limpa(x) for x in partes if limpa(x))
+    if marca and norm(marca) not in norm(nome):
+        nome += f" ({marca.title()})"
+    return nome or "Documento"
+
+
 def format_document_answer(doc: dict, alts: List[dict], missing_type: Optional[str]) -> str:
-    titulo = doc.get("titulo") or doc.get("filename")
+    titulo = pretty_title(doc)
     if missing_type:
-        text = (f"📘 Bibliotecário - não achei um {missing_type} específico desse modelo na base. "
+        return (f"📘 Bibliotecário - não achei um {missing_type} específico desse modelo na base. "
                 f"O documento mais próximo é: {titulo}. Se quiser, me pergunta o que precisa que eu monto a partir dele.")
-    else:
-        text = f"📘 Bibliotecário - aqui está: {titulo}."
-    if alts:
-        text += "\n\nTambém tenho: " + "; ".join((a.get("titulo") or a.get("filename")) for a in alts) + ". É só pedir pelo nome."
-    return text
+    return f"📘 Bibliotecário - aqui está: {titulo}."
+
+
+# ---------------------------------------------------------------------------------------------
+# Lista numerada de documentos - pedido do usuário em 13/10/2026: "lista eles com números e pede
+# pro técnico escolher um número, e ele manda o manual do número correspondente". Antes ia um
+# documento + "Também tenho: A; B; C" numa linha só, com o nome de arquivo inteiro - bagunçado.
+# ---------------------------------------------------------------------------------------------
+
+class CopilotDocOption(Base):
+    """Opções que o bibliotecário ofereceu numa mensagem (o técnico responde com o número). Fica
+    aqui e não em models.py de propósito: tabela de uso só do bibliotecário, criada sozinha no boot
+    (create_all) por estar registrada no mesmo Base."""
+    __tablename__ = "copilot_doc_options"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(Integer, index=True, unique=True)
+    opcoes_json: Mapped[str] = mapped_column(Text)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# "2", "o 2", "opção 2", "nº 2", "manda o 2"
+CHOICE = re.compile(r"^\s*(?:op[cç][aã]o|n[uú]mero|num|n[ºo°]\.?|quero o|quero a|manda o|manda a|o|a)?\s*(\d{1,2})\s*[.!)]?\s*$", re.I)
+
+
+def parse_option_choice(mensagem: str) -> Optional[int]:
+    m = CHOICE.match(mensagem or "")
+    return int(m.group(1)) if m else None
+
+
+def document_options(doc: dict, alts: List[dict]) -> List[dict]:
+    return [
+        {"nome": pretty_title(d), "titulo": d.get("titulo") or d.get("filename"), "source_path": d.get("source_path")}
+        for d in [doc] + list(alts)
+    ][:MAX_OPTIONS]
+
+
+def format_document_choices(options: List[dict]) -> str:
+    linhas = [f"📘 Bibliotecário - achei {len(options)} documentos:", ""]
+    linhas += [f"{i}. {o['nome']}" for i, o in enumerate(options, 1)]
+    linhas += ["", "Responda só com o número que eu abro o documento aqui."]
+    return "\n".join(linhas)
+
+
+async def save_options(message_id: int, options: List[dict]) -> None:
+    async with AsyncSessionLocal() as db:
+        db.add(CopilotDocOption(message_id=message_id, opcoes_json=json.dumps(options, ensure_ascii=False)))
+        await db.commit()
+
+
+async def load_latest_options(message_ids: List[int]) -> Optional[List[dict]]:
+    """A lista numerada mais recente entre essas mensagens - o técnico pode escolher o 2 e depois
+    pedir o 5 da MESMA lista, sem o bibliotecário ter que listar de novo."""
+    if not message_ids:
+        return None
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(
+            select(CopilotDocOption).where(CopilotDocOption.message_id.in_(message_ids)).order_by(CopilotDocOption.message_id.desc()).limit(1)
+        )).scalar_one_or_none()
+    return json.loads(row.opcoes_json) if row else None
+
+
+async def load_options(message_id: int) -> Optional[List[dict]]:
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(select(CopilotDocOption).where(CopilotDocOption.message_id == message_id))).scalar_one_or_none()
+    return json.loads(row.opcoes_json) if row else None

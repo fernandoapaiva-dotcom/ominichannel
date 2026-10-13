@@ -454,6 +454,10 @@ async def technician_update_os_status(
 # webhooks.py) e substituir por esse chat in-app. Documentos encontrados abrem só em visualização
 # embutida (GET /copilot/document/{id}) - nunca como arquivo baixável/anexo.
 
+class _BibliotecarioRespondeu(Exception):
+    """Interrompe o fluxo do bibliotecário quando a mensagem já foi respondida (ex: escolha de número)."""
+
+
 class CopilotAskRequest(BaseModel):
     mensagem: str
     thread_id: Optional[str] = None  # vazio/None = nova conversa
@@ -566,7 +570,26 @@ async def copilot_ask(
     # consulta direta, sem chamar a IA, quando ele tem certeza; senão a pergunta segue pra IA já com
     # o modelo da conversa ("...dela?" herda a LHN 242 da mensagem anterior).
     equip_text, ranked_docs = "", []
+    opcoes_oferecidas = None  # lista numerada que esta resposta oferece (técnico responde com o número)
     try:
+        # Resposta com o NÚMERO de uma lista que o bibliotecário acabou de oferecer ("2", "o 2")
+        escolha = librarian_service.parse_option_choice(mensagem)
+        ids_assistente = [m.id for m in recent[:-1] if m.remetente == "assistente"]
+        opcoes_anteriores = (await librarian_service.load_latest_options(ids_assistente)) if escolha else None
+        if opcoes_anteriores:
+            if 1 <= escolha <= len(opcoes_anteriores):
+                op = opcoes_anteriores[escolha - 1]
+                if op.get("source_path") and os.path.exists(op["source_path"]):
+                    resposta_texto = f"📘 Bibliotecário - aqui está o {escolha}: {op['nome']}."
+                    documento_titulo = op["nome"]
+                    documento_source_path = op["source_path"]
+                else:
+                    resposta_texto = f"⚠️ O documento {escolha} ({op['nome']}) não está mais disponível no servidor."
+            else:
+                resposta_texto = f"Escolha um número de 1 a {len(opcoes_anteriores)}."
+                opcoes_oferecidas = opcoes_anteriores  # continua valendo a mesma lista
+            raise _BibliotecarioRespondeu  # já respondido - pula o resto do bibliotecário
+
         equip_text, ranked_docs = librarian_service.resolve_equipment(tech.tenant_id, mensagem, history)
         wants_send = bool(librarian_service.SEND_INTENT.search(mensagem)) or len(mensagem.split()) <= 9
         is_fault_question = bool(librarian_service.FAULT_INTENT.search(mensagem))
@@ -584,11 +607,18 @@ async def copilot_ask(
         elif librarian_service.DOC_INTENT.search(mensagem) and wants_send and ranked_docs:
             doc, alts, missing_type = librarian_service.pick_document(mensagem, ranked_docs)
             if doc and not missing_type:
-                resposta_texto = librarian_service.format_document_answer(doc, alts, None)
-                documento_titulo = doc.get("titulo") or doc.get("filename")
-                documento_source_path = doc.get("source_path")
+                if alts:
+                    # Mais de um documento possível: lista numerada, o técnico escolhe pelo número
+                    opcoes_oferecidas = librarian_service.document_options(doc, alts)
+                    resposta_texto = librarian_service.format_document_choices(opcoes_oferecidas)
+                else:
+                    resposta_texto = librarian_service.format_document_answer(doc, [], None)
+                    documento_titulo = librarian_service.pretty_title(doc)
+                    documento_source_path = doc.get("source_path")
         if resposta_texto:
-            logger.info(f"[BIBLIOTECARIO] Respondeu sem IA pro técnico {tech.nome}: '{mensagem[:80]}' -> {documento_titulo or '(sem documento)'}")
+            logger.info(f"[BIBLIOTECARIO] Respondeu sem IA pro técnico {tech.nome}: '{mensagem[:80]}' -> {documento_titulo or ('lista de %d documentos' % len(opcoes_oferecidas) if opcoes_oferecidas else '(sem documento)')}")
+    except _BibliotecarioRespondeu:
+        logger.info(f"[BIBLIOTECARIO] Escolha '{mensagem[:20]}' do técnico {tech.nome} -> {documento_titulo or '(sem documento)'}")
     except Exception as e:
         logger.error(f"[BIBLIOTECARIO] Falha (segue pra IA): {e}", exc_info=True)
         resposta_texto = None
@@ -643,6 +673,8 @@ async def copilot_ask(
     db.add(assistant_msg)
     await db.commit()
     await db.refresh(assistant_msg)
+    if opcoes_oferecidas:
+        await librarian_service.save_options(assistant_msg.id, opcoes_oferecidas)
 
     return _copilot_message_out(assistant_msg)
 
