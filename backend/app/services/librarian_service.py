@@ -241,23 +241,57 @@ async def start_librarian_catalog_loop(tenant_ids: Optional[list] = None):
 # Consulta
 # ---------------------------------------------------------------------------------------------
 
+# Palavras que aparecem em nome de arquivo mas não identificam um equipamento - não servem de prova
+# de que o documento é "daquele" equipamento (ver _rank_docs).
+_NOT_EQUIPMENT = _STOP | {
+    "tocha", "tochas", "solda", "maquina", "fonte", "inversora", "inversor", "manual", "manuais",
+    "esquema", "vista", "explodida", "servico", "problema", "ajuda", "ajudar", "consegue", "estou",
+    "esta", "com", "sem", "pdf", "rev", "pt", "br", "en", "es", "doc", "tecnico", "tecnicos", "documento",
+}
+
+
 def _rank_docs(tenant_id: int, text: str) -> list:
-    from app.services.rag_service import rag_service
+    """Documentos cujo NOME bate com o equipamento do texto - mas só os que batem pelo menos uma
+    PALAVRA do equipamento (marca/linha: lhn, powermax, hardcut...). Achado em 13/10/2026: "Me envia
+    manual" numa conversa sobre a tocha do Hardcut 52 mandou a vista explodida de uma furadeira
+    INGCO, que só batia NÚMERO solto com o texto. Número sozinho só vale se tiver 3+ dígitos e o
+    texto não citar palavra nenhuma de equipamento (ex: "manual do 0205322")."""
+    from app.services.rag_service import rag_service, MODEL_NUMBER_IN_NAME
     try:
-        return rag_service._rank_docs_by_model_number(tenant_id, text, 0)
+        ranked = rag_service._rank_docs_by_model_number(tenant_id, text, 0)
     except Exception:
         return []
+    if not ranked:
+        return []
+    words = {w for w in _words(text) if not w.isdigit() and len(w) >= 3 and w not in _NOT_EQUIPMENT}
+    numbers = {w for w in _words(text) if w.isdigit()}
+    out = []
+    for item in ranked:
+        meta = item[3]
+        name = (meta.get("filename") or "") + " " + (meta.get("titulo") or "")
+        name_words = set(_words(name))
+        if words & name_words:
+            out.append(item)
+        elif not words:
+            name_numbers = set(re.findall(MODEL_NUMBER_IN_NAME, name))
+            if any(len(n) >= 3 for n in numbers & name_numbers):
+                out.append(item)
+    return out
 
 
 def resolve_equipment(tenant_id: int, mensagem: str, history: List[dict]) -> Tuple[str, list]:
     """Texto que identifica o equipamento da pergunta + documentos que batem com ele. Se a pergunta
-    não cita modelo, herda da mensagem mais recente da conversa que citava (do técnico ou o título
-    do documento que o assistente mandou)."""
+    não cita modelo, herda da mensagem mais recente DO TÉCNICO que citava, ou do título do documento
+    que já foi mandado na conversa - nunca do texto da IA (que tem número de exemplo, valor de
+    tensão etc. e fazia herdar um "modelo" que ninguém pediu)."""
     ranked = _rank_docs(tenant_id, mensagem)
     if ranked:
         return mensagem, ranked
     for h in reversed(history):
-        for text in (h.get("conteudo") or "", h.get("documento_titulo") or ""):
+        texts = [h.get("documento_titulo") or ""]
+        if h.get("remetente") == "tecnico":
+            texts.insert(0, h.get("conteudo") or "")
+        for text in texts:
             if not text:
                 continue
             r = _rank_docs(tenant_id, text)

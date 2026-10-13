@@ -618,18 +618,18 @@ async def copilot_ask(
         search_terms = (ai_output or {}).get("documento_solicitado")
         if search_terms:
             try:
-                # Quem escolhe o arquivo é o bibliotecário (nome do arquivo + modelo da conversa);
-                # a busca antiga fica só de reserva.
+                # Quem escolhe o arquivo é o bibliotecário (nome do arquivo + modelo da conversa).
+                # Sem a busca "por significado" de reserva (até 13/10/2026): ela anexava qualquer
+                # arquivo parecido quando o equipamento não tinha documento - melhor avisar.
                 terms_ranked = librarian_service.resolve_equipment(tech.tenant_id, f"{search_terms} {equip_text}".strip(), [])[1]
                 doc, _alts, _missing = librarian_service.pick_document(search_terms, terms_ranked or ranked_docs)
-                if not doc:
-                    candidates = await rag_service.find_document(tech.tenant_id, search_terms, department_id=0, top_k=3)
-                    doc = next((c for c in candidates if c.get("source_path") and os.path.exists(c["source_path"])), None)
                 if doc:
                     documento_titulo = doc.get("titulo") or doc.get("filename")
                     documento_source_path = doc["source_path"]
                 elif _wants_diagram(search_terms):
                     resposta_texto += "\n\n⚠️ Não encontrei esse esquema/diagrama específico na base - tenta descrever o modelo com mais detalhes."
+                else:
+                    resposta_texto += f"\n\n⚠️ Não encontrei um documento de \"{search_terms}\" na base técnica."
             except Exception as e:
                 logger.error(f"[COPILOTO PORTAL] Falha buscando documento pra '{search_terms}': {e}")
 
