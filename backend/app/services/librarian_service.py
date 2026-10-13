@@ -254,54 +254,117 @@ _NOT_EQUIPMENT = _STOP | {
 }
 
 
-def _rank_docs(tenant_id: int, text: str) -> list:
-    """Documentos cujo NOME bate com o equipamento do texto - mas só os que batem pelo menos uma
-    PALAVRA do equipamento (marca/linha: lhn, powermax, hardcut...). Achado em 13/10/2026: "Me envia
-    manual" numa conversa sobre a tocha do Hardcut 52 mandou a vista explodida de uma furadeira
-    INGCO, que só batia NÚMERO solto com o texto. Número sozinho só vale se tiver 3+ dígitos e o
-    texto não citar palavra nenhuma de equipamento (ex: "manual do 0205322")."""
-    from app.services.rag_service import rag_service, MODEL_NUMBER_IN_NAME
+def _doc_name(meta: dict) -> str:
+    return norm((meta.get("filename") or "") + " " + (meta.get("titulo") or ""))
+
+
+_vocab_cache: Dict[str, object] = {"key": None, "vocab": set()}
+_NARROW_NAME = ("calibracao", "roteiro", "instrucao", "transformacao")
+
+
+def _equipment_vocab(index: list) -> set:
+    """Palavras (3+ letras) que aparecem no NOME de algum documento da base, tirando as que não
+    identificam equipamento (tipo de documento, categoria, nome de peça). É o que permite reconhecer
+    "lhn", "mdc", "tig", "esab", "handyarc"... - a busca antiga por modelo só considerava palavras de
+    5+ letras e não via "lhn" (achado em 13/10/2026: "me envia manual da lhn" devolveu Powermax)."""
+    from app.services.rag_service import rag_service
+    key = f"{id(index)}:{len(index)}"
+    if _vocab_cache["key"] != key:
+        generic = {norm(w) for w in getattr(rag_service, "_GENERIC_WORDS", set())}
+        vocab = set()
+        for m in index:
+            vocab.update(w for w in re.findall(r"[a-z]+", _doc_name(m)) if len(w) >= 3)
+        _vocab_cache["key"] = key
+        _vocab_cache["vocab"] = {w for w in vocab if w not in _NOT_EQUIPMENT and w not in generic and w[:6] not in _STEM_TO_GROUP}
+    return _vocab_cache["vocab"]  # type: ignore[return-value]
+
+
+def _doc_index(tenant_id: int) -> list:
+    from app.services.rag_service import rag_service
     try:
-        ranked = rag_service._rank_docs_by_model_number(tenant_id, text, 0)
+        return rag_service._get_doc_index(tenant_id) or []
     except Exception:
         return []
-    if not ranked:
+
+
+def _query_signal(tenant_id: int, text: str) -> Tuple[set, set]:
+    """(palavras de equipamento, números) citados no texto."""
+    vocab = _equipment_vocab(_doc_index(tenant_id))
+    t = norm(text)
+    words = {w for w in re.findall(r"[a-z]+", t) if len(w) >= 3 and w in vocab}
+    nums = set(re.findall(r"\d+", t))
+    return words, nums
+
+
+def _rank_docs(tenant_id: int, text: str) -> list:
+    """Documentos cujo NOME bate com o equipamento do texto, no formato (pontos, estreito, trechos,
+    meta), do melhor pro pior. Precisa bater pelo menos uma PALAVRA de equipamento quando o texto cita
+    uma (achado em 13/10/2026: "Me envia manual" sobre o Hardcut 52 mandou a vista explodida de uma
+    furadeira INGCO, que só batia número solto); sem palavra, só vale número de 3+ dígitos."""
+    from app.services.rag_service import MODEL_NUMBER_IN_NAME
+    words, nums = _query_signal(tenant_id, text)
+    if not words and not any(len(n) >= 3 for n in nums):
         return []
-    words = {w for w in _words(text) if not w.isdigit() and len(w) >= 3 and w not in _NOT_EQUIPMENT}
-    numbers = {w for w in _words(text) if w.isdigit()}
     out = []
-    for item in ranked:
-        meta = item[3]
-        name = (meta.get("filename") or "") + " " + (meta.get("titulo") or "")
-        name_words = set(_words(name))
-        if words & name_words:
-            out.append(item)
-        elif not words:
-            name_numbers = set(re.findall(MODEL_NUMBER_IN_NAME, name))
-            if any(len(n) >= 3 for n in numbers & name_numbers):
-                out.append(item)
+    for m in _doc_index(tenant_id):
+        name = _doc_name(m)
+        name_words = set(re.findall(r"[a-z]+", name))
+        name_nums = set(re.findall(MODEL_NUMBER_IN_NAME, (m.get("filename") or "") + " " + (m.get("titulo") or "")))
+        wm = len(words & name_words)
+        nm = len(nums & name_nums)
+        if words and not wm:
+            continue
+        if not words and not any(len(n) >= 3 for n in nums & name_nums):
+            continue
+        narrow = any(x in name for x in _NARROW_NAME)
+        out.append((wm * 2 + nm * 2, 1 if narrow else 0, int(m.get("total_chunks") or 1), m))
+    out.sort(key=lambda x: (-x[0], x[1], -x[2]))
     return out
 
 
 def resolve_equipment(tenant_id: int, mensagem: str, history: List[dict]) -> Tuple[str, list]:
-    """Texto que identifica o equipamento da pergunta + documentos que batem com ele. Se a pergunta
-    não cita modelo, herda da mensagem mais recente DO TÉCNICO que citava, ou do título do documento
-    que já foi mandado na conversa - nunca do texto da IA (que tem número de exemplo, valor de
-    tensão etc. e fazia herdar um "modelo" que ninguém pediu)."""
-    ranked = _rank_docs(tenant_id, mensagem)
-    if ranked:
-        return mensagem, ranked
+    """Texto que identifica o equipamento da pergunta + documentos que batem com ele.
+      - A mensagem cita equipamento ("lhn", "powermax 65"): usa SÓ ela - nunca herda outro da conversa
+        (achado em 13/10/2026: "me envia manual da lhn" logo depois de falar da Powermax devolvia
+        Powermax, porque "lhn" não era reconhecida e o modelo era herdado).
+      - Só número ("240", resposta a "qual modelo?"): junta com a palavra de equipamento mais recente
+        do técnico na conversa ("lhn" + "240").
+      - Nada: herda da mensagem mais recente DO TÉCNICO que citava equipamento, ou do título do
+        documento já mandado - nunca do texto da IA (número de exemplo, tensão...)."""
+    words, nums = _query_signal(tenant_id, mensagem)
+    if words:
+        return mensagem, _rank_docs(tenant_id, mensagem)
+
+    anteriores = []
     for h in reversed(history):
-        texts = [h.get("documento_titulo") or ""]
-        if h.get("remetente") == "tecnico":
-            texts.insert(0, h.get("conteudo") or "")
-        for text in texts:
-            if not text:
-                continue
-            r = _rank_docs(tenant_id, text)
-            if r:
-                return text, r
+        if h.get("remetente") == "tecnico" and h.get("conteudo"):
+            anteriores.append(h["conteudo"])
+        if h.get("documento_titulo"):
+            anteriores.append(h["documento_titulo"])
+
+    if nums:
+        for prev in anteriores:
+            pw, _ = _query_signal(tenant_id, prev)
+            if pw:
+                combinado = " ".join(sorted(pw)) + " " + mensagem
+                r = _rank_docs(tenant_id, combinado)
+                if r:
+                    return combinado, r
+                break
+        r = _rank_docs(tenant_id, mensagem)
+        if r:
+            return mensagem, r
+
+    for prev in anteriores:
+        r = _rank_docs(tenant_id, prev)
+        if r:
+            return prev, r
     return "", []
+
+
+def equipment_label(tenant_id: int, text: str) -> str:
+    words, _ = _query_signal(tenant_id, text)
+    return " ".join(sorted(w.upper() for w in words))
 
 
 def _model_tokens(equip_text: str) -> Tuple[set, set]:
@@ -441,6 +504,9 @@ def pretty_title(meta: dict) -> str:
         return re.sub(r"\s+", " ", x).strip(" -")
 
     nome = " · ".join(limpa(x) for x in partes if limpa(x))
+    # Tira código interno de produto (6+ dígitos: "742528 - LHN 242I 752315") - só polui a lista
+    nome = re.sub(r"(?<![\w.])\d{6,}(?![\w.])\s*-?\s*", "", nome)
+    nome = re.sub(r"\s+·\s+", " · ", re.sub(r"\s{2,}", " ", nome)).strip(" -·")
     if marca and norm(marca) not in norm(nome):
         nome += f" ({marca.title()})"
     return nome or "Documento"
@@ -517,3 +583,60 @@ async def load_options(message_id: int) -> Optional[List[dict]]:
     async with AsyncSessionLocal() as db:
         row = (await db.execute(select(CopilotDocOption).where(CopilotDocOption.message_id == message_id))).scalar_one_or_none()
     return json.loads(row.opcoes_json) if row else None
+
+
+# Correção do técnico ("eu pedi da lhn", "não é esse", "quero o da lhn") - vale como pedido de
+# documento quando a última resposta foi um documento/lista (achado em 13/10/2026).
+CORRECTION_INTENT = re.compile(
+    r"\b(pedi|quero|queria|errad[oa]|confundiu|n[aã]o (?:é|e|era) (?:esse|essa|isso)|n[aã]o quero|outr[oa])\b", re.I)
+
+
+def _models_next_to(words: set, metas: list) -> set:
+    """Números de modelo que aparecem LOGO DEPOIS da palavra da linha no nome do documento
+    ("lhn 240", "lhn_242i", "lhn220i", "powermax 65-85", "handyarc_130i_140i_160i") - e não qualquer
+    número do nome (rev02, código 733920...)."""
+    out = set()
+    for m in metas:
+        name = _doc_name(m)
+        for w in words:
+            for occ in re.finditer(re.escape(w), name):
+                tail = name[occ.end():occ.end() + 40]
+                seq = re.match(r"(?:[\s_\-/·]*\d{2,4}[a-z]?(?![0-9]))+", tail)
+                if seq:
+                    out.update(re.findall(r"\d{2,4}", seq.group(0)))
+    return out
+
+
+def decide_documents(tenant_id: int, mensagem: str, ranked_docs: list, equip_text: str = "") -> dict:
+    """O que fazer com um pedido de documento:
+      {"tipo": "unico", "doc"}                 - um documento certo: manda
+      {"tipo": "lista", "opcoes"}              - poucos possíveis: lista numerada
+      {"tipo": "modelo", "modelos", "rotulo", "nao_achado"} - a linha tem vários modelos e o pedido não
+                                                 diz qual (ou diz um que não existe): pergunta o modelo
+      {"tipo": "nenhum"}
+    Em todos, "faltando" = tipo pedido (esquema, roteiro...) que não existe no nome dos documentos.
+    `equip_text` = texto que identificou o equipamento (pode ser "lhn 242" juntando a conversa)."""
+    texto = equip_text or mensagem
+    doc, alts, missing = pick_document(mensagem, ranked_docs)
+    if not doc:
+        return {"tipo": "nenhum", "faltando": missing}
+    words, nums = _query_signal(tenant_id, texto)
+    melhor = ranked_docs[0][0] if ranked_docs else 0
+    empatados = [m for pts, _n, _c, m in ranked_docs if pts == melhor]
+    modelos_linha = _models_next_to(words, [m for _p, _n, _c, m in ranked_docs]) if words else set()
+    pedido_existe = bool(nums & modelos_linha) or bool(nums & _models_next_to(words, empatados))
+    numero_pedido = sorted(n for n in nums if 2 <= len(n) <= 4)
+    if len(modelos_linha) >= 2 and not pedido_existe and (len(empatados) > MAX_OPTIONS or numero_pedido):
+        return {"tipo": "modelo", "modelos": sorted(modelos_linha, key=int)[:20],
+                "rotulo": " ".join(sorted(w.upper() for w in words)),
+                "nao_achado": numero_pedido[0] if numero_pedido else None, "faltando": missing}
+    if alts:
+        return {"tipo": "lista", "opcoes": document_options(doc, alts), "faltando": missing}
+    return {"tipo": "unico", "doc": doc, "faltando": missing}
+
+
+def format_ask_model(rotulo: str, modelos: List[str], nao_achado: Optional[str] = None) -> str:
+    linha = f" da {rotulo}" if rotulo else ""
+    aviso = f"Não achei documento do modelo {nao_achado}{linha}. " if nao_achado else ""
+    return (f"📘 Bibliotecário - {aviso}Tenho documentos destes modelos{linha}: {', '.join(modelos)}.\n\n"
+            f"De qual modelo você precisa? (pode responder só o número)")

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2, Lock, Mic, Paperclip } from 'lucide-react';
+import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2, Lock, Mic, Paperclip, Camera, Video, Image as ImageIcon } from 'lucide-react';
 import { techApiFetch, techApiFetchBlob, techApiUpload } from '../services/techApi';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore - Vite resolve o worker como URL de asset; é o padrão recomendado do pdfjs-dist com Vite.
@@ -715,7 +715,13 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewerMsg, setViewerMsg] = useState<CopilotMsg | null>(null);
   const [sendingLabel, setSendingLabel] = useState('Copiloto pesquisando...');
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // 3 entradas de arquivo: câmera (foto), câmera (vídeo) e galeria - pedido do usuário em 13/10/2026
+  // ("no anexo não teve a opção de tirar foto na hora"): com um seletor só de foto+vídeo, muitos
+  // Androids mostram só os arquivos, sem a câmera.
+  const cameraFotoRef = useRef<HTMLInputElement>(null);
+  const cameraVideoRef = useRef<HTMLInputElement>(null);
+  const galeriaRef = useRef<HTMLInputElement>(null);
+  const [anexoAberto, setAnexoAberto] = useState(false);
   const recorder = useWavRecorder();
   const endRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -1035,15 +1041,39 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
         </div>
         ) : (
         <div style={{ flexShrink: 0, padding: '12px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px' }}>
-          <input ref={fileInputRef} type="file" accept="image/*,video/*" onChange={onPickFile} style={{ display: 'none' }} />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={sending}
-            title="Enviar foto ou vídeo da bancada"
-            style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'transparent', color: sending ? 'var(--text-dim, var(--text-muted))' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: sending ? 'default' : 'pointer', flexShrink: 0 }}
-          >
-            <Paperclip size={17} />
-          </button>
+          <input ref={cameraFotoRef} type="file" accept="image/*" capture="environment" onChange={onPickFile} style={{ display: 'none' }} />
+          <input ref={cameraVideoRef} type="file" accept="video/*" capture="environment" onChange={onPickFile} style={{ display: 'none' }} />
+          <input ref={galeriaRef} type="file" accept="image/*,video/*" onChange={onPickFile} style={{ display: 'none' }} />
+          <div style={{ position: 'relative', flexShrink: 0 }}>
+            <button
+              onClick={() => setAnexoAberto(v => !v)}
+              disabled={sending}
+              title="Enviar foto ou vídeo da bancada"
+              style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: `1px solid ${anexoAberto ? 'rgba(0,230,153,0.5)' : 'var(--border-color)'}`, background: anexoAberto ? 'rgba(0,230,153,0.1)' : 'transparent', color: sending ? 'var(--text-dim, var(--text-muted))' : anexoAberto ? 'var(--accent-primary)' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: sending ? 'default' : 'pointer' }}
+            >
+              <Paperclip size={17} />
+            </button>
+            {anexoAberto && (
+              <>
+                <div onClick={() => setAnexoAberto(false)} style={{ position: 'fixed', inset: 0, zIndex: 25 }} />
+                <div style={{ position: 'absolute', bottom: '50px', left: 0, zIndex: 26, minWidth: '200px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '6px', boxShadow: '0 10px 30px rgba(0,0,0,0.45)' }}>
+                  {[
+                    { label: 'Tirar foto', icon: <Camera size={17} />, ref: cameraFotoRef },
+                    { label: 'Gravar vídeo', icon: <Video size={17} />, ref: cameraVideoRef },
+                    { label: 'Galeria', icon: <ImageIcon size={17} />, ref: galeriaRef },
+                  ].map(op => (
+                    <button
+                      key={op.label}
+                      onClick={() => { setAnexoAberto(false); op.ref.current?.click(); }}
+                      style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: '11px 12px', border: 'none', borderRadius: '8px', background: 'transparent', color: 'var(--text-main)', fontSize: '14px', fontWeight: 600, cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      <span style={{ color: 'var(--accent-primary)', display: 'flex' }}>{op.icon}</span>{op.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}

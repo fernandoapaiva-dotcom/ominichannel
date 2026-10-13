@@ -611,6 +611,9 @@ async def _copilot_responder(
             raise _BibliotecarioRespondeu  # já respondido - pula o resto do bibliotecário
 
         equip_text, ranked_docs = librarian_service.resolve_equipment(tech.tenant_id, mensagem, history)
+        ultima_resp = next((h for h in reversed(history) if h.get("remetente") == "assistente"), None)
+        ultima_resposta_era_documento = bool(ultima_resp and (ultima_resp.get("documento_titulo") or str(ultima_resp.get("conteudo") or "").startswith("📘")))
+        ultima_resposta_pediu_modelo = bool(ultima_resp and "De qual modelo você precisa" in str(ultima_resp.get("conteudo") or ""))
         wants_send = bool(librarian_service.SEND_INTENT.search(mensagem)) or len(mensagem.split()) <= 9
         is_fault_question = bool(librarian_service.FAULT_INTENT.search(mensagem))
 
@@ -624,14 +627,23 @@ async def _copilot_responder(
                     documento_titulo = parts[0].titulo or parts[0].filename
                     documento_source_path = parts[0].source_path
                     documento_busca = parts[0].codigo
-        elif librarian_service.DOC_INTENT.search(mensagem) and wants_send and ranked_docs:
-            doc, alts, missing_type = librarian_service.pick_document(mensagem, ranked_docs)
-            if doc and not missing_type:
-                if alts:
+        elif ranked_docs and (
+            (librarian_service.DOC_INTENT.search(mensagem) and wants_send)
+            # Correção ("eu pedi da lhn", "não é esse") logo depois de um documento/lista
+            or (librarian_service.CORRECTION_INTENT.search(mensagem) and ultima_resposta_era_documento)
+            # Resposta à pergunta "de qual modelo?" ("240")
+            or (ultima_resposta_pediu_modelo and len(mensagem.split()) <= 4)
+        ):
+            dec = librarian_service.decide_documents(tech.tenant_id, mensagem, ranked_docs, equip_text)
+            if not dec.get("faltando"):
+                if dec["tipo"] == "lista":
                     # Mais de um documento possível: lista numerada, o técnico escolhe pelo número
-                    opcoes_oferecidas = librarian_service.document_options(doc, alts)
+                    opcoes_oferecidas = dec["opcoes"]
                     resposta_texto = librarian_service.format_document_choices(opcoes_oferecidas)
-                else:
+                elif dec["tipo"] == "modelo":
+                    resposta_texto = librarian_service.format_ask_model(dec["rotulo"], dec["modelos"], dec.get("nao_achado"))
+                elif dec["tipo"] == "unico":
+                    doc = dec["doc"]
                     resposta_texto = librarian_service.format_document_answer(doc, [], None)
                     documento_titulo = librarian_service.pretty_title(doc)
                     documento_source_path = doc.get("source_path")
@@ -671,14 +683,21 @@ async def _copilot_responder(
         search_terms = (ai_output or {}).get("documento_solicitado")
         if search_terms:
             try:
-                # Quem escolhe o arquivo é o bibliotecário (nome do arquivo + modelo da conversa).
-                # Sem a busca "por significado" de reserva (até 13/10/2026): ela anexava qualquer
-                # arquivo parecido quando o equipamento não tinha documento - melhor avisar.
-                terms_ranked = librarian_service.resolve_equipment(tech.tenant_id, f"{search_terms} {equip_text}".strip(), [])[1]
-                doc, _alts, _missing = librarian_service.pick_document(search_terms, terms_ranked or ranked_docs)
-                if doc:
-                    documento_titulo = doc.get("titulo") or doc.get("filename")
-                    documento_source_path = doc["source_path"]
+                # Quem escolhe o arquivo é o bibliotecário. Sem a busca "por significado" de reserva
+                # (até 13/10/2026: anexava qualquer arquivo parecido). E o equipamento sai do QUE A
+                # IA PEDIU - só herda da conversa se o pedido não citar equipamento nenhum (antes
+                # juntava o equipamento antigo da conversa e "manual da LHN" virava Powermax de novo).
+                terms_ranked = librarian_service._rank_docs(tech.tenant_id, search_terms) or \
+                    librarian_service.resolve_equipment(tech.tenant_id, search_terms, history)[1]
+                dec = librarian_service.decide_documents(tech.tenant_id, search_terms, terms_ranked)
+                if dec["tipo"] == "unico":
+                    documento_titulo = librarian_service.pretty_title(dec["doc"])
+                    documento_source_path = dec["doc"]["source_path"]
+                elif dec["tipo"] == "lista":
+                    opcoes_oferecidas = dec["opcoes"]
+                    resposta_texto += "\n\n" + librarian_service.format_document_choices(opcoes_oferecidas)
+                elif dec["tipo"] == "modelo":
+                    resposta_texto += "\n\n" + librarian_service.format_ask_model(dec["rotulo"], dec["modelos"], dec.get("nao_achado"))
                 elif _wants_diagram(search_terms):
                     resposta_texto += "\n\n⚠️ Não encontrei esse esquema/diagrama específico na base - tenta descrever o modelo com mais detalhes."
                 else:
