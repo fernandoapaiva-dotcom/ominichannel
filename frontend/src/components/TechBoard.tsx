@@ -4,7 +4,7 @@ import {
   ArrowLeft, Download, FileText, Monitor, RefreshCw, X, Clock,
   Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
   Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight, Video, Paperclip, Sparkles, Bell, Menu,
-  BarChart3,
+  BarChart3, ZoomIn, ZoomOut, Maximize2,
   type LucideIcon,
 } from 'lucide-react';
 import { TechDashboard } from './TechDashboard';
@@ -749,52 +749,155 @@ const sendOsReport = (codos: number, internalNote: string, customerMessage: stri
 // passar pra próxima/anterior sem fechar. Só participa da navegação quem é imagem de verdade;
 // documentos (PDF, etc.) continuam abrindo em aba nova ao clicar, já que não faz sentido "ampliar"
 // um PDF dentro desse visualizador.
+// Zoom na foto (pedido do usuário em 13/10/2026: "nas fotos no módulo do técnico a gente não consegue
+// dar zoom"). As páginas bloqueiam o zoom do navegador de propósito (user-scalable=no no viewport,
+// pro sistema se comportar como app no celular) - então o zoom é feito aqui dentro do visualizador:
+// pinça com 2 dedos / toque duplo no celular, rodinha / clique duplo no computador, arrastar pra
+// mover a foto ampliada, e botões +/−/ajustar. Setas e troca de foto só valem com a foto em 100%.
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 6;
+const ZOOM_DOUBLE_TAP = 2.5;
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
 const PhotoLightbox: React.FC<{ photos: OsFotoItem[]; index: number; onClose: () => void; onIndexChange: (i: number) => void }> = ({ photos, index, onClose, onIndexChange }) => {
   const photo = photos[index];
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [gesturing, setGesturing] = useState(false);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<{ startDist: number; startZoom: number; startPan: { x: number; y: number }; startPoint: { x: number; y: number } } | null>(null);
+  const movedRef = useRef(false);
+  const lastTapRef = useRef(0);
+  const zoomed = zoom > 1.01;
+
+  const resetZoom = useCallback(() => { setZoom(1); setPan({ x: 0, y: 0 }); }, []);
+  useEffect(() => { resetZoom(); }, [index, resetZoom]);
+
+  const applyZoom = useCallback((next: number) => {
+    const z = clampZoom(next);
+    setZoom(z);
+    if (z <= 1.01) setPan({ x: 0, y: 0 });
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') { if (zoomed) resetZoom(); else onClose(); }
+      else if (e.key === '+' || e.key === '=') applyZoom(zoom * 1.4);
+      else if (e.key === '-') applyZoom(zoom / 1.4);
+      else if (zoomed) return;
       else if (e.key === 'ArrowRight' && photos.length > 1) onIndexChange((index + 1) % photos.length);
       else if (e.key === 'ArrowLeft' && photos.length > 1) onIndexChange((index - 1 + photos.length) % photos.length);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [index, photos.length, onClose, onIndexChange]);
+  }, [index, photos.length, onClose, onIndexChange, zoom, zoomed, resetZoom, applyZoom]);
+
+  const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    movedRef.current = false;
+    const pts = Array.from(pointers.current.values());
+    gesture.current = {
+      startDist: pts.length >= 2 ? dist(pts[0], pts[1]) : 0,
+      startZoom: zoom,
+      startPan: pan,
+      startPoint: { x: e.clientX, y: e.clientY },
+    };
+    setGesturing(true);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId) || !gesture.current) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pts = Array.from(pointers.current.values());
+    const g = gesture.current;
+    if (pts.length >= 2) {
+      if (!g.startDist) { g.startDist = dist(pts[0], pts[1]); g.startZoom = zoom; return; }
+      movedRef.current = true;
+      applyZoom(g.startZoom * (dist(pts[0], pts[1]) / g.startDist));
+    } else if (zoomed) {
+      const dx = e.clientX - g.startPoint.x;
+      const dy = e.clientY - g.startPoint.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) movedRef.current = true;
+      setPan({ x: g.startPan.x + dx, y: g.startPan.y + dy });
+    }
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    const pts = Array.from(pointers.current.values());
+    // Sobrou 1 dedo depois da pinça: recomeça o arraste a partir dele, sem a foto "pular"
+    gesture.current = pts.length ? { startDist: 0, startZoom: zoom, startPan: pan, startPoint: pts[0] } : null;
+    if (!pts.length) setGesturing(false);
+    if (e.pointerType === 'touch' && !movedRef.current && pts.length === 0) {
+      const now = Date.now();
+      if (now - lastTapRef.current < 300) {
+        if (zoomed) resetZoom(); else applyZoom(ZOOM_DOUBLE_TAP);
+        lastTapRef.current = 0;
+      } else lastTapRef.current = now;
+    }
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    e.stopPropagation();
+    applyZoom(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+  };
 
   if (!photo) return null;
 
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40000, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <button
-        onClick={onClose}
-        style={{ position: 'absolute', top: '16px', right: '16px', width: '38px', height: '38px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-      ><X size={18} /></button>
+  const btn: React.CSSProperties = { width: '38px', height: '38px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' };
+  const navBtn: React.CSSProperties = { position: 'absolute', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 2 };
 
-      {photos.length > 1 && (
-        <button
-          onClick={e => { e.stopPropagation(); onIndexChange((index - 1 + photos.length) % photos.length); }}
-          style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-        ><ChevronLeft size={22} /></button>
+  return (
+    <div
+      // Um arraste que termina fora da foto gera "click" no fundo - não pode fechar o visualizador
+      onClick={() => { if (movedRef.current) { movedRef.current = false; return; } onClose(); }}
+      style={{ position: 'fixed', inset: 0, zIndex: 40000, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}
+    >
+      <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', gap: '8px', zIndex: 2 }}>
+        <button title="Diminuir zoom" onClick={() => applyZoom(zoom / 1.4)} disabled={!zoomed} style={{ ...btn, opacity: zoomed ? 1 : 0.4 }}><ZoomOut size={18} /></button>
+        <button title="Aumentar zoom" onClick={() => applyZoom(zoom * 1.4)} disabled={zoom >= ZOOM_MAX} style={{ ...btn, opacity: zoom >= ZOOM_MAX ? 0.4 : 1 }}><ZoomIn size={18} /></button>
+        {zoomed && <button title="Ajustar à tela" onClick={resetZoom} style={btn}><Maximize2 size={17} /></button>}
+        <button title="Fechar" onClick={onClose} style={btn}><X size={18} /></button>
+      </div>
+
+      {photos.length > 1 && !zoomed && (
+        <button onClick={e => { e.stopPropagation(); onIndexChange((index - 1 + photos.length) % photos.length); }} style={{ ...navBtn, left: '12px' }}>
+          <ChevronLeft size={22} />
+        </button>
       )}
 
       <img
-        src={photo.file_url} alt="Foto da O.S." onClick={e => e.stopPropagation()}
-        style={{ maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: '8px', boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}
+        src={photo.file_url} alt="Foto da O.S." draggable={false}
+        onClick={e => e.stopPropagation()}
+        onDoubleClick={e => { e.stopPropagation(); if (zoomed) resetZoom(); else applyZoom(ZOOM_DOUBLE_TAP); }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onWheel={onWheel}
+        style={{
+          maxWidth: '92vw', maxHeight: '84vh', objectFit: 'contain', borderRadius: zoomed ? 0 : '8px', boxShadow: '0 10px 40px rgba(0,0,0,0.5)',
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transition: gesturing ? 'none' : 'transform 0.12s ease-out',
+          touchAction: 'none', userSelect: 'none', cursor: zoomed ? 'grab' : 'zoom-in',
+        }}
       />
 
-      {photos.length > 1 && (
-        <button
-          onClick={e => { e.stopPropagation(); onIndexChange((index + 1) % photos.length); }}
-          style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', width: '42px', height: '42px', borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-        ><ChevronRight size={22} /></button>
+      {photos.length > 1 && !zoomed && (
+        <button onClick={e => { e.stopPropagation(); onIndexChange((index + 1) % photos.length); }} style={{ ...navBtn, right: '12px' }}>
+          <ChevronRight size={22} />
+        </button>
       )}
 
-      {photos.length > 1 && (
-        <div style={{ position: 'absolute', bottom: '18px', left: '50%', transform: 'translateX(-50%)', fontSize: '12.5px', fontWeight: 700, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: '999px' }}>
-          {index + 1} / {photos.length}
-        </div>
-      )}
+      <div style={{ position: 'absolute', bottom: '18px', left: '50%', transform: 'translateX(-50%)', fontSize: '12.5px', fontWeight: 700, color: 'rgba(255,255,255,0.85)', background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: '999px', whiteSpace: 'nowrap', pointerEvents: 'none' }}>
+        {zoomed
+          ? `${Math.round(zoom * 100)}% · arraste para mover`
+          : `${photos.length > 1 ? `${index + 1} / ${photos.length} · ` : ''}pinça ou toque duplo para ampliar`}
+      </div>
     </div>
   );
 };
