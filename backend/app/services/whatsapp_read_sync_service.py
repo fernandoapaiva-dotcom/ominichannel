@@ -123,7 +123,10 @@ async def _process_once() -> int:
             )).scalars().all()
             if conv.tenant_id not in tenant_settings:
                 tenant_settings[conv.tenant_id] = await settings_service.get_tenant_decrypted_settings(db, conv.tenant_id)
-            jobs.append((conv.id, m.id, wn.instancia_evolution_api, remote_jid, list(ids), tenant_settings[conv.tenant_id]))
+            # Sem repetidos: a mesma mensagem às vezes está gravada 2x no banco (sincronização de
+            # histórico) e a Evolution recusa a lista inteira com "readMessages contains duplicate
+            # item" - a conversa nunca seria marcada (visto em produção em 13/10/2026).
+            jobs.append((conv.id, m.id, wn.instancia_evolution_api, remote_jid, list(dict.fromkeys(ids)), tenant_settings[conv.tenant_id]))
 
     done = 0
     skip_instances = set()
