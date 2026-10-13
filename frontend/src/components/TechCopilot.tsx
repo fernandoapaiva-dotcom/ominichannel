@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import { techApiFetch, techApiFetchBlob } from '../services/techApi';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore - Vite resolve o worker como URL de asset; é o padrão recomendado do pdfjs-dist com Vite.
@@ -14,6 +14,7 @@ interface CopilotMsg {
   conteudo: string;
   documento_titulo?: string | null;
   tem_documento: boolean;
+  documento_busca?: string | null;
   criado_em: string;
 }
 
@@ -27,21 +28,42 @@ interface TechCopilotProps {
   techName: string;
 }
 
-// Visualizador de PDF renderizado via PDF.js (canvas), não iframe nativo - pedido do usuário em
-// 11/10/2026 ("o PDF não abriu"): o Portal do Técnico roda como TWA (app instalado), e o WebView
-// do Android geralmente não tem o visualizador de PDF embutido que o Chrome desktop tem, então um
-// <iframe> apontando pro PDF fica em branco. PDF.js renderiza em canvas puro - funciona igual em
-// qualquer navegador/WebView, independente de suporte nativo a PDF. Só visualização (sem botão de
-// download/compartilhar) - o documento nunca vira um arquivo baixável, pedido explícito do usuário.
-const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; onClose: () => void }> = ({ messageId, titulo, onClose }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+// Leitor de PDF contínuo, estilo Acrobat Reader - pedido do usuário em 13/10/2026: "abre o arquivo,
+// dá zoom, passa pra próxima página rolando, descendo; hoje você tem que passar de página em página e
+// num manual gigante é ruim". Todas as páginas ficam numa coluna só, rolando; cada página só é
+// desenhada quando chega perto da tela (e apagada quando se afasta bastante), pra um manual de 300+
+// páginas não estourar a memória do celular. Zoom: pinça (2 dedos), Ctrl+rodinha, ou os botões.
+// Continua renderizando via PDF.js em canvas (não iframe - ver nota de 11/10/2026 abaixo) e sem
+// botão de baixar/compartilhar, pedido explícito do usuário.
+//
+// Nota de 11/10/2026 (mantida): o Portal do Técnico roda como TWA (app instalado), e o WebView do
+// Android geralmente não tem visualizador de PDF embutido - um <iframe> ficaria em branco.
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
+const PAGE_GAP = 12;
+
+const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?: string | null; onClose: () => void }> = ({ messageId, titulo, busca, onClose }) => {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
-  const [pageNum, setPageNum] = useState(1);
   const [numPages, setNumPages] = useState(0);
+  const [pageSizes, setPageSizes] = useState<{ w: number; h: number }[]>([]); // tamanho na escala 1
+  const [fitWidth, setFitWidth] = useState(800);
+  const [zoom, setZoom] = useState(1); // 1 = página na largura da tela
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageInput, setPageInput] = useState('1');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchStatus, setSearchStatus] = useState<string | null>(null);
+  const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
+  const renderTasks = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
+  const renderedAt = useRef<Map<number, number>>(new Map()); // página -> escala com que foi desenhada
+  const visible = useRef<Set<number>>(new Set());
+  const pinch = useRef<{ startDist: number; startZoom: number } | null>(null);
+  const zoomRef = useRef(1);
+  const pinchScaleRef = useRef(1);
+  const applyZoomRef = useRef<(z: number) => void>(() => {});
+  const [pinchScale, setPinchScale] = useState(1); // prévia do zoom durante a pinça (CSS), aplicado ao soltar
 
+  // Carrega o documento + o tamanho de todas as páginas (só metadados, rápido)
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -49,75 +71,302 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; onClose
     techApiFetchBlob(`/copilot/document/${messageId}`)
       .then(blob => blob.arrayBuffer())
       .then(buf => pdfjsLib.getDocument({ data: buf }).promise)
-      .then(doc => {
+      .then(async doc => {
         if (cancelled) return;
         pdfRef.current = doc;
+        const sizes: { w: number; h: number }[] = [];
+        const first = (await doc.getPage(1)).getViewport({ scale: 1 });
+        for (let i = 1; i <= doc.numPages; i++) {
+          if (i === 1) { sizes.push({ w: first.width, h: first.height }); continue; }
+          try { const v = (await doc.getPage(i)).getViewport({ scale: 1 }); sizes.push({ w: v.width, h: v.height }); }
+          catch { sizes.push({ w: first.width, h: first.height }); }
+        }
+        if (cancelled) return;
+        setPageSizes(sizes);
         setNumPages(doc.numPages);
-        setPageNum(1);
         setLoading(false);
       })
       .catch(() => { if (!cancelled) { setError('Não foi possível abrir o documento.'); setLoading(false); } });
-    return () => { cancelled = true; pdfRef.current?.destroy(); };
+    return () => {
+      cancelled = true;
+      renderTasks.current.forEach(t => t.cancel());
+      pdfRef.current?.destroy();
+    };
   }, [messageId]);
 
+  // Largura útil da tela (página "na largura") - acompanha girar o celular / redimensionar
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setFitWidth(Math.max(240, el.clientWidth - 24)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [loading]);
+
+  const pageScale = useCallback((i: number) => {
+    const s = pageSizes[i];
+    return s ? (fitWidth / s.w) * zoom : 1;
+  }, [pageSizes, fitWidth, zoom]);
+
+  const renderPage = useCallback((i: number) => {
     const pdf = pdfRef.current;
-    const canvas = canvasRef.current;
-    if (!pdf || !canvas || loading) return;
-    let cancelled = false;
-    pdf.getPage(pageNum).then(page => {
-      if (cancelled) return;
+    const canvas = canvasRefs.current[i];
+    if (!pdf || !canvas) return;
+    const scale = pageScale(i);
+    if (renderedAt.current.get(i) === scale) return;
+    renderTasks.current.get(i)?.cancel();
+    pdf.getPage(i + 1).then(page => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const viewport = page.getViewport({ scale: scale * dpr });
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
-      const containerWidth = containerRef.current?.clientWidth || 800;
-      const unscaled = page.getViewport({ scale: 1 });
-      const scale = Math.min(2.2, (containerWidth - 24) / unscaled.width);
-      const viewport = page.getViewport({ scale });
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      page.render({ canvasContext: ctx, viewport, canvas });
-    }).catch(() => setError('Não foi possível renderizar essa página.'));
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      const task = page.render({ canvasContext: ctx, viewport });
+      renderTasks.current.set(i, task);
+      renderedAt.current.set(i, scale);
+      task.promise.catch(() => renderedAt.current.delete(i));
+    }).catch(() => renderedAt.current.delete(i));
+  }, [pageScale]);
+
+  const clearPage = (i: number) => {
+    renderTasks.current.get(i)?.cancel();
+    renderTasks.current.delete(i);
+    renderedAt.current.delete(i);
+    const c = canvasRefs.current[i];
+    if (c) { c.width = 0; c.height = 0; }
+  };
+
+  // Desenha só as páginas perto da tela; apaga as que ficaram bem longe (memória do celular)
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !numPages) return;
+    const near = new IntersectionObserver(entries => {
+      entries.forEach(e => {
+        const i = Number((e.target as HTMLElement).dataset.page);
+        if (e.isIntersecting) { visible.current.add(i); renderPage(i); }
+        else { visible.current.delete(i); }
+      });
+    }, { root, rootMargin: '1200px 0px' });
+    const far = new IntersectionObserver(entries => {
+      entries.forEach(e => { if (!e.isIntersecting) clearPage(Number((e.target as HTMLElement).dataset.page)); });
+    }, { root, rootMargin: '4000px 0px' });
+    root.querySelectorAll('[data-page]').forEach(el => { near.observe(el); far.observe(el); });
+    return () => { near.disconnect(); far.disconnect(); };
+  }, [numPages, renderPage]);
+
+  // Zoom mudou: redesenha as páginas que estão perto da tela na escala nova
+  useEffect(() => { visible.current.forEach(i => renderPage(i)); }, [zoom, fitWidth, renderPage]);
+
+  const pageTop = (i: number) => {
+    let top = 12;
+    for (let k = 0; k < i; k++) top += (pageSizes[k]?.h || 0) * pageScale(k) + PAGE_GAP;
+    return top;
+  };
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el || !pageSizes.length) return;
+    const mid = el.scrollTop + el.clientHeight / 3;
+    let top = 12;
+    for (let i = 0; i < pageSizes.length; i++) {
+      const h = pageSizes[i].h * pageScale(i) + PAGE_GAP;
+      if (mid < top + h) { if (currentPage !== i + 1) { setCurrentPage(i + 1); setPageInput(String(i + 1)); } return; }
+      top += h;
+    }
+  };
+
+  const goToPage = (n: number) => {
+    const el = scrollRef.current;
+    if (!el || !numPages) return;
+    const p = Math.min(numPages, Math.max(1, n));
+    el.scrollTo({ top: pageTop(p - 1) - 8 });
+    setCurrentPage(p);
+    setPageInput(String(p));
+  };
+
+  // Mantém a página atual no lugar quando o zoom muda (senão o leitor "pula" pra outra página)
+  const applyZoom = (z: number) => {
+    const el = scrollRef.current;
+    const clamped = Math.min(4, Math.max(0.5, z));
+    if (!el) { setZoom(clamped); return; }
+    const ratio = el.scrollTop / Math.max(1, el.scrollHeight);
+    setZoom(clamped);
+    requestAnimationFrame(() => { el.scrollTop = ratio * el.scrollHeight; });
+  };
+  applyZoomRef.current = applyZoom;
+  zoomRef.current = zoom;
+  const stepZoom = (dir: 1 | -1) => {
+    const next = dir > 0 ? ZOOM_STEPS.find(z => z > zoom + 0.01) : [...ZOOM_STEPS].reverse().find(z => z < zoom - 0.01);
+    applyZoom(next ?? zoom);
+  };
+
+  // Abrir já na página da peça/termo que o bibliotecário achou (ex: o código 0742654)
+  useEffect(() => {
+    const pdf = pdfRef.current;
+    if (!pdf || loading || !busca || !pageSizes.length) return;
+    let cancelled = false;
+    const alvo = busca.replace(/\s+/g, '').toLowerCase();
+    setSearchStatus(`Procurando "${busca}" no documento...`);
+    (async () => {
+      for (let i = 1; i <= pdf.numPages; i++) {
+        if (cancelled) return;
+        try {
+          const tc = await (await pdf.getPage(i)).getTextContent();
+          const txt = tc.items.map((it: any) => it.str || '').join('').replace(/\s+/g, '').toLowerCase();
+          if (txt.includes(alvo)) {
+            if (cancelled) return;
+            goToPage(i);
+            setSearchStatus(`"${busca}" está na página ${i}`);
+            setTimeout(() => !cancelled && setSearchStatus(null), 5000);
+            return;
+          }
+        } catch { /* página sem texto (imagem) - segue */ }
+      }
+      if (!cancelled) { setSearchStatus(null); }
+    })();
     return () => { cancelled = true; };
-  }, [pageNum, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, busca, pageSizes.length]);
+
+  // Pinça com 2 dedos (prévia por CSS durante o gesto, redesenho nítido ao soltar). Eventos de toque
+  // nativos (não pointer events): com 2 dedos o preventDefault segura a rolagem do navegador só
+  // durante a pinça; com 1 dedo a rolagem normal continua.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const d = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) pinch.current = { startDist: d(e.touches), startZoom: zoomRef.current };
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!pinch.current || e.touches.length !== 2) return;
+      e.preventDefault();
+      const target = Math.min(4, Math.max(0.5, pinch.current.startZoom * d(e.touches) / pinch.current.startDist));
+      pinchScaleRef.current = target / pinch.current.startZoom;
+      setPinchScale(pinchScaleRef.current);
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (!pinch.current || e.touches.length >= 2) return;
+      const target = pinch.current.startZoom * pinchScaleRef.current;
+      pinch.current = null;
+      pinchScaleRef.current = 1;
+      setPinchScale(1);
+      applyZoomRef.current(target);
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd);
+    el.addEventListener('touchcancel', onEnd);
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, [loading]);
+  const onWheel = (e: React.WheelEvent) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    applyZoom(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+  };
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const ctrlBtn: React.CSSProperties = { width: '34px', height: '34px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 };
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 50000, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '820px', height: '92vh', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, gap: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-            <FileText size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{titulo}</span>
-          </div>
-          <button onClick={onClose} style={{ width: '30px', height: '30px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
-            <X size={16} />
-          </button>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 50000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'min(12px, 2vw)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '1100px', height: '100%', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+          <FileText size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{titulo}</span>
+          <button onClick={onClose} title="Fechar" style={ctrlBtn}><X size={16} /></button>
         </div>
-        <div ref={containerRef} style={{ flex: 1, minHeight: 0, background: '#2a2a2a', overflow: 'auto', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '12px' }}>
+
+        {!loading && !error && (
+          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexShrink: 0, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', color: 'var(--text-muted)' }}>
+              Página
+              <input
+                value={pageInput}
+                onChange={e => setPageInput(e.target.value.replace(/\D/g, ''))}
+                onKeyDown={e => { if (e.key === 'Enter') goToPage(parseInt(pageInput || '1', 10)); }}
+                onBlur={() => goToPage(parseInt(pageInput || String(currentPage), 10))}
+                inputMode="numeric"
+                style={{ width: '46px', padding: '5px 6px', textAlign: 'center', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--input-bg, var(--bg-secondary))', color: 'var(--text-main)', fontSize: '12.5px' }}
+              />
+              de {numPages}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <button onClick={() => stepZoom(-1)} title="Diminuir" style={ctrlBtn}><ZoomOut size={16} /></button>
+              <span style={{ minWidth: '46px', textAlign: 'center', fontSize: '12.5px', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{Math.round(zoom * 100)}%</span>
+              <button onClick={() => stepZoom(1)} title="Aumentar" style={ctrlBtn}><ZoomIn size={16} /></button>
+              <button onClick={() => applyZoom(1)} title="Ajustar à largura" style={ctrlBtn}><Maximize2 size={15} /></button>
+            </div>
+          </div>
+        )}
+
+        {searchStatus && (
+          <div style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', background: 'rgba(0,230,153,0.08)', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
+            {searchStatus}
+          </div>
+        )}
+
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          onWheel={onWheel}
+          style={{ flex: 1, minHeight: 0, background: '#2a2a2a', overflow: 'auto', touchAction: 'pan-x pan-y', WebkitOverflowScrolling: 'touch' as any }}
+        >
           {error ? (
             <div style={{ color: '#f87171', fontSize: '13px', padding: '20px', textAlign: 'center' }}>{error}</div>
           ) : loading ? (
-            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-              <Loader2 size={24} className="animate-spin" />
+            <div style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '12px' }}>
+              <Loader2 size={24} className="animate-spin" /> Abrindo documento...
             </div>
           ) : (
-            <canvas ref={canvasRef} style={{ boxShadow: '0 4px 20px rgba(0,0,0,0.4)' }} />
+            <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: `${PAGE_GAP}px`, width: 'max-content', minWidth: '100%', boxSizing: 'border-box', transform: pinchScale !== 1 ? `scale(${pinchScale})` : undefined, transformOrigin: 'top center' }}>
+              {pageSizes.map((s, i) => {
+                const w = s.w * pageScale(i);
+                const h = s.h * pageScale(i);
+                return (
+                  <div key={i} data-page={i} style={{ width: `${w}px`, height: `${h}px`, background: '#fff', boxShadow: '0 4px 20px rgba(0,0,0,0.4)', flexShrink: 0, position: 'relative' }}>
+                    <canvas ref={el => { canvasRefs.current[i] = el; }} style={{ width: `${w}px`, height: `${h}px`, display: 'block' }} />
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
-        {!loading && !error && numPages > 1 && (
-          <div style={{ flexShrink: 0, padding: '10px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
-            <button onClick={() => setPageNum(p => Math.max(1, p - 1))} disabled={pageNum <= 1} style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: pageNum <= 1 ? 'var(--text-dim, #475569)' : 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: pageNum <= 1 ? 'default' : 'pointer' }}>
-              <ChevronLeft size={16} />
-            </button>
-            <span style={{ fontSize: '12.5px', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>Página {pageNum} de {numPages}</span>
-            <button onClick={() => setPageNum(p => Math.min(numPages, p + 1))} disabled={pageNum >= numPages} style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: pageNum >= numPages ? 'var(--text-dim, #475569)' : 'var(--text-main)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: pageNum >= numPages ? 'default' : 'pointer' }}>
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
 };
+
+const groupThreads = (threads: CopilotThread[]) => {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const groups: { label: string; items: CopilotThread[] }[] = [
+    { label: 'Hoje', items: [] }, { label: 'Ontem', items: [] }, { label: 'Últimos 7 dias', items: [] }, { label: 'Mais antigas', items: [] },
+  ];
+  threads.forEach(t => {
+    const ts = t.ultima_em ? new Date(t.ultima_em.endsWith('Z') ? t.ultima_em : t.ultima_em + 'Z').getTime() : 0;
+    if (ts >= startOfDay) groups[0].items.push(t);
+    else if (ts >= startOfDay - 86400000) groups[1].items.push(t);
+    else if (ts >= startOfDay - 7 * 86400000) groups[2].items.push(t);
+    else groups[3].items.push(t);
+  });
+  return groups.filter(g => g.items.length);
+};
+
+// Largura a partir da qual o histórico fica fixo ao lado do chat (computador/tablet deitado).
+// Abaixo disso (celular) vira gaveta pelo botão ☰ - mesmo comportamento do Claude.ai no celular.
+const SIDEBAR_FIXED_MIN_WIDTH = 760;
 
 export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
   const [threads, setThreads] = useState<CopilotThread[]>([]);
@@ -130,6 +379,31 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewerMsg, setViewerMsg] = useState<CopilotMsg | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem('copilot_sidebar_collapsed') === '1'; } catch { return false; }
+  });
+  const sidebarFixed = wide && !collapsed;
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setWide(el.clientWidth >= SIDEBAR_FIXED_MIN_WIDTH));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const toggleSidebar = () => {
+    if (wide) {
+      setCollapsed(c => {
+        try { localStorage.setItem('copilot_sidebar_collapsed', c ? '0' : '1'); } catch { /* sem storage - só não lembra */ }
+        return !c;
+      });
+    } else {
+      setSidebarOpen(v => !v);
+    }
+  };
 
   const loadThreads = () => {
     techApiFetch('/copilot/threads')
@@ -188,35 +462,44 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
   };
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', background: 'var(--bg-primary)', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
-      {/* Menu lateral com histórico de conversas + "Nova conversa" - mesma ideia de layout do
-          Claude.ai, pedido do usuário em 11/10/2026. Vira um painel deslizante por cima do chat
-          em telas estreitas (o Portal do Técnico é majoritariamente usado no celular) em vez de
-          dividir a tela em duas colunas permanentes, que ficaria apertado demais. */}
-      {sidebarOpen && (
+    <div ref={rootRef} style={{ flex: 1, minHeight: 0, display: 'flex', background: 'var(--bg-primary)', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+      {/* Menu lateral com histórico de conversas + "Nova conversa" - layout do Claude.ai, pedido do
+          usuário em 11/10/2026. Desde 13/10/2026 ("quero que o histórico fique sempre visível igual
+          do Claude na barra lateral esquerda") fica FIXO ao lado do chat em tela larga; no celular
+          continua gaveta pelo botão ☰ (duas colunas fixas ficariam apertadas demais). */}
+      {!sidebarFixed && sidebarOpen && (
         <div onClick={() => setSidebarOpen(false)} style={{ position: 'absolute', inset: 0, zIndex: 10, background: 'rgba(0,0,0,0.5)' }} />
       )}
       <div
-        style={{
+        style={sidebarFixed ? {
+          position: 'relative', flexShrink: 0, width: '270px',
+          background: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)',
+          display: 'flex', flexDirection: 'column',
+        } : {
           position: 'absolute', top: 0, bottom: 0, left: 0, zIndex: 11,
-          width: '260px', maxWidth: '82vw',
+          width: '270px', maxWidth: '82vw',
           background: 'var(--bg-secondary)', borderRight: '1px solid var(--border-color)',
           display: 'flex', flexDirection: 'column',
           transform: sidebarOpen ? 'translateX(0)' : 'translateX(-100%)',
           transition: 'transform 0.22s ease',
         }}
       >
-        <div style={{ padding: '12px', flexShrink: 0 }}>
+        <div style={{ padding: '12px', flexShrink: 0, display: 'flex', gap: '8px' }}>
           <button
             onClick={startNewThread}
             style={{
-              width: '100%', display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px',
+              flex: 1, display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px',
               borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)',
               background: 'transparent', color: 'var(--text-main)', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
             }}
           >
             <Plus size={15} /> Nova conversa
           </button>
+          {sidebarFixed && (
+            <button onClick={toggleSidebar} title="Recolher histórico" style={{ width: '40px', flexShrink: 0, borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <PanelLeftClose size={16} />
+            </button>
+          )}
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 8px 8px' }}>
           {loadingThreads ? (
@@ -226,7 +509,10 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
           ) : threads.length === 0 ? (
             <div style={{ fontSize: '12px', color: 'var(--text-dim, var(--text-muted))', padding: '10px 8px' }}>Nenhuma conversa ainda.</div>
           ) : (
-            threads.map(t => (
+            groupThreads(threads).map(g => (
+              <div key={g.label} style={{ marginBottom: '10px' }}>
+                <div style={{ fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.5px', textTransform: 'uppercase', color: 'var(--text-dim, var(--text-muted))', padding: '6px 10px 4px' }}>{g.label}</div>
+                {g.items.map(t => (
               <button
                 key={t.thread_id}
                 onClick={() => openThread(t.thread_id)}
@@ -241,6 +527,8 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
                 <MessageSquare size={13} style={{ flexShrink: 0, opacity: 0.7 }} />
                 <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.titulo || 'Conversa'}</span>
               </button>
+                ))}
+              </div>
             ))
           )}
         </div>
@@ -248,13 +536,13 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <div style={{ flexShrink: 0, padding: '14px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <button
-            onClick={() => setSidebarOpen(v => !v)}
+          {!sidebarFixed && <button
+            onClick={toggleSidebar}
             title="Histórico de conversas"
             style={{ width: '32px', height: '32px', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
           >
             <Menu size={16} />
-          </button>
+          </button>}
           <div style={{ width: '34px', height: '34px', borderRadius: '10px', background: 'var(--accent-gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#051a12', flexShrink: 0 }}>
             <Bot size={18} />
           </div>
@@ -348,7 +636,7 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
       </div>
 
       {viewerMsg && (
-        <DocumentViewerModal messageId={viewerMsg.id} titulo={viewerMsg.documento_titulo || 'Documento'} onClose={() => setViewerMsg(null)} />
+        <DocumentViewerModal messageId={viewerMsg.id} titulo={viewerMsg.documento_titulo || 'Documento'} busca={viewerMsg.documento_busca} onClose={() => setViewerMsg(null)} />
       )}
     </div>
   );

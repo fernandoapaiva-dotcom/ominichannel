@@ -318,7 +318,34 @@ class OsTechnicianCopilotMessage(Base):
     # rag_service.find_document) - o front pede o PDF embutido via document_id, nunca um link direto.
     documento_titulo: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     documento_source_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # Texto que o visualizador procura no PDF pra já abrir na página certa (ex: o código da peça
+    # que o bibliotecário achou na tabela de peças do manual) - 13/10/2026.
+    documento_busca: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+# Catálogo de peças extraído das tabelas de peças dos manuais que já estão no RAG (ver
+# librarian_service) - 13/10/2026. Pedido do usuário depois de o Copiloto não achar o código da
+# "placa de controle da LHN 242" que estava no manual (tabela 3.1, item 30: CIRCUITO DE CONTROLE LHN
+# 242I, código 0742654): código de peça é dado EXATO, consulta direta numa tabela é mais certeira
+# (e não gasta token) do que esperar a busca por significado trazer o trecho certo no meio de 73
+# mil trechos e a IA ler a tabela. Reconstruído inteiro pelo bibliotecário (não editar à mão).
+class PartsCatalogItem(Base):
+    __tablename__ = "parts_catalog_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, index=True)
+    parent_doc_id: Mapped[str] = mapped_column(String(80), index=True)
+    titulo: Mapped[str] = mapped_column(String(255))
+    filename: Mapped[str] = mapped_column(String(255))
+    marca: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    source_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    item: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    codigo: Mapped[str] = mapped_column(String(40), index=True)
+    part_number: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    descricao: Mapped[str] = mapped_column(String(255))
+    descricao_norm: Mapped[str] = mapped_column(String(255))  # minúscula, sem acento - pra busca
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 # Continuous Improvement / Feedback Loop Table (correcoes_ia)

@@ -74,6 +74,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         migrations = [
             "ALTER TABLE contacts ADD COLUMN foto_perfil_url VARCHAR(500);",
+            "ALTER TABLE os_technician_copilot_messages ADD COLUMN documento_busca VARCHAR(120);",
             "ALTER TABLE authorized_technicians ADD COLUMN cargo VARCHAR(100);",
             "ALTER TABLE authorized_technicians ADD COLUMN departamento VARCHAR(100);",
             "ALTER TABLE calendar_events ADD COLUMN event_type VARCHAR(50) DEFAULT 'geral';",

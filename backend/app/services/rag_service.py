@@ -5,6 +5,10 @@ from typing import Optional
 
 logger = logging.getLogger("rag_service")
 
+# Número de modelo dentro do NOME de um arquivo: aceita LHN_242i, LHN220i, MIG250S, 65-85, mas não
+# número colado em 2+ letras (TOP242FN, código de componente) - ver _rank_docs_by_model_number.
+MODEL_NUMBER_IN_NAME = r'(?<!\d)(\d+)[A-Za-z]?(?![A-Za-z0-9])'
+
 def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
     chunks = []
     start = 0
@@ -252,7 +256,10 @@ class RAGService:
                 continue
             pdoc_id = meta.get("parent_doc_id", "")
             name_text = meta.get("filename", "") + " " + meta.get("titulo", "") + " " + meta.get("modelo", "")
-            name_numbers = set(re.findall(r'\d+', name_text))
+            # Número só conta quando aparece "solto" no nome (LHN_242i, LHN 242, POWERMAX 65-85), não
+            # colado em letras de um código de componente - achado em 13/10/2026: "placa de controle
+            # da LHN 242" devolveu o datasheet "TOP242FN" (CI de fonte) no lugar do manual da LHN 242i.
+            name_numbers = set(re.findall(MODEL_NUMBER_IN_NAME, name_text))
             name_words = {w for w in re.findall(r'[a-zA-ZÀ-ÿ]+', name_text.lower()) if len(w) >= 5}
             # Número de modelo pesa mais que palavra (mais específico/confiável) - duas ocorrências
             # equivalentes de "overlap" pra cada número batido, uma só pra cada palavra batida.

@@ -43,6 +43,7 @@ from app.services.os_report_autodraft_service import start_report_autodraft_loop
 from app.services.rag_service import start_rag_index_warmer_loop
 from app.services.whatsapp_read_sync_service import start_whatsapp_read_sync_loop
 from app.services.media_recovery_service import start_media_recovery_loop
+from app.services.librarian_service import start_librarian_catalog_loop
 
 import mimetypes
 
@@ -144,6 +145,10 @@ async def lifespan(app: FastAPI):
     # cliente ficou "indisponível" no sistema porque a busca do arquivo estourou o tempo na chegada.
     media_recovery_task = asyncio.create_task(start_media_recovery_loop())
 
+    # Catálogo de peças do bibliotecário do Copiloto Técnico (ver app/services/librarian_service.py)
+    # - ligado em 13/10/2026: monta no primeiro boot (15 min depois) e reconstrói toda madrugada.
+    librarian_catalog_task = asyncio.create_task(start_librarian_catalog_loop())
+
     # Continuous WhatsApp polling disabled to prevent WhatsApp Meta anti-spam bans.
     # Reconciliation continua sendo só sob demanda (conexão reestabelecida, ou botão manual).
     #
@@ -204,6 +209,7 @@ async def lifespan(app: FastAPI):
     rag_warmer_task.cancel()
     whatsapp_read_sync_task.cancel()
     media_recovery_task.cancel()
+    librarian_catalog_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
     logger.info("Application shutdown completed.")

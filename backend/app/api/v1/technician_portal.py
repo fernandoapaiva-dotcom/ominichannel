@@ -33,6 +33,7 @@ from app.core.security import create_technician_access_token, get_current_techni
 from app.models.models import AuthorizedTechnician, OsBoardOrder, OsTechnicianCopilotMessage, OsTechnicianNote, SoftsystemPendingWrite
 from app.services.automation_service import normalize_text
 from app.services.gemini_service import gemini_service
+from app.services import librarian_service
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 
@@ -463,6 +464,7 @@ def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
         "conteudo": m.conteudo,
         "documento_titulo": m.documento_titulo,
         "tem_documento": bool(m.documento_source_path),
+        "documento_busca": m.documento_busca,
         "criado_em": m.criado_em.isoformat() if m.criado_em else None,
     }
 
@@ -550,48 +552,90 @@ async def copilot_ask(
         .limit(10)
     )
     recent = list(reversed(hist_res.scalars().all()))
-    history = [{"remetente": m.remetente, "conteudo": m.conteudo} for m in recent[:-1]]  # sem a que acabou de entrar
+    history = [{"remetente": m.remetente, "conteudo": m.conteudo, "documento_titulo": m.documento_titulo} for m in recent[:-1]]  # sem a que acabou de entrar
 
-    rag_context = await rag_service.search_context(tenant_id=tech.tenant_id, query=mensagem, department_id=0)
-    decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tech.tenant_id)
-
-    ai_output = await gemini_service.generate_concierge_response(
-        customer_name=tech.nome,
-        department_name=tech.departamento or "Assistência Técnica",
-        user_message=mensagem,
-        conversation_history=history,
-        memory_summary=None,
-        rag_context=rag_context,
-        available_departments=[],
-        available_attendants=[],
-        protocol_number=None,
-        should_announce_protocol=False,
-        is_technician_or_admin=True,
-        customer_phone=None,
-        tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
-        tenant_gemini_model_name=decrypted_settings.get("gemini_model_name"),
-    )
-
-    resposta_texto = (ai_output or {}).get("resposta") or "Não consegui gerar uma resposta agora, tenta de novo."
     documento_titulo = None
     documento_source_path = None
+    documento_busca = None
+    resposta_texto = None
 
-    search_terms = (ai_output or {}).get("documento_solicitado")
-    if search_terms:
-        try:
-            candidates = await rag_service.find_document(tech.tenant_id, search_terms, department_id=0, top_k=3)
-            doc = next((c for c in candidates if c.get("source_path") and os.path.exists(c["source_path"])), None)
-            if doc:
+    # Bibliotecário (ver librarian_service) - pedido de código de peça / documento é respondido por
+    # consulta direta, sem chamar a IA, quando ele tem certeza; senão a pergunta segue pra IA já com
+    # o modelo da conversa ("...dela?" herda a LHN 242 da mensagem anterior).
+    equip_text, ranked_docs = "", []
+    try:
+        equip_text, ranked_docs = librarian_service.resolve_equipment(tech.tenant_id, mensagem, history)
+        wants_send = bool(librarian_service.SEND_INTENT.search(mensagem)) or len(mensagem.split()) <= 9
+        is_fault_question = bool(librarian_service.FAULT_INTENT.search(mensagem))
+
+        if librarian_service.CODE_INTENT.search(mensagem) and not is_fault_question:
+            by_code = await librarian_service.find_by_code(tech.tenant_id, mensagem)
+            parts = by_code or await librarian_service.find_parts(tech.tenant_id, mensagem, equip_text, ranked_docs)
+            if parts:
+                resposta_texto = (librarian_service.format_code_lookup_answer(parts) if by_code
+                                  else librarian_service.format_parts_answer(parts))
+                if parts[0].source_path and os.path.exists(parts[0].source_path):
+                    documento_titulo = parts[0].titulo or parts[0].filename
+                    documento_source_path = parts[0].source_path
+                    documento_busca = parts[0].codigo
+        elif librarian_service.DOC_INTENT.search(mensagem) and wants_send and ranked_docs:
+            doc, alts, missing_type = librarian_service.pick_document(mensagem, ranked_docs)
+            if doc and not missing_type:
+                resposta_texto = librarian_service.format_document_answer(doc, alts, None)
                 documento_titulo = doc.get("titulo") or doc.get("filename")
-                documento_source_path = doc["source_path"]
-            elif _wants_diagram(search_terms):
-                resposta_texto += "\n\n⚠️ Não encontrei esse esquema/diagrama específico na base - tenta descrever o modelo com mais detalhes."
-        except Exception as e:
-            logger.error(f"[COPILOTO PORTAL] Falha buscando documento pra '{search_terms}': {e}")
+                documento_source_path = doc.get("source_path")
+        if resposta_texto:
+            logger.info(f"[BIBLIOTECARIO] Respondeu sem IA pro técnico {tech.nome}: '{mensagem[:80]}' -> {documento_titulo or '(sem documento)'}")
+    except Exception as e:
+        logger.error(f"[BIBLIOTECARIO] Falha (segue pra IA): {e}", exc_info=True)
+        resposta_texto = None
+
+    if resposta_texto is None:
+        # Pergunta sem o modelo ("...dela?"): a busca leva o equipamento da conversa junto
+        rag_query = mensagem if (not equip_text or equip_text == mensagem) else f"{mensagem} ({equip_text[:120]})"
+        rag_context = await rag_service.search_context(tenant_id=tech.tenant_id, query=rag_query, department_id=0)
+        decrypted_settings = await settings_service.get_tenant_decrypted_settings(db, tech.tenant_id)
+
+        ai_output = await gemini_service.generate_concierge_response(
+            customer_name=tech.nome,
+            department_name=tech.departamento or "Assistência Técnica",
+            user_message=mensagem,
+            conversation_history=[{"remetente": h["remetente"], "conteudo": h["conteudo"]} for h in history],
+            memory_summary=None,
+            rag_context=rag_context,
+            available_departments=[],
+            available_attendants=[],
+            protocol_number=None,
+            should_announce_protocol=False,
+            is_technician_or_admin=True,
+            customer_phone=None,
+            tenant_gemini_api_key=decrypted_settings.get("gemini_api_key"),
+            tenant_gemini_model_name=decrypted_settings.get("gemini_model_name"),
+        )
+
+        resposta_texto = (ai_output or {}).get("resposta") or "Não consegui gerar uma resposta agora, tenta de novo."
+
+        search_terms = (ai_output or {}).get("documento_solicitado")
+        if search_terms:
+            try:
+                # Quem escolhe o arquivo é o bibliotecário (nome do arquivo + modelo da conversa);
+                # a busca antiga fica só de reserva.
+                terms_ranked = librarian_service.resolve_equipment(tech.tenant_id, f"{search_terms} {equip_text}".strip(), [])[1]
+                doc, _alts, _missing = librarian_service.pick_document(search_terms, terms_ranked or ranked_docs)
+                if not doc:
+                    candidates = await rag_service.find_document(tech.tenant_id, search_terms, department_id=0, top_k=3)
+                    doc = next((c for c in candidates if c.get("source_path") and os.path.exists(c["source_path"])), None)
+                if doc:
+                    documento_titulo = doc.get("titulo") or doc.get("filename")
+                    documento_source_path = doc["source_path"]
+                elif _wants_diagram(search_terms):
+                    resposta_texto += "\n\n⚠️ Não encontrei esse esquema/diagrama específico na base - tenta descrever o modelo com mais detalhes."
+            except Exception as e:
+                logger.error(f"[COPILOTO PORTAL] Falha buscando documento pra '{search_terms}': {e}")
 
     assistant_msg = OsTechnicianCopilotMessage(
         tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=thread_id, remetente="assistente", conteudo=resposta_texto,
-        documento_titulo=documento_titulo, documento_source_path=documento_source_path,
+        documento_titulo=documento_titulo, documento_source_path=documento_source_path, documento_busca=documento_busca,
     )
     db.add(assistant_msg)
     await db.commit()

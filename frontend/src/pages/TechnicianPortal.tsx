@@ -315,7 +315,8 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
         <div style={{ margin: '0 16px 10px', padding: '10px 14px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#f87171', fontSize: '13px', flexShrink: 0 }}>{error}</div>
       )}
 
-      {!useMobileLayout && (
+      {/* Zoom do QUADRO - na aba do Copiloto ficava por cima do botão de enviar (13/10/2026) */}
+      {!useMobileLayout && tab !== 'copilot' && (
         <div style={{ position: 'fixed', right: '14px', bottom: '14px', zIndex: 50, display: 'flex', flexDirection: 'column', gap: '6px', background: 'var(--bg-secondary, rgba(20,24,32,0.92))', border: '1px solid var(--border-color, rgba(255,255,255,0.14))', borderRadius: '10px', padding: '4px', boxShadow: '0 4px 14px rgba(0,0,0,0.35)' }}>
           <button onClick={() => setZoom(zoom + 0.15)} title="Aumentar zoom" style={{ width: '36px', height: '36px', fontSize: '16px', fontWeight: 800, borderRadius: 'var(--radius-md, 8px)', cursor: 'pointer', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}>+</button>
           <button onClick={() => setZoom(zoom - 0.15)} title="Diminuir zoom" style={{ width: '36px', height: '36px', fontSize: '16px', fontWeight: 800, borderRadius: 'var(--radius-md, 8px)', cursor: 'pointer', background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color, rgba(255,255,255,0.12))' }}>−</button>
