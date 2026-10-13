@@ -1710,4 +1710,101 @@ class GeminiService:
         return location_intent.NONE
 
 
+    async def analyze_bench_media(
+        self,
+        media_bytes: bytes,
+        mime_type: str,
+        technician_name: str,
+        caption: str = "",
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        equipment: str = "",
+        rag_context: str = "",
+        tenant_gemini_api_key: Optional[str] = None,
+        tenant_gemini_model_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Copiloto Técnico: analisa uma FOTO ou VÍDEO que o técnico mandou da bancada e sugere o que fazer
+        na hora - pedido do usuário em 13/10/2026 ("envio de multimídia para a IA analisar com o técnico
+        e dar sugestões do que ele pode fazer na hora da manutenção"). Recebe junto a conversa, o
+        equipamento em foco e os trechos dos manuais da base (RAG), pra resposta ser do equipamento
+        certo. Vídeo vai pela Files API do Gemini (vídeo de celular passa fácil do limite de envio
+        direto); foto vai direto na requisição.
+        """
+        client = self.get_client_for_key(tenant_gemini_api_key)
+        if not client or not media_bytes:
+            return {"success": False, "text": "Não consegui analisar o arquivo agora - tenta de novo em instantes."}
+
+        is_video = mime_type.startswith("video/")
+        tipo = "um vídeo" if is_video else "uma foto"
+        hist = "\n".join(
+            f"[{'Técnico' if (h.get('remetente') == 'tecnico') else 'Copiloto'}]: {str(h.get('conteudo') or '')[:400]}"
+            for h in (conversation_history or [])[-8:]
+        ) or "(início da conversa)"
+        prompt = (
+            f"Você é o Copiloto Técnico da Servweld, ajudando o técnico {technician_name} na bancada de manutenção "
+            "de equipamentos de solda e corte (inversoras, retificadoras, MIG/MAG, TIG, plasma, tochas, alimentadores).\n\n"
+            f"CONVERSA ATÉ AGORA:\n{hist}\n\n"
+            f"EQUIPAMENTO EM FOCO: {equipment or '(não informado - identifique pela imagem se possível)'}\n\n"
+            "TRECHOS DOS MANUAIS DA BASE (use quando ajudarem e diga de qual manual tirou; não invente o que não estiver aqui):\n"
+            f"{rag_context or '(nenhum trecho encontrado)'}\n\n"
+            f"O técnico mandou {tipo} da bancada"
+            + (f" com a mensagem: \"{caption}\"." if caption else ", sem mensagem.")
+            + "\n\nResponda em português, direto e prático, em TEXTO SIMPLES (sem asteriscos, sem markdown), nesta ordem:\n"
+            "1. O que você vê: componente/equipamento, estado, defeitos visíveis (queimado, estufado, trincado, oxidado, "
+            "solda fria), e QUALQUER leitura de display, multímetro, osciloscópio ou código de erro - transcreva exatamente.\n"
+            "2. Causas prováveis, da mais para a menos provável.\n"
+            "3. O que fazer AGORA, passo a passo: medições (com os pontos e valores esperados quando souber), testes e "
+            "peças a verificar.\n"
+            "4. Cuidados de segurança relevantes (rede desligada, capacitores do barramento descarregados, EPI).\n"
+            "Se a imagem não permitir concluir, diga exatamente o que fotografar ou medir em seguida. "
+            "Nunca invente código de peça nem valor que não esteja visível ou nos trechos dos manuais."
+        )
+
+        uploaded = None
+        try:
+            if is_video:
+                import tempfile, os as _os
+                suffix = "." + (mime_type.split("/")[-1] or "mp4")
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(media_bytes)
+                    tmp_path = tmp.name
+                try:
+                    uploaded = await asyncio.to_thread(client.files.upload, file=tmp_path, config={"mime_type": mime_type})
+                finally:
+                    _os.unlink(tmp_path)
+                for _ in range(60):  # vídeo precisa ficar ACTIVE antes de usar (processamento do Gemini)
+                    state = getattr(getattr(uploaded, "state", None), "name", str(getattr(uploaded, "state", "")))
+                    if state == "ACTIVE":
+                        break
+                    if state == "FAILED":
+                        return {"success": False, "text": "O vídeo não pôde ser processado - tenta um vídeo mais curto (até 30 segundos)."}
+                    await asyncio.sleep(2)
+                    uploaded = await asyncio.to_thread(client.files.get, name=uploaded.name)
+                media_part = uploaded
+            else:
+                media_part = genai.types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
+
+            models_to_try = [tenant_gemini_model_name or "gemini-3.6-flash"]
+            for candidate in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"]:
+                if candidate not in models_to_try:
+                    models_to_try.append(candidate)
+            for m_name in models_to_try:
+                try:
+                    response = await asyncio.to_thread(
+                        client.models.generate_content, model=m_name, contents=[prompt, media_part]
+                    )
+                    if response and response.text and response.text.strip():
+                        return {"success": True, "text": response.text.strip().replace("**", ""), "model_used": m_name}
+                except Exception as e:
+                    logger.warning(f"[COPILOTO MIDIA] Erro analisando {tipo} com '{m_name}': {e}")
+                    await asyncio.sleep(0.5)
+            return {"success": False, "text": "Não consegui analisar o arquivo agora - tenta de novo em instantes."}
+        finally:
+            if uploaded is not None:
+                try:
+                    await asyncio.to_thread(client.files.delete, name=uploaded.name)
+                except Exception:
+                    pass
+
+
 gemini_service = GeminiService()

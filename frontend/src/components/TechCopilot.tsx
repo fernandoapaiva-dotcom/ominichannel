@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2, Lock } from 'lucide-react';
-import { techApiFetch, techApiFetchBlob } from '../services/techApi';
+import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2, Lock, Mic, Paperclip } from 'lucide-react';
+import { techApiFetch, techApiFetchBlob, techApiUpload } from '../services/techApi';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore - Vite resolve o worker como URL de asset; é o padrão recomendado do pdfjs-dist com Vite.
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -15,6 +15,8 @@ interface CopilotMsg {
   documento_titulo?: string | null;
   tem_documento: boolean;
   documento_busca?: string | null;
+  midia?: 'audio' | 'imagem' | 'video' | null;
+  localUrl?: string; // prévia local logo depois de enviar (antes do servidor responder)
   criado_em: string;
 }
 
@@ -536,6 +538,150 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
   );
 };
 
+// ---------------------------------------------------------------------------------------------
+// Áudio e foto/vídeo da bancada (13/10/2026) - pedido do usuário: "botão de áudio pra ele mandar
+// áudio e a IA transcrever, e envio de multimídia pra IA analisar e dar sugestões na hora da
+// manutenção".
+// ---------------------------------------------------------------------------------------------
+
+// Gravador de voz em WAV (16 kHz, mono, 16 bits) direto pelo microfone. Não usa o MediaRecorder de
+// propósito: no Chrome/Android ele grava WebM, que a IA (Gemini) não aceita como áudio, e a VM não
+// tem ffmpeg pra converter. WAV de voz a 16 kHz dá ~2 MB por minuto.
+const MAX_AUDIO_SECONDS = 120;
+
+const encodeWav = (chunks: Float32Array[], inRate: number, outRate = 16000): Blob => {
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const merged = new Float32Array(total);
+  let off = 0;
+  chunks.forEach(c => { merged.set(c, off); off += c.length; });
+  const ratio = inRate / outRate;
+  const outLen = Math.floor(merged.length / ratio);
+  const pcm = new Int16Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const a = Math.floor(i * ratio), b = Math.min(merged.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    for (let k = a; k < b; k++) sum += merged[k];
+    const v = Math.max(-1, Math.min(1, b > a ? sum / (b - a) : 0));
+    pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  const buf = new ArrayBuffer(44 + pcm.length * 2);
+  const dv = new DataView(buf);
+  const str = (o: number, s: string) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); dv.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ');
+  dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, outRate, true); dv.setUint32(28, outRate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  str(36, 'data'); dv.setUint32(40, pcm.length * 2, true);
+  new Int16Array(buf, 44).set(pcm);
+  return new Blob([buf], { type: 'audio/wav' });
+};
+
+const useWavRecorder = () => {
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const ctxRef = useRef<AudioContext | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const procRef = useRef<ScriptProcessorNode | null>(null);
+  const chunksRef = useRef<Float32Array[]>([]);
+  const timerRef = useRef<number | null>(null);
+  const startedAt = useRef(0);
+
+  const cleanup = () => {
+    if (timerRef.current) window.clearInterval(timerRef.current);
+    timerRef.current = null;
+    procRef.current?.disconnect();
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    ctxRef.current?.close().catch(() => {});
+    procRef.current = null; streamRef.current = null; ctxRef.current = null;
+    setRecording(false);
+  };
+
+  const start = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx: AudioContext = new Ctx();
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    chunksRef.current = [];
+    proc.onaudioprocess = e => { chunksRef.current.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    src.connect(proc);
+    proc.connect(ctx.destination);
+    ctxRef.current = ctx; streamRef.current = stream; procRef.current = proc;
+    startedAt.current = Date.now();
+    setSeconds(0);
+    setRecording(true);
+    timerRef.current = window.setInterval(() => setSeconds(Math.floor((Date.now() - startedAt.current) / 1000)), 250);
+  };
+
+  // Devolve o WAV (ou null se foi curto demais pra ter fala)
+  const stop = (): Blob | null => {
+    const rate = ctxRef.current?.sampleRate || 48000;
+    const dur = (Date.now() - startedAt.current) / 1000;
+    cleanup();
+    if (dur < 0.7 || !chunksRef.current.length) return null;
+    return encodeWav(chunksRef.current, rate);
+  };
+  const cancel = () => { chunksRef.current = []; cleanup(); };
+  useEffect(() => () => cleanup(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  return { recording, seconds, start, stop, cancel };
+};
+
+// Foto grande de celular (4-8 MB) sobe devagar no 4G - reduz pra no máximo 1920 px antes de mandar.
+const compressImage = async (file: File): Promise<Blob> => {
+  if (file.size < 1.5 * 1024 * 1024 || !file.type.startsWith('image/') || typeof createImageBitmap !== 'function') return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1920 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    canvas.getContext('2d')?.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const out = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/jpeg', 0.85));
+    return out && out.size < file.size ? out : file;
+  } catch {
+    return file;
+  }
+};
+
+// Mídia de uma mensagem do técnico, buscada com o login dele (nunca por link público)
+const MediaView: React.FC<{ messageId: number; tipo: 'audio' | 'imagem' | 'video'; localUrl?: string; watermark: string }> = ({ messageId, tipo, localUrl, watermark }) => {
+  const [url, setUrl] = useState<string | null>(localUrl || null);
+  const [aberta, setAberta] = useState(false);
+  useEffect(() => {
+    if (localUrl || messageId <= 0) return;
+    let u: string | null = null;
+    let cancelled = false;
+    techApiFetchBlob(`/copilot/media/${messageId}`)
+      .then(b => { if (!cancelled) { u = URL.createObjectURL(b); setUrl(u); } })
+      .catch(() => {});
+    return () => { cancelled = true; if (u) URL.revokeObjectURL(u); };
+  }, [messageId, localUrl]);
+
+  if (!url) return <div style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}><Loader2 size={12} className="animate-spin" /> carregando…</div>;
+  if (tipo === 'audio') {
+    return <audio src={url} controls controlsList="nodownload noplaybackrate" style={{ width: '230px', maxWidth: '100%', height: '36px' }} />;
+  }
+  if (tipo === 'video') {
+    return <video src={url} controls playsInline controlsList="nodownload noremoteplayback noplaybackrate" disablePictureInPicture style={{ width: '260px', maxWidth: '100%', borderRadius: '10px', background: '#000' }} />;
+  }
+  return (
+    <>
+      <img src={url} alt="Foto da bancada" draggable={false} onClick={() => setAberta(true)}
+        style={{ width: '220px', maxWidth: '100%', maxHeight: '260px', objectFit: 'cover', borderRadius: '10px', cursor: 'zoom-in', display: 'block' }} />
+      {aberta && (
+        <div onClick={() => setAberta(false)} style={{ position: 'fixed', inset: 0, zIndex: 50000, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ position: 'relative', maxWidth: '96vw', maxHeight: '90vh' }}>
+            <img src={url} alt="Foto da bancada" draggable={false} style={{ maxWidth: '96vw', maxHeight: '90vh', objectFit: 'contain', display: 'block', pointerEvents: 'none' }} />
+            <Watermark text={watermark} onPaper />
+          </div>
+          <button onClick={() => setAberta(false)} style={{ position: 'absolute', top: '16px', right: '16px', width: '38px', height: '38px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><X size={18} /></button>
+        </div>
+      )}
+    </>
+  );
+};
+
+const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
 const groupThreads = (threads: CopilotThread[]) => {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -568,6 +714,9 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
   const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewerMsg, setViewerMsg] = useState<CopilotMsg | null>(null);
+  const [sendingLabel, setSendingLabel] = useState('Copiloto pesquisando...');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const recorder = useWavRecorder();
   const endRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [wide, setWide] = useState(false);
@@ -650,6 +799,70 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
       setSending(false);
     }
   };
+
+  const sendMedia = async (blob: Blob, filename: string, tipo: 'audio' | 'imagem' | 'video') => {
+    if (sending) return;
+    const caption = tipo === 'audio' ? '' : input.trim();
+    if (tipo !== 'audio') setInput('');
+    const localUrl = URL.createObjectURL(blob);
+    const tempId = -Date.now();
+    setSending(true);
+    setSendingLabel(tipo === 'audio' ? 'Transcrevendo o áudio...' : tipo === 'imagem' ? 'Analisando a foto...' : 'Analisando o vídeo (pode levar até 1 minuto)...');
+    const rotulo = tipo === 'audio' ? '🎤 Áudio' : (caption || (tipo === 'imagem' ? '📷 Foto da bancada' : '🎥 Vídeo da bancada'));
+    setMessages(prev => [...prev, { id: tempId, thread_id: activeThreadId || '', remetente: 'tecnico', conteudo: rotulo, tem_documento: false, midia: tipo, localUrl, criado_em: new Date().toISOString() }]);
+    try {
+      const fd = new FormData();
+      fd.append('file', blob, filename);
+      fd.append('mensagem', caption);
+      fd.append('thread_id', activeThreadId || '');
+      const r: { pergunta: CopilotMsg; resposta: CopilotMsg } = await techApiUpload('/copilot/ask-media', fd);
+      const isNewThread = !activeThreadId;
+      setMessages(prev => [...prev.map(m => (m.id === tempId ? { ...r.pergunta, localUrl } : m)), r.resposta]);
+      if (isNewThread) {
+        setActiveThreadId(r.resposta.thread_id);
+        loadThreads();
+      } else {
+        setThreads(prev => prev.map(t => t.thread_id === r.resposta.thread_id ? { ...t, ultima_em: r.resposta.criado_em } : t));
+      }
+    } catch (err: any) {
+      setMessages(prev => [...prev, { id: -Date.now(), thread_id: activeThreadId || '', remetente: 'assistente', conteudo: `⚠️ ${err.message || 'Não consegui enviar o arquivo.'}`, tem_documento: false, criado_em: new Date().toISOString() }]);
+    } finally {
+      setSending(false);
+      setSendingLabel('Copiloto pesquisando...');
+    }
+  };
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const input = e.target;
+    const picked = input.files?.[0];
+    if (!picked) return;
+    const tipo = picked.type.startsWith('video/') ? 'video' : picked.type.startsWith('image/') ? 'imagem' : null;
+    if (!tipo) { input.value = ''; alert('Envie uma foto ou um vídeo.'); return; }
+    if (tipo === 'video' && picked.size > 60 * 1024 * 1024) { input.value = ''; alert('Vídeo grande demais (máximo 60 MB) - grave até uns 30 segundos.'); return; }
+    // Lê o arquivo pra memória ANTES de limpar o campo - limpar antes deixava o arquivo ilegível em
+    // alguns navegadores e a foto subia vazia (visto no teste de 13/10/2026).
+    const f = new File([await picked.arrayBuffer()], picked.name, { type: picked.type });
+    input.value = '';
+    const blob = tipo === 'imagem' ? await compressImage(f) : f;
+    sendMedia(blob, tipo === 'imagem' && blob !== f ? 'foto.jpg' : f.name, tipo);
+  };
+
+  const startRecording = async () => {
+    if (sending) return;
+    try {
+      await recorder.start();
+    } catch {
+      alert('Não consegui usar o microfone. Permita o acesso ao microfone para o Portal do Técnico nas configurações do celular/navegador.');
+    }
+  };
+  const stopAndSend = () => {
+    const wav = recorder.stop();
+    if (wav) sendMedia(wav, 'audio.wav', 'audio');
+  };
+  // Limite de 2 minutos por áudio: envia sozinho
+  useEffect(() => {
+    if (recorder.recording && recorder.seconds >= MAX_AUDIO_SECONDS) stopAndSend();
+  }, [recorder.recording, recorder.seconds]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div ref={rootRef} {...protectedProps} style={{ ...protectedStyle, flex: 1, minHeight: 0, display: 'flex', background: 'var(--bg-primary)', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
@@ -772,6 +985,11 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
                       wordBreak: 'break-word',
                     }}
                   >
+                    {msg.midia && (
+                      <div style={{ marginBottom: msg.midia === 'audio' ? '6px' : '8px' }}>
+                        <MediaView messageId={msg.id} tipo={msg.midia} localUrl={msg.localUrl} watermark={watermark} />
+                      </div>
+                    )}
                     {msg.conteudo}
                   </div>
                   {msg.tem_documento && msg.documento_titulo && (
@@ -794,13 +1012,38 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
           )}
           {sending && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '12px' }}>
-              <Loader2 size={14} className="animate-spin" /> Copiloto pesquisando...
+              <Loader2 size={14} className="animate-spin" /> {sendingLabel}
             </div>
           )}
           <div ref={endRef} />
         </div>
 
+        {recorder.recording ? (
+        <div style={{ flexShrink: 0, padding: '12px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <button onClick={recorder.cancel} title="Cancelar áudio" style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <X size={18} />
+          </button>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '10px', padding: '0 6px', color: 'var(--text-main)', fontSize: '13.5px', fontWeight: 700 }}>
+            <style>{'@keyframes copilotRecPulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.25 } }'}</style>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444', animation: 'copilotRecPulse 1s infinite' }} />
+            Gravando {fmtSec(recorder.seconds)}
+            <span style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-muted)' }}>(máx. {fmtSec(MAX_AUDIO_SECONDS)})</span>
+          </div>
+          <button onClick={stopAndSend} title="Enviar áudio" style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--accent-gradient)', color: '#051a12', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}>
+            <Send size={17} />
+          </button>
+        </div>
+        ) : (
         <div style={{ flexShrink: 0, padding: '12px 16px', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '8px' }}>
+          <input ref={fileInputRef} type="file" accept="image/*,video/*" onChange={onPickFile} style={{ display: 'none' }} />
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sending}
+            title="Enviar foto ou vídeo da bancada"
+            style={{ width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', background: 'transparent', color: sending ? 'var(--text-dim, var(--text-muted))' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: sending ? 'default' : 'pointer', flexShrink: 0 }}
+          >
+            <Paperclip size={17} />
+          </button>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -812,20 +1055,39 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone })
               userSelect: 'text', WebkitUserSelect: 'text',
             } as React.CSSProperties}
           />
+          {input.trim() ? (
           <button
             onClick={send}
-            disabled={!input.trim() || sending}
+            disabled={sending}
+            title="Enviar"
             style={{
               width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: 'none',
-              background: input.trim() && !sending ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.06)',
-              color: input.trim() && !sending ? '#051a12' : 'var(--text-dim, var(--text-muted))',
+              background: !sending ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.06)',
+              color: !sending ? '#051a12' : 'var(--text-dim, var(--text-muted))',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              cursor: input.trim() && !sending ? 'pointer' : 'default', flexShrink: 0,
+              cursor: !sending ? 'pointer' : 'default', flexShrink: 0,
             }}
           >
             <Send size={17} />
           </button>
+          ) : (
+          <button
+            onClick={startRecording}
+            disabled={sending}
+            title="Gravar áudio"
+            style={{
+              width: '42px', height: '42px', borderRadius: 'var(--radius-md)', border: 'none',
+              background: !sending ? 'var(--accent-gradient)' : 'rgba(255,255,255,0.06)',
+              color: !sending ? '#051a12' : 'var(--text-dim, var(--text-muted))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: !sending ? 'pointer' : 'default', flexShrink: 0,
+            }}
+          >
+            <Mic size={18} />
+          </button>
+          )}
         </div>
+        )}
       </div>
 
       {viewerMsg && (

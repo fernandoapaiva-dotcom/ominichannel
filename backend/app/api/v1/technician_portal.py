@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi import Response
+from fastapi.responses import FileResponse
 
 from app.api.v1.os_board import build_board_data, EVENT_LABELS
 from app.api.v1.technicians import clean_phone_digits
@@ -34,6 +35,7 @@ from app.models.models import AuthorizedTechnician, OsBoardOrder, OsTechnicianCo
 from app.services.automation_service import normalize_text
 from app.services.gemini_service import gemini_service
 from app.services import librarian_service
+from app.services import copilot_media_service
 from app.services.rag_service import rag_service
 from app.services.settings_service import settings_service
 
@@ -463,7 +465,7 @@ class CopilotAskRequest(BaseModel):
     thread_id: Optional[str] = None  # vazio/None = nova conversa
 
 
-def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
+def _copilot_message_out(m: OsTechnicianCopilotMessage, midia: Optional[str] = None) -> Dict[str, Any]:
     return {
         "id": m.id,
         "thread_id": m.thread_id,
@@ -472,6 +474,7 @@ def _copilot_message_out(m: OsTechnicianCopilotMessage) -> Dict[str, Any]:
         "documento_titulo": m.documento_titulo,
         "tem_documento": bool(m.documento_source_path),
         "documento_busca": m.documento_busca,
+        "midia": midia,  # 'audio' | 'imagem' | 'video' quando o técnico mandou um arquivo
         "criado_em": m.criado_em.isoformat() if m.criado_em else None,
     }
 
@@ -524,7 +527,9 @@ async def copilot_thread_messages(
         )
         .order_by(OsTechnicianCopilotMessage.id.asc())
     )
-    return [_copilot_message_out(m) for m in res.scalars().all()]
+    msgs = res.scalars().all()
+    tipos = await copilot_media_service.tipos_por_mensagem([m.id for m in msgs])
+    return [_copilot_message_out(m, tipos.get(m.id)) for m in msgs]
 
 
 @router.post("/copilot/ask")
@@ -536,13 +541,28 @@ async def copilot_ask(
     mensagem = (payload.mensagem or "").strip()
     if not mensagem:
         raise HTTPException(status_code=422, detail="Mensagem vazia.")
+    resposta, _tech_msg_id = await _copilot_responder(tech, db, mensagem, payload.thread_id)
+    return resposta
 
-    thread_id = (payload.thread_id or "").strip() or uuid.uuid4().hex[:20]
 
-    db.add(OsTechnicianCopilotMessage(
-        tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=thread_id, remetente="tecnico", conteudo=mensagem,
-    ))
+async def _copilot_responder(
+    tech: AuthorizedTechnician,
+    db: AsyncSession,
+    mensagem: str,
+    thread_id_in: Optional[str],
+    conteudo_exibido: Optional[str] = None,
+):
+    """Responde uma pergunta do técnico (digitada ou transcrita de áudio) e devolve (resposta, id da
+    mensagem do técnico). `conteudo_exibido` é o que fica no histórico (ex: "🎤 ..." pro áudio) -
+    a lógica usa sempre `mensagem` (sem o ícone), pra "2" falado escolher da lista igual digitado."""
+    thread_id = (thread_id_in or "").strip() or uuid.uuid4().hex[:20]
+
+    tech_msg = OsTechnicianCopilotMessage(
+        tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=thread_id, remetente="tecnico", conteudo=conteudo_exibido or mensagem,
+    )
+    db.add(tech_msg)
     await db.commit()
+    await db.refresh(tech_msg)
 
     # Últimas mensagens DESSA conversa dão contexto pro Gemini (mesmo padrão do antigo copiloto
     # do WhatsApp) - sem isso cada pergunta seria tratada isolada, sem lembrar o que já foi
@@ -676,7 +696,7 @@ async def copilot_ask(
     if opcoes_oferecidas:
         await librarian_service.save_options(assistant_msg.id, opcoes_oferecidas)
 
-    return _copilot_message_out(assistant_msg)
+    return _copilot_message_out(assistant_msg), tech_msg.id
 
 
 @router.get("/copilot/document/{message_id}")
@@ -706,3 +726,121 @@ async def copilot_document(
         content = f.read()
 
     return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": "inline"})
+
+
+# Áudio, foto e vídeo do técnico no Copiloto - pedido do usuário em 13/10/2026 ("botão de áudio pra
+# ele mandar áudio e a IA transcrever, e envio de multimídia pra IA analisar e dar sugestões do que
+# ele pode fazer na hora da manutenção"). Áudio: transcreve e segue EXATAMENTE o caminho da mensagem
+# digitada (bibliotecário, IA, lista numerada...). Foto/vídeo: a IA analisa junto com a conversa, o
+# equipamento em foco e os trechos dos manuais, e responde o que vê + o que fazer agora.
+@router.post("/copilot/ask-media")
+async def copilot_ask_media(
+    file: UploadFile = File(...),
+    mensagem: str = Form(""),
+    thread_id: str = Form(""),
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    mime = (file.content_type or "").split(";")[0].strip().lower()
+    tipo = copilot_media_service.tipo_da_midia(mime)
+    if not tipo:
+        raise HTTPException(status_code=415, detail="Envie um áudio, uma foto ou um vídeo.")
+    dados = await file.read()
+    if not dados:
+        raise HTTPException(status_code=422, detail="Arquivo vazio.")
+    limite = copilot_media_service.MAX_BYTES[tipo]
+    if len(dados) > limite:
+        raise HTTPException(status_code=413, detail=f"Arquivo grande demais (máximo {limite // (1024 * 1024)} MB). Para vídeo, grave até uns 30 segundos.")
+
+    legenda = (mensagem or "").strip()
+    settings_dec = await settings_service.get_tenant_decrypted_settings(db, tech.tenant_id)
+    api_key = settings_dec.get("gemini_api_key")
+    model_name = settings_dec.get("gemini_model_name")
+
+    if tipo == "audio":
+        tr = await gemini_service.process_audio_message(dados, mime_type=mime, tenant_gemini_api_key=api_key, tenant_gemini_model_name=model_name)
+        texto = ((tr or {}).get("transcription") or "").strip()
+        if texto:
+            resposta, tech_msg_id = await _copilot_responder(tech, db, texto, thread_id, conteudo_exibido=f"🎤 {texto}")
+            await copilot_media_service.salvar(tech_msg_id, "audio", mime, dados)
+            logger.info(f"[COPILOTO MIDIA] Áudio de {tech.nome} transcrito: '{texto[:80]}'")
+            pergunta = {"id": tech_msg_id, "thread_id": resposta["thread_id"], "remetente": "tecnico", "conteudo": f"🎤 {texto}",
+                        "documento_titulo": None, "tem_documento": False, "documento_busca": None, "midia": "audio",
+                        "criado_em": resposta["criado_em"]}
+            return {"pergunta": pergunta, "resposta": resposta}
+        # Não deu pra entender o áudio: fica registrado na conversa, com o aviso
+        tid = thread_id.strip() or uuid.uuid4().hex[:20]
+        tech_msg = OsTechnicianCopilotMessage(tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=tid, remetente="tecnico", conteudo="🎤 (áudio)")
+        db.add(tech_msg)
+        await db.commit()
+        await db.refresh(tech_msg)
+        await copilot_media_service.salvar(tech_msg.id, "audio", mime, dados)
+        aviso = (tr or {}).get("fallback_message") or "Não consegui entender o áudio - tenta de novo mais perto do microfone ou escreve."
+        resp_msg = OsTechnicianCopilotMessage(tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=tid, remetente="assistente", conteudo=f"⚠️ {aviso}")
+        db.add(resp_msg)
+        await db.commit()
+        await db.refresh(resp_msg)
+        return {"pergunta": _copilot_message_out(tech_msg, "audio"), "resposta": _copilot_message_out(resp_msg)}
+
+    # Foto / vídeo da bancada
+    tid = thread_id.strip() or uuid.uuid4().hex[:20]
+    exibido = legenda or ("📷 Foto da bancada" if tipo == "imagem" else "🎥 Vídeo da bancada")
+    tech_msg = OsTechnicianCopilotMessage(tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=tid, remetente="tecnico", conteudo=exibido)
+    db.add(tech_msg)
+    await db.commit()
+    await db.refresh(tech_msg)
+    await copilot_media_service.salvar(tech_msg.id, tipo, mime, dados)
+
+    hist_res = await db.execute(
+        select(OsTechnicianCopilotMessage)
+        .where(
+            OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+            OsTechnicianCopilotMessage.technician_id == tech.id,
+            OsTechnicianCopilotMessage.thread_id == tid,
+            OsTechnicianCopilotMessage.id < tech_msg.id,
+        )
+        .order_by(OsTechnicianCopilotMessage.id.desc())
+        .limit(10)
+    )
+    history = [{"remetente": m.remetente, "conteudo": m.conteudo, "documento_titulo": m.documento_titulo}
+               for m in reversed(hist_res.scalars().all())]
+    equip_text = ""
+    try:
+        equip_text = librarian_service.resolve_equipment(tech.tenant_id, legenda, history)[0]
+    except Exception as e:
+        logger.warning(f"[COPILOTO MIDIA] Falha identificando o equipamento: {e}")
+    rag_query = " ".join(x for x in (legenda, equip_text) if x).strip()
+    rag_context = await rag_service.search_context(tenant_id=tech.tenant_id, query=rag_query, department_id=0) if rag_query else ""
+
+    analise = await gemini_service.analyze_bench_media(
+        dados, mime, technician_name=tech.nome, caption=legenda, conversation_history=history,
+        equipment=equip_text, rag_context=rag_context, tenant_gemini_api_key=api_key, tenant_gemini_model_name=model_name,
+    )
+    resp_msg = OsTechnicianCopilotMessage(tenant_id=tech.tenant_id, technician_id=tech.id, thread_id=tid, remetente="assistente",
+                                          conteudo=analise.get("text") or "Não consegui analisar agora.")
+    db.add(resp_msg)
+    await db.commit()
+    await db.refresh(resp_msg)
+    logger.info(f"[COPILOTO MIDIA] {tipo} de {tech.nome} analisado ({len(dados) // 1024} KB, equipamento: '{equip_text[:60]}')")
+    return {"pergunta": _copilot_message_out(tech_msg, tipo), "resposta": _copilot_message_out(resp_msg)}
+
+
+@router.get("/copilot/media/{message_id}")
+async def copilot_media(
+    message_id: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db),
+):
+    """Áudio/foto/vídeo que o PRÓPRIO técnico mandou - só pra ver dentro do Copiloto."""
+    res = await db.execute(select(OsTechnicianCopilotMessage).where(
+        OsTechnicianCopilotMessage.id == message_id,
+        OsTechnicianCopilotMessage.tenant_id == tech.tenant_id,
+        OsTechnicianCopilotMessage.technician_id == tech.id,
+    ))
+    if not res.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Mensagem não encontrada.")
+    midia = await copilot_media_service.da_mensagem(message_id)
+    if not midia or not os.path.exists(midia.caminho):
+        raise HTTPException(status_code=404, detail="Arquivo não está mais disponível.")
+    return FileResponse(midia.caminho, media_type=midia.mimetype,
+                        headers={"Content-Disposition": "inline", "Cache-Control": "private, no-store"})
