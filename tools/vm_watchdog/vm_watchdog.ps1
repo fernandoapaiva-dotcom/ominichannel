@@ -135,9 +135,18 @@ try {
         } finally { if ($resp) { $resp.Close() } }
     }
 
-    function Test-Port([string]$ip, [int]$port) {
+    # VM "viva" = o sshd RESPONDE o banner ("SSH-2.0-..."), nao so a porta aceitar conexao.
+    # Achado em 12/10/2026: com a VM travada, o kernel ainda completava a conexao TCP na porta 22
+    # mas nada respondia - o vigia achava que era "so o backend" e esperava 15min em vez de 4.
+    function Test-SshAlive([string]$ip) {
         $c = New-Object Net.Sockets.TcpClient
-        try { return $c.ConnectAsync($ip, $port).Wait(4000) -and $c.Connected } catch { return $false } finally { $c.Close() }
+        try {
+            if (-not ($c.ConnectAsync($ip, 22).Wait(4000) -and $c.Connected)) { return $false }
+            $s = $c.GetStream(); $s.ReadTimeout = 10000
+            $buf = New-Object byte[] 64
+            $n = $s.Read($buf, 0, 64)
+            return ($n -gt 0 -and [Text.Encoding]::ASCII.GetString($buf, 0, $n).StartsWith('SSH-'))
+        } catch { return $false } finally { $c.Close() }
     }
 
     $now = Get-Date
@@ -164,7 +173,7 @@ try {
     foreach ($ip in (Resolve-VmIp)) {
         if (Test-Health ($cfg.health_url_local -replace '\{ip\}', $ip)) { $healthy = $true; $alive = $true; $usedIp = $ip; break }
         $errors += "$ip -> $script:lastHealthError"
-        if (Test-Port $ip 22) { $alive = $true; $usedIp = $ip }
+        if (Test-SshAlive $ip) { $alive = $true; $usedIp = $ip }
     }
 
     if ($healthy) {
