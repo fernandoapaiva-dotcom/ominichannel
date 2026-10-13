@@ -385,200 +385,203 @@ class WhatsAppSyncService:
                         logger.error(f"[{instance_name}] Erro ao pre-sincronizar agenda de contatos: {ab_db_err}")
                         break
 
-                    # Process chats batch by batch
-                    for idx, chat in enumerate(chats_list[:total_chats]):
-                        jid = chat.get("remoteJid", "")
-                        if not jid or "status@broadcast" in jid:
-                            stats["processed_chats"] = idx + 1
-                            stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
-                            continue
-
-                        phone = self._clean_phone_from_jid(jid)
-                        if not phone:
-                            stats["processed_chats"] = idx + 1
-                            stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
-                            continue
-
-                        # Prefer address book name over raw chat name or fallback to chat name / phone
-                        ab_entry = address_book_map.get(phone)
-                        name = (
-                            ab_entry["name"] if ab_entry
-                            else chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
-                        )
-                        profile_pic = (ab_entry.get("profile_pic") if ab_entry else None) or chat.get("profilePicUrl")
-
-                        stats["current_contact"] = f"{name} ({phone})"
+                # Fora do `for attempt` acima (estava dentro dele desde 15/09/2026, commit 345525e: o
+                # `break` de sucesso da agenda saía da repetição ANTES de chegar aqui, então nenhum chat
+                # era importado e a barra ficava presa em "0 de N chats" - achado em 13/10/2026).
+                # Process chats batch by batch
+                for idx, chat in enumerate(chats_list[:total_chats]):
+                    jid = chat.get("remoteJid", "")
+                    if not jid or "status@broadcast" in jid:
                         stats["processed_chats"] = idx + 1
                         stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
+                        continue
 
-                        if idx % 3 == 0 or idx == total_chats - 1:
-                            await self._emit_progress(tenant_id, stats)
+                    phone = self._clean_phone_from_jid(jid)
+                    if not phone:
+                        stats["processed_chats"] = idx + 1
+                        stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
+                        continue
 
-                        # 1. Fetch messages for this chat via HTTP (outside DB transaction)
-                        records = []
+                    # Prefer address book name over raw chat name or fallback to chat name / phone
+                    ab_entry = address_book_map.get(phone)
+                    name = (
+                        ab_entry["name"] if ab_entry
+                        else chat.get("pushName") or chat.get("name") or chat.get("verifiedName") or phone
+                    )
+                    profile_pic = (ab_entry.get("profile_pic") if ab_entry else None) or chat.get("profilePicUrl")
+
+                    stats["current_contact"] = f"{name} ({phone})"
+                    stats["processed_chats"] = idx + 1
+                    stats["percentage"] = round(((idx + 1) / total_chats) * 100, 1)
+
+                    if idx % 3 == 0 or idx == total_chats - 1:
+                        await self._emit_progress(tenant_id, stats)
+
+                    # 1. Fetch messages for this chat via HTTP (outside DB transaction)
+                    records = []
+                    try:
+                        msgs_payload = {
+                            "where": {
+                                "key": {
+                                    "remoteJid": jid
+                                }
+                            },
+                            "limit": limit_msgs
+                        }
+                        msgs_res = await client.post(f"/chat/findMessages/{instance_name}", json=msgs_payload)
+                        if msgs_res.status_code == 200:
+                            msgs_json = msgs_res.json()
+                            records = (
+                                (msgs_json.get("messages") or {}).get("records", [])
+                                if isinstance(msgs_json, dict) and "messages" in msgs_json
+                                else msgs_json.get("records", []) if isinstance(msgs_json, dict)
+                                else msgs_json if isinstance(msgs_json, list)
+                                else []
+                            )
+
+                            # If chat is a LID, resolve to true phone number via remoteJidAlt
+                            if "@lid" in jid or (len(phone) >= 14 and not phone.startswith("55") and not phone.startswith("120363")):
+                                for m_item in records:
+                                    k_obj = m_item.get("key", {})
+                                    alt_jid = k_obj.get("remoteJidAlt") or m_item.get("remoteJidAlt") or ""
+                                    if "@s.whatsapp.net" in alt_jid:
+                                        resolved_phone = self._clean_phone_from_jid(alt_jid)
+                                        if resolved_phone:
+                                            phone = resolved_phone
+                                            if m_item.get("pushName") and (name == phone or not name or name == jid):
+                                                name = m_item["pushName"]
+                                            break
+
+                    except Exception as chat_err:
+                        logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
+
+                    # 2. Open short-lived DB transaction with retry to save Contact, Conv and Messages
+                    for attempt in range(5):
                         try:
-                            msgs_payload = {
-                                "where": {
-                                    "key": {
-                                        "remoteJid": jid
-                                    }
-                                },
-                                "limit": limit_msgs
-                            }
-                            msgs_res = await client.post(f"/chat/findMessages/{instance_name}", json=msgs_payload)
-                            if msgs_res.status_code == 200:
-                                msgs_json = msgs_res.json()
-                                records = (
-                                    (msgs_json.get("messages") or {}).get("records", [])
-                                    if isinstance(msgs_json, dict) and "messages" in msgs_json
-                                    else msgs_json.get("records", []) if isinstance(msgs_json, dict)
-                                    else msgs_json if isinstance(msgs_json, list)
-                                    else []
+                            async with AsyncSessionLocal() as session:
+                                # 2. Get or create clean definitive Contact with LID resolution and permanent local avatar cache
+                                contact = await resolve_and_bind_contact(
+                                    session=session,
+                                    tenant_id=tenant_id,
+                                    raw_jid=jid,
+                                    push_name=name,
+                                    profile_pic_url=profile_pic
                                 )
+                                stats["contacts_synced"] += 1
 
-                                # If chat is a LID, resolve to true phone number via remoteJidAlt
-                                if "@lid" in jid or (len(phone) >= 14 and not phone.startswith("55") and not phone.startswith("120363")):
-                                    for m_item in records:
-                                        k_obj = m_item.get("key", {})
-                                        alt_jid = k_obj.get("remoteJidAlt") or m_item.get("remoteJidAlt") or ""
-                                        if "@s.whatsapp.net" in alt_jid:
-                                            resolved_phone = self._clean_phone_from_jid(alt_jid)
-                                            if resolved_phone:
-                                                phone = resolved_phone
-                                                if m_item.get("pushName") and (name == phone or not name or name == jid):
-                                                    name = m_item["pushName"]
-                                                break
+                                # Get or create Conversation
+                                conv_stmt = select(Conversation).where(
+                                    Conversation.tenant_id == tenant_id,
+                                    Conversation.contact_id == contact.id,
+                                    Conversation.whatsapp_number_id == whatsapp_number_id
+                                )
+                                conv_res = await session.execute(conv_stmt)
+                                conv = conv_res.scalars().first()
 
-                        except Exception as chat_err:
-                            logger.warning(f"Erro ao buscar mensagens do chat {jid}: {chat_err}")
-
-                        # 2. Open short-lived DB transaction with retry to save Contact, Conv and Messages
-                        for attempt in range(5):
-                            try:
-                                async with AsyncSessionLocal() as session:
-                                    # 2. Get or create clean definitive Contact with LID resolution and permanent local avatar cache
-                                    contact = await resolve_and_bind_contact(
-                                        session=session,
+                                if not conv:
+                                    conv = Conversation(
                                         tenant_id=tenant_id,
-                                        raw_jid=jid,
-                                        push_name=name,
-                                        profile_pic_url=profile_pic
+                                        whatsapp_number_id=whatsapp_number_id,
+                                        contact_id=contact.id,
+                                        status=ConversationStatus.COM_HUMANO,
+                                        protocol_number=None,
+                                        dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
+                                        criado_em=datetime.utcnow(),
+                                        ultima_interacao_em=datetime.utcnow()
                                     )
-                                    stats["contacts_synced"] += 1
+                                    session.add(conv)
+                                    await session.flush()
+                                    stats["conversations_synced"] += 1
 
-                                    # Get or create Conversation
-                                    conv_stmt = select(Conversation).where(
-                                        Conversation.tenant_id == tenant_id,
-                                        Conversation.contact_id == contact.id,
-                                        Conversation.whatsapp_number_id == whatsapp_number_id
-                                    )
-                                    conv_res = await session.execute(conv_stmt)
-                                    conv = conv_res.scalars().first()
-
-                                    if not conv:
-                                        conv = Conversation(
-                                            tenant_id=tenant_id,
-                                            whatsapp_number_id=whatsapp_number_id,
-                                            contact_id=contact.id,
-                                            status=ConversationStatus.COM_HUMANO,
-                                            protocol_number=None,
-                                            dados_adicionais={"is_migrated": True, "migrated_from_whatsapp": True},
-                                            criado_em=datetime.utcnow(),
-                                            ultima_interacao_em=datetime.utcnow()
-                                        )
-                                        session.add(conv)
-                                        await session.flush()
-                                        stats["conversations_synced"] += 1
-
-                                    # Insert messages. Each record is processed defensively so one
-                                    # malformed/unexpected record (e.g. a protocol/system message with
-                                    # an explicit "message": null, common in groups) never aborts the
-                                    # whole chat's import - previously a single bad record raised past
-                                    # this loop, skipping session.commit() below and silently discarding
-                                    # the entire conversation + every other message that WAS parseable.
-                                    latest_msg_dt = None
-                                    for m_obj in records:
-                                        try:
-                                            key_obj = m_obj.get("key", {})
-                                            msg_wa_id = key_obj.get("id")
-                                            if not msg_wa_id:
-                                                continue
-
-                                            from_me = key_obj.get("fromMe", False)
-                                            remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
-                                            content_text, msg_type = self._parse_message_content(m_obj)
-                                            if content_text is None:
-                                                continue
-
-                                            ts_raw = m_obj.get("messageTimestamp")
-                                            msg_dt = datetime.utcnow()
-                                            if ts_raw:
-                                                try:
-                                                    ts_int = int(ts_raw)
-                                                    if ts_int > 1e11:
-                                                        ts_int = ts_int / 1000.0
-                                                    msg_dt = datetime.fromtimestamp(ts_int)
-                                                except Exception:
-                                                    pass
-
-                                            if latest_msg_dt is None or msg_dt > latest_msg_dt:
-                                                latest_msg_dt = msg_dt
-
-                                            existing_msg_stmt = select(Message.id).where(
-                                                Message.conversation_id == conv.id,
-                                                Message.whatsapp_msg_id == msg_wa_id
-                                            )
-                                            existing_res = await session.execute(existing_msg_stmt)
-                                            if existing_res.scalars().first():
-                                                continue
-
-                                            msg_extra = {}
-                                            m_payload_safe = m_obj.get("message") or {}
-                                            doc_wrapper_safe = m_payload_safe.get("documentWithCaptionMessage") or {}
-                                            doc_info = (m_payload_safe.get("documentMessage") or
-                                                        (doc_wrapper_safe.get("message") or {}).get("documentMessage") or {})
-                                            if doc_info:
-                                                fn = doc_info.get("fileName") or doc_info.get("title")
-                                                if fn:
-                                                    msg_extra["original_filename"] = fn
-                                                    msg_extra["file_name"] = fn
-
-                                            db_msg = Message(
-                                                conversation_id=conv.id,
-                                                remetente=remetente,
-                                                conteudo=content_text,
-                                                tipo=msg_type,
-                                                status="delivered",
-                                                whatsapp_msg_id=msg_wa_id,
-                                                dados_adicionais=msg_extra if msg_extra else None,
-                                                timestamp=msg_dt
-                                            )
-                                            session.add(db_msg)
-                                            stats["messages_synced"] += 1
-                                        except Exception as msg_err:
-                                            logger.debug(f"Skipping unparseable message record in chat {jid}: {msg_err}")
+                                # Insert messages. Each record is processed defensively so one
+                                # malformed/unexpected record (e.g. a protocol/system message with
+                                # an explicit "message": null, common in groups) never aborts the
+                                # whole chat's import - previously a single bad record raised past
+                                # this loop, skipping session.commit() below and silently discarding
+                                # the entire conversation + every other message that WAS parseable.
+                                latest_msg_dt = None
+                                for m_obj in records:
+                                    try:
+                                        key_obj = m_obj.get("key", {})
+                                        msg_wa_id = key_obj.get("id")
+                                        if not msg_wa_id:
                                             continue
 
-                                    if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
-                                        conv.ultima_interacao_em = latest_msg_dt
+                                        from_me = key_obj.get("fromMe", False)
+                                        remetente = MessageSender.ATENDENTE if from_me else MessageSender.CLIENTE
+                                        content_text, msg_type = self._parse_message_content(m_obj)
+                                        if content_text is None:
+                                            continue
 
-                                    await session.commit()
-                                break
-                            except Exception as db_err:
-                                if "locked" in str(db_err).lower() and attempt < 4:
-                                    await asyncio.sleep(0.3 * (attempt + 1))
-                                    continue
-                                logger.warning(f"Erro ao salvar dados do chat {jid}: {db_err}")
-                                break
+                                        ts_raw = m_obj.get("messageTimestamp")
+                                        msg_dt = datetime.utcnow()
+                                        if ts_raw:
+                                            try:
+                                                ts_int = int(ts_raw)
+                                                if ts_int > 1e11:
+                                                    ts_int = ts_int / 1000.0
+                                                msg_dt = datetime.fromtimestamp(ts_int)
+                                            except Exception:
+                                                pass
 
-                        # Cooperative yield to ensure real-time webhooks and incoming messages are never blocked
-                        await asyncio.sleep(0.05)
+                                        if latest_msg_dt is None or msg_dt > latest_msg_dt:
+                                            latest_msg_dt = msg_dt
 
-                    stats["status"] = "completed"
-                    stats["percentage"] = 100
-                    stats["current_contact"] = "Sincronização concluída com sucesso!"
-                    await self._emit_progress(tenant_id, stats)
-                    logger.info(f"=== SINCRONIZAÇÃO CONCLUÍDA [{instance_name}]: {stats['contacts_synced']} contatos, {stats['conversations_synced']} conversas, {stats['messages_synced']} mensagens. ===")
+                                        existing_msg_stmt = select(Message.id).where(
+                                            Message.conversation_id == conv.id,
+                                            Message.whatsapp_msg_id == msg_wa_id
+                                        )
+                                        existing_res = await session.execute(existing_msg_stmt)
+                                        if existing_res.scalars().first():
+                                            continue
+
+                                        msg_extra = {}
+                                        m_payload_safe = m_obj.get("message") or {}
+                                        doc_wrapper_safe = m_payload_safe.get("documentWithCaptionMessage") or {}
+                                        doc_info = (m_payload_safe.get("documentMessage") or
+                                                    (doc_wrapper_safe.get("message") or {}).get("documentMessage") or {})
+                                        if doc_info:
+                                            fn = doc_info.get("fileName") or doc_info.get("title")
+                                            if fn:
+                                                msg_extra["original_filename"] = fn
+                                                msg_extra["file_name"] = fn
+
+                                        db_msg = Message(
+                                            conversation_id=conv.id,
+                                            remetente=remetente,
+                                            conteudo=content_text,
+                                            tipo=msg_type,
+                                            status="delivered",
+                                            whatsapp_msg_id=msg_wa_id,
+                                            dados_adicionais=msg_extra if msg_extra else None,
+                                            timestamp=msg_dt
+                                        )
+                                        session.add(db_msg)
+                                        stats["messages_synced"] += 1
+                                    except Exception as msg_err:
+                                        logger.debug(f"Skipping unparseable message record in chat {jid}: {msg_err}")
+                                        continue
+
+                                if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
+                                    conv.ultima_interacao_em = latest_msg_dt
+
+                                await session.commit()
+                            break
+                        except Exception as db_err:
+                            if "locked" in str(db_err).lower() and attempt < 4:
+                                await asyncio.sleep(0.3 * (attempt + 1))
+                                continue
+                            logger.warning(f"Erro ao salvar dados do chat {jid}: {db_err}")
+                            break
+
+                    # Cooperative yield to ensure real-time webhooks and incoming messages are never blocked
+                    await asyncio.sleep(0.05)
+
+                stats["status"] = "completed"
+                stats["percentage"] = 100
+                stats["current_contact"] = "Sincronização concluída com sucesso!"
+                await self._emit_progress(tenant_id, stats)
+                logger.info(f"=== SINCRONIZAÇÃO CONCLUÍDA [{instance_name}]: {stats['contacts_synced']} contatos, {stats['conversations_synced']} conversas, {stats['messages_synced']} mensagens. ===")
 
             return {"success": True, "stats": stats}
 
