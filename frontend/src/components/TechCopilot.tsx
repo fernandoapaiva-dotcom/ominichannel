@@ -175,11 +175,19 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
   const renderTasks = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
   const renderedAt = useRef<Map<number, number>>(new Map()); // página -> escala com que foi desenhada
   const visible = useRef<Set<number>>(new Set());
-  const pinch = useRef<{ startDist: number; startZoom: number } | null>(null);
+  // Geração do desenho de cada página: um desenho que termina depois de a página ter sido apagada ou
+  // pedida de novo noutra escala é descartado (senão sobra canvas vazio marcado como "desenhado").
+  const renderGen = useRef<Map<number, number>>(new Map());
+  // Durante a troca de zoom o documento muda de tamanho ANTES da rolagem ser reposicionada - nesse
+  // meio-tempo a página da tela parece "longe" e era apagada (achado em 13/10/2026: depois da pinça a
+  // página ficava em branco). Enquanto isso estiver true, nada é apagado.
+  const zoomingRef = useRef(false);
+  // Pinça: ponto do DOCUMENTO que estava entre os dedos (cx, cy) e onde ele estava na TELA (mx, my)
+  const pinch = useRef<{ startDist: number; startZoom: number; mx: number; my: number; cx: number; cy: number; s: number; tx: number; ty: number } | null>(null);
   const zoomRef = useRef(1);
-  const pinchScaleRef = useRef(1);
-  const applyZoomRef = useRef<(z: number) => void>(() => {});
-  const [pinchScale, setPinchScale] = useState(1); // prévia do zoom durante a pinça (CSS), aplicado ao soltar
+  const zoomAtRef = useRef<(z: number, cx: number, cy: number, sx: number, sy: number) => void>(() => {});
+  // prévia do zoom durante a pinça (CSS, ancorada entre os dedos); o redesenho nítido é ao soltar
+  const [pinchView, setPinchView] = useState<{ s: number; ox: number; oy: number; tx: number; ty: number } | null>(null);
 
   // Carrega o documento + o tamanho de todas as páginas (só metadados, rápido)
   useEffect(() => {
@@ -231,9 +239,13 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
     const canvas = canvasRefs.current[i];
     if (!pdf || !canvas) return;
     const scale = pageScale(i);
-    if (renderedAt.current.get(i) === scale) return;
+    if (renderedAt.current.get(i) === scale && canvas.width > 0) return;
     renderTasks.current.get(i)?.cancel();
+    const gen = (renderGen.current.get(i) || 0) + 1;
+    renderGen.current.set(i, gen);
+    renderedAt.current.set(i, scale);
     pdf.getPage(i + 1).then(page => {
+      if (renderGen.current.get(i) !== gen) return; // apagada ou pedida de novo nesse meio-tempo
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const viewport = page.getViewport({ scale: scale * dpr });
       const ctx = canvas.getContext('2d');
@@ -242,12 +254,16 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
       canvas.height = Math.floor(viewport.height);
       const task = page.render({ canvasContext: ctx, viewport });
       renderTasks.current.set(i, task);
-      renderedAt.current.set(i, scale);
-      task.promise.catch(() => renderedAt.current.delete(i));
+      task.promise.catch(() => { if (renderGen.current.get(i) === gen) renderedAt.current.delete(i); });
     }).catch(() => renderedAt.current.delete(i));
   }, [pageScale]);
 
+  const renderPageRef = useRef<(i: number) => void>(() => {});
+  renderPageRef.current = renderPage;
+
   const clearPage = (i: number) => {
+    if (zoomingRef.current) return;
+    renderGen.current.set(i, (renderGen.current.get(i) || 0) + 1);
     renderTasks.current.get(i)?.cancel();
     renderTasks.current.delete(i);
     renderedAt.current.delete(i);
@@ -303,17 +319,52 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
     setPageInput(String(p));
   };
 
-  // Mantém a página atual no lugar quando o zoom muda (senão o leitor "pula" pra outra página)
+  // Posição vertical (no documento) do topo da página i num zoom qualquer
+  const pageTopAt = (i: number, z: number) => {
+    let top = 12;
+    for (let k = 0; k < i; k++) top += (pageSizes[k] ? pageSizes[k].h * (fitWidth / pageSizes[k].w) * z : 0) + PAGE_GAP;
+    return top;
+  };
+
+  // Zoom ANCORADO: o ponto (cx, cy) do documento que estava na posição (sx, sy) da tela continua no
+  // mesmo lugar da tela depois do zoom - é o que faz a pinça ampliar "onde os dedos estão" em vez de
+  // pular de página (achado em 13/10/2026: antes ampliava a partir do topo do documento inteiro).
+  const zoomAt = (z: number, cx: number, cy: number, sx: number, sy: number) => {
+    const el = scrollRef.current;
+    const zo = zoomRef.current;
+    const zn = Math.min(4, Math.max(0.5, z));
+    if (!el || !pageSizes.length || Math.abs(zn - zo) < 0.001) { setZoom(zn); return; }
+    let i = 0;
+    while (i < pageSizes.length - 1 && pageTopAt(i + 1, zo) <= cy) i++;
+    const ny = pageTopAt(i, zn) + (cy - pageTopAt(i, zo)) * (zn / zo);
+    const nx = 12 + (cx - 12) * (zn / zo);
+    zoomingRef.current = true;
+    setZoom(zn);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.scrollTop = ny - sy;
+      el.scrollLeft = nx - sx;
+      // Redesenha já as páginas que ficaram na tela (não espera o observador)
+      const r = el.getBoundingClientRect();
+      el.querySelectorAll<HTMLElement>('[data-page]').forEach(pgEl => {
+        const b = pgEl.getBoundingClientRect();
+        if (b.bottom > r.top - 600 && b.top < r.bottom + 600) {
+          const idx = Number(pgEl.dataset.page);
+          visible.current.add(idx);
+          renderPageRef.current(idx);
+        }
+      });
+      setTimeout(() => { zoomingRef.current = false; }, 400);
+    }));
+  };
+  zoomAtRef.current = zoomAt;
+  zoomRef.current = zoom;
+
+  // Botões: amplia a partir do centro da tela
   const applyZoom = (z: number) => {
     const el = scrollRef.current;
-    const clamped = Math.min(4, Math.max(0.5, z));
-    if (!el) { setZoom(clamped); return; }
-    const ratio = el.scrollTop / Math.max(1, el.scrollHeight);
-    setZoom(clamped);
-    requestAnimationFrame(() => { el.scrollTop = ratio * el.scrollHeight; });
+    if (!el) { setZoom(Math.min(4, Math.max(0.5, z))); return; }
+    zoomAt(z, el.scrollLeft + el.clientWidth / 2, el.scrollTop + el.clientHeight / 2, el.clientWidth / 2, el.clientHeight / 2);
   };
-  applyZoomRef.current = applyZoom;
-  zoomRef.current = zoom;
   const stepZoom = (dir: 1 | -1) => {
     const next = dir > 0 ? ZOOM_STEPS.find(z => z > zoom + 0.01) : [...ZOOM_STEPS].reverse().find(z => z < zoom - 0.01);
     applyZoom(next ?? zoom);
@@ -347,30 +398,43 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, busca, pageSizes.length]);
 
-  // Pinça com 2 dedos (prévia por CSS durante o gesto, redesenho nítido ao soltar). Eventos de toque
-  // nativos (não pointer events): com 2 dedos o preventDefault segura a rolagem do navegador só
-  // durante a pinça; com 1 dedo a rolagem normal continua.
+  // Pinça com 2 dedos. Eventos de toque nativos (não pointer events). Com 2 dedos na tela a ROLAGEM
+  // FICA TRAVADA (overflow hidden) - senão o navegador continua rolando o que o 1º dedo começou e o
+  // leitor "troca de página adoidado" no meio da pinça (achado em 13/10/2026). A prévia amplia a
+  // partir do ponto entre os dedos e acompanha se eles se moverem; ao soltar, o zoom é aplicado
+  // ancorado nesse mesmo ponto (zoomAt).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const d = (t: TouchList) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t: TouchList) => {
+      const r = el.getBoundingClientRect();
+      return { x: (t[0].clientX + t[1].clientX) / 2 - r.left, y: (t[0].clientY + t[1].clientY) / 2 - r.top };
+    };
     const onStart = (e: TouchEvent) => {
-      if (e.touches.length === 2) pinch.current = { startDist: d(e.touches), startZoom: zoomRef.current };
+      if (e.touches.length !== 2) return;
+      const m = mid(e.touches);
+      el.style.overflow = 'hidden'; // trava a rolagem; o valor original (auto) volta no fim do gesto
+      pinch.current = { startDist: d(e.touches), startZoom: zoomRef.current, mx: m.x, my: m.y, cx: el.scrollLeft + m.x, cy: el.scrollTop + m.y, s: 1, tx: 0, ty: 0 };
     };
     const onMove = (e: TouchEvent) => {
-      if (!pinch.current || e.touches.length !== 2) return;
-      e.preventDefault();
-      const target = Math.min(4, Math.max(0.5, pinch.current.startZoom * d(e.touches) / pinch.current.startDist));
-      pinchScaleRef.current = target / pinch.current.startZoom;
-      setPinchScale(pinchScaleRef.current);
+      const p = pinch.current;
+      if (!p || e.touches.length !== 2) return;
+      if (e.cancelable) e.preventDefault();
+      const target = Math.min(4, Math.max(0.5, p.startZoom * d(e.touches) / p.startDist));
+      const m = mid(e.touches);
+      p.s = target / p.startZoom;
+      p.tx = m.x - p.mx;
+      p.ty = m.y - p.my;
+      setPinchView({ s: p.s, ox: p.cx, oy: p.cy, tx: p.tx, ty: p.ty });
     };
     const onEnd = (e: TouchEvent) => {
-      if (!pinch.current || e.touches.length >= 2) return;
-      const target = pinch.current.startZoom * pinchScaleRef.current;
+      const p = pinch.current;
+      if (!p || e.touches.length >= 2) return;
       pinch.current = null;
-      pinchScaleRef.current = 1;
-      setPinchScale(1);
-      applyZoomRef.current(target);
+      el.style.overflow = 'auto'; // NÃO '' - isso apagaria o overflow do style e o leitor pararia de rolar
+      setPinchView(null);
+      zoomAtRef.current(p.startZoom * p.s, p.cx, p.cy, p.mx + p.tx, p.my + p.ty);
     };
     el.addEventListener('touchstart', onStart, { passive: true });
     el.addEventListener('touchmove', onMove, { passive: false });
@@ -383,10 +447,15 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
       el.removeEventListener('touchcancel', onEnd);
     };
   }, [loading]);
+  // Ctrl + rodinha: amplia a partir de onde está o mouse
   const onWheel = (e: React.WheelEvent) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
-    applyZoom(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    const el = scrollRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    zoomAt(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), el.scrollLeft + sx, el.scrollTop + sy, sx, sy);
   };
 
   useEffect(() => {
@@ -448,7 +517,7 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
               <Loader2 size={24} className="animate-spin" /> Abrindo documento...
             </div>
           ) : (
-            <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: `${PAGE_GAP}px`, width: 'max-content', minWidth: '100%', boxSizing: 'border-box', transform: pinchScale !== 1 ? `scale(${pinchScale})` : undefined, transformOrigin: 'top center' }}>
+            <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: `${PAGE_GAP}px`, width: 'max-content', minWidth: '100%', boxSizing: 'border-box', transform: pinchView ? `translate(${pinchView.tx}px, ${pinchView.ty}px) scale(${pinchView.s})` : undefined, transformOrigin: pinchView ? `${pinchView.ox}px ${pinchView.oy}px` : undefined, willChange: pinchView ? 'transform' : undefined }}>
               {pageSizes.map((s, i) => {
                 const w = s.w * pageScale(i);
                 const h = s.h * pageScale(i);
