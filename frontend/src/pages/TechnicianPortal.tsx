@@ -48,6 +48,7 @@ const MyNotesTicker: React.FC<{ notes: MyNote[] }> = ({ notes }) => {
 interface TechnicianMe {
   id: number;
   nome: string;
+  telefone?: string | null;
   cargo?: string | null;
   departamento?: string | null;
 }
@@ -325,7 +326,7 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
 
       <div style={{ flex: '1 1 0%', minHeight: 0, minWidth: 0, padding: '0 16px 16px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {tab === 'copilot' ? (
-          <TechCopilot techName={me?.nome || 'Técnico'} />
+          <TechCopilot techName={me?.nome || 'Técnico'} techPhone={me?.telefone} />
         ) : query.trim() ? (
           <SearchResultsList
             results={searchResults}

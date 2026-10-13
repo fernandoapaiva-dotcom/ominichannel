@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { Bot, Send, FileText, X, Loader2, Menu, Plus, MessageSquare, PanelLeftClose, ZoomIn, ZoomOut, Maximize2, Lock } from 'lucide-react';
 import { techApiFetch, techApiFetchBlob } from '../services/techApi';
 import * as pdfjsLib from 'pdfjs-dist';
 // @ts-ignore - Vite resolve o worker como URL de asset; é o padrão recomendado do pdfjs-dist com Vite.
@@ -26,7 +26,125 @@ interface CopilotThread {
 
 interface TechCopilotProps {
   techName: string;
+  techPhone?: string | null;
 }
+
+// Proteção do conteúdo do Copiloto - pedido do usuário em 13/10/2026: "não seja uma tela que possa
+// bater print nem compartilhar nada, somente o visual dentro dela".
+//
+// LIMITE HONESTO: página web não consegue impedir o print do sistema operacional (botão do celular,
+// PrintScreen, câmera de outro celular). O bloqueio de verdade no Android só vem com o app nativo
+// usando FLAG_SECURE (print e gravação saem pretos) - o Portal hoje é um TWA (Chrome por dentro), que
+// não permite isso. O que dá pra fazer aqui, e faz:
+//   1. Marca d'água com nome + telefone do técnico + data/hora por cima do chat e de cada página do
+//      PDF - um print que vazar sai identificado (o maior desestímulo possível no navegador);
+//   2. Sem seleção/cópia de texto, sem menu de "salvar imagem" (toque longo / botão direito), sem
+//      arrastar imagem, sem imprimir (Ctrl+P sai em branco) nem Ctrl+S;
+//   3. Tecla PrintScreen (computador): limpa a área de transferência e esconde o conteúdo;
+//   4. Ao sair do app / trocar de janela, o conteúdo é escondido (miniatura de "apps recentes" e
+//      algumas ferramentas de recorte pegam a tela coberta).
+// Os documentos já nunca vão como arquivo baixável (ver copilot_document no backend).
+
+const watermarkUrl = (text: string, onPaper: boolean) => {
+  const safe = text.replace(/[<>&"']/g, '');
+  const fill = onPaper ? 'rgba(30,41,59,0.14)' : 'rgba(148,163,184,0.16)';
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='520' height='240'><text x='20' y='140' transform='rotate(-22 260 120)' fill='${fill}' font-family='Inter,Arial,sans-serif' font-size='13' font-weight='700'>${safe}</text></svg>`;
+  return `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}")`;
+};
+
+const useWatermarkText = (techName: string, techPhone?: string | null) => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  const digits = (techPhone || '').replace(/\D/g, '');
+  const phone = digits ? ` · ${digits.slice(-11)}` : '';
+  const stamp = now.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return `${techName}${phone} · ${stamp} · CONFIDENCIAL SERVWELD`;
+};
+
+const Watermark: React.FC<{ text: string; onPaper?: boolean }> = ({ text, onPaper }) => (
+  <div
+    aria-hidden
+    style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 20,
+      backgroundImage: watermarkUrl(text, !!onPaper), backgroundRepeat: 'repeat',
+    }}
+  />
+);
+
+// O campo onde o técnico digita continua aceitando copiar/colar/menu - o resto não.
+const blockEvent = (e: React.SyntheticEvent) => {
+  const el = e.target as HTMLElement | null;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+  e.preventDefault();
+};
+
+// Esconde o conteúdo quando o app sai de foco / vai pro fundo, bloqueia atalhos e a impressão.
+const useContentShield = () => {
+  const [shielded, setShielded] = useState(false);
+  useEffect(() => {
+    const hide = () => setShielded(true);
+    const show = () => { if (!document.hidden) setShielded(false); };
+    const onVisibility = () => (document.hidden ? hide() : show());
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (e.key === 'PrintScreen' || e.key === 'Snapshot') {
+        hide();
+        try { navigator.clipboard?.writeText(''); } catch { /* sem permissão - segue */ }
+        setTimeout(show, 1500);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && ['c', 'x', 's', 'p', 'u'].includes(k)) {
+        const el = e.target as HTMLElement | null;
+        if (k === 'c' || k === 'x') {
+          if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return; // copiar o que ele mesmo digitou
+        }
+        e.preventDefault();
+      }
+    };
+    const style = document.createElement('style');
+    style.setAttribute('data-copilot-shield', '');
+    style.textContent = '@media print { body * { visibility: hidden !important; } }';
+    document.head.appendChild(style);
+    window.addEventListener('blur', hide);
+    window.addEventListener('focus', show);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
+    return () => {
+      style.remove();
+      window.removeEventListener('blur', hide);
+      window.removeEventListener('focus', show);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
+    };
+  }, []);
+  return shielded;
+};
+
+const ShieldCover: React.FC = () => (
+  <div style={{ position: 'fixed', inset: 0, zIndex: 70000, background: '#0b0f19', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px', color: 'var(--text-muted, #94a3b8)', fontSize: '14px', fontWeight: 700 }}>
+    <Lock size={28} />
+    Conteúdo protegido - toque para voltar ao Copiloto
+  </div>
+);
+
+// Props comuns pra área protegida (sem seleção, sem menu de contexto, sem cópia, sem arrastar)
+const protectedProps = {
+  onContextMenu: blockEvent,
+  onCopy: blockEvent,
+  onCut: blockEvent,
+  onDragStart: blockEvent,
+};
+const protectedStyle: React.CSSProperties = {
+  userSelect: 'none',
+  WebkitUserSelect: 'none',
+  WebkitTouchCallout: 'none',
+} as React.CSSProperties;
+
 
 // Leitor de PDF contínuo, estilo Acrobat Reader - pedido do usuário em 13/10/2026: "abre o arquivo,
 // dá zoom, passa pra próxima página rolando, descendo; hoje você tem que passar de página em página e
@@ -41,7 +159,7 @@ interface TechCopilotProps {
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4];
 const PAGE_GAP = 12;
 
-const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?: string | null; onClose: () => void }> = ({ messageId, titulo, busca, onClose }) => {
+const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?: string | null; watermark: string; onClose: () => void }> = ({ messageId, titulo, busca, watermark, onClose }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null);
   const [numPages, setNumPages] = useState(0);
@@ -281,7 +399,7 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 50000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'min(12px, 2vw)' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '1100px', height: '100%', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div onClick={e => e.stopPropagation()} {...protectedProps} style={{ ...protectedStyle, width: '100%', maxWidth: '1100px', height: '100%', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color)', borderRadius: '12px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
           <FileText size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
           <span style={{ flex: 1, minWidth: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{titulo}</span>
@@ -336,7 +454,8 @@ const DocumentViewerModal: React.FC<{ messageId: number; titulo: string; busca?:
                 const h = s.h * pageScale(i);
                 return (
                   <div key={i} data-page={i} style={{ width: `${w}px`, height: `${h}px`, background: '#fff', boxShadow: '0 4px 20px rgba(0,0,0,0.4)', flexShrink: 0, position: 'relative' }}>
-                    <canvas ref={el => { canvasRefs.current[i] = el; }} style={{ width: `${w}px`, height: `${h}px`, display: 'block' }} />
+                    <canvas ref={el => { canvasRefs.current[i] = el; }} style={{ width: `${w}px`, height: `${h}px`, display: 'block', pointerEvents: 'none' }} />
+                    <Watermark text={watermark} onPaper />
                   </div>
                 );
               })}
@@ -368,7 +487,9 @@ const groupThreads = (threads: CopilotThread[]) => {
 // Abaixo disso (celular) vira gaveta pelo botão ☰ - mesmo comportamento do Claude.ai no celular.
 const SIDEBAR_FIXED_MIN_WIDTH = 760;
 
-export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
+export const TechCopilot: React.FC<TechCopilotProps> = ({ techName, techPhone }) => {
+  const watermark = useWatermarkText(techName, techPhone);
+  const shielded = useContentShield();
   const [threads, setThreads] = useState<CopilotThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<CopilotMsg[]>([]);
@@ -462,7 +583,9 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
   };
 
   return (
-    <div ref={rootRef} style={{ flex: 1, minHeight: 0, display: 'flex', background: 'var(--bg-primary)', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+    <div ref={rootRef} {...protectedProps} style={{ ...protectedStyle, flex: 1, minHeight: 0, display: 'flex', background: 'var(--bg-primary)', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--border-color)' }}>
+      <Watermark text={watermark} />
+      {shielded && <ShieldCover />}
       {/* Menu lateral com histórico de conversas + "Nova conversa" - layout do Claude.ai, pedido do
           usuário em 11/10/2026. Desde 13/10/2026 ("quero que o histórico fique sempre visível igual
           do Claude na barra lateral esquerda") fica FIXO ao lado do chat em tela larga; no celular
@@ -617,7 +740,8 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
             style={{
               flex: 1, padding: '11px 14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)',
               background: 'var(--input-bg, var(--bg-secondary))', color: 'var(--text-main)', fontSize: '13.5px', outline: 'none',
-            }}
+              userSelect: 'text', WebkitUserSelect: 'text',
+            } as React.CSSProperties}
           />
           <button
             onClick={send}
@@ -636,7 +760,7 @@ export const TechCopilot: React.FC<TechCopilotProps> = ({ techName }) => {
       </div>
 
       {viewerMsg && (
-        <DocumentViewerModal messageId={viewerMsg.id} titulo={viewerMsg.documento_titulo || 'Documento'} busca={viewerMsg.documento_busca} onClose={() => setViewerMsg(null)} />
+        <DocumentViewerModal messageId={viewerMsg.id} titulo={viewerMsg.documento_titulo || 'Documento'} busca={viewerMsg.documento_busca} watermark={watermark} onClose={() => setViewerMsg(null)} />
       )}
     </div>
   );

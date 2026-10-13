@@ -87,6 +87,9 @@ async def technician_me(tech: AuthorizedTechnician = Depends(get_current_technic
     return {
         "id": tech.id,
         "nome": tech.nome,
+        # Vai na marca d'água do Copiloto (13/10/2026): print de manual/código que vazar leva o
+        # nome + telefone de quem estava com o aparelho.
+        "telefone": tech.telefone,
         "cargo": tech.cargo,
         "departamento": tech.departamento,
         "must_change_pin": tech.pin_deve_trocar,
