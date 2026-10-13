@@ -682,8 +682,23 @@ const formatDateTime = (iso?: string | null) => {
 //    tempo no mesmo navegador/celular sem um derrubar a sessão do outro (ver o comentário em
 //    techApi.ts). Chamar apiFetch (do admin) sempre ia falhar pro técnico nessa tela, não importa
 //    a URL - precisa trocar o cliente HTTP inteiro, não só o prefixo.
+// Quem está usando a tela sai do APP aberto (ver main.tsx), não de existir um tech_token salvo -
+// achado em 13/10/2026: o dono entrou no Portal do Técnico nesse mesmo navegador (pra testar o
+// Copiloto), o tech_token ficou guardado, e o Quadro administrativo passou a se comportar como
+// técnico - escondia a seção "Relatório pro Cliente" (rascunho da IA + "Gerar com IA") e chamava
+// os endpoints do técnico. Admin e técnico logados juntos no mesmo navegador é cenário previsto
+// (ver techApi.ts), então o token sozinho nunca diz em qual dos dois apps a pessoa está.
+// /foto-os aceita os dois logins e prefere o do técnico (FotoLauncherApp.checkAuth) - lá o token
+// continua sendo o critério certo.
+const isTechnicianSession = (): boolean => {
+  const path = window.location.pathname;
+  if (path.startsWith('/tecnico')) return true;
+  if (path.startsWith('/foto-os')) return !!localStorage.getItem('tech_token');
+  return false;
+};
+
 const fetchOsDetail = (codos: number) => {
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   return isTechnician ? techApiFetch(`/order/${codos}`) : apiFetch(`/os-board/order/${codos}`);
 };
 
@@ -694,7 +709,7 @@ const fetchOsDetail = (codos: number) => {
 // igual, só não dispara pro WhatsApp do cliente (ele já tem o original, não faz sentido devolver).
 const uploadOsPhoto = (codos: number, formData: FormData, sendToCustomer: boolean) => {
   formData.append('send_to_customer', sendToCustomer ? 'true' : 'false');
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   return isTechnician ? techApiUpload(`/order/${codos}/photos`, formData) : apiUpload(`/os-board/order/${codos}/photos`, formData);
 };
 
@@ -705,23 +720,23 @@ const uploadOsPhoto = (codos: number, formData: FormData, sendToCustomer: boolea
 // com um motivo e pede nova versão; sendOsReport aprova e manda de verdade (PDF pro cliente +
 // grava no Softsystem).
 const getOsReport = (codos: number) => {
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   return isTechnician ? techApiFetch(`/order/${codos}/report`) : apiFetch(`/os-board/order/${codos}/report`);
 };
 
 const draftOsReport = (codos: number) => {
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   return isTechnician ? techApiFetch(`/order/${codos}/draft-report`, { method: 'POST' }) : apiFetch(`/os-board/order/${codos}/draft-report`, { method: 'POST' });
 };
 
 const rejectOsReport = (codos: number, reason: string) => {
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   const body = JSON.stringify({ reason });
   return isTechnician ? techApiFetch(`/order/${codos}/reject-report`, { method: 'POST', body }) : apiFetch(`/os-board/order/${codos}/reject-report`, { method: 'POST', body });
 };
 
 const sendOsReport = (codos: number, internalNote: string, customerMessage: string) => {
-  const isTechnician = !!localStorage.getItem('tech_token');
+  const isTechnician = isTechnicianSession();
   const body = JSON.stringify({ internal_note: internalNote, customer_message: customerMessage });
   return isTechnician ? techApiFetch(`/order/${codos}/send-report`, { method: 'POST', body }) : apiFetch(`/os-board/order/${codos}/send-report`, { method: 'POST', body });
 };
@@ -832,7 +847,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
   const [addingNote, setAddingNote] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [resolvingNoteId, setResolvingNoteId] = useState<number | null>(null);
-  const isTechnicianUser = !!localStorage.getItem('tech_token');
+  const isTechnicianUser = isTechnicianSession();
 
   const loadTechNotes = async () => {
     try {
@@ -1770,7 +1785,7 @@ export const OsPhotoQuickUploadModal: React.FC<{ onClose: () => void }> = ({ onC
     const handle = setTimeout(async () => {
       try {
         const qs = new URLSearchParams({ q: query.trim() });
-        const isTechnician = !!localStorage.getItem('tech_token');
+        const isTechnician = isTechnicianSession();
         const data = isTechnician
           ? await techApiFetch(`/search?${qs.toString()}`)
           : await apiFetch(`/os-board/search?${qs.toString()}`);
