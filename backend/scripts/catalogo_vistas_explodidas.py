@@ -194,11 +194,19 @@ async def comparar(n: int):
         refs = {}
         for d in docs:
             refs[d[0]] = (await db.execute(select(VisaoPeca.codigo).where(VisaoPeca.parent_doc_id == d[0]))).scalars().all()
-    escolhidos, marcas = [], set()  # variedade: um PDF por marca
-    for d in sorted(docs, key=lambda d: d[0]):
-        if d[1] not in marcas and os.path.exists(d[2] or ""):
+    # variedade: um PDF por marca primeiro; se houver menos marcas que N (a 1ª noite leu quase só Balmer),
+    # completa com outros PDFs, de tamanhos variados
+    existentes = [d for d in sorted(docs, key=lambda d: d[0]) if os.path.exists(d[2] or "")]
+    escolhidos, marcas = [], set()
+    for d in existentes:
+        if d[1] not in marcas:
             escolhidos.append(d)
             marcas.add(d[1])
+    resto = sorted((d for d in existentes if d not in escolhidos), key=lambda d: d[4])  # por nº de peças
+    faltam = min(n - len(escolhidos), len(resto))
+    if faltam > 0:  # espalhados do menor ao maior
+        passo = len(resto) / faltam
+        escolhidos += [resto[int(i * passo + passo / 2)] for i in range(faltam)]
     escolhidos = escolhidos[:n]
     if not escolhidos:
         print("Nenhum PDF já lido para comparar.")
