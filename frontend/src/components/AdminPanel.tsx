@@ -69,6 +69,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
   const [ragContent, setRagContent] = useState('');
   const [ragFiles, setRagFiles] = useState<FileList | null>(null);
   const [ragDocuments, setRagDocuments] = useState<any[]>([]);
+  const [ragFiltro, setRagFiltro] = useState('');
   const [ragLoading, setRagLoading] = useState(false);
 
   // Progress Bar State
@@ -419,7 +420,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
     loadData();
     loadSettingsAndAudit();
     loadWhatsAppGroups();
-    loadRagDocuments();
+    // loadRagDocuments() saiu daqui (14/10/2026): a lista do RAG é grande e só a aba RAG precisa dela
     loadPixKeys();
     loadTechnicians();
 
@@ -2115,6 +2116,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
               <h3 style={{ fontSize: '17px', marginBottom: '16px', color: 'var(--text-main)' }}>
                 Conhecimentos Cadastrados no RAG ({ragDocuments.length})
               </h3>
+              {ragDocuments.length > 0 && (
+                <input
+                  type="text"
+                  value={ragFiltro}
+                  onChange={(e) => setRagFiltro(e.target.value)}
+                  placeholder="Filtrar por nome, marca ou modelo..."
+                  style={{ width: '100%', padding: '10px 12px', marginBottom: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)', color: 'var(--text-main)', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+              )}
 
               {ragDocuments.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '13px' }}>
@@ -2122,7 +2132,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {ragDocuments.map((doc) => (
+                  {(() => {
+                    const f = ragFiltro.trim().toLowerCase();
+                    const lista = f ? ragDocuments.filter((d) => `${d.titulo} ${d.snippet} ${d.filename}`.toLowerCase().includes(f)) : ragDocuments;
+                    return lista.length > 200 ? (
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                        Mostrando 200 de {lista.length} documentos - use o filtro para achar um específico.
+                      </div>
+                    ) : null;
+                  })()}
+                  {(ragFiltro.trim()
+                    ? ragDocuments.filter((d) => `${d.titulo} ${d.snippet} ${d.filename}`.toLowerCase().includes(ragFiltro.trim().toLowerCase()))
+                    : ragDocuments
+                  ).slice(0, 200).map((doc) => (
                     <div
                       key={doc.id}
                       style={{

@@ -524,40 +524,50 @@ class RAGService:
             return []
 
     async def list_documents(self, tenant_id: int) -> list:
-        """Lists all RAG documents index metadata for a tenant"""
-        try:
-            self._ensure_client()
-            res = self.collection.get(
-                where={"tenant_id": int(tenant_id)},
-                include=["metadatas", "documents"]
-            )
-            ids = res.get("ids", [])
-            metas = res.get("metadatas", [])
-            docs = res.get("documents", [])
+        """Lista os documentos do RAG - UMA linha por documento, tirada do índice que o aquecedor já
+        mantém em memória (_get_doc_index), sem tocar no ChromaDB.
 
-            output = []
-            for d_id, meta, doc in zip(ids, metas, docs):
-                output.append({
-                    "id": d_id.replace(f"t{tenant_id}_", ""),
-                    "full_id": d_id,
-                    "titulo": meta.get("titulo", "Sem Título"),
-                    "scope": meta.get("scope", "geral"),
-                    "department_id": meta.get("department_id", 0),
-                    "department_name": meta.get("department_name", "Geral"),
-                    "filename": meta.get("filename", ""),
-                    "snippet": doc[:150] + ("..." if len(doc) > 150 else "")
-                })
-            return output
-        except Exception as e:
-            logger.error(f"Error listing RAG documents: {e}")
-            return []
+        Achado em produção em 14/10/2026: a versão antiga fazia collection.get() de TODOS os chunks
+        COM o texto (85 mil+), síncrono dentro do endpoint async - o painel Admin chama isso ao abrir,
+        e cada abertura travava o backend INTEIRO por ~3 min (memória subia para 4,4 GB) e no fim ainda
+        falhava com "too many SQL variables". Nos primeiros minutos após o boot, antes do aquecedor
+        montar o índice, a lista volta vazia."""
+        output = []
+        for meta in self._doc_index_cache.get(tenant_id, []):
+            pdoc_id = str(meta.get("parent_doc_id") or "")
+            if not pdoc_id:
+                continue
+            partes = [p for p in (meta.get("marca"), meta.get("modelo"), meta.get("filename")) if p]
+            n = int(meta.get("total_chunks") or 1)
+            output.append({
+                "id": pdoc_id,
+                "full_id": f"t{tenant_id}_{pdoc_id}",
+                "titulo": meta.get("titulo") or meta.get("filename") or "Sem Título",
+                "scope": meta.get("scope", "geral"),
+                "department_id": meta.get("department_id", 0),
+                "department_name": meta.get("department_name", "Geral"),
+                "filename": meta.get("filename", ""),
+                "snippet": " · ".join(str(p) for p in partes) + f" · {n} trecho{'s' if n > 1 else ''}",
+            })
+        output.sort(key=lambda d: (str(d["titulo"]).lower(), d["id"]))
+        return output
 
     async def delete_document(self, tenant_id: int, doc_id: str) -> bool:
-        """Deletes a document from ChromaDB vector store"""
+        """Apaga o documento inteiro (todos os chunks dele) do ChromaDB. A lista agora é por documento
+        (id = parent_doc_id); um id de chunk antigo ("t1_xxx") continua funcionando."""
+        import asyncio
         try:
             self._ensure_client()
-            full_id = doc_id if doc_id.startswith(f"t{tenant_id}_") else f"t{tenant_id}_{doc_id}"
-            self.collection.delete(ids=[full_id])
+            prefixo = f"t{tenant_id}_"
+            pdoc_id = doc_id[len(prefixo):] if doc_id.startswith(prefixo) else doc_id
+
+            def _apagar():
+                self._chroma_call(self.collection.delete, ids=[f"{prefixo}{pdoc_id}"])
+                self._chroma_call(self.collection.delete, where={"parent_doc_id": pdoc_id})
+            await asyncio.to_thread(_apagar)
+            if tenant_id in self._doc_index_cache:  # some da lista na hora, sem esperar o aquecedor
+                self._doc_index_cache[tenant_id] = [m for m in self._doc_index_cache[tenant_id]
+                                                    if str(m.get("parent_doc_id") or "") != pdoc_id]
             return True
         except Exception as e:
             logger.error(f"Error deleting RAG document {doc_id}: {e}")
