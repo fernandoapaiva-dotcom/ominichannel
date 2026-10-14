@@ -208,6 +208,18 @@ def _build_catalog_sync(tenant_id: int) -> List[dict]:
 async def rebuild_catalog(tenant_id: int = 1) -> int:
     t0 = datetime.utcnow()
     rows = await asyncio.to_thread(_build_catalog_sync, tenant_id)
+    # Peças lidas por IMAGEM das vistas explodidas (parts_vision_service) não estão no texto do RAG:
+    # junta de volta, senão a reconstrução da madrugada apagaria tudo o que foi lido (13/10/2026).
+    # Documento que já tem tabela lida do texto fica com a do texto.
+    try:
+        from app.services.parts_vision_service import VisaoPeca
+        com_texto = {r["parent_doc_id"] for r in rows}
+        async with AsyncSessionLocal() as db:
+            visao = (await db.execute(select(VisaoPeca).where(VisaoPeca.tenant_id == tenant_id))).scalars().all()
+        cols = ("tenant_id", "parent_doc_id", "titulo", "filename", "marca", "source_path", "item", "codigo", "part_number", "descricao", "descricao_norm")
+        rows += [{c: getattr(v, c) for c in cols} for v in visao if v.parent_doc_id not in com_texto]
+    except Exception as e:
+        logger.warning(f"[BIBLIOTECARIO] Peças das vistas explodidas não entraram na reconstrução: {e}")
     async with AsyncSessionLocal() as db:
         await db.execute(delete(PartsCatalogItem).where(PartsCatalogItem.tenant_id == tenant_id))
         for i in range(0, len(rows), 1000):
