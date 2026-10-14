@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
 import io
+import re
 import uuid
 
 from app.core.database import get_db
@@ -34,7 +35,35 @@ class RAGTestFlowResponse(BaseModel):
     tokens: Dict[str, int]
     mensagem: str
 
+def extract_legacy_doc_text(content_bytes: bytes) -> str:
+    """Texto de um .doc (Word 97-2003) sem depender de antiword/LibreOffice (a VM não tem nenhum dos
+    dois) - achado em 13/10/2026: o python-docx só lê .docx, o .doc saía vazio, ia pro OCR do Gemini
+    (que não aceita application/msword) e a chamada ficava pendurada, travando o vigia do RAG a noite
+    toda. O Word antigo guarda o texto corrido dentro do arquivo em UTF-16LE ou em 8 bits (cp1252):
+    pega os trechos legíveis longos das duas formas e fica com a que rendeu mais texto de verdade."""
+    def runs(texto: str) -> list:
+        achados = re.findall(r"[\w\s.,;:()/%°ºª\-+=<>'\"!?@#&*\[\]]{25,}", texto)
+        return [r.strip() for r in achados if sum(ch.isalpha() for ch in r) >= 15 and len(r.split()) >= 4]
+
+    candidatos = []
+    for codec in ("utf-16le", "cp1252"):
+        try:
+            texto = content_bytes.decode(codec, errors="ignore")
+        except Exception:
+            continue
+        texto = texto.replace("\r", "\n").replace("\x07", "\t")
+        partes = runs(texto)
+        candidatos.append(("\n".join(partes), sum(len(p) for p in partes)))
+    if not candidatos:
+        return ""
+    melhor = max(candidatos, key=lambda c: c[1])[0]
+    return re.sub(r"\n{3,}", "\n\n", melhor).strip()
+
+
 def extract_text_from_bytes(filename: str, content_bytes: bytes) -> str:
+    # Leitura que falha devolve "" (até 13/10/2026 devolvia o arquivo BINÁRIO decodificado como texto:
+    # um .doc de 10 MB virava milhares de trechos de lixo no RAG e travava o vigia de treinamento).
+    # Vazio, o arquivo segue pro OCR (PDF) ou é registrado como "sem texto".
     ext = filename.lower().split('.')[-1]
     if ext in ['txt', 'md', 'json', 'csv', 'log']:
         return content_bytes.decode('utf-8', errors='ignore')
@@ -51,14 +80,16 @@ def extract_text_from_bytes(filename: str, content_bytes: bytes) -> str:
                 text_pages = [page.extract_text() or "" for page in reader.pages]
                 return "\n".join(text_pages).strip()
             except Exception:
-                return content_bytes.decode('utf-8', errors='ignore')
-    elif ext in ['docx', 'doc']:
+                return ""
+    elif ext == 'doc':
+        return extract_legacy_doc_text(content_bytes)
+    elif ext == 'docx':
         try:
             import docx
             doc = docx.Document(io.BytesIO(content_bytes))
             return "\n".join([p.text for p in doc.paragraphs if p.text]).strip()
         except Exception:
-            return content_bytes.decode('utf-8', errors='ignore')
+            return ""
     return content_bytes.decode('utf-8', errors='ignore')
 
 @router.get("/documents")

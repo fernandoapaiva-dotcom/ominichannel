@@ -76,6 +76,10 @@ async def ocr_with_gemini(content_bytes: bytes, fname: str) -> str:
     from app.core.config import settings
 
     ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
+    # Só PDF: o Gemini não aceita .doc/.docx (application/msword) - mandar travava a chamada
+    # (13/10/2026). Word sai da extração de texto normal (extract_legacy_doc_text / python-docx).
+    if ext != "pdf":
+        return ""
     mime = "application/pdf" if ext == "pdf" else (
         "application/msword" if ext == "doc" else
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" if ext == "docx" else
@@ -84,11 +88,11 @@ async def ocr_with_gemini(content_bytes: bytes, fname: str) -> str:
     client = genai.Client(api_key=settings.GEMINI_API_KEY)
     for model_name in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
         try:
-            response = await asyncio.to_thread(
+            response = await asyncio.wait_for(asyncio.to_thread(
                 client.models.generate_content,
                 model=model_name,
                 contents=[OCR_PROMPT, genai.types.Part.from_bytes(data=content_bytes, mime_type=mime)],
-            )
+            ), timeout=600)  # nunca mais pendurado sem limite
             text = (response.text or "").strip() if response else ""
             if text and "[SEM_CONTEUDO]" not in text:
                 return text
