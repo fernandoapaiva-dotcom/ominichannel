@@ -296,6 +296,16 @@ def _query_signal(tenant_id: int, text: str) -> Tuple[set, set]:
     return words, nums
 
 
+def _model_numbers_in_name(name: str) -> set:
+    """Números de modelo num nome de arquivo: os de MODEL_NUMBER_IN_NAME (LHN_242i, LHN220i, 65-85) e
+    também número SOLTO com sufixo de 2-3 letras (TDG 400ED, TDS 1500ED, Trafire 105HD) - achado na
+    medição de 13/10/2026; código de componente colado em letras dos dois lados (TOP242FN) continua fora."""
+    from app.services.rag_service import MODEL_NUMBER_IN_NAME
+    out = set(re.findall(MODEL_NUMBER_IN_NAME, name))
+    out.update(re.findall(r"(?<![A-Za-z0-9])(\d{2,5})[A-Za-z]{2,3}(?![A-Za-z0-9])", name))
+    return out
+
+
 def _rank_docs(tenant_id: int, text: str) -> list:
     """Documentos cujo NOME bate com o equipamento do texto, no formato (pontos, estreito, trechos,
     meta), do melhor pro pior. Precisa bater pelo menos uma PALAVRA de equipamento quando o texto cita
@@ -309,7 +319,7 @@ def _rank_docs(tenant_id: int, text: str) -> list:
     for m in _doc_index(tenant_id):
         name = _doc_name(m)
         name_words = set(re.findall(r"[a-z]+", name))
-        name_nums = set(re.findall(MODEL_NUMBER_IN_NAME, (m.get("filename") or "") + " " + (m.get("titulo") or "")))
+        name_nums = _model_numbers_in_name((m.get("filename") or "") + " " + (m.get("titulo") or ""))
         wm = len(words & name_words)
         nm = len(nums & name_nums)
         if words and not wm:
