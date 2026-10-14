@@ -100,6 +100,8 @@ def _limpa_linhas(dados) -> List[dict]:
 async def extrair_pecas(pdf_bytes: bytes, titulo: str, api_key: str) -> Tuple[str, List[dict], str]:
     """(status, peças, detalhe). Status: 'ok' | 'sem_tabela' | 'erro' | 'grande'."""
     from google import genai
+    from app.services.ia_consumo_service import instalar
+    instalar()  # tokens/custo vão para o painel Admin > Consumo de IA
     if len(pdf_bytes) > MAX_BYTES:
         return "grande", [], f"{len(pdf_bytes) // (1024 * 1024)} MB"
     client = genai.Client(api_key=api_key)

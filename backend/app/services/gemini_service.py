@@ -6,6 +6,9 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from google import genai
 from app.core.config import settings
+from app.services.ia_consumo_service import instalar as _instalar_observador_ia
+
+_instalar_observador_ia()  # grava tokens/custo de toda chamada ao Gemini (Admin > Consumo de IA)
 
 logger = logging.getLogger("gemini_service")
 

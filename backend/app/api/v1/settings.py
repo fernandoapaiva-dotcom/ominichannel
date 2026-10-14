@@ -452,3 +452,7 @@ async def chat_with_automation_copilot(
     )
 
 
+# Painel Admin > Consumo de IA (observador de tokens) - rotas em ia_consumo.py, servidas em /settings/ia-consumo/...
+from app.api.v1.ia_consumo import router as _ia_consumo_router  # noqa: E402
+
+router.include_router(_ia_consumo_router)

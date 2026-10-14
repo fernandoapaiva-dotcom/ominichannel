@@ -74,6 +74,8 @@ async def ocr_with_gemini(content_bytes: bytes, fname: str) -> str:
     transcrição/descrição técnica completa. Ver OCR_PROMPT acima."""
     from google import genai
     from app.core.config import settings
+    from app.services.ia_consumo_service import instalar
+    instalar()  # tokens/custo vão para o painel Admin > Consumo de IA
 
     ext = fname.lower().rsplit(".", 1)[-1] if "." in fname else ""
     # Só PDF: o Gemini não aceita .doc/.docx (application/msword) - mandar travava a chamada

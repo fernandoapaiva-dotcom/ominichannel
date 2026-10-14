@@ -4,6 +4,7 @@ import { WhatsAppNumber, User, WhatsAppGroup, AuthorizedTechnician } from '../ty
 import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
 import { AutomationsSettings } from './AutomationsSettings';
+import { IAConsumoPanel } from './IAConsumoPanel';
 import { RagTrainingAssistantModal } from './RagTrainingAssistantModal';
 
 interface AdminPanelProps {
@@ -13,11 +14,11 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onRefreshNumbers, onBack }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations'>(() => {
+  const [activeSubTab, setActiveSubTab] = useState<'numbers' | 'users' | 'rag' | 'technicians' | 'integrations' | 'groups' | 'pix' | 'automations' | 'consumo_ia'>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const st = params.get('subtab');
-      if (st && ['numbers', 'users', 'rag', 'technicians', 'integrations', 'groups', 'pix', 'automations'].includes(st)) {
+      if (st && ['numbers', 'users', 'rag', 'technicians', 'integrations', 'groups', 'pix', 'automations', 'consumo_ia'].includes(st)) {
         return st as any;
       }
     } catch {}
@@ -1086,6 +1087,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
             className={`admin-subtab-btn ${activeSubTab === 'automations' ? 'btn-primary' : 'btn-secondary'}`}
           >
             <Zap size={16} /> Automações & Gatilhos (OS)
+          </button>
+          <button
+            onClick={() => setActiveSubTab('consumo_ia')}
+            className={`admin-subtab-btn ${activeSubTab === 'consumo_ia' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            <Cpu size={16} /> Consumo de IA
           </button>
           <button
             onClick={() => { setActiveSubTab('technicians'); loadTechnicians(); }}
@@ -3216,6 +3223,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
         {/* 8. Automations & Smart OS Handlers Tab */}
         {activeSubTab === 'automations' && (
           <AutomationsSettings />
+        )}
+
+        {/* Consumo de IA (observador de tokens) */}
+        {activeSubTab === 'consumo_ia' && (
+          <IAConsumoPanel />
         )}
 
         {/* 9. AI RAG Training Assistant Modal */}
