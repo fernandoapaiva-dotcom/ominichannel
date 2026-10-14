@@ -73,6 +73,7 @@ ROTULOS = {
     "test_integration_connection": ("Teste da chave da IA", "Admin e testes"),
     "chat_with_rag_trainer": ("Assistente de treino do RAG", "Treino e catálogo"),
     "extrair_pecas": ("Catálogo: vistas explodidas", "Treino e catálogo"),
+    "ler_vista": ("Catálogo: vistas explodidas", "Treino e catálogo"),
     "ocr_with_gemini": ("OCR de PDF escaneado", "Treino e catálogo"),
 }
 GRUPOS_TREINO = {"Treino e catálogo"}  # gasto único (o resto é recorrente, do dia a dia)
