@@ -319,7 +319,7 @@ class GeminiService:
             }
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -401,8 +401,8 @@ class GeminiService:
             return f"Olá {clean_name}! Como posso te ajudar hoje?"
 
         models_to_try = [primary_model]
-        if "gemini-2.5-flash" not in models_to_try:
-            models_to_try.append("gemini-2.5-flash")
+        if "gemini-3.6-flash" not in models_to_try:  # reserva (o gemini-2.5-flash foi descontinuado em out/2026)
+            models_to_try.append("gemini-3.6-flash")
 
         for m_name in models_to_try:
             try:
@@ -779,7 +779,7 @@ class GeminiService:
         )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -869,7 +869,7 @@ class GeminiService:
             )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -951,7 +951,7 @@ class GeminiService:
         )
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -1524,7 +1524,7 @@ class GeminiService:
             }
 
         models_to_try = [primary_model]
-        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"]:
+        for candidate in ["gemini-3.1-flash-lite", "gemini-3.6-flash"]:
             if candidate not in models_to_try:
                 models_to_try.append(candidate)
 
@@ -1616,8 +1616,8 @@ class GeminiService:
             )
 
         models_to_try = [primary_model]
-        if "gemini-2.5-flash" not in models_to_try:
-            models_to_try.append("gemini-2.5-flash")
+        if "gemini-3.6-flash" not in models_to_try:  # reserva (o gemini-2.5-flash foi descontinuado em out/2026)
+            models_to_try.append("gemini-3.6-flash")
 
         for m_name in models_to_try:
             try:
@@ -1788,7 +1788,7 @@ class GeminiService:
                 media_part = genai.types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
 
             models_to_try = [tenant_gemini_model_name or "gemini-3.6-flash"]
-            for candidate in ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-3.1-flash-lite"]:
+            for candidate in ["gemini-3.6-flash", "gemini-3.1-flash-lite"]:
                 if candidate not in models_to_try:
                     models_to_try.append(candidate)
             for m_name in models_to_try:

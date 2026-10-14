@@ -5,6 +5,7 @@ import { apiFetch } from '../services/api';
 import { AvatarCropModal } from './AvatarCropModal';
 import { AutomationsSettings } from './AutomationsSettings';
 import { IAConsumoPanel } from './IAConsumoPanel';
+import { BackupSistemaStatus } from './BackupSistemaStatus';
 import { RagTrainingAssistantModal } from './RagTrainingAssistantModal';
 
 interface AdminPanelProps {
@@ -2578,6 +2579,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ initialNumbers = [], onR
                           </button>
                         </div>
                       </div>
+
+                      {/* Backup do RAG e do sistema (código + .env) */}
+                      <BackupSistemaStatus conectado={maskedSettings?.google_drive_connected} />
                     </div>
                   </div>
                 </div>

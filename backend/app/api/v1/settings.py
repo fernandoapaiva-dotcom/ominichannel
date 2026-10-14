@@ -456,3 +456,8 @@ async def chat_with_automation_copilot(
 from app.api.v1.ia_consumo import router as _ia_consumo_router  # noqa: E402
 
 router.include_router(_ia_consumo_router)
+
+# Backup do RAG e do sistema no Google Drive - rotas em backup_sistema.py, servidas em /settings/backup-sistema/...
+from app.api.v1.backup_sistema import router as _backup_sistema_router  # noqa: E402
+
+router.include_router(_backup_sistema_router)

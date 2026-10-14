@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, AlertTriangle, BarChart3, Cpu, DollarSign, Plus, RefreshCw, Save, Trash2, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Cpu, DollarSign, History, Plus, RefreshCw, Save, Trash2, TrendingUp, Wallet } from 'lucide-react';
 import { apiFetch } from '../services/api';
 
 // Painel Admin > Consumo de IA - lê o que o observador de tokens do backend grava (ia_consumo_service.py).
@@ -15,10 +15,12 @@ interface Resumo {
   mes: Totais;
   mes_recorrente: Totais;
   mes_treino: Totais;
+  mes_historico_brl: number;
+  saldo: { informado_brl: number; informado_em: string; gasto_desde_brl: number; estimado_brl: number; dias_no_ritmo_atual: number | null; dias_no_dia_a_dia: number | null } | null;
   media_recorrente_dia_brl: number;
   projecao_mes_brl: number;
   projecao_recorrente_mes_brl: number;
-  por_dia: { dia: string; recorrente: Totais; treino: Totais }[];
+  por_dia: { dia: string; recorrente: Totais; treino: Totais; historico_brl: number }[];
   por_funcao: Funcao[];
   por_modelo: (Totais & { modelo: string })[];
   ultimos_erros: { quando: string; funcao: string; modelo: string; erro: string }[];
@@ -27,6 +29,7 @@ interface Precos { cotacao_dolar: number; orcamento_mensal_brl: number; modelos:
 
 const COR_REC = 'var(--accent-primary)';
 const COR_TREINO = '#f5a524';
+const COR_HIST = '#7c8799';
 
 const brl = (v: number) => {
   const casas = v !== 0 && Math.abs(v) < 1 ? 3 : 2;
@@ -65,6 +68,39 @@ export const IAConsumoPanel: React.FC = () => {
   const [recalcular, setRecalcular] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [msgPrecos, setMsgPrecos] = useState<string | null>(null);
+  const [editSaldo, setEditSaldo] = useState(false);
+  const [saldoInput, setSaldoInput] = useState('');
+  const [historico, setHistorico] = useState<{ dia: string; custo_brl: number; fonte: string }[] | null>(null);
+  const [mostrarHist, setMostrarHist] = useState(false);
+  const [novoDia, setNovoDia] = useState('');
+  const [novoValor, setNovoValor] = useState('');
+
+  const salvarSaldo = async () => {
+    const t = saldoInput.trim().replace(/^R\$\s*/i, '');
+    const v = Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t);  // "1.482,74" ou "148.09"
+    if (!saldoInput.trim() || isNaN(v)) return;
+    try {
+      await apiFetch('/settings/ia-consumo/saldo', { method: 'POST', body: JSON.stringify({ valor_brl: v }) });
+      setEditSaldo(false);
+      setSaldoInput('');
+      carregar();
+    } catch (e: any) { setErro(e.message); }
+  };
+  const carregarHist = async () => { try { setHistorico(await apiFetch('/settings/ia-consumo/historico')); } catch { /* sem histórico */ } };
+  const salvarHist = async (dia: string, valor: string) => {
+    const v = Number(valor.replace(',', '.'));
+    if (!dia || !valor.trim() || isNaN(v)) return;
+    await apiFetch('/settings/ia-consumo/historico', { method: 'POST', body: JSON.stringify({ dia, custo_brl: v }) });
+    setNovoDia('');
+    setNovoValor('');
+    carregarHist();
+    carregar();
+  };
+  const apagarHist = async (dia: string) => {
+    await apiFetch(`/settings/ia-consumo/historico/${dia}`, { method: 'DELETE' });
+    carregarHist();
+    carregar();
+  };
 
   const carregar = async (d = dias) => {
     setCarregando(true);
@@ -124,7 +160,8 @@ export const IAConsumoPanel: React.FC = () => {
     );
   }
 
-  const maxDia = Math.max(0.0001, ...dados.por_dia.map(d => d.recorrente.custo_brl + d.treino.custo_brl));
+  const maxDia = Math.max(0.0001, ...dados.por_dia.map(d => d.recorrente.custo_brl + d.treino.custo_brl + (d.historico_brl || 0)));
+  const sd = dados.saldo;
   const totalFuncoes = dados.por_funcao.reduce((s, f) => s + f.custo_brl, 0) || 1;
   const orc = dados.orcamento_mensal_brl;
   const pctOrc = orc > 0 ? Math.min(100, (dados.mes.custo_brl / orc) * 100) : 0;
@@ -157,12 +194,39 @@ export const IAConsumoPanel: React.FC = () => {
 
       {/* Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px' }}>
+        <div style={{ ...card, borderColor: sd && sd.estimado_brl < 20 ? '#ef4444' : 'var(--border-color)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 600 }}>
+            <Wallet size={14} />Saldo no AI Studio (estimado agora)
+          </div>
+          {sd ? (
+            <>
+              <div style={{ fontSize: '24px', fontWeight: 700, color: sd.estimado_brl < 20 ? '#ef4444' : 'var(--text-main)', margin: '6px 0 4px' }}>{brl(sd.estimado_brl)}</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                informado {brl(sd.informado_brl)} em {dataBR(sd.informado_em)} − gasto desde então {brl(sd.gasto_desde_brl)}
+                {sd.dias_no_ritmo_atual != null && <><br />dura ~{Math.floor(sd.dias_no_ritmo_atual)} dia(s) no ritmo dos últimos 7 dias</>}
+                {sd.dias_no_dia_a_dia != null && <><br />~{Math.floor(sd.dias_no_dia_a_dia)} dia(s) só no uso do dia a dia</>}
+              </div>
+            </>
+          ) : <div style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '8px 0' }}>Informe o saldo do AI Studio</div>}
+          {editSaldo ? (
+            <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+              <input style={input} autoFocus placeholder="ex.: 148,09" value={saldoInput} onChange={e => setSaldoInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') salvarSaldo(); }} />
+              <button type="button" className="btn-primary" onClick={salvarSaldo} style={{ padding: '4px 10px', fontSize: '12px' }}>OK</button>
+            </div>
+          ) : (
+            <button type="button" className="btn-secondary" onClick={() => setEditSaldo(true)} style={{ marginTop: '8px', padding: '4px 10px', fontSize: '11px' }}>
+              Atualizar com o saldo do AI Studio
+            </button>
+          )}
+        </div>
         <Card titulo="Hoje" icone={<Activity size={14} />} valor={brl(dados.hoje.custo_brl)}
           sub={<>{tokens(totalTok(dados.hoje))} tokens · {dados.hoje.chamadas} chamada(s){dados.hoje.erros > 0 && <span style={{ color: '#ef4444' }}> · {dados.hoje.erros} erro(s)</span>}</>} />
         <Card titulo="Mês até agora" icone={<DollarSign size={14} />} valor={brl(dados.mes.custo_brl)}
           sub={<>
             <span style={{ color: COR_REC }}>■</span> Uso do dia a dia {brl(dados.mes_recorrente.custo_brl)}<br />
             <span style={{ color: COR_TREINO }}>■</span> Treino (gasto único) {brl(dados.mes_treino.custo_brl)}
+            {dados.mes_historico_brl > 0 && <><br /><span style={{ color: COR_HIST }}>■</span> Antes do observador (AI Studio) {brl(dados.mes_historico_brl)}</>}
           </>} />
         <Card titulo="Projeção do mês" icone={<TrendingUp size={14} />} valor={brl(dados.projecao_mes_brl)}
           sub={orc > 0 ? (
@@ -182,18 +246,19 @@ export const IAConsumoPanel: React.FC = () => {
         <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
           <strong style={{ fontSize: '14px', color: 'var(--text-main)' }}>Gasto por dia</strong>
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            <span style={{ color: COR_REC }}>■</span> dia a dia &nbsp; <span style={{ color: COR_TREINO }}>■</span> treino
+            <span style={{ color: COR_REC }}>■</span> dia a dia &nbsp; <span style={{ color: COR_TREINO }}>■</span> treino &nbsp; <span style={{ color: COR_HIST }}>■</span> AI Studio (antes do observador)
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: dados.por_dia.length > 40 ? '1px' : '3px', height: '140px' }}>
           {dados.por_dia.map(d => {
-            const rec = d.recorrente.custo_brl, tr = d.treino.custo_brl;
+            const rec = d.recorrente.custo_brl, tr = d.treino.custo_brl, hi = d.historico_brl || 0;
             const dia = d.dia.slice(8, 10) + '/' + d.dia.slice(5, 7);
             return (
-              <div key={d.dia} title={`${dia}: ${brl(rec + tr)} (dia a dia ${brl(rec)} · treino ${brl(tr)}) · ${tokens(totalTok(d.recorrente) + totalTok(d.treino))} tokens`}
+              <div key={d.dia} title={hi > 0 ? `${dia}: ${brl(hi + rec + tr)} (AI Studio, antes do observador${rec + tr > 0 ? ` + observado ${brl(rec + tr)}` : ''})` : `${dia}: ${brl(rec + tr)} (dia a dia ${brl(rec)} · treino ${brl(tr)}) · ${tokens(totalTok(d.recorrente) + totalTok(d.treino))} tokens`}
                 style={{ flex: '1 1 0', minWidth: '2px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}>
-                <div style={{ height: `${(tr / maxDia) * 100}%`, backgroundColor: COR_TREINO, borderRadius: '2px 2px 0 0' }} />
-                <div style={{ height: `${(rec / maxDia) * 100}%`, backgroundColor: COR_REC, borderRadius: tr > 0 ? 0 : '2px 2px 0 0', minHeight: rec > 0 ? '2px' : 0 }} />
+                <div style={{ height: `${(hi / maxDia) * 100}%`, backgroundColor: COR_HIST, borderRadius: '2px 2px 0 0' }} />
+                <div style={{ height: `${(tr / maxDia) * 100}%`, backgroundColor: COR_TREINO, borderRadius: hi > 0 ? 0 : '2px 2px 0 0' }} />
+                <div style={{ height: `${(rec / maxDia) * 100}%`, backgroundColor: COR_REC, borderRadius: tr + hi > 0 ? 0 : '2px 2px 0 0', minHeight: rec > 0 ? '2px' : 0 }} />
               </div>
             );
           })}
@@ -291,6 +356,41 @@ export const IAConsumoPanel: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Histórico do AI Studio (antes do observador) */}
+      <div style={card}>
+        <button type="button" className="btn-secondary" style={{ fontSize: '13px' }}
+          onClick={() => { setMostrarHist(v => !v); if (!historico) carregarHist(); }}>
+          <History size={14} /> {mostrarHist ? 'Fechar histórico do AI Studio' : 'Histórico do AI Studio (antes do observador)'}
+        </button>
+        {mostrarHist && (
+          <div style={{ marginTop: '12px', overflowX: 'auto' }}>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 8px' }}>
+              Gasto por dia antes de 14/10, quando o sistema ainda não media o consumo. Os valores iniciais foram lidos do gráfico de
+              faturamento do AI Studio (aproximados, total de R$ 27,29). Corrija ou lance outros dias aqui. Esses dias não têm divisão por função.
+            </p>
+            <table style={{ width: '100%', borderCollapse: 'collapse', maxWidth: '560px' }}>
+              <thead><tr><th style={th}>Dia</th><th style={th}>Custo (R$)</th><th style={th}>Fonte</th><th style={th}></th></tr></thead>
+              <tbody>
+                {(historico || []).map(h => (
+                  <tr key={h.dia}>
+                    <td style={td}>{h.dia.split('-').reverse().join('/')}</td>
+                    <td style={td}><input style={{ ...input, width: '90px' }} defaultValue={String(h.custo_brl).replace('.', ',')}
+                      onBlur={e => { if (Number(e.target.value.replace(',', '.')) !== h.custo_brl) salvarHist(h.dia, e.target.value); }} /></td>
+                    <td style={{ ...td, color: 'var(--text-muted)', fontSize: '11px' }}>{h.fonte}</td>
+                    <td style={td}><button type="button" className="btn-secondary" onClick={() => apagarHist(h.dia)} style={{ padding: '4px 8px' }}><Trash2 size={13} /></button></td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={td}><input style={input} type="date" value={novoDia} onChange={e => setNovoDia(e.target.value)} /></td>
+                  <td style={td}><input style={{ ...input, width: '90px' }} placeholder="0,00" value={novoValor} onChange={e => setNovoValor(e.target.value)} /></td>
+                  <td style={td} colSpan={2}><button type="button" className="btn-secondary" onClick={() => salvarHist(novoDia, novoValor)} style={{ fontSize: '12px' }}><Plus size={13} /> Lançar dia</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Tabela de preços */}

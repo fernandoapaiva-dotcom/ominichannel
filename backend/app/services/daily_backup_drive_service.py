@@ -318,6 +318,10 @@ async def start_daily_drive_backup_loop(interval_hours: int = 24):
     mais usado - o horario agora e sempre o fixo.
     """
     logger.info(f"Google Drive daily system backup loop started - agendado para {BACKUP_HOUR_LOCAL:02d}:00 (America/Sao_Paulo).")
+    # Backup do RAG (chroma_data) e do sistema (codigo + .env) - sobe a cada atualizacao, ver
+    # sistema_backup_drive_service.py (pedido de 14/10/2026: 'nao ter risco de perder nada')
+    from app.services.sistema_backup_drive_service import start_sistema_backup_loop
+    _tarefa_backup_sistema = asyncio.create_task(start_sistema_backup_loop())  # noqa: F841 (referencia viva enquanto o loop roda)
     while True:
         wait_s = _seconds_until_next_run()
         logger.info(f"[DAILY DRIVE BACKUP] Próxima execução em {wait_s / 3600:.1f}h.")

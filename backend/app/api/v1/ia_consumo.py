@@ -6,6 +6,7 @@ Montado dentro do router de /settings (ver o fim de settings.py).
 """
 import asyncio
 import calendar
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -19,9 +20,40 @@ router = APIRouter(prefix="/ia-consumo")
 
 _DIA_BRT = "date(criado_em, '-3 hours')"
 
+# Gasto ANTES do observador existir (14/10/2026), lido do gráfico "Custo da conta de faturamento" do
+# Google AI Studio (dias no fuso dos EUA; valores das barras aproximados, total = R$ 27,29 informado).
+# Editável no painel (Histórico do AI Studio). Saldo informado pelo usuário: R$ 148,09 após a recarga.
+HISTORICO_INICIAL = {
+    "2026-10-06": 2.35, "2026-10-07": 5.40, "2026-10-08": 2.25, "2026-10-09": 0.80,
+    "2026-10-10": 1.90, "2026-10-11": 0.30, "2026-10-12": 0.15, "2026-10-13": 14.14,
+}
+SALDO_INICIAL = {"valor_brl": 148.09, "em": "2026-10-14T12:00:00"}
+
+
+def _config(con, chave: str):
+    row = con.execute("SELECT valor FROM ia_consumo_config WHERE chave = ?", (chave,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _set_config(con, chave: str, valor) -> None:
+    con.execute("INSERT OR REPLACE INTO ia_consumo_config (chave, valor) VALUES (?, ?)", (chave, json.dumps(valor)))
+
+
+def _conectar_com_historico():
+    con = obs._conectar()
+    con.execute("CREATE TABLE IF NOT EXISTS ia_consumo_historico (dia TEXT PRIMARY KEY, custo_brl REAL NOT NULL, fonte TEXT)")
+    if _config(con, "historico_semeado") is None:  # 1ª vez: já entra com o passado do AI Studio e o saldo
+        con.executemany("INSERT OR IGNORE INTO ia_consumo_historico (dia, custo_brl, fonte) VALUES (?, ?, ?)",
+                        [(d, v, "AI Studio (gráfico, aproximado)") for d, v in HISTORICO_INICIAL.items()])
+        if _config(con, "saldo") is None:
+            _set_config(con, "saldo", SALDO_INICIAL)
+        _set_config(con, "historico_semeado", True)
+        con.commit()
+    return con
+
 
 def _resumo(dias: int) -> dict:
-    con = obs._conectar()
+    con = _conectar_com_historico()
     try:
         precos = obs.ler_precos(con)
         cot = float(precos.get("cotacao_dolar") or obs.PRECOS_PADRAO["cotacao_dolar"])
@@ -43,6 +75,14 @@ def _resumo(dias: int) -> dict:
         erros = con.execute(
             "SELECT criado_em, origem, chamadores, modelo, erro FROM ia_consumo WHERE ok = 0 ORDER BY id DESC LIMIT 15"
         ).fetchall()
+        historico = con.execute("SELECT dia, custo_brl FROM ia_consumo_historico WHERE dia >= ?", (desde,)).fetchall()
+        saldo = _config(con, "saldo")
+        gasto_desde_saldo = 0.0
+        if saldo:
+            gasto_desde_saldo = (con.execute("SELECT SUM(custo_usd) FROM ia_consumo WHERE criado_em >= ?",
+                                             (saldo["em"],)).fetchone()[0] or 0) * cot
+        sete_dias = (datetime.utcnow() - timedelta(days=7)).isoformat(timespec="seconds")
+        gasto_7d = (con.execute("SELECT SUM(custo_usd) FROM ia_consumo WHERE criado_em >= ?", (sete_dias,)).fetchone()[0] or 0) * cot
     finally:
         con.close()
 
@@ -59,7 +99,14 @@ def _resumo(dias: int) -> dict:
 
     tot_hoje, tot_mes = vazio(), vazio()
     mes_rec, mes_treino = vazio(), vazio()
-    por_dia = {(agora - timedelta(days=i)).strftime("%Y-%m-%d"): {"recorrente": vazio(), "treino": vazio()} for i in range(dias)}
+    por_dia = {(agora - timedelta(days=i)).strftime("%Y-%m-%d"): {"recorrente": vazio(), "treino": vazio(), "historico_brl": 0.0}
+               for i in range(dias)}
+    mes_historico = 0.0
+    for dia, custo in historico:  # gasto de antes do observador (AI Studio): só o total do dia
+        if dia >= ini_mes:
+            mes_historico += custo
+        if dia in por_dia:
+            por_dia[dia]["historico_brl"] += custo
     por_funcao, por_modelo = defaultdict(vazio), defaultdict(vazio)
     for dia, origem, chamadores, modelo, ch, er, te, ts, tp, usd in linhas:
         valores = (ch, er, te, ts, tp, usd)
@@ -84,7 +131,23 @@ def _resumo(dias: int) -> dict:
         if inicio_obs.strftime("%Y-%m") == agora.strftime("%Y-%m"):
             dias_passados = (agora.date() - inicio_obs).days + 1
     media_rec_dia = mes_rec["custo_brl"] / max(1, dias_passados)
-    projecao = mes_treino["custo_brl"] + mes_rec["custo_brl"] + media_rec_dia * (dias_mes - agora.day)
+    projecao = mes_historico + mes_treino["custo_brl"] + mes_rec["custo_brl"] + media_rec_dia * (dias_mes - agora.day)
+
+    # Saldo: o Google não tem API do saldo pré-pago - o usuário informa o saldo do AI Studio e o painel
+    # desconta, em tempo real, o que o observador viu gastar desde então
+    saldo_info = None
+    if saldo:
+        estimado = float(saldo["valor_brl"]) - gasto_desde_saldo
+        dias_obs = 7
+        if primeiro:
+            dias_obs = max(1, min(7, (datetime.utcnow() - datetime.fromisoformat(primeiro)).total_seconds() / 86400))
+        media_total_dia = gasto_7d / dias_obs
+        saldo_info = {
+            "informado_brl": float(saldo["valor_brl"]), "informado_em": saldo["em"], "gasto_desde_brl": gasto_desde_saldo,
+            "estimado_brl": estimado,
+            "dias_no_ritmo_atual": (estimado / media_total_dia) if media_total_dia > 0.01 else None,
+            "dias_no_dia_a_dia": (estimado / media_rec_dia) if media_rec_dia > 0.01 else None,
+        }
 
     funcoes = []
     for (nome, grupo), v in por_funcao.items():
@@ -100,7 +163,9 @@ def _resumo(dias: int) -> dict:
         "observando_desde": primeiro,
         "dias": dias,
         "hoje": tot_hoje,
-        "mes": tot_mes,
+        "mes": dict(tot_mes, custo_brl=tot_mes["custo_brl"] + mes_historico),
+        "mes_historico_brl": mes_historico,
+        "saldo": saldo_info,
         "mes_recorrente": mes_rec,
         "mes_treino": mes_treino,
         "media_recorrente_dia_brl": media_rec_dia,
@@ -146,3 +211,68 @@ async def salvar_precos(payload: dict, recalcular: bool = Query(False), admin_us
     if recalcular:  # "aplicar também ao que já foi gasto"
         await asyncio.to_thread(obs.recalcular_historico, valor)
     return valor
+
+
+@router.post("/saldo")
+async def informar_saldo(payload: dict, admin_user: User = Depends(get_admin_user)):
+    """Saldo atual mostrado no Google AI Studio (Faturamento) - a partir dele o painel desconta o gasto em tempo real."""
+    try:
+        valor = float(payload.get("valor_brl"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Informe o saldo em R$")
+
+    def _salvar():
+        con = _conectar_com_historico()
+        try:
+            _set_config(con, "saldo", {"valor_brl": valor, "em": datetime.utcnow().isoformat(timespec="seconds")})
+            con.commit()
+        finally:
+            con.close()
+    await asyncio.to_thread(_salvar)
+    return {"ok": True}
+
+
+@router.get("/historico")
+async def listar_historico(admin_user: User = Depends(get_admin_user)):
+    def _ler():
+        con = _conectar_com_historico()
+        try:
+            return [{"dia": d, "custo_brl": c, "fonte": f} for d, c, f in
+                    con.execute("SELECT dia, custo_brl, fonte FROM ia_consumo_historico ORDER BY dia").fetchall()]
+        finally:
+            con.close()
+    return await asyncio.to_thread(_ler)
+
+
+@router.post("/historico")
+async def salvar_historico(payload: dict, admin_user: User = Depends(get_admin_user)):
+    """Lança/corrige o gasto de um dia anterior ao observador (valor do AI Studio)."""
+    try:
+        dia = datetime.strptime(str(payload.get("dia")), "%Y-%m-%d").strftime("%Y-%m-%d")
+        custo = float(payload.get("custo_brl"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Informe o dia (AAAA-MM-DD) e o valor em R$")
+
+    def _salvar():
+        con = _conectar_com_historico()
+        try:
+            con.execute("INSERT OR REPLACE INTO ia_consumo_historico (dia, custo_brl, fonte) VALUES (?, ?, 'AI Studio (lançado no painel)')",
+                        (dia, custo))
+            con.commit()
+        finally:
+            con.close()
+    await asyncio.to_thread(_salvar)
+    return {"ok": True}
+
+
+@router.delete("/historico/{dia}")
+async def apagar_historico(dia: str, admin_user: User = Depends(get_admin_user)):
+    def _apagar():
+        con = _conectar_com_historico()
+        try:
+            con.execute("DELETE FROM ia_consumo_historico WHERE dia = ?", (dia,))
+            con.commit()
+        finally:
+            con.close()
+    await asyncio.to_thread(_apagar)
+    return {"ok": True}
