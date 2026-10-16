@@ -369,7 +369,14 @@ class ComprasCustoService:
         """
         # Naturezas de operação sem cobrança / remessa (Garantia, Troca, Bonificação, Retorno, etc.)
         nat_op = (doc.get("natureza_operacao") or "").upper()
+        info_ad = (doc.get("informacoes_complementares") or "").upper()
         sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
+        
+        # CFOPs típicos de remessa sem cobrança: 5949, 6949, 5910, 6910 (bonif), 5915, 6915 (conserto), 5916, 6916, 5912, 6912 (demonstracao)
+        cfops_sem_cobranca = {"5949", "6949", "5910", "6910", "5915", "6915", "5916", "6916", "5912", "6912", "5927", "6927"}
+        itens = doc.get("itens") or []
+        cfops_itens = {str(it.get("cfop") or "").strip() for it in itens}
+        eh_cfop_remessa = bool(cfops_itens and cfops_itens.issubset(cfops_sem_cobranca))
         
         # Formas de pagamento no XML: tPag 90 = Sem Pagamento
         formas_pag = doc.get("formas_pagamento") or []
@@ -377,12 +384,14 @@ class ComprasCustoService:
         
         dups = doc.get("duplicatas") or []
 
-        # Se for operação sem cobrança (remessa em garantia, bonificação, conserto...) e não trouxe duplicatas expressas
-        if (any(p in nat_op for p in sem_cobranca_padroes) or tem_sem_pagamento) and not dups:
-            return {"origem": "sem_cobranca", "trecho": f"Operação sem cobrança financeira ({nat_op or 'Sem Pagamento'})", "parcelas": []}
+        # Se for operação sem cobrança (natureza, CFOP 5949/6949, dados adicionais ou tPag 90) e não trouxe duplicatas expressas
+        if (any(p in nat_op for p in sem_cobranca_padroes) or any(p in info_ad for p in sem_cobranca_padroes) or eh_cfop_remessa or tem_sem_pagamento) and not dups:
+            motivo = nat_op or ("CFOP " + ", ".join(cfops_itens)) or "Operação sem cobrança"
+            return {"origem": "sem_cobranca", "trecho": f"Operação sem cobrança financeira ({motivo})", "parcelas": []}
 
         if dups:
             return {"origem": "xml", "trecho": None, "parcelas": [{
+
                 "numero": (d.get("numero") or f"{i + 1:03d}")[-3:].zfill(3),
                 "vencimento": d.get("vencimento"),
                 "valor": round(_f(d.get("valor")), 2),

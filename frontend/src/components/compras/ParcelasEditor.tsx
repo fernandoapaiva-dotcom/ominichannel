@@ -55,36 +55,69 @@ export const ParcelasEditor: React.FC<Props> = ({ titulo, parcelas, valorEsperad
               onClick={() => onChange([...parcelas, { numero: String(parcelas.length + 1).padStart(3, '0'), vencimento: dataBase || '', valor: Math.max(diferenca, 0), origem: 'manual' }])}>
               Parcela
             </Botao>
+            {parcelas.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                style={{
+                  padding: '4px 8px',
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer'
+                }}
+                title="Limpar parcelas (usado para Remessa em Garantia, Bonificação ou Troca sem cobrança)"
+              >
+                Sem Cobrança / Zerar
+              </button>
+            )}
           </div>
         )}
       </div>
+
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr><th style={th}>Nº</th><th style={th}>Vencimento</th><th style={th}>Valor</th><th style={th}>Origem</th>{!somenteLeitura && <th style={th}></th>}</tr>
         </thead>
         <tbody>
-          {parcelas.map((p, i) => (
-            <tr key={i}>
-              <td style={td}>{p.numero}</td>
-              <td style={td}>
-                {somenteLeitura ? p.vencimento : <input type="date" style={input} value={p.vencimento} onChange={(e) => alterar(i, 'vencimento', e.target.value)} />}
+          {parcelas.length === 0 ? (
+            <tr>
+              <td colSpan={5} style={{ ...td, textAlign: 'center', padding: '16px', color: 'var(--text-muted)' }}>
+                Nenhum vencimento gerado (Operação sem cobrança / Remessa). Não gerará contas a pagar.
               </td>
-              <td style={td}>
-                {somenteLeitura ? brl(p.valor) : <input type="number" step="0.01" style={input} value={p.valor} onChange={(e) => alterar(i, 'valor', e.target.value)} />}
-              </td>
-              <td style={{ ...td, fontSize: '11px', color: 'var(--text-muted)' }}>{p.origem === 'xml' ? 'da nota (XML)' : p.origem === 'condicao' ? 'gerada' : 'manual'}</td>
-              {!somenteLeitura && (
-                <td style={td}>
-                  <Botao variante="fantasma" icone={<Trash2 size={13} />} onClick={() => onChange(parcelas.filter((_, j) => j !== i))} />
-                </td>
-              )}
             </tr>
-          ))}
+          ) : (
+            parcelas.map((p, i) => (
+              <tr key={i}>
+                <td style={td}>{p.numero}</td>
+                <td style={td}>
+                  {somenteLeitura ? p.vencimento : <input type="date" style={input} value={p.vencimento} onChange={(e) => alterar(i, 'vencimento', e.target.value)} />}
+                </td>
+                <td style={td}>
+                  {somenteLeitura ? brl(p.valor) : <input type="number" step="0.01" style={input} value={p.valor} onChange={(e) => alterar(i, 'valor', e.target.value)} />}
+                </td>
+                <td style={{ ...td, fontSize: '11px', color: 'var(--text-muted)' }}>{p.origem === 'xml' ? 'da nota (XML)' : p.origem === 'condicao' ? 'gerada' : 'manual'}</td>
+                {!somenteLeitura && (
+                  <td style={td}>
+                    <Botao variante="fantasma" icone={<Trash2 size={13} />} onClick={() => onChange(parcelas.filter((_, j) => j !== i))} />
+                  </td>
+                )}
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
-      <div style={{ fontSize: '12px', marginTop: '6px', color: Math.abs(diferenca) > 0.05 ? '#f87171' : 'var(--text-muted)' }}>
-        Soma {brl(soma)} de {brl(valorEsperado)}{Math.abs(diferenca) > 0.05 && ` — diferença de ${brl(diferenca)}`}
+      <div style={{ fontSize: '12px', marginTop: '6px', color: Math.abs(diferenca) > 0.05 && parcelas.length > 0 ? '#f87171' : 'var(--text-muted)' }}>
+        {parcelas.length === 0 ? (
+          <span style={{ color: '#22c55e', fontWeight: 600 }}>Operação sem cobrança financeira — Contas a pagar: R$ 0,00</span>
+        ) : (
+          <>Soma {brl(soma)} de {brl(valorEsperado)}{Math.abs(diferenca) > 0.05 && ` — diferença de ${brl(diferenca)}`}</>
+        )}
       </div>
+
     </div>
   );
 };
