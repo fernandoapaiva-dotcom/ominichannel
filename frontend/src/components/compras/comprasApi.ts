@@ -184,6 +184,8 @@ export interface Entrada extends EntradaResumo {
   fechada_em?: string;
   softsystem_codcompra?: number | null;
   softsystem_modo?: 'desligado' | 'teste' | 'producao';
+  eh_sem_cobranca?: boolean;
+  natureza_operacao?: string;
 }
 
 export interface SoftsystemProduto {
@@ -240,14 +242,23 @@ export async function api<T = any>(path: string, options: { method?: string; bod
     /* resposta sem corpo */
   }
   if (!res.ok) {
-    const detalhe = json?.detail;
-    if (typeof detalhe === 'string') throw new Error(detalhe);
-    // 502/503/504 sem corpo nosso = a conexão com o servidor caiu no caminho (túnel/internet),
-    // a requisição pode nem ter chegado - visto em 14/10/2026 na contagem (túnel caiu ~3 s)
-    if ([502, 503, 504].includes(res.status)) {
-      throw new Error('A conexão com o servidor caiu por um instante (internet/túnel). Nada foi perdido do que já estava salvo - tente de novo em alguns segundos.');
+    let msg = '';
+    if (json) {
+      if (typeof json.detail === 'string') msg = json.detail;
+      else if (Array.isArray(json.detail)) msg = json.detail.map((d: any) => d.msg || JSON.stringify(d)).join('; ');
+      else if (typeof json.message === 'string') msg = json.message;
+      else if (typeof json.erro === 'string') msg = json.erro;
+      else msg = JSON.stringify(json);
     }
-    throw new Error(`Erro ${res.status}`);
+    if (!msg) {
+      // 502/503/504 sem corpo nosso = a conexão com o servidor caiu no caminho (túnel/internet)
+      if ([502, 503, 504].includes(res.status)) {
+        msg = 'A conexão com o servidor caiu por um instante (internet/túnel). Nada foi perdido do que já estava salvo - tente de novo em alguns segundos.';
+      } else {
+        msg = `Erro ${res.status}`;
+      }
+    }
+    throw new Error(msg);
   }
   return json as T;
 }

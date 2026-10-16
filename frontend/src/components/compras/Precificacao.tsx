@@ -51,8 +51,8 @@ const BarraComposicao: React.FC<{ comp: Record<string, number>; preco: number }>
 
 export const Precificacao: React.FC<Props> = ({ entrada, onAtualizada }) => {
   const [itens, setItens] = useState<ItemNota[]>(entrada.itens);
-  const [parcelas, setParcelas] = useState<Parcela[]>(entrada.parcelas);
-  const [parcelasCte, setParcelasCte] = useState<Parcela[]>(entrada.parcelas_cte);
+  const [parcelas, setParcelas] = useState<Parcela[]>(entrada.eh_sem_cobranca ? [] : (entrada.parcelas || []));
+  const [parcelasCte, setParcelasCte] = useState<Parcela[]>(entrada.parcelas_cte || []);
   const [salvando, setSalvando] = useState(false);
   const [pesquisando, setPesquisando] = useState<number | null>(null);
   const [mensagem, setMensagem] = useState<{ tipo: 'ok' | 'erro' | 'alerta'; texto: string } | null>(null);
@@ -277,8 +277,19 @@ export const Precificacao: React.FC<Props> = ({ entrada, onAtualizada }) => {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '14px' }}>
         <div style={card}>
-          <ParcelasEditor titulo="Vencimentos do fornecedor" parcelas={parcelas} valorEsperado={entrada.valor_total_nota}
-            dataBase={entrada.data_emissao?.slice(0, 10)} onChange={setParcelas} somenteLeitura={somenteLeitura} />
+          {entrada.eh_sem_cobranca ? (
+            <div style={{ padding: '16px', background: 'rgba(34, 197, 94, 0.08)', border: '1px solid rgba(34, 197, 94, 0.25)', borderRadius: 'var(--radius-md)' }}>
+              <div style={{ fontWeight: 700, color: '#22c55e', fontSize: '13px', marginBottom: '6px' }}>
+                ✓ Operação sem cobrança financeira ({entrada.natureza_operacao || 'REMESSA EM GARANTIA'})
+              </div>
+              <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: '1.5' }}>
+                Por se tratar de uma remessa/garantia, <strong>nenhum vencimento ou conta a pagar será gerado</strong> no Softsystem. Esta operação não gera lançamento financeiro.
+              </div>
+            </div>
+          ) : (
+            <ParcelasEditor titulo="Vencimentos do fornecedor" parcelas={parcelas} valorEsperado={entrada.valor_total_nota}
+              dataBase={entrada.data_emissao?.slice(0, 10)} onChange={setParcelas} somenteLeitura={somenteLeitura} />
+          )}
         </div>
         {(entrada.valor_frete_cte || 0) > 0 && (
           <div style={card}>

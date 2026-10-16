@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -463,7 +464,33 @@ def _serializar_item(it: ComprasEntradaItem, ocultar_qtd: bool = False) -> Dict[
     return d
 
 
+SEM_COBRANCA_PADROES = ("GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE")
+CFOPS_SEM_COBRANCA = {
+    "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
+    "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
+    "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
+}
+
+
+def _eh_operacao_sem_cobranca(nota: Dict[str, Any], itens: List[Any], valor_total: float = 0.0) -> bool:
+    nat_op = (nota.get("natureza_operacao") or "").upper()
+    info_ad = (nota.get("informacoes_complementares") or "").upper()
+    cfops_itens = set()
+    for it in itens:
+        cfop = getattr(it, "cfop", None) if not isinstance(it, dict) else it.get("cfop")
+        if cfop:
+            cfops_itens.add(re.sub(r"\D", "", str(cfop)))
+    return (
+        any(p in nat_op for p in SEM_COBRANCA_PADROES)
+        or any(p in info_ad for p in SEM_COBRANCA_PADROES)
+        or bool(cfops_itens and all(c in CFOPS_SEM_COBRANCA for c in cfops_itens))
+        or (valor_total or 0) == 0
+    )
+
+
 def _serializar_entrada(e: ComprasEntrada, com_itens: bool = True, ocultar_qtd: bool = False) -> Dict[str, Any]:
+    nota = json.loads(e.nota_json) if e.nota_json else {}
+    eh_sem_cobranca = _eh_operacao_sem_cobranca(nota, e.itens or [], e.valor_total_nota or 0.0)
     d = {
         "id": e.id,
         "empresa": e.empresa,
@@ -493,9 +520,11 @@ def _serializar_entrada(e: ComprasEntrada, com_itens: bool = True, ocultar_qtd: 
         "fechada_por": e.fechada_por,
         "softsystem_codcompra": e.softsystem_codcompra,
         "softsystem_modo": _modo_lancamento(),
-        "parcelas": json.loads(e.parcelas_json) if e.parcelas_json else [],
+        "parcelas": [] if eh_sem_cobranca else (json.loads(e.parcelas_json) if e.parcelas_json else []),
         "parcelas_cte": json.loads(e.parcelas_cte_json) if e.parcelas_cte_json else [],
         "despesas_extras": json.loads(e.despesas_extras_json) if e.despesas_extras_json else [],
+        "eh_sem_cobranca": eh_sem_cobranca,
+        "natureza_operacao": nota.get("natureza_operacao") or ("Remessa em garantia" if eh_sem_cobranca else ""),
     }
     if com_itens:
         d["itens"] = [_serializar_item(i, ocultar_qtd) for i in sorted(e.itens, key=lambda x: x.numero_item)]
@@ -1536,7 +1565,10 @@ async def salvar_precificacao(
             it.produto_modelo_codigo = str(c.get("produto_modelo_codigo")) if c.get("produto_modelo_codigo") is not None else None
             _aplicar_calculo_no_item(it, c)
 
-        if payload.parcelas is not None:
+        eh_sem_cobranca = _eh_operacao_sem_cobranca(nota, entrada.itens or [], entrada.valor_total_nota or 0.0)
+        if eh_sem_cobranca:
+            entrada.parcelas_json = "[]"
+        elif payload.parcelas is not None:
             entrada.parcelas_json = json.dumps(payload.parcelas, ensure_ascii=False)
         if payload.parcelas_cte is not None:
             entrada.parcelas_cte_json = json.dumps(payload.parcelas_cte, ensure_ascii=False)
@@ -1942,28 +1974,17 @@ async def fechar_entrada(entrada_id: int, db: AsyncSession = Depends(get_db), cu
             if not it.preco_venda_final or it.preco_venda_final <= 0:
                 pendencias.append(f"Item {it.numero_item} sem preço de venda.")
         nota = json.loads(entrada.nota_json or "{}")
-        sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
-        cfops_sem_cobranca = {
-            "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
-            "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
-            "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
-        }
-        nat_op = (nota.get("natureza_operacao") or "").upper()
-        info_ad = (nota.get("informacoes_complementares") or "").upper()
-        cfops_itens = {re.sub(r"\D", "", str(it.cfop or "")) for it in entrada.itens if it.cfop}
-        eh_sem_cobranca = (
-            any(p in nat_op for p in sem_cobranca_padroes)
-            or any(p in info_ad for p in sem_cobranca_padroes)
-            or bool(cfops_itens and all(c in cfops_sem_cobranca for c in cfops_itens))
-            or (entrada.valor_total_nota or 0) == 0
-        )
-
-        parcelas = json.loads(entrada.parcelas_json or "[]")
-        soma = round(sum(float(p.get("valor") or 0) for p in parcelas), 2)
-        if parcelas and abs(soma - (entrada.valor_total_nota or 0)) > 0.05:
-            pendencias.append(f"Parcelas somam R$ {soma:.2f}, mas a nota é de R$ {entrada.valor_total_nota:.2f}.")
-        if not parcelas and not eh_sem_cobranca:
-            pendencias.append("Informe os vencimentos (contas a pagar) do fornecedor.")
+        eh_sem_cobranca = _eh_operacao_sem_cobranca(nota, entrada.itens or [], entrada.valor_total_nota or 0.0)
+        if eh_sem_cobranca:
+            entrada.parcelas_json = "[]"
+            parcelas = []
+        else:
+            parcelas = json.loads(entrada.parcelas_json or "[]")
+            soma = round(sum(float(p.get("valor") or 0) for p in parcelas), 2)
+            if parcelas and abs(soma - (entrada.valor_total_nota or 0)) > 0.05:
+                pendencias.append(f"Parcelas somam R$ {soma:.2f}, mas a nota é de R$ {entrada.valor_total_nota:.2f}.")
+            if not parcelas:
+                pendencias.append("Informe os vencimentos (contas a pagar) do fornecedor.")
         if (entrada.valor_frete_cte or 0) > 0:
             parcelas_cte = json.loads(entrada.parcelas_cte_json or "[]")
             soma_cte = round(sum(float(p.get("valor") or 0) for p in parcelas_cte), 2)

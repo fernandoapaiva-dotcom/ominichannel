@@ -153,11 +153,30 @@ def montar_plano(entrada: Dict[str, Any], itens: List[Dict[str, Any]], parcelas:
     if not linhas and not erros:
         erros.append("A entrada não tem itens.")
 
-    parc = _parcelas_validas(parcelas)
-    soma_parc = round(sum(p["valor"] for p in parc), 2)
-    total_nota = round(_f(entrada.get("valor_total_nota") or totais.get("valor_total_nf")), 2)
-    if parc and abs(soma_parc - total_nota) > 0.05:
-        erros.append(f"As parcelas somam R$ {soma_parc:.2f}, mas a nota é de R$ {total_nota:.2f}. Ajuste os vencimentos antes de lançar.")
+    sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
+    cfops_sem_cobranca = {
+        "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
+        "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
+        "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
+    }
+    nat_op = (nota.get("natureza_operacao") or "").upper()
+    info_ad = (nota.get("informacoes_complementares") or "").upper()
+    cfops_itens = {re.sub(r"\D", "", str(it.get("cfop") or "")) for it in itens if it.get("cfop")}
+    eh_sem_cobranca = (
+        any(p in nat_op for p in sem_cobranca_padroes)
+        or any(p in info_ad for p in sem_cobranca_padroes)
+        or bool(cfops_itens and all(c in cfops_sem_cobranca for c in cfops_itens))
+        or (_f(entrada.get("valor_total_nota")) == 0)
+    )
+
+    if eh_sem_cobranca:
+        parc = []
+    else:
+        parc = _parcelas_validas(parcelas)
+        soma_parc = round(sum(p["valor"] for p in parc), 2)
+        total_nota = round(_f(entrada.get("valor_total_nota") or totais.get("valor_total_nf")), 2)
+        if parc and abs(soma_parc - total_nota) > 0.05:
+            erros.append(f"As parcelas somam R$ {soma_parc:.2f}, mas a nota é de R$ {total_nota:.2f}. Ajuste os vencimentos antes de lançar.")
 
     # CT-e da transportadora (frete por conta da loja)
     cte_plano = None
