@@ -1933,11 +1933,28 @@ async def fechar_entrada(entrada_id: int, db: AsyncSession = Depends(get_db), cu
                                   if it.produto_modelo_codigo or cad else f"Item {it.numero_item} sem produto vinculado nem modelo para cadastro.")
         if not it.preco_venda_final or it.preco_venda_final <= 0:
             pendencias.append(f"Item {it.numero_item} sem preço de venda.")
+    nota = json.loads(entrada.nota_json or "{}")
+    sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
+    cfops_sem_cobranca = {
+        "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
+        "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
+        "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
+    }
+    nat_op = (nota.get("natureza_operacao") or "").upper()
+    info_ad = (nota.get("informacoes_complementares") or "").upper()
+    cfops_itens = {re.sub(r"\D", "", str(it.cfop or "")) for it in entrada.itens if it.cfop}
+    eh_sem_cobranca = (
+        any(p in nat_op for p in sem_cobranca_padroes)
+        or any(p in info_ad for p in sem_cobranca_padroes)
+        or bool(cfops_itens and all(c in cfops_sem_cobranca for c in cfops_itens))
+        or (entrada.valor_total_nota or 0) == 0
+    )
+
     parcelas = json.loads(entrada.parcelas_json or "[]")
     soma = round(sum(float(p.get("valor") or 0) for p in parcelas), 2)
     if parcelas and abs(soma - (entrada.valor_total_nota or 0)) > 0.05:
         pendencias.append(f"Parcelas somam R$ {soma:.2f}, mas a nota é de R$ {entrada.valor_total_nota:.2f}.")
-    if not parcelas:
+    if not parcelas and not eh_sem_cobranca:
         pendencias.append("Informe os vencimentos (contas a pagar) do fornecedor.")
     if (entrada.valor_frete_cte or 0) > 0:
         parcelas_cte = json.loads(entrada.parcelas_cte_json or "[]")
