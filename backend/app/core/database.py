@@ -155,6 +155,10 @@ async def init_db():
             "ALTER TABLE compras_entrada_itens ADD COLUMN localizacao_estoque VARCHAR(100);",
             "ALTER TABLE compras_entrada_itens ADD COLUMN synced_softsystem BOOLEAN DEFAULT 0;",
             "ALTER TABLE compras_entrada_itens ADD COLUMN synced_ecommerce BOOLEAN DEFAULT 0;",
+            "ALTER TABLE balcao_fila_espera ADD COLUMN compra_entrada_id INTEGER;",
+            "ALTER TABLE balcao_fila_espera ADD COLUMN conversa_id INTEGER;",
+            "ALTER TABLE balcao_fila_espera ADD COLUMN notificado_msg_id VARCHAR(100);",
+            "ALTER TABLE balcao_fila_espera ADD COLUMN historico_auditoria TEXT;",
         ]
         for sql in migrations:
             try:

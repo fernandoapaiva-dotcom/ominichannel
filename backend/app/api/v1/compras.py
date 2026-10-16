@@ -1492,56 +1492,63 @@ async def salvar_precificacao(
     current_user: User = Depends(get_current_user),
 ):
     """Grava margem/preço escolhidos, vínculos e vencimentos - recalcula tudo no servidor."""
-    entrada = await _carregar_entrada(db, current_user.tenant_id, entrada_id)
-    if entrada.status in ("fechada", "enviada_softsystem", "cancelada"):
-        raise HTTPException(status_code=400, detail=f"Entrada {entrada.status} não pode mais ser alterada.")
+    try:
+        entrada = await _carregar_entrada(db, current_user.tenant_id, entrada_id)
+        if entrada.status in ("fechada", "enviada_softsystem", "cancelada"):
+            raise HTTPException(status_code=400, detail=f"Entrada {entrada.status} não pode mais ser alterada.")
 
-    editaveis = ("margem_lucro_pct", "preco_venda_final", "softsystem_prod_codigo", "softsystem_descricao",
-                 "softsystem_grupo", "softsystem_subgrupo", "vinculo_metodo", "produto_modelo_codigo",
-                 "preco_mercado_min", "preco_mercado_med", "preco_mercado_max", "preco_mercado_resumo",
-                 "concorrentes", "softsystem_status", "fator_conversao")
-    por_id = {i.id: i for i in entrada.itens}
-    mudancas = {int(p["item_id"]): p for p in payload.itens if p.get("item_id") is not None}
-    if payload.despesas_extras is not None:
-        entrada.despesas_extras_json = json.dumps(payload.despesas_extras, ensure_ascii=False)
-    if payload.tipo_rateio:
-        entrada.tipo_rateio_frete = payload.tipo_rateio
+        editaveis = ("margem_lucro_pct", "preco_venda_final", "softsystem_prod_codigo", "softsystem_descricao",
+                     "softsystem_grupo", "softsystem_subgrupo", "vinculo_metodo", "produto_modelo_codigo",
+                     "preco_mercado_min", "preco_mercado_med", "preco_mercado_max", "preco_mercado_resumo",
+                     "concorrentes", "softsystem_status", "fator_conversao")
+        por_id = {i.id: i for i in entrada.itens}
+        mudancas = {int(p["item_id"]): p for p in payload.itens if p.get("item_id") is not None}
+        if payload.despesas_extras is not None:
+            entrada.despesas_extras_json = json.dumps(payload.despesas_extras, ensure_ascii=False)
+        if payload.tipo_rateio:
+            entrada.tipo_rateio_frete = payload.tipo_rateio
 
-    itens_calc = []
-    for it in sorted(entrada.itens, key=lambda x: x.numero_item):
-        base = json.loads(it.calculo_json) if it.calculo_json else {}
-        m = mudancas.get(it.id, {})
-        for k in editaveis:
-            if k in m:
-                base[k] = m[k]
-        if "fator_conversao" in m and entrada.status in ("aguardando_contagem", "contagem_divergente"):
-            it.fator_conversao = float(m["fator_conversao"] or 1.0)
-        base["item_id"] = it.id
-        itens_calc.append(base)
+        itens_calc = []
+        for it in sorted(entrada.itens, key=lambda x: x.numero_item):
+            base = json.loads(it.calculo_json) if it.calculo_json else {}
+            m = mudancas.get(it.id, {})
+            for k in editaveis:
+                if k in m:
+                    base[k] = m[k]
+            if "fator_conversao" in m and entrada.status in ("aguardando_contagem", "contagem_divergente"):
+                it.fator_conversao = _safe_float(m["fator_conversao"], 1.0) or 1.0
+            base["item_id"] = it.id
+            itens_calc.append(base)
 
-    nota = json.loads(entrada.nota_json) if entrada.nota_json else {"totais": {}}
-    params = await _parametros_loja(db, current_user.tenant_id, entrada.empresa)
-    calc = ComprasCustoService.calcular(
-        itens_calc, nota.get("totais") or {}, params, entrada.valor_frete_cte or 0.0, entrada.valor_icms_cte or 0.0,
-        json.loads(entrada.despesas_extras_json or "[]"), entrada.tipo_rateio_frete or "valor",
-    )
-    for c in calc["itens"]:
-        it = por_id[c["item_id"]]
-        it.softsystem_prod_codigo = c.get("softsystem_prod_codigo")
-        it.softsystem_descricao = c.get("softsystem_descricao")
-        it.softsystem_grupo = c.get("softsystem_grupo")
-        it.softsystem_subgrupo = c.get("softsystem_subgrupo")
-        it.vinculo_metodo = c.get("vinculo_metodo")
-        it.produto_modelo_codigo = c.get("produto_modelo_codigo")
-        _aplicar_calculo_no_item(it, c)
+        nota = json.loads(entrada.nota_json) if entrada.nota_json else {"totais": {}}
+        params = await _parametros_loja(db, current_user.tenant_id, entrada.empresa)
+        calc = ComprasCustoService.calcular(
+            itens_calc, nota.get("totais") or {}, params, entrada.valor_frete_cte or 0.0, entrada.valor_icms_cte or 0.0,
+            json.loads(entrada.despesas_extras_json or "[]"), entrada.tipo_rateio_frete or "valor",
+        )
+        for c in calc["itens"]:
+            it = por_id[c["item_id"]]
+            it.softsystem_prod_codigo = str(c.get("softsystem_prod_codigo")) if c.get("softsystem_prod_codigo") is not None else None
+            it.softsystem_descricao = c.get("softsystem_descricao")
+            it.softsystem_grupo = c.get("softsystem_grupo")
+            it.softsystem_subgrupo = c.get("softsystem_subgrupo")
+            it.vinculo_metodo = c.get("vinculo_metodo")
+            it.produto_modelo_codigo = str(c.get("produto_modelo_codigo")) if c.get("produto_modelo_codigo") is not None else None
+            _aplicar_calculo_no_item(it, c)
 
-    if payload.parcelas is not None:
-        entrada.parcelas_json = json.dumps(payload.parcelas, ensure_ascii=False)
-    if payload.parcelas_cte is not None:
-        entrada.parcelas_cte_json = json.dumps(payload.parcelas_cte, ensure_ascii=False)
-    _registrar_evento(db, entrada.id, _usuario(current_user), "precificacao", "Preços/margens/vencimentos atualizados.")
-    await db.commit()
-    return {"success": True, "calculo": calc}
+        if payload.parcelas is not None:
+            entrada.parcelas_json = json.dumps(payload.parcelas, ensure_ascii=False)
+        if payload.parcelas_cte is not None:
+            entrada.parcelas_cte_json = json.dumps(payload.parcelas_cte, ensure_ascii=False)
+        _registrar_evento(db, entrada.id, _usuario(current_user), "precificacao", "Preços/margens/vencimentos atualizados.")
+        await db.commit()
+        return {"success": True, "calculo": calc}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[SALVAR_PRECIFICACAO] Erro na precificação da entrada #{entrada_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar precificação: {e}")
 
 
 # --------------------------------------------------------------------------- lançamento no Softsystem
@@ -1920,73 +1927,85 @@ async def fechar_entrada(entrada_id: int, db: AsyncSession = Depends(get_db), cu
     Fecha a entrada depois da contagem. A gravação no Softsystem (compra, itens, contas a pagar,
     estoque pela quantidade contada e preço) é a próxima etapa - fica com status 'fechada' até lá.
     """
-    entrada = await _carregar_entrada(db, current_user.tenant_id, entrada_id)
-    if entrada.status != "contada":
-        raise HTTPException(status_code=400, detail="Só é possível fechar depois que a contagem física for concluída (ou a divergência aprovada).")
+    try:
+        entrada = await _carregar_entrada(db, current_user.tenant_id, entrada_id)
+        if entrada.status != "contada":
+            raise HTTPException(status_code=400, detail="Só é possível fechar depois que a contagem física for concluída (ou a divergência aprovada).")
 
-    pendencias = []
-    for it in entrada.itens:
-        if not it.softsystem_prod_codigo:
-            cad = json.loads(it.cadastro_novo_json) if it.cadastro_novo_json else {}
-            if not cad.get("confirmado"):
-                pendencias.append(f"Item {it.numero_item} é produto novo: confirme o cadastro dele (botão \"Cadastro do produto novo\")."
-                                  if it.produto_modelo_codigo or cad else f"Item {it.numero_item} sem produto vinculado nem modelo para cadastro.")
-        if not it.preco_venda_final or it.preco_venda_final <= 0:
-            pendencias.append(f"Item {it.numero_item} sem preço de venda.")
-    nota = json.loads(entrada.nota_json or "{}")
-    sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
-    cfops_sem_cobranca = {
-        "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
-        "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
-        "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
-    }
-    nat_op = (nota.get("natureza_operacao") or "").upper()
-    info_ad = (nota.get("informacoes_complementares") or "").upper()
-    cfops_itens = {re.sub(r"\D", "", str(it.cfop or "")) for it in entrada.itens if it.cfop}
-    eh_sem_cobranca = (
-        any(p in nat_op for p in sem_cobranca_padroes)
-        or any(p in info_ad for p in sem_cobranca_padroes)
-        or bool(cfops_itens and all(c in cfops_sem_cobranca for c in cfops_itens))
-        or (entrada.valor_total_nota or 0) == 0
-    )
+        pendencias = []
+        for it in entrada.itens:
+            if not it.softsystem_prod_codigo:
+                cad = json.loads(it.cadastro_novo_json) if it.cadastro_novo_json else {}
+                if not cad.get("confirmado"):
+                    pendencias.append(f"Item {it.numero_item} é produto novo: confirme o cadastro dele (botão \"Cadastro do produto novo\")."
+                                      if it.produto_modelo_codigo or cad else f"Item {it.numero_item} sem produto vinculado nem modelo para cadastro.")
+            if not it.preco_venda_final or it.preco_venda_final <= 0:
+                pendencias.append(f"Item {it.numero_item} sem preço de venda.")
+        nota = json.loads(entrada.nota_json or "{}")
+        sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
+        cfops_sem_cobranca = {
+            "5949", "6949", "5910", "6910", "5911", "6911", "5912", "6912",
+            "5913", "6913", "5914", "6914", "5915", "6915", "5916", "6916",
+            "5927", "6927", "5928", "6928", "5944", "6944", "5945", "6945"
+        }
+        nat_op = (nota.get("natureza_operacao") or "").upper()
+        info_ad = (nota.get("informacoes_complementares") or "").upper()
+        cfops_itens = {re.sub(r"\D", "", str(it.cfop or "")) for it in entrada.itens if it.cfop}
+        eh_sem_cobranca = (
+            any(p in nat_op for p in sem_cobranca_padroes)
+            or any(p in info_ad for p in sem_cobranca_padroes)
+            or bool(cfops_itens and all(c in cfops_sem_cobranca for c in cfops_itens))
+            or (entrada.valor_total_nota or 0) == 0
+        )
 
-    parcelas = json.loads(entrada.parcelas_json or "[]")
-    soma = round(sum(float(p.get("valor") or 0) for p in parcelas), 2)
-    if parcelas and abs(soma - (entrada.valor_total_nota or 0)) > 0.05:
-        pendencias.append(f"Parcelas somam R$ {soma:.2f}, mas a nota é de R$ {entrada.valor_total_nota:.2f}.")
-    if not parcelas and not eh_sem_cobranca:
-        pendencias.append("Informe os vencimentos (contas a pagar) do fornecedor.")
-    if (entrada.valor_frete_cte or 0) > 0:
-        parcelas_cte = json.loads(entrada.parcelas_cte_json or "[]")
-        soma_cte = round(sum(float(p.get("valor") or 0) for p in parcelas_cte), 2)
-        if not parcelas_cte:
-            pendencias.append(f"Informe o vencimento do frete do CT-e {entrada.cte_numero or ''} (transportadora).")
-        elif abs(soma_cte - entrada.valor_frete_cte) > 0.05:
-            pendencias.append(f"Vencimentos do frete somam R$ {soma_cte:.2f}, mas o CT-e é de R$ {entrada.valor_frete_cte:.2f}.")
-    if pendencias:
-        raise HTTPException(status_code=400, detail=" ".join(pendencias))
+        parcelas = json.loads(entrada.parcelas_json or "[]")
+        soma = round(sum(float(p.get("valor") or 0) for p in parcelas), 2)
+        if parcelas and abs(soma - (entrada.valor_total_nota or 0)) > 0.05:
+            pendencias.append(f"Parcelas somam R$ {soma:.2f}, mas a nota é de R$ {entrada.valor_total_nota:.2f}.")
+        if not parcelas and not eh_sem_cobranca:
+            pendencias.append("Informe os vencimentos (contas a pagar) do fornecedor.")
+        if (entrada.valor_frete_cte or 0) > 0:
+            parcelas_cte = json.loads(entrada.parcelas_cte_json or "[]")
+            soma_cte = round(sum(float(p.get("valor") or 0) for p in parcelas_cte), 2)
+            if not parcelas_cte:
+                pendencias.append(f"Informe o vencimento do frete do CT-e {entrada.cte_numero or ''} (transportadora).")
+            elif abs(soma_cte - entrada.valor_frete_cte) > 0.05:
+                pendencias.append(f"Vencimentos do frete somam R$ {soma_cte:.2f}, mas o CT-e é de R$ {entrada.valor_frete_cte:.2f}.")
+        if pendencias:
+            raise HTTPException(status_code=400, detail=" ".join(pendencias))
 
-    usuario = _usuario(current_user)
-    entrada.status = "fechada"
-    entrada.fechada_em = datetime.utcnow()
-    entrada.fechada_por = usuario
-    _registrar_evento(db, entrada.id, usuario, "fechada", "Entrada fechada - aguardando envio ao Softsystem.")
-    await db.commit()
+        usuario = _usuario(current_user)
+        entrada.status = "fechada"
+        entrada.fechada_em = datetime.utcnow()
+        entrada.fechada_por = usuario
+        _registrar_evento(db, entrada.id, usuario, "fechada", "Entrada fechada - aguardando envio ao Softsystem.")
+        await db.commit()
 
-    # lança no Softsystem na hora (se liberado) - se der problema, a entrada fica 'fechada' e o
-    # botão "Lançar no Softsystem" tenta de novo
-    lancamento = await _lancar_no_softsystem(db, entrada, current_user)
+        # lança no Softsystem na hora (se liberado) - se der problema, a entrada fica 'fechada' e o
+        # botão "Lançar no Softsystem" tenta de novo
+        lancamento = await _lancar_no_softsystem(db, entrada, current_user)
 
-    itens_gatilho = [{
-        "ean": it.ean, "descricao_fornecedor": it.descricao_fornecedor,
-        "softsystem_prod_codigo": it.softsystem_prod_codigo,
-    } for it in entrada.itens]
-    notificacoes = await BalcaoEsperaService.processar_gatilho_entrada_compra(
-        db=db, tenant_id=current_user.tenant_id, empresa=entrada.empresa,
-        itens_entrada=itens_gatilho, numero_nf=entrada.numero_nf, compra_id=entrada.id,
-    )
-    return {"success": True, "status": entrada.status, "lancamento": lancamento,
-            "clientes_notificados": len(notificacoes), "detalhes_notificacoes": notificacoes}
+        notificacoes = []
+        try:
+            itens_gatilho = [{
+                "ean": it.ean, "descricao_fornecedor": it.descricao_fornecedor,
+                "softsystem_prod_codigo": it.softsystem_prod_codigo,
+            } for it in entrada.itens]
+            notificacoes = await BalcaoEsperaService.processar_gatilho_entrada_compra(
+                db=db, tenant_id=current_user.tenant_id, empresa=entrada.empresa,
+                itens_entrada=itens_gatilho, numero_nf=entrada.numero_nf, compra_id=entrada.id,
+            )
+        except Exception as e_balcao:
+            logger.warning(f"[BALCAO] Erro ao processar gatilho do balcão na entrada #{entrada.id}: {e_balcao}")
+
+        return {"success": True, "status": entrada.status, "lancamento": lancamento,
+                "clientes_notificados": len(notificacoes), "detalhes_notificacoes": notificacoes}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[FECHAR_ENTRADA] Erro ao fechar entrada #{entrada_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao fechar entrada: {e}")
 
 
 @router.post("/entradas/{entrada_id}/cancelar")

@@ -66,7 +66,7 @@ def cfop_entrada(cfop_saida: str, com_st: bool) -> str:
     if not prefixo:
         return c
     resto = c[1:]
-    if resto in ("910", "911"):
+    if resto.startswith("9"):
         return prefixo + resto
     if com_st or resto in ("401", "402", "403", "404", "405"):
         return prefixo + "403"
