@@ -365,9 +365,22 @@ class ComprasCustoService:
         """
         Vencimentos de uma NF-e ou CT-e, nesta ordem: duplicatas do XML -> dados adicionais
         (texto do fornecedor) -> condição padrão da loja a partir da emissão.
-        Devolve {"parcelas": [...], "origem": "xml"|"dados_adicionais"|"condicao", "trecho": str|None}.
+        Devolve {"parcelas": [...], "origem": "xml"|"dados_adicionais"|"condicao"|"sem_cobranca", "trecho": str|None}.
         """
+        # Naturezas de operação sem cobrança / remessa (Garantia, Troca, Bonificação, Retorno, etc.)
+        nat_op = (doc.get("natureza_operacao") or "").upper()
+        sem_cobranca_padroes = ["GARANTIA", "REMESSA", "TROCA", "BONIFICA", "CONSERTO", "DEVOLU", "RETORNO", "DEMONSTRA", "AMOSTRA", "BRINDE"]
+        
+        # Formas de pagamento no XML: tPag 90 = Sem Pagamento
+        formas_pag = doc.get("formas_pagamento") or []
+        tem_sem_pagamento = any(f.get("tipo") == "90" for f in formas_pag)
+        
         dups = doc.get("duplicatas") or []
+
+        # Se for operação sem cobrança (remessa em garantia, bonificação, conserto...) e não trouxe duplicatas expressas
+        if (any(p in nat_op for p in sem_cobranca_padroes) or tem_sem_pagamento) and not dups:
+            return {"origem": "sem_cobranca", "trecho": f"Operação sem cobrança financeira ({nat_op or 'Sem Pagamento'})", "parcelas": []}
+
         if dups:
             return {"origem": "xml", "trecho": None, "parcelas": [{
                 "numero": (d.get("numero") or f"{i + 1:03d}")[-3:].zfill(3),
@@ -375,6 +388,7 @@ class ComprasCustoService:
                 "valor": round(_f(d.get("valor")), 2),
                 "origem": "xml",
             } for i, d in enumerate(dups)]}
+
         emissao = (doc.get("data_emissao") or "")[:10]
         try:
             data_base = datetime.strptime(emissao, "%Y-%m-%d").date()

@@ -640,10 +640,13 @@ async def buscar_nota_por_chave(
 
 
 def _aviso_vencimentos(avisos: List[str], quem: str, venc: Dict[str, Any], condicao: str) -> None:
-    if venc["origem"] == "dados_adicionais":
+    if venc["origem"] == "sem_cobranca":
+        avisos.append(f"{quem} é uma {venc.get('trecho', 'operação sem cobrança')} - nenhum vencimento/conta a pagar gerado.")
+    elif venc["origem"] == "dados_adicionais":
         avisos.append(f"{quem} não traz duplicatas - vencimentos lidos dos dados adicionais (\"{(venc['trecho'] or '')[:120]}\"). Confira.")
     elif venc["origem"] == "condicao":
         avisos.append(f"{quem} não traz duplicatas nem vencimento nos dados adicionais - gerados pela condição padrão ({condicao} dias). Confira.")
+
 
 
 def _parcelas_cte(cte: Optional[Dict[str, Any]], condicao: str, avisos: List[str]) -> List[Dict[str, Any]]:
