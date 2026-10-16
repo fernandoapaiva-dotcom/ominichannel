@@ -1188,6 +1188,13 @@ async def criar_entrada(
     await db.flush()
 
     for it in payload.itens:
+        mod_cod = it.get("produto_modelo_codigo")
+        if mod_cod is not None:
+            mod_cod = str(mod_cod)
+        soft_cod = it.get("softsystem_prod_codigo")
+        if soft_cod is not None:
+            soft_cod = str(soft_cod)
+
         item_db = ComprasEntradaItem(
             entrada_id=entrada.id,
             numero_item=int(it.get("numero_item") or 1),
@@ -1205,13 +1212,14 @@ async def criar_entrada(
             v_icms_st=float(it.get("v_icms_st") or 0.0),
             v_pis=float(it.get("v_pis") or 0.0),
             v_cofins=float(it.get("v_cofins") or 0.0),
-            softsystem_prod_codigo=it.get("softsystem_prod_codigo"),
+            softsystem_prod_codigo=soft_cod,
             softsystem_descricao=it.get("softsystem_descricao"),
             softsystem_grupo=it.get("softsystem_grupo"),
             softsystem_subgrupo=it.get("softsystem_subgrupo"),
             fator_conversao=float(it.get("fator_conversao") or 1.0),
             vinculo_metodo=it.get("vinculo_metodo"),
-            produto_modelo_codigo=it.get("produto_modelo_codigo"),
+            produto_modelo_codigo=mod_cod,
+            cadastro_novo_json=json.dumps(it.get("cadastro_novo"), ensure_ascii=False) if it.get("cadastro_novo") else None,
             recontagens=0,
         )
         _aplicar_calculo_no_item(item_db, it)
@@ -1220,11 +1228,18 @@ async def criar_entrada(
     _registrar_evento(db, entrada.id, _usuario(current_user), "importada",
                       f"NF-e {entrada.numero_nf} de {entrada.fornecedor_nome} importada ({payload.origem_xml or 'manual'}), "
                       f"{len(payload.itens)} itens, total R$ {entrada.valor_total_nota:.2f}. Aguardando contagem física.")
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[CRIAR_ENTRADA] Erro ao commitar entrada #{entrada.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar entrada: {e}")
+
     # já cria a pasta ANO/MÊS/FORNECEDOR/N.F da via da nota (em segundo plano, não atrasa a tela)
     asyncio.create_task(_preparar_pasta_bg(entrada.id, entrada.empresa, entrada.chave_acesso, entrada.numero_nf,
                                            nota.get("fornecedor") or {"razao_social": entrada.fornecedor_nome}))
     return {"success": True, "entrada_id": entrada.id}
+
 
 
 async def _preparar_pasta_bg(entrada_id: int, empresa: str, chave: str, numero_nf: str, fornecedor: Dict[str, Any]):
