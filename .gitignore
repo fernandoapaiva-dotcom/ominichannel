@@ -65,3 +65,19 @@ tools/vm_watchdog/config.json
 tools/vm_watchdog/state.json
 tools/vm_watchdog/vm_watchdog.log
 tools/vm_watchdog/install.log
+
+# Certificados digitais A1 das lojas (enviados pela tela de Compras) - nunca versionar
+backend/certificados/
+*.pfx
+*.p12
+
+# Scratch debug / test / repair scripts in root
+repair_*.py
+test_*.py
+check_*.py
+inspect_*.py
+find_offsets.py
+dump_all_schemas.py
+apply_repair_and_test.py
+*.tar.gz
+

@@ -136,7 +136,10 @@ def generate_diagnostic_pdf(order, pecas: List[Dict[str, Any]], customer_message
         [Paragraph("O.S.", label), Paragraph("CLIENTE", label), Paragraph("EQUIPAMENTO", label), Paragraph("DATA", label)],
         [
             Paragraph(f"#{order.codos}", value),
-            Paragraph(_clean_pdf_text(order.contato_nome or order.cliente) or "—", value),
+            # Razão social/nome do cliente como está na O.S. do Softsystem, não o contato (pedido do
+            # usuário em 14/10/2026: O.S. #1993 saía "Ygor" em vez da empresa). O contato continua
+            # só na saudação da mensagem de WhatsApp.
+            Paragraph(_clean_pdf_text(order.cliente or order.contato_nome) or "—", value),
             Paragraph(_clean_pdf_text(order.equipamento) or "—", value),
             Paragraph(datetime.now().strftime("%d/%m/%Y"), value),
         ],

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 import os
 import re
 import uuid
@@ -20,6 +21,27 @@ from app.services.whatsapp_sync_service import whatsapp_sync_service, parse_quot
 from app.api.websockets import manager as ws_manager
 
 logger = logging.getLogger("whatsapp_reconciliation")
+
+# Trava compartilhada com o webhook (webhooks._in_flight_webhook_messages) - achado em produção em
+# 15/10/2026: na volta da VM depois de uma queda, a reconciliação e o webhook reentregue pelo
+# WhatsApp gravaram a MESMA mensagem ao mesmo tempo (os dois conferiam "não existe" antes do
+# outro gravar) - um áudio da cliente apareceu repetido na conversa. O webhook de áudio demora
+# (download + transcrição), por isso a janela aqui é bem maior que a dele (10 s).
+RECONCILE_INFLIGHT_WINDOW_S = 120.0
+
+
+def _reservar_msg(msg_id: str) -> bool:
+    """True = pode gravar (e marca como em processamento); False = webhook está cuidando dela."""
+    try:
+        from app.api.v1 import webhooks as _wh
+    except Exception:
+        return True
+    agora = time.time()
+    if agora - _wh._in_flight_webhook_messages.get(msg_id, 0.0) < RECONCILE_INFLIGHT_WINDOW_S:
+        return False
+    _wh._in_flight_webhook_messages[msg_id] = agora
+    return True
+
 
 class WhatsAppReconciliationService:
     def __init__(self):
@@ -334,6 +356,8 @@ class WhatsAppReconciliationService:
                                                 rm_id = rk.get("id")
                                                 if not rm_id:
                                                     continue
+                                                if not _reservar_msg(rm_id):
+                                                    continue
                                                 async with AsyncSessionLocal() as db_m:
                                                     if (await db_m.execute(select(Message.id).where(Message.whatsapp_msg_id == rm_id))).scalars().first():
                                                         continue
@@ -392,6 +416,8 @@ class WhatsAppReconciliationService:
                             if "@s.whatsapp.net" in str(remote_jid_alt):
                                 remote_jid = remote_jid_alt
 
+                            if not _reservar_msg(msg_id):
+                                continue
                             async with AsyncSessionLocal() as db:
                                 exists = (await db.execute(select(Message.id).where(Message.whatsapp_msg_id == msg_id))).scalars().first()
                                 if exists:

@@ -8,6 +8,7 @@
   "slow_threshold_seconds": 8,
   "frozen_minutes": 4,
   "backend_down_minutes": 15,
+  "restart_vm_when_alive": false,
   "acpi_wait_seconds": 90,
   "cooldown_minutes": 15,
   "max_actions_per_day": 4,

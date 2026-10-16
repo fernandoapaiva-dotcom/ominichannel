@@ -26,8 +26,10 @@ A cada 1 minuto, ele:
    de IP fixo.
 3. Testa `http://IP:8000/api/v1/health` e a porta 22:
    - health OK → tudo certo;
-   - sem health mas com SSH → a VM está viva e só o backend caiu. Espera 15 min, que é tempo de
-     sobra para o vigia interno resolver com `pm2 restart`;
+   - sem health mas com SSH → a VM está viva e só o backend caiu. **Não reinicia a VM** (isso
+     derrubaria junto a Evolution API e a sessão do WhatsApp, com risco de bloqueio do número):
+     depois de 15 min sem o vigia interno resolver, só avisa uma vez. Opção
+     `restart_vm_when_alive: true` no config volta ao comportamento antigo (desde 13/10/2026);
    - sem health e sem SSH → **VM travada**. Reinicia depois de 4 min.
 4. Para reiniciar, primeiro tenta o desligamento ACPI ("apertar o botão"). Se a VM não desligar em
    90s (kernel travado não obedece), faz **reset forçado**.

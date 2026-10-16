@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import Response
 from fastapi.responses import FileResponse
 
-from app.api.v1.os_board import build_board_data, EVENT_LABELS
+from app.api.v1.os_board import build_board_data, EVENT_LABELS, CreateInteractionRequest, broadcast_interaction_update
 from app.api.v1.technicians import clean_phone_digits
 from app.api.v1.webhooks import _wants_diagram
 from app.core.database import get_db
@@ -198,6 +198,38 @@ async def technician_order_notes(
     ]
 
 
+@router.get("/order/{codos}/interactions")
+async def technician_order_interactions(
+    codos: int,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db)
+):
+    """Histórico de interações internas da O.S. - mesmo formato de os_board.list_order_interactions."""
+    from app.services.os_interaction_service import list_interactions
+    try:
+        return await list_interactions(db, tech.tenant_id, codos, "tecnico", tech.nome or "Técnico")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/interactions")
+async def technician_create_interaction(
+    codos: int,
+    payload: CreateInteractionRequest,
+    tech: AuthorizedTechnician = Depends(get_current_technician),
+    db: AsyncSession = Depends(get_db)
+):
+    """Técnico registra observação/pendência (ex.: "parei, placa sem estoque") ou resolve uma."""
+    from app.services.os_interaction_service import create_interaction
+    try:
+        row = await create_interaction(db, tech.tenant_id, codos, payload.tipo, payload.mensagem,
+                                       tech.nome or "Técnico", "tecnico")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    await broadcast_interaction_update(tech.tenant_id)
+    return row
+
+
 @router.get("/search")
 async def technician_search(
     q: str,
@@ -323,20 +355,51 @@ EVENTO_SEM_CONSERTO = 11
 EVENTO_SEM_DEFEITO = 13
 EVENTO_DESCARTE = 14
 EVENTO_APROVADO = 15
+EVENTO_ORCAMENTO_ENVIADO = 3
+EVENTO_NAO_AUTORIZADA = 12
+EVENTO_NAO_APROVADO = 16
+
+# "Aguardando retirada" só muda de verdade com o cliente já tendo aprovado (pedido do usuário em
+# 14/10/2026): Aprovado, Execução ou Aguardando peça (tudo depois da aprovação). Nos estágios de
+# ANTES da aprovação a opção também aparece, mas em vez de mudar o status dispara o reenvio
+# automático do orçamento (ver os_report_service.auto_resend_quote) e avisa o técnico.
+ESTAGIOS_POS_APROVACAO = {EVENTO_APROVADO, EVENTO_EXECUCAO, EVENTO_AGUARDANDO_PECA}
+ESTAGIOS_SEM_APROVACAO = {None, EVENTO_ENTRADA, EVENTO_AVALIACAO, EVENTO_ORCAMENTO_ENVIADO}
+
+# Retirada LIVRE (pedido do usuário em 14/10/2026) - "Aguardando retirada" sem precisar de aprovação
+# do cliente nem de peça lançada, pra qualquer técnico:
+#   - O.S. de garantia (de loja ou de fábrica): não tem orçamento pro cliente aprovar;
+#   - O.S. em Não aprovado / Não autorizada / Sem conserto / Sem defeito: o equipamento volta pro
+#     cliente sem reparo - não há o que aprovar.
+TIPOS_OS_GARANTIA = {2, 3}  # TIPO_OS_LABEL: 2 = Garantia de Fábrica, 3 = Garantia de Loja
+ESTAGIOS_RETIRADA_LIVRE = {EVENTO_NAO_APROVADO, EVENTO_NAO_AUTORIZADA, EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO}
+ESTAGIOS_SEM_SAIDA = {EVENTO_AGUARDANDO_RETIRADA, EVENTO_FINALIZADA}
+
+
+def _retirada_livre(order: OsBoardOrder) -> bool:
+    if order.situacao_evento in ESTAGIOS_SEM_SAIDA:
+        return False
+    return order.cod_tipo_os in TIPOS_OS_GARANTIA or order.situacao_evento in ESTAGIOS_RETIRADA_LIVRE
 
 # Transições permitidas pelo app, por ESTÁGIO ATUAL da O.S. - expandido em 07/10/2026 (antes só
 # tinha 3 opções fixas, iguais em qualquer estágio). De propósito, sem entrada pra "Orçamento
 # enviado" (3), "Aguardando retirada" (6), "Não aprovado"/"Não autorizada" (16/12) e "Finalizada"
 # (7) como ORIGEM - o técnico não tem nenhuma ação disponível a partir desses estágios (confirmado
 # com o usuário).
-TECHNICIAN_ALLOWED_TRANSITIONS: Dict[int, List[int]] = {
-    EVENTO_ENTRADA: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO],
-    EVENTO_AVALIACAO: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO],
+TECHNICIAN_ALLOWED_TRANSITIONS: Dict[Optional[int], List[int]] = {
+    None: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO, EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_ENTRADA: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO, EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_AVALIACAO: [EVENTO_SEM_CONSERTO, EVENTO_SEM_DEFEITO, EVENTO_AGUARDANDO_RETIRADA],
+    # Só "Aguardando retirada" a partir daqui - e nunca muda de verdade: cai no reenvio automático
+    # do orçamento (ver ESTAGIOS_SEM_APROVACAO).
+    EVENTO_ORCAMENTO_ENVIADO: [EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_NAO_AUTORIZADA: [EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_NAO_APROVADO: [EVENTO_AGUARDANDO_RETIRADA],
     EVENTO_APROVADO: [EVENTO_EXECUCAO, EVENTO_AGUARDANDO_PECA, EVENTO_AGUARDANDO_RETIRADA],
-    EVENTO_AGUARDANDO_PECA: [EVENTO_EXECUCAO],
+    EVENTO_AGUARDANDO_PECA: [EVENTO_EXECUCAO, EVENTO_AGUARDANDO_RETIRADA],
     EVENTO_EXECUCAO: [EVENTO_AGUARDANDO_RETIRADA],
-    EVENTO_SEM_CONSERTO: [EVENTO_FINALIZADA],
-    EVENTO_SEM_DEFEITO: [EVENTO_FINALIZADA],
+    EVENTO_SEM_CONSERTO: [EVENTO_FINALIZADA, EVENTO_AGUARDANDO_RETIRADA],
+    EVENTO_SEM_DEFEITO: [EVENTO_FINALIZADA, EVENTO_AGUARDANDO_RETIRADA],
     EVENTO_DESCARTE: [EVENTO_FINALIZADA],
 }
 
@@ -372,8 +435,78 @@ async def technician_update_os_status(
     tech: AuthorizedTechnician = Depends(get_current_technician),
     db: AsyncSession = Depends(get_db)
 ):
+    return await change_os_status(
+        db, tech.tenant_id, payload.codos, payload.status, payload.obs, tech.nome or "Técnico", tech_name=tech.nome,
+    )
+
+
+# Status que o ADMIN pode escolher na O.S. pela plataforma (pedido do usuário em 14/10/2026: "para
+# admin deixe todos os botões ativos") - sem as travas de transição/aprovação do técnico. Aprovado,
+# Não aprovado e Descarte não existem como evento no Softsystem (ver os_board.BACKEND_ONLY_EVENTOS):
+# esses só mudam o quadro, igual quando o cliente responde SIM/NÃO no WhatsApp.
+ADMIN_STATUS_OPTIONS: Dict[int, str] = {
+    EVENTO_AVALIACAO: "Avaliação",
+    EVENTO_ORCAMENTO_ENVIADO: "Orçamento enviado",
+    EVENTO_APROVADO: "Orçamento aprovado",
+    EVENTO_NAO_APROVADO: "Orçamento não aprovado",
+    EVENTO_EXECUCAO: "Execução",
+    EVENTO_AGUARDANDO_PECA: "Aguardando peça",
+    EVENTO_AGUARDANDO_RETIRADA: "Aguardando retirada",
+    EVENTO_SEM_CONSERTO: "Sem conserto",
+    EVENTO_SEM_DEFEITO: "Sem defeito",
+    EVENTO_NAO_AUTORIZADA: "Não autorizada",
+    EVENTO_DESCARTE: "Desmanche e descarte",
+    EVENTO_FINALIZADA: "Finalizada",
+}
+ADMIN_STATUS_SO_QUADRO = {EVENTO_APROVADO, EVENTO_NAO_APROVADO, EVENTO_DESCARTE}
+
+
+async def _admin_change_status(db: AsyncSession, tenant_id: int, order: OsBoardOrder, status: int, obs_in: Optional[str], actor: str):
+    if status not in ADMIN_STATUS_OPTIONS:
+        raise HTTPException(status_code=422, detail="Status inválido.")
+    if status == order.situacao_evento:
+        raise HTTPException(status_code=422, detail=f"O.S. #{order.codos} já está em \"{ADMIN_STATUS_OPTIONS[status]}\".")
+    label = ADMIN_STATUS_OPTIONS[status]
+
+    if status in ADMIN_STATUS_SO_QUADRO:
+        from app.api.v1.os_board import record_board_event
+        await record_board_event(db, tenant_id, order.codos, status)
+        logger.info(f"[STATUS ADMIN] O.S. #{order.codos} -> {label} por {actor} (só no quadro).")
+        return {"status": "success", "message": f"O.S. #{order.codos} marcada como \"{label}\" no quadro (esse status não existe no Softsystem)."}
+
+    estagio_atual = order.situacao_evento
+    obs = (obs_in or "").strip() or f"Alterado pelo sistema por {actor}"
+    now = datetime.utcnow()
+    db.add(SoftsystemPendingWrite(
+        tenant_id=tenant_id, empresa=order.empresa, loja=order.loja, codos=order.codos,
+        cod_evento=status, obs=obs, requested_by=actor,
+        suppress_customer_notice=(estagio_atual, status) in SILENT_TRANSITIONS,
+    ))
+    order.situacao_evento = status
+    order.situacao_obs = None
+    order.ultimo_evento_em = now - timedelta(hours=3)  # horário de Brasília, igual ao quadro
+    order.last_nudge_at = None
+    order.atualizado_em = now
+    if status == EVENTO_FINALIZADA:
+        order.finalizada_em = order.ultimo_evento_em
+    await db.commit()
+    try:
+        from app.api.websockets import manager as ws_manager
+        await ws_manager.broadcast_to_tenant(tenant_id, {"type": "OS_BOARD_UPDATE", "empresa": order.empresa})
+    except Exception as err:
+        logger.debug(f"[STATUS ADMIN] broadcast falhou: {err}")
+    logger.info(f"[STATUS ADMIN] O.S. #{order.codos} -> {label} por {actor} (enfileirado pro Softsystem).")
+    return {"status": "success", "message": f"O.S. #{order.codos} marcada como \"{label}\". Enviando pro Softsystem..."}
+
+
+async def change_os_status(
+    db: AsyncSession, tenant_id: int, codos: int, status: int, obs_in: Optional[str], actor: str,
+    tech_name: Optional[str] = None, admin_override: bool = False, origem: str = "Portal do Técnico",
+):
     """
-    Muda a etapa de uma O.S. pelo app. Não escreve direto no Softsystem (o backend roda na nuvem e
+    Muda a etapa de uma O.S. (Portal do Técnico e plataforma - ver os_board.change_order_status).
+    admin_override=True: admin na plataforma, qualquer status de ADMIN_STATUS_OPTIONS, sem travas.
+    Não escreve direto no Softsystem (o backend roda na nuvem e
     não alcança o Firebird da loja) - só enfileira o pedido (SoftsystemPendingWrite) pro vigia
     (tools/os_db_watcher/poll_pending_writes) executar de verdade lá e confirmar. Atualiza o quadro
     aqui na hora (otimista) pra não deixar o técnico esperando o próximo ciclo do vigia pra ver o
@@ -381,11 +514,11 @@ async def technician_update_os_status(
     sozinho (sync_board_empresa lê o Firebird de novo e sobrescreve).
     """
     res = await db.execute(select(OsBoardOrder).where(
-        OsBoardOrder.tenant_id == tech.tenant_id, OsBoardOrder.codos == payload.codos
+        OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos
     ))
     orders = res.scalars().all()
     if not orders:
-        raise HTTPException(status_code=404, detail=f"O.S. #{payload.codos} não encontrada no quadro.")
+        raise HTTPException(status_code=404, detail=f"O.S. #{codos} não encontrada no quadro.")
 
     # Qualquer técnico autorizado pode mudar o status de uma O.S. de outro técnico (pedido do
     # usuário em 07/10/2026 - cobertura em imprevistos, folga do técnico titular etc.) - a
@@ -393,19 +526,47 @@ async def technician_update_os_status(
     # SoftsystemPendingWrite.requested_by (nossa auditoria) E o campo OPERADOR de verdade no
     # Softsystem (ver tools/os_db_watcher/db_watcher.py::poll_pending_writes), nunca mais um
     # literal fixo "PORTAL_TECNICO" sem saber quem foi.
-    tech_name_norm = normalize_text(tech.nome)
+    tech_name_norm = normalize_text(tech_name or actor)
     order = next((o for o in orders if _matches_technician(o.tecnico or "", tech_name_norm) or _matches_technician(o.tecnico2 or "", tech_name_norm)), None)
     if order is None:
         order = orders[0]
 
+    if admin_override:
+        return await _admin_change_status(db, tenant_id, order, status, obs_in, actor)
+
     estagio_atual = order.situacao_evento
-    permitidos = TECHNICIAN_ALLOWED_TRANSITIONS.get(estagio_atual, [])
-    if payload.status not in permitidos:
+    permitidos = list(TECHNICIAN_ALLOWED_TRANSITIONS.get(estagio_atual, []))
+    livre = status == EVENTO_AGUARDANDO_RETIRADA and _retirada_livre(order)
+    if livre and status not in permitidos:
+        permitidos.append(status)  # garantia: Retirada a partir de qualquer estágio em aberto
+    if status not in permitidos:
         nome_atual = EVENT_LABELS.get(estagio_atual, f"estágio {estagio_atual}")
         raise HTTPException(
             status_code=422,
-            detail=f"O.S. #{payload.codos} está em \"{nome_atual}\" - não é possível mudar pra esse status a partir daí pelo app."
+            detail=f"O.S. #{codos} está em \"{nome_atual}\" - não é possível mudar pra esse status a partir daí pelo app."
         )
+
+    # Cliente ainda não aprovou: não muda o status - avisa o técnico (popup no app) e reenvia o
+    # orçamento sozinho, sem revisão humana (pedido do usuário em 14/10/2026). status
+    # "needs_approval" (não erro HTTP) pro app mostrar o popup próprio em vez do toast de erro.
+    if status == EVENTO_AGUARDANDO_RETIRADA and estagio_atual in ESTAGIOS_SEM_APROVACAO and not livre:
+        import asyncio
+        from app.services.os_report_service import check_auto_resend, auto_resend_quote
+        motivo = await check_auto_resend(tenant_id, order.codos)
+        if motivo is None:
+            asyncio.create_task(auto_resend_quote(tenant_id, order.codos, actor))
+            logger.info(f"[REENVIO AUTO] O.S. #{order.codos}: {actor} tentou 'Aguardando retirada' sem aprovação - reenviando orçamento.")
+        return {
+            "status": "needs_approval",
+            "resent": motivo is None,
+            "title": f"O.S. #{order.codos} ainda não foi aprovada pelo cliente",
+            "message": (
+                'Ela não pode ir pra "Aguardando retirada" antes do cliente aprovar o orçamento. '
+                + ("Vamos reenviar o orçamento pro cliente agora: a IA analisa as peças e o histórico, monta o "
+                   "diagnóstico e manda o PDF no WhatsApp dele. Quando ele aprovar, a O.S. libera."
+                   if motivo is None else motivo)
+            ),
+        }
 
     # Ressalva pedida pelo usuário (29/09/2026, reforçada em 07/10/2026): não deixa marcar
     # "Aguardando retirada" numa O.S. sem nada lançado (sem histórico de peças/mão de obra) - não
@@ -413,17 +574,17 @@ async def technician_update_os_status(
     # nela. valor_total é a soma dos itens da O.S. (ITENSORDEMSERVICO, ver
     # os_db_watcher._board_valores) - a melhor aproximação disponível aqui, já que o backend não
     # alcança o Firebird pra conferir ao vivo.
-    if payload.status == EVENTO_AGUARDANDO_RETIRADA and not order.valor_total:
+    if status == EVENTO_AGUARDANDO_RETIRADA and not order.valor_total and not livre:
         raise HTTPException(
             status_code=422,
-            detail=f"O.S. #{payload.codos} está sem peças/mão de obra lançadas - não é possível marcar como Aguardando retirada."
+            detail=f"O.S. #{codos} está sem peças/mão de obra lançadas - não é possível marcar como Aguardando retirada."
         )
 
     # Ressalva pedida pelo usuário em 07/10/2026: pulando direto de "Aprovado" pra "Aguardando
     # retirada" (sem passar pela Execução) precisa de uma observação de verdade explicando o que
     # foi feito - não pode cair no texto fixo genérico, já que não existe nenhum outro registro do
     # que foi executado nesse caminho mais curto.
-    if estagio_atual == EVENTO_APROVADO and payload.status == EVENTO_AGUARDANDO_RETIRADA and not (payload.obs or "").strip():
+    if estagio_atual == EVENTO_APROVADO and status == EVENTO_AGUARDANDO_RETIRADA and not livre and not (obs_in or "").strip():
         raise HTTPException(
             status_code=422,
             detail="Pulando direto de \"Aprovado\" pra \"Aguardando retirada\", é obrigatório preencher uma observação explicando o que foi feito."
@@ -432,22 +593,24 @@ async def technician_update_os_status(
     # A observação vai crua pro Softsystem (é dela que o "Sem conserto" tira o {motivo} da
     # mensagem ao cliente - ver AutomationService.sem_conserto_motivo). Sem observação do técnico,
     # cai no texto fixo, sem motivo.
-    obs = (payload.obs or "").strip() or f"Alterado via Portal do Técnico por {tech.nome}"
+    obs = (obs_in or "").strip() or f"Alterado via {origem} por {actor}"
     now = datetime.utcnow()
     db.add(SoftsystemPendingWrite(
-        tenant_id=tech.tenant_id, empresa=order.empresa, loja=order.loja, codos=order.codos,
-        cod_evento=payload.status, obs=obs, requested_by=tech.nome,
-        suppress_customer_notice=(estagio_atual, payload.status) in SILENT_TRANSITIONS,
+        tenant_id=tenant_id, empresa=order.empresa, loja=order.loja, codos=order.codos,
+        cod_evento=status, obs=obs, requested_by=actor,
+        suppress_customer_notice=(estagio_atual, status) in SILENT_TRANSITIONS,
     ))
-    order.situacao_evento = payload.status
-    order.ultimo_evento_em = now
+    order.situacao_evento = status
+    # Horário de Brasília, igual ao Softsystem/quadro - conta "dias no estágio" e o prazo de 90 dias
+    # da retirada (ver os_board_followup_service._now_brt); `now` (UTC) só pra atualizado_em.
+    order.ultimo_evento_em = now - timedelta(hours=3)
     order.last_nudge_at = None
     order.atualizado_em = now
     await db.commit()
 
     return {
         "status": "success",
-        "message": f"O.S. #{payload.codos} marcada como \"{STATUS_LABELS.get(payload.status, payload.status)}\". Enviando pro Softsystem...",
+        "message": f"O.S. #{codos} marcada como \"{STATUS_LABELS.get(status, status)}\". Enviando pro Softsystem...",
     }
 
 

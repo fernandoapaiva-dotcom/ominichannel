@@ -4,7 +4,7 @@ import {
   ArrowLeft, Download, FileText, Monitor, RefreshCw, X, Clock,
   Inbox, Search, CheckCircle2, XCircle, Wrench, Package, PackageCheck, AlertTriangle, Trash2,
   Camera, Image as ImageIcon, Loader2, ChevronLeft, ChevronRight, Video, Paperclip, Sparkles, Bell, Menu,
-  BarChart3, ZoomIn, ZoomOut, Maximize2,
+  BarChart3, ZoomIn, ZoomOut, Maximize2, MessageSquare, Eye, EyeOff,
   type LucideIcon,
 } from 'lucide-react';
 import { TechDashboard } from './TechDashboard';
@@ -29,6 +29,8 @@ export interface BoardCard {
   dias_no_estagio?: number | null;
   dias_desde_entrada?: number | null;
   tipo_os?: string | null;
+  // pendência interna aberta (alerta "!") - ver OsInteractionsSection
+  pendencia?: { mensagem: string; autor: string; criado_em: string } | null;
 }
 
 // Status que o Portal do Técnico deixa o próprio técnico mudar direto pelo cartão (ver
@@ -48,15 +50,33 @@ export const TECH_STATUS_OPTIONS: { key: number; short: string }[] = [
 // do backend (technician_portal.TECHNICIAN_ALLOWED_TRANSITIONS), só que indexado por chave de
 // string em vez de código numérico porque é isso que já está disponível em cada card renderizado
 // (sem precisar saber se "sem_reparo" é código 11 ou 13 - as duas vão pro mesmo lugar: Finalizada).
+// "Retirada" (6) também aparece antes da aprovação (entrada/avaliação/orçamento/não aprovado) -
+// pedido do usuário em 14/10/2026: aí o backend não muda o status, reenvia o orçamento pro
+// cliente e devolve status "needs_approval" pro app mostrar o aviso (ver TechnicianPortal.tsx).
 const STAGE_KEY_ALLOWED_TRANSITIONS: Record<string, number[]> = {
-  entrada: [11, 13],
-  avaliacao: [11, 13],
+  entrada: [11, 13, 6],
+  avaliacao: [11, 13, 6],
+  orcamento: [6],
+  nao_aprovado: [6],
   aprovado: [4, 8, 6],
-  peca: [4],
+  peca: [4, 6],
   execucao: [6],
-  sem_reparo: [7],
+  sem_reparo: [7, 6],
   descarte: [7],
 };
+// Garantia (de loja ou de fábrica) vai pra "Aguardando retirada" de qualquer estágio em aberto, sem
+// aprovação do cliente - pedido do usuário em 14/10/2026 (backend: technician_portal._retirada_livre).
+const isGarantia = (tipoOs?: string | null) => tipoOs === 'Garantia de Loja' || tipoOs === 'Garantia de Fábrica';
+const allowedStatusKeys = (stageKey: string, tipoOs?: string | null): number[] => {
+  const base = STAGE_KEY_ALLOWED_TRANSITIONS[stageKey] || [];
+  if (isGarantia(tipoOs) && !base.includes(6) && stageKey !== 'retirada' && stageKey !== 'finalizada') return [...base, 6];
+  return base;
+};
+
+// Admin na plataforma: todos os status liberados (menu "⋮" do cartão e botões dentro da O.S.).
+// Só o TechBoard do escritório provê true - Portal do Técnico e demais usuários ficam no padrão.
+const StatusPermContext = React.createContext<{ podeTudo: boolean }>({ podeTudo: false });
+
 export type ChangeStatusFn = (codos: number, empresa: string, status: number, label: string, obs?: string) => void;
 export interface BoardCell { count: number; cards: BoardCard[] }
 export interface BoardTech { name: string; total_open: number; cells: Record<string, BoardCell> }
@@ -90,7 +110,8 @@ interface OsFotoItem {
 interface OsOrderDetail {
   codos: number; empresa: string; cliente?: string | null; equipamento?: string | null;
   tecnico?: string | null; tecnico2?: string | null; data_entrada?: string | null;
-  tipo_os?: string | null; situacao: string; stage: string;
+  tipo_os?: string | null; situacao: string; situacao_evento?: number | null; stage: string;
+  pode_mudar_qualquer_status?: boolean;
   valor_total?: number | null; forma_pagamento?: string | null; tecnico_nota?: string | null;
   historico: (TimelineItem & { obs?: string | null })[];
   pecas: OsPecaItem[];
@@ -154,6 +175,18 @@ const fmtDateTime = (iso?: string | null) => {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
 };
+// Alerta "!" no cartão quando a O.S. tem pendência interna aberta (ex.: "parei, placa sem
+// estoque") - some sozinho quando alguém resolve pela seção Interações da O.S.
+const PendenciaBadge: React.FC<{ pendencia?: BoardCard['pendencia']; size?: number }> = ({ pendencia, size = 18 }) => {
+  if (!pendencia) return null;
+  return (
+    <span
+      title={`Pendência: ${pendencia.mensagem} (${pendencia.autor})`}
+      style={{ width: `${size}px`, height: `${size}px`, borderRadius: '50%', background: '#ef4444', color: '#fff', fontWeight: 900, fontSize: `${Math.round(size * 0.7)}px`, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: '0 0 0 2px rgba(239,68,68,0.25)' }}
+    >!</span>
+  );
+};
+
 export const titleCase = (s: string) => s.toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase());
 
 // Cor fixa por técnico (sempre a mesma pro mesmo nome, determinístico) - pedido do usuário em
@@ -186,6 +219,24 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
   const [detailTech, setDetailTech] = useState<string | null>(null);
   const reloadTimer = useRef<number | null>(null);
   const [stageFilter, setStageFilter] = useState<string>('');
+  // Mudança de status pelo "⋮" dos cartões do quadro do escritório (pedido do usuário em
+  // 14/10/2026) - admin com todos os status (StatusPermContext), demais com a regra do estágio.
+  const [statusNotice, setStatusNotice] = useState<{ kind: 'ok' | 'aviso' | 'erro'; title?: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!statusNotice || statusNotice.kind === 'aviso') return;
+    const t = window.setTimeout(() => setStatusNotice(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [statusNotice]);
+  const handleChangeStatus: ChangeStatusFn = async (codos, _empresa, status, _label, obs) => {
+    try {
+      const res = await apiFetch(`/os-board/order/${codos}/status`, { method: 'POST', body: JSON.stringify({ status, obs }) });
+      if (res?.status === 'needs_approval') setStatusNotice({ kind: 'aviso', title: res.title, text: res.message });
+      else setStatusNotice({ kind: 'ok', text: res?.message || 'Status atualizado.' });
+      window.dispatchEvent(new CustomEvent('os-board-update'));
+    } catch (err: any) {
+      setStatusNotice({ kind: 'erro', text: err?.message || 'Não foi possível mudar o status.' });
+    }
+  };
 
   // Modo TV: carrossel passando por um técnico de cada vez (em vez da grade estática, onde os técnicos
   // de baixo ficavam escondidos - ninguém rola a tela sozinho de longe). CAROUSEL_MS por técnico.
@@ -359,6 +410,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
     : { flex: 1, display: 'flex', flexDirection: 'column', padding: '16px 20px', overflow: 'hidden', minWidth: 0, height: '100%', background: 'var(--bg-primary)' };
 
   return (
+    <StatusPermContext.Provider value={{ podeTudo: isAdmin }}>
     <div style={wrapperStyle}>
       <NotesTicker />
       {/* Cabeçalho */}
@@ -458,7 +510,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
 
       {/* Quadro: carrossel (TV), busca, lista por técnico (tela estreita) ou grade (desktop) */}
       {!tvMode && searchQuery.trim() ? (
-        <SearchResultsList results={searchResults} loading={searching} showEmpresa={!empresa} showTecnico />
+        <SearchResultsList results={searchResults} loading={searching} showEmpresa={!empresa} showTecnico onChangeStatus={handleChangeStatus} />
       ) : tvMode && isDashboardSlide && board ? (
         <TechDashboard board={{ ...board, leaderboard, leaderboard_month_label: leaderboardMonth }} tvMode />
       ) : tvMode ? (
@@ -483,6 +535,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onOpenTech={setDetailTech}
           showEmpresa={!empresa}
           onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
+          onChangeStatus={handleChangeStatus}
         />
       ) : (
         <BoardGrid
@@ -493,6 +546,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           onOpenTech={setDetailTech}
           showEmpresa={!empresa}
           onOpenCell={(tecnico, stage, label) => setCellModal({ tecnico, stage, label })}
+          onChangeStatus={handleChangeStatus}
         />
       )}
       {!tvMode && !isAdmin && (
@@ -509,7 +563,18 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
           empresa={empresa}
           showEmpresa={!empresa}
           onClose={() => setCellModal(null)}
+          onChangeStatus={handleChangeStatus}
         />
+      )}
+
+      {statusNotice && (
+        <div style={{ position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)', zIndex: 10000, width: 'min(440px, calc(100% - 32px))', padding: '12px 14px', borderRadius: '10px', background: 'var(--bg-primary, #0b1220)', border: `1px solid ${statusNotice.kind === 'ok' ? 'rgba(34,197,94,0.5)' : statusNotice.kind === 'aviso' ? 'rgba(245,158,11,0.6)' : 'rgba(248,113,113,0.6)'}`, boxShadow: '0 8px 24px rgba(0,0,0,0.45)', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, fontSize: '12.5px', lineHeight: 1.45, color: 'var(--text-main)' }}>
+            {statusNotice.title && <div style={{ fontWeight: 800, color: '#f59e0b', marginBottom: '2px' }}>{statusNotice.title}</div>}
+            <span style={{ fontWeight: statusNotice.title ? 400 : 700, color: statusNotice.kind === 'erro' ? '#f87171' : statusNotice.kind === 'ok' ? '#22c55e' : 'var(--text-main)' }}>{statusNotice.text}</span>
+          </div>
+          <button onClick={() => setStatusNotice(null)} style={{ ...iconBtn, width: '26px', height: '26px', flexShrink: 0 }}><X size={14} /></button>
+        </div>
       )}
 
       {reportOpen && (
@@ -524,6 +589,7 @@ export const TechBoard: React.FC<Props> = ({ user, onBack }) => {
         </div>
       )}
     </div>
+    </StatusPermContext.Provider>
   );
 };
 
@@ -608,7 +674,7 @@ export const BoardGrid: React.FC<{
   );
 };
 
-const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empresa: string; showEmpresa: boolean; onClose: () => void }> = ({ tecnico, stage, label, empresa, showEmpresa, onClose }) => {
+const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empresa: string; showEmpresa: boolean; onClose: () => void; onChangeStatus?: ChangeStatusFn }> = ({ tecnico, stage, label, empresa, showEmpresa, onClose, onChangeStatus }) => {
   const [cards, setCards] = useState<BoardCard[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -648,7 +714,7 @@ const CellModal: React.FC<{ tecnico: string; stage: string; label: string; empre
           {!error && cards === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Carregando…</div>}
           {cards && cards.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '13px', textAlign: 'center', padding: '20px' }}>Nenhuma O.S. nesta célula.</div>}
           {cards && cards.map(card => (
-            <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} stageKey={stage} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} />
+            <MobileOsRow key={`${card.empresa}-${card.codos}`} card={card} stageLabel={label} stageKey={stage} color={STAGE_COLORS[stage]} showEmpresa={showEmpresa} showStage={false} onChangeStatus={onChangeStatus} />
           ))}
         </div>
       </div>
@@ -723,6 +789,11 @@ const getOsReport = (codos: number) => {
   const isTechnician = isTechnicianSession();
   return isTechnician ? techApiFetch(`/order/${codos}/report`) : apiFetch(`/os-board/order/${codos}/report`);
 };
+
+// Último relatório já enviado (só no quadro administrativo - a seção de relatório não aparece
+// pro técnico): libera o "Reenviar com valores atualizados" quando o preço foi renegociado.
+const getOsLastSentReport = (codos: number): Promise<{ enviado_em: string; aprovado_por: string | null; valor_total: number | null }> =>
+  apiFetch(`/os-board/order/${codos}/last-sent-report`);
 
 const draftOsReport = (codos: number) => {
   const isTechnician = isTechnicianSession();
@@ -925,6 +996,296 @@ const InternalDocToggle: React.FC<{ checked: boolean; onChange: (v: boolean) => 
   </label>
 );
 
+// --------------------------------------------------------------------------- botões de status dentro da O.S.
+
+// Pedido do usuário em 14/10/2026: os botões de mudar status (antes só no "⋮" do cartão, no Portal
+// do Técnico) também dentro da O.S., na plataforma. Admin: todos os status liberados, sem travas
+// (backend: os_board.change_order_status -> technician_portal.ADMIN_STATUS_OPTIONS). Demais
+// usuários e técnicos: só os que a regra do estágio atual permite (STAGE_KEY_ALLOWED_TRANSITIONS);
+// os outros aparecem apagados.
+const OS_STATUS_BUTTONS: { code: number; label: string; stage: string }[] = [
+  { code: 2, label: 'Avaliação', stage: 'avaliacao' },
+  { code: 3, label: 'Orçamento enviado', stage: 'orcamento' },
+  { code: 15, label: 'Aprovado', stage: 'aprovado' },
+  { code: 16, label: 'Não aprovado', stage: 'nao_aprovado' },
+  { code: 4, label: 'Execução', stage: 'execucao' },
+  { code: 8, label: 'Aguardando peça', stage: 'peca' },
+  { code: 6, label: 'Aguardando retirada', stage: 'retirada' },
+  { code: 11, label: 'Sem conserto', stage: 'sem_reparo' },
+  { code: 13, label: 'Sem defeito', stage: 'sem_reparo' },
+  { code: 12, label: 'Não autorizada', stage: 'nao_aprovado' },
+  { code: 14, label: 'Descarte', stage: 'descarte' },
+  { code: 7, label: 'Finalizada', stage: 'finalizada' },
+];
+const STATUS_SO_QUADRO = new Set([15, 16, 14]); // não existem como evento no Softsystem
+const STATUS_ADMIN_ONLY = new Set([2, 3, 15, 16, 12, 14]); // técnico nunca escolhe esses
+
+const OsStatusButtons: React.FC<{
+  codos: number; stage: string; tipoOs?: string | null; situacaoEvento: number | null | undefined; podeTudo: boolean; isTechnician: boolean;
+  onChanged: () => void;
+}> = ({ codos, stage, tipoOs, situacaoEvento, podeTudo, isTechnician, onChanged }) => {
+  const [pending, setPending] = useState<number | null>(null);
+  const [obs, setObs] = useState('');
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ kind: 'ok' | 'aviso' | 'erro'; title?: string; text: string } | null>(null);
+
+  const allowed = allowedStatusKeys(stage, tipoOs);
+  const visiveis = OS_STATUS_BUTTONS.filter(b => podeTudo || !STATUS_ADMIN_ONLY.has(b.code));
+  const enabled = (code: number) => code !== situacaoEvento && (podeTudo || allowed.includes(code));
+  const obsRequired = !podeTudo && !isGarantia(tipoOs) && stage === 'aprovado' && pending === 6;
+  const pendingBtn = OS_STATUS_BUTTONS.find(b => b.code === pending);
+
+  const confirmar = async () => {
+    if (pending == null || sending) return;
+    if (obsRequired && !obs.trim()) return;
+    setSending(true);
+    setResult(null);
+    try {
+      const body = JSON.stringify(isTechnician ? { codos, status: pending, obs: obs.trim() || undefined } : { status: pending, obs: obs.trim() || undefined });
+      const res = isTechnician
+        ? await techApiFetch('/os/status', { method: 'POST', body })
+        : await apiFetch(`/os-board/order/${codos}/status`, { method: 'POST', body });
+      if (res?.status === 'needs_approval') {
+        setResult({ kind: 'aviso', title: res.title, text: res.message });
+      } else {
+        setResult({ kind: 'ok', text: res?.message || 'Status atualizado.' });
+        onChanged();
+        window.dispatchEvent(new CustomEvent('os-board-update'));
+      }
+      setPending(null);
+      setObs('');
+    } catch (err: any) {
+      setResult({ kind: 'erro', text: err?.message || 'Não foi possível mudar o status.' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const resultColor = result?.kind === 'ok' ? '#22c55e' : result?.kind === 'aviso' ? '#f59e0b' : '#f87171';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+          <RefreshCw size={14} /> Mudar status
+        </div>
+        {podeTudo && <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-muted)' }}>Admin · todos liberados</span>}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(128px, 1fr))', gap: '6px' }}>
+        {visiveis.map(b => {
+          // cinza da coluna "finalizada" parece botão desligado - clareia só aqui
+          const c = b.code === 7 ? '#cbd5e1' : (STAGE_COLORS[b.stage] || '#94a3b8');
+          const atual = b.code === situacaoEvento;
+          const on = enabled(b.code);
+          const sel = pending === b.code;
+          return (
+            <button
+              key={b.code}
+              disabled={!on || sending}
+              onClick={() => { setPending(sel ? null : b.code); setResult(null); setObs(''); }}
+              title={atual ? 'Status atual' : on ? `Mudar para ${b.label}` : 'Não disponível a partir do status atual'}
+              style={{
+                padding: '9px 8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, lineHeight: 1.2, textAlign: 'center',
+                cursor: on && !sending ? 'pointer' : 'default', fontFamily: 'inherit',
+                color: atual ? '#04140d' : on ? c : 'var(--text-muted)',
+                background: atual ? c : sel ? `${c}33` : on ? `${c}12` : 'transparent',
+                border: `1.5px solid ${atual || sel ? c : on ? `${c}66` : 'rgba(148,163,184,0.18)'}`,
+                opacity: on || atual ? 1 : 0.45,
+              }}
+            >
+              {b.label}{atual ? ' · atual' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {pendingBtn && (
+        <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', border: '1px solid var(--border-color, rgba(255,255,255,0.14))', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-main)' }}>Mudar para "{pendingBtn.label}"?</div>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+            {STATUS_SO_QUADRO.has(pendingBtn.code)
+              ? 'Esse status não existe no Softsystem: muda só no quadro (igual quando o cliente responde SIM/NÃO no WhatsApp).'
+              : 'Grava o evento no Softsystem com o seu nome. Se esse status tiver mensagem automática, o cliente recebe no WhatsApp.'}
+          </div>
+          {!STATUS_SO_QUADRO.has(pendingBtn.code) && (
+            <textarea
+              value={obs}
+              onChange={e => setObs(e.target.value)}
+              rows={2}
+              placeholder={pendingBtn.code === 11 ? 'Motivo (vai na mensagem ao cliente)' : obsRequired ? 'Obrigatório: o que foi feito (pulando a Execução)' : 'Observação (opcional)'}
+              style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: '6px', border: `1px solid ${obsRequired && !obs.trim() ? 'rgba(248,113,113,0.5)' : 'var(--border-color, rgba(255,255,255,0.18))'}`, background: 'var(--bg-primary)', color: 'var(--text-main)', fontSize: '12.5px', padding: '7px 9px', fontFamily: 'inherit' }}
+            />
+          )}
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <button onClick={() => { setPending(null); setObs(''); }} disabled={sending} style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'transparent', color: 'var(--text-muted)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>
+              Cancelar
+            </button>
+            <button onClick={confirmar} disabled={sending || (obsRequired && !obs.trim())} style={{ flex: 1.4, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '12px', fontWeight: 800, cursor: sending ? 'default' : 'pointer', opacity: sending || (obsRequired && !obs.trim()) ? 0.6 : 1 }}>
+              {sending && <Loader2 size={13} className="animate-spin" />} Confirmar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div style={{ marginTop: '10px', padding: '9px 11px', borderRadius: '8px', fontSize: '12.5px', lineHeight: 1.45, color: 'var(--text-main)', background: `${resultColor}14`, border: `1px solid ${resultColor}55` }}>
+          {result.title && <div style={{ fontWeight: 800, color: resultColor, marginBottom: '2px' }}>{result.title}</div>}
+          <span style={{ color: result.title ? 'var(--text-main)' : resultColor, fontWeight: result.title ? 400 : 700 }}>{result.text}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --------------------------------------------------------------------------- interações internas da O.S.
+
+// Pedido do usuário em 14/10/2026, no estilo do "Interagir na Ordem de Serviço" do Telecontrol:
+// técnico e escritório conversam dentro da O.S. com histórico. "Pendência" acende o alerta (!) no
+// cartão do quadro até alguém resolver; "Observação" é só registro (ex.: "cotação enviada pra
+// fábrica, aguardando retorno"). Leitura confirmada = alguém do outro lado abriu a O.S. depois.
+interface OsInteractionItem {
+  id: number; tipo: 'observacao' | 'pendencia' | 'resolucao'; mensagem: string; autor: string;
+  autor_tipo: 'admin' | 'tecnico'; criado_em: string; lido_em: string | null; lido_por: string | null;
+  resolved_at: string | null; resolved_by: string | null;
+}
+
+const INTERACTION_TIPO: Record<OsInteractionItem['tipo'], { label: string; color: string }> = {
+  observacao: { label: 'Observação', color: '#94a3b8' },
+  pendencia: { label: 'Pendência', color: '#ef4444' },
+  resolucao: { label: 'Resolvido', color: '#22c55e' },
+};
+
+const OsInteractionsSection: React.FC<{ codos: number; isTechnician: boolean }> = ({ codos, isTechnician }) => {
+  const [items, setItems] = useState<OsInteractionItem[] | null>(null);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState<OsInteractionItem['tipo'] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const call = useCallback((opts?: RequestInit) => {
+    const path = `/order/${codos}/interactions`;
+    return isTechnician ? techApiFetch(path, opts) : apiFetch(`/os-board${path}`, opts);
+  }, [codos, isTechnician]);
+
+  const load = useCallback(async () => {
+    try {
+      setItems((await call()) || []);
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível carregar as interações.');
+      setItems([]);
+    }
+  }, [call]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openPendencias = (items || []).filter(i => i.tipo === 'pendencia' && !i.resolved_at);
+  const lastOpen = openPendencias[openPendencias.length - 1];
+  const mySide = isTechnician ? 'tecnico' : 'admin';
+
+  const submit = async (tipo: OsInteractionItem['tipo']) => {
+    if (sending) return;
+    if (tipo !== 'resolucao' && !text.trim()) return;
+    setSending(tipo);
+    setError(null);
+    try {
+      await call({ method: 'POST', body: JSON.stringify({ tipo, mensagem: text.trim() }) });
+      setText('');
+      await load();
+      // acende/apaga o "!" no quadro sem esperar o WebSocket
+      window.dispatchEvent(new CustomEvent('os-board-update'));
+    } catch (err: any) {
+      setError(err?.message || 'Não foi possível registrar a interação.');
+    } finally {
+      setSending(null);
+    }
+  };
+
+  const btn = (color: string, filled = false, enabled = true): React.CSSProperties => ({
+    flex: 1, minWidth: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px 6px', borderRadius: '6px',
+    fontSize: '11.5px', fontWeight: 800, cursor: enabled ? 'pointer' : 'default', border: `1px solid ${color}55`,
+    background: filled ? color : `${color}14`, color: filled ? '#04140d' : color, opacity: enabled ? 1 : 0.5,
+  });
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+        <MessageSquare size={14} /> Interações internas
+        {lastOpen && <PendenciaBadge pendencia={lastOpen} size={16} />}
+      </div>
+
+      {openPendencias.length > 0 && (
+        <div style={{ padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          {openPendencias.map(p => (
+            <div key={p.id} style={{ fontSize: '12px', color: '#fca5a5' }}>
+              <AlertTriangle size={12} style={{ verticalAlign: '-2px', marginRight: '4px' }} />
+              <b>{p.mensagem}</b> <span style={{ color: 'var(--text-muted)' }}>— {titleCase(p.autor)}, {formatDateTime(p.criado_em)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {error && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{error}</div>}
+      {items === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Carregando…</div>}
+      {items && items.length === 0 && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>Nenhuma interação nesta O.S. ainda.</div>
+      )}
+      {items && items.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', marginBottom: '10px' }}>
+          {items.map((it, idx) => {
+            const t = INTERACTION_TIPO[it.tipo] || INTERACTION_TIPO.observacao;
+            const mine = it.autor_tipo === mySide;
+            return (
+              <div key={it.id} style={{ display: 'flex', gap: '10px', padding: '7px 0', borderBottom: idx < items.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap', flexShrink: 0, minWidth: '82px' }}>{formatDateTime(it.criado_em)}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', fontSize: '11.5px', fontWeight: 700, color: 'var(--text-main)' }}>
+                    {titleCase(it.autor)}
+                    <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>{it.autor_tipo === 'tecnico' ? 'Técnico' : 'Escritório'}</span>
+                    <span style={{ fontSize: '10px', fontWeight: 800, padding: '1px 7px', borderRadius: '999px', color: t.color, background: `${t.color}1F`, border: `1px solid ${t.color}55` }}>
+                      {it.tipo === 'pendencia' && it.resolved_at ? 'Pendência (resolvida)' : t.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '12.5px', color: 'var(--text-main)', marginTop: '2px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{it.mensagem}</div>
+                  {mine && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', marginTop: '3px', color: it.lido_em ? '#22c55e' : '#f59e0b' }}>
+                      {it.lido_em ? <Eye size={12} /> : <EyeOff size={12} />}
+                      {it.lido_em ? `Lido por ${titleCase(it.lido_por || '')} em ${formatDateTime(it.lido_em)}` : 'Leitura não confirmada'}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        rows={2}
+        placeholder={openPendencias.length > 0 ? 'Ex: a placa chegou, pode seguir' : 'Ex: parei, a placa não tem em estoque / cotação enviada pra fábrica'}
+        style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', borderRadius: '8px', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', background: 'var(--bg-secondary, rgba(255,255,255,0.04))', color: 'var(--text-main)', fontSize: '12.5px', padding: '8px 10px', fontFamily: 'inherit', lineHeight: 1.5, marginBottom: '6px' }}
+      />
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        <button onClick={() => submit('observacao')} disabled={!!sending || !text.trim()} style={btn('#94a3b8', false, !!text.trim())}
+          title="Só fica registrado no histórico da O.S., sem alerta">
+          {sending === 'observacao' && <Loader2 size={13} className="animate-spin" />} Registrar observação
+        </button>
+        <button onClick={() => submit('pendencia')} disabled={!!sending || !text.trim()} style={btn('#ef4444', false, !!text.trim())}
+          title="Acende o alerta (!) no quadro até alguém resolver">
+          {sending === 'pendencia' ? <Loader2 size={13} className="animate-spin" /> : <AlertTriangle size={13} />} Abrir pendência
+        </button>
+        {openPendencias.length > 0 && (
+          <button onClick={() => submit('resolucao')} disabled={!!sending} style={btn('#22c55e', true)}
+            title="Fecha a(s) pendência(s) aberta(s) - o texto acima (opcional) fica como resposta">
+            {sending === 'resolucao' ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />} Resolver pendência
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos, onClose }) => {
   const [data, setData] = useState<OsOrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -943,6 +1304,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
   const [reportRejecting, setReportRejecting] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
   const [reportSent, setReportSent] = useState(false);
+  const [lastSent, setLastSent] = useState<{ enviado_em: string; aprovado_por: string | null } | null>(null);
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [techNotes, setTechNotes] = useState<{ id: number; mensagem: string; tecnico: string; criado_por: string; criado_em: string }[]>([]);
@@ -1073,6 +1435,13 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
       } catch {
         // Sem rascunho pendente - normal, mantém o botão manual "Gerar com IA".
       }
+      if (isTechnicianUser) return;
+      try {
+        const sent = await getOsLastSentReport(codos);
+        if (!cancelled && sent) setLastSent(sent);
+      } catch {
+        // Nunca enviado - sem opção de reenvio.
+      }
     })();
     return () => { cancelled = true; };
   }, [codos]);
@@ -1146,6 +1515,18 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
               </div>
 
               <Section variant={nextSectionVariant()}>
+                <OsStatusButtons
+                  codos={codos}
+                  stage={data.stage}
+                  tipoOs={data.tipo_os}
+                  situacaoEvento={data.situacao_evento}
+                  podeTudo={!isTechnicianUser && !!data.pode_mudar_qualquer_status}
+                  isTechnician={isTechnicianUser}
+                  onChanged={() => { fetchOsDetail(codos).then(setData).catch(() => {}); }}
+                />
+              </Section>
+
+              <Section variant={nextSectionVariant()}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 800, color: 'var(--text-main)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                   <Clock size={14} /> Histórico
                 </div>
@@ -1161,6 +1542,10 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                     </div>
                   ))}
                 </div>
+              </Section>
+
+              <Section variant={nextSectionVariant()}>
+                <OsInteractionsSection codos={codos} isTechnician={isTechnicianUser} />
               </Section>
 
               <Section variant={nextSectionVariant()}>
@@ -1210,13 +1595,21 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                         style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 700, color: fed ? 'var(--accent-primary, #00e699)' : 'var(--text-muted)', background: fed ? 'rgba(0,230,153,0.1)' : 'rgba(148,163,184,0.08)', border: `1px solid ${fed ? 'rgba(0,230,153,0.3)' : 'rgba(148,163,184,0.2)'}`, borderRadius: '8px', padding: '6px 10px', cursor: disabled ? 'default' : 'pointer', opacity: reportLoading ? 0.6 : 1 }}
                       >
                         {reportLoading ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                        {reportLoading ? 'Gerando…' : 'Gerar com IA'}
+                        {reportLoading ? 'Gerando…' : lastSent ? 'Reenviar com valores atualizados' : 'Gerar com IA'}
                       </button>
                     );
                   })()}
                 </div>
                 {reportError && <div style={{ color: '#f87171', fontSize: '12px', marginBottom: '8px' }}>{reportError}</div>}
-                {!internalNote && !reportLoading && !reportError && (
+                {!internalNote && !reportLoading && !reportError && lastSent && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--accent-primary, #00e699)', fontWeight: 700 }}>
+                      <CheckCircle2 size={14} /> Enviado ao cliente em {new Date(lastSent.enviado_em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}{lastSent.aprovado_por ? ` por ${lastSent.aprovado_por}` : ''}
+                    </div>
+                    <div>Renegociou o preço? Atualize as peças/valores na O.S. no Softsystem e clique em "Reenviar com valores atualizados" - a IA monta uma nova versão pra você revisar antes de ir pro cliente (o PDF sai marcado como orçamento atualizado).</div>
+                  </div>
+                )}
+                {!internalNote && !reportLoading && !reportError && !lastSent && (
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                     {(data.pecas.length > 0 || !!(data.tecnico_nota && data.tecnico_nota.trim()))
                       ? 'A IA monta o laudo técnico e o diagnóstico/orçamento a partir das peças lançadas - você revisa, edita e aprova (ou reprova com um motivo) antes de qualquer coisa ir pro cliente ou pro Softsystem.'
@@ -1272,7 +1665,7 @@ const OsDetailModal: React.FC<{ codos: number; onClose: () => void }> = ({ codos
                         </button>
                         <button onClick={handleSendReport} disabled={reportSending || !internalNote.trim() || !customerMessage.trim()} style={{ flex: 1.3, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '8px', borderRadius: '6px', border: 'none', background: 'var(--accent-primary)', color: '#04140d', fontSize: '11.5px', fontWeight: 800, cursor: reportSending ? 'default' : 'pointer', opacity: reportSending ? 0.7 : 1 }}>
                           {reportSending ? <Loader2 size={13} className="animate-spin" /> : null}
-                          {reportSending ? 'Enviando…' : 'Aprovar e enviar pro cliente'}
+                          {reportSending ? 'Enviando…' : lastSent ? 'Aprovar e reenviar pro cliente' : 'Aprovar e enviar pro cliente'}
                         </button>
                       </div>
                     )}
@@ -1767,6 +2160,7 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; stageKey: str
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', minWidth: 0 }}>
         <span style={{ fontSize: '14.5px', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1.3, minWidth: 0, wordBreak: 'break-word' }}>#{card.codos} {card.cliente ? '· ' + titleCase(card.cliente) : ''}</span>
         <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '7px' }}>
+          <PendenciaBadge pendencia={card.pendencia} size={20} />
           <TipoOsBadge tipo={card.tipo_os} />
           {onChangeStatus && (
             <button
@@ -1783,11 +2177,13 @@ const MobileOsRow: React.FC<{ card: BoardCard; stageLabel: string; stageKey: str
           anchorRect={anchorRect}
           codos={card.codos}
           stageKey={stageKey}
+          tipoOs={card.tipo_os}
           onClose={() => setAnchorRect(null)}
           onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
         />
       )}
       {card.equipamento && <div style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: 1.3 }}>{card.equipamento}</div>}
+      {card.pendencia && <div style={{ fontSize: '12px', color: '#f87171', fontWeight: 700, lineHeight: 1.3 }}>Pendência: {card.pendencia.mensagem}</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', fontSize: '12px', marginTop: '2px', flexWrap: 'wrap' }}>
         <span style={{ color: aging || 'var(--text-muted)', fontWeight: aging ? 800 : 600 }}>{dias === 0 ? 'hoje no estágio' : `${dias}d no estágio`}</span>
         <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}>{fmtDate(card.data_entrada)}</span>
@@ -2099,13 +2495,15 @@ const OsCard: React.FC<{ card: BoardCard; stageKey: string; color?: string; scal
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px', fontSize: `${10.5 * scale}px`, fontWeight: 800, color: 'var(--text-main)', overflow: 'hidden', minWidth: 0 }}>
         <span style={{ flexShrink: 0 }}>#{card.codos}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: '4px', overflow: 'hidden', minWidth: 0 }}>
+          <PendenciaBadge pendencia={card.pendencia} size={Math.max(Math.round(13 * scale), 14)} />
           <TipoOsBadge tipo={card.tipo_os} scale={scale} />
           {onChangeStatus && (
             <button
               ref={btnRef}
               onClick={(e) => { e.stopPropagation(); setAnchorRect(btnRef.current!.getBoundingClientRect()); }}
               title="Mudar status"
-              style={{ width: `${Math.max(16 * scale, 28)}px`, height: `${Math.max(16 * scale, 28)}px`, flexShrink: 0, padding: 0, borderRadius: '6px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: `${Math.max(10 * scale, 15)}px`, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              // escritório (mouse): botão menor pra não espremer a etiqueta do tipo; técnico (dedo): 28px
+              style={{ width: `${Math.max(16 * scale, isTechnicianSession() ? 28 : 20)}px`, height: `${Math.max(16 * scale, isTechnicianSession() ? 28 : 20)}px`, flexShrink: 0, padding: 0, borderRadius: '6px', border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: `${Math.max(10 * scale, isTechnicianSession() ? 15 : 13)}px`, lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >⋮</button>
           )}
         </span>
@@ -2127,6 +2525,7 @@ const OsCard: React.FC<{ card: BoardCard; stageKey: string; color?: string; scal
           anchorRect={anchorRect}
           codos={card.codos}
           stageKey={stageKey}
+          tipoOs={card.tipo_os}
           onClose={() => setAnchorRect(null)}
           onPick={(status, label, obs) => { setAnchorRect(null); onChangeStatus(card.codos, card.empresa, status, label, obs); }}
         />
@@ -2140,8 +2539,9 @@ const OsCard: React.FC<{ card: BoardCard; stageKey: string; color?: string; scal
 // STAGE_KEY_ALLOWED_TRANSITIONS) - usado tanto no cartão da grade
 // (OsCard) quanto na linha da lista (MobileOsRow).
 const STATUS_LABELS: Record<number, string> = {
+  2: 'Avaliação', 3: 'Orçamento enviado', 15: 'Orçamento aprovado', 16: 'Não aprovado',
   4: 'Execução', 6: 'Aguardando retirada', 7: 'Finalizada', 8: 'Aguardando peça',
-  11: 'Sem conserto', 13: 'Sem defeito',
+  11: 'Sem conserto', 12: 'Não autorizada', 13: 'Sem defeito', 14: 'Descarte',
 };
 
 // Flutua via portal direto no <body>, posicionado em 'fixed' pelas coordenadas reais do botão que
@@ -2154,16 +2554,19 @@ const STATUS_LABELS: Record<number, string> = {
 // fica esperando uma resposta de UI nativa que esse ambiente não sabe mostrar). Por isso o menu
 // inteiro (escolher status, perguntar o motivo do "sem conserto", confirmar) é resolvido só com UI
 // própria dentro do mesmo portal, nunca com diálogo nativo do navegador.
-const StatusMenu: React.FC<{ anchorRect: DOMRect; codos: number; stageKey: string; onClose: () => void; onPick: (status: number, label: string, obs?: string) => void }> = ({ anchorRect, codos, stageKey, onClose, onPick }) => {
+const StatusMenu: React.FC<{ anchorRect: DOMRect; codos: number; stageKey: string; tipoOs?: string | null; onClose: () => void; onPick: (status: number, label: string, obs?: string) => void }> = ({ anchorRect, codos, stageKey, tipoOs, onClose, onPick }) => {
   const [step, setStep] = useState<'menu' | 'motivo' | 'confirm'>('menu');
   const [pendingKey, setPendingKey] = useState<number | null>(null);
   const [obsText, setObsText] = useState('');
-  const allowedKeys = STAGE_KEY_ALLOWED_TRANSITIONS[stageKey] || [];
-  const availableOptions = TECH_STATUS_OPTIONS.filter(opt => allowedKeys.includes(opt.key));
+  const { podeTudo } = React.useContext(StatusPermContext);
+  const allowedKeys = allowedStatusKeys(stageKey, tipoOs);
+  const availableOptions = podeTudo
+    ? OS_STATUS_BUTTONS.filter(b => b.stage !== stageKey || b.code === 13 || b.code === 11).map(b => ({ key: b.code, short: b.label }))
+    : TECH_STATUS_OPTIONS.filter(opt => allowedKeys.includes(opt.key));
   // Pulando direto de "Aprovado" pra "Aguardando retirada" (sem passar pela Execução), a
   // observação vira obrigatória - pedido do usuário em 07/10/2026: precisa explicar o que foi
   // feito, já que não existe outro registro desse caminho mais curto.
-  const obsRequired = stageKey === 'aprovado' && pendingKey === 6;
+  const obsRequired = !podeTudo && !isGarantia(tipoOs) && stageKey === 'aprovado' && pendingKey === 6;
   // Anexo de foto/vídeo ao mudar status (pedido do usuário em 07/10/2026): fica registrado nos
   // arquivos da O.S. no Softsystem e vai pro cliente, mesmo pipeline do upload rápido já existente
   // (uploadOsPhoto -> handle_os_photo_upload: Drive + WhatsApp + Softsystem, em paralelo).
@@ -2196,7 +2599,7 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; codos: number; stageKey: strin
     // "Sem conserto" pergunta o motivo (opcional - vira o {motivo} da mensagem ao cliente, ver
     // AutomationService.sem_conserto_motivo). "Aprovado" -> "Aguardando retirada" (pulando a
     // Execução) também pergunta, mas aqui é OBRIGATÓRIO (ver obsRequired acima).
-    const needsObsStep = key === 11 || (stageKey === 'aprovado' && key === 6);
+    const needsObsStep = key === 11 || (!podeTudo && !isGarantia(tipoOs) && stageKey === 'aprovado' && key === 6);
     setStep(needsObsStep ? 'motivo' : 'confirm');
   };
 
@@ -2235,7 +2638,8 @@ const StatusMenu: React.FC<{ anchorRect: DOMRect; codos: number; stageKey: strin
     left: Math.max(8, Math.min(anchorRect.right - menuWidth, window.innerWidth - menuWidth - 8)),
     ...(openUpward ? { bottom: window.innerHeight - anchorRect.top + 4 } : { top: anchorRect.bottom + 4 }),
     zIndex: 9999, background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.18))',
-    borderRadius: '8px', boxShadow: '0 6px 18px rgba(0,0,0,0.4)', overflow: 'hidden', width: `${menuWidth}px`,
+    borderRadius: '8px', boxShadow: '0 6px 18px rgba(0,0,0,0.4)', overflowX: 'hidden', overflowY: 'auto', width: `${menuWidth}px`,
+    maxHeight: `${Math.max(200, (openUpward ? anchorRect.top : window.innerHeight - anchorRect.bottom) - 16)}px`,
   };
 
   const btnStyle: React.CSSProperties = { display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)', background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-color, rgba(255,255,255,0.08))', cursor: 'pointer' };

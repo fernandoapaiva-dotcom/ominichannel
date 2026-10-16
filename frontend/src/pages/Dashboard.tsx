@@ -18,6 +18,8 @@ import { MobileBottomNav } from '../components/MobileBottomNav';
 import { TechBoard, OsPhotoQuickUploadModal } from '../components/TechBoard';
 import { ModuleHome } from '../components/ModuleHome';
 import { ModuleTabBar } from '../components/ModuleTabBar';
+import { ComprasPanel } from '../components/ComprasPanel';
+import { RelatoriosPanel } from '../components/RelatoriosPanel';
 import {
   isConversationPendingForAttendant,
   isGroupPending,
@@ -33,11 +35,11 @@ interface DashboardProps {
 }
  
 export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'home'>(() => {
+  const [activeTab, setActiveTab] = useState<'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'compras' | 'relatorios' | 'home'>(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const t = params.get('tab');
-      if (t === 'admin' || t === 'chats' || t === 'groups' || t === 'contacts' || t === 'segmentation' || t === 'tecnicos') {
+      if (t === 'admin' || t === 'chats' || t === 'groups' || t === 'contacts' || t === 'segmentation' || t === 'tecnicos' || t === 'compras' || t === 'relatorios') {
         return t as any;
       }
     } catch {}
@@ -392,7 +394,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             const msgMap = new Map<number, Message>();
             const waIdMap = new Map<string, Message>();
 
+            // Mesma mensagem do WhatsApp gravada 2x no banco (corrida webhook x reconciliação na
+            // volta de uma queda, 15/10/2026 - áudio da cliente aparecia repetido): mostra uma só,
+            // a mais completa (ex.: a que já tem a transcrição do áudio).
             detailMsgs.forEach((m: Message) => {
+              const dup = m.whatsapp_msg_id ? waIdMap.get(m.whatsapp_msg_id) : undefined;
+              if (dup) {
+                const score = (x: Message) => ((x.conteudo || '').startsWith('/uploads') ? 1e9 : 0) + (x.conteudo || '').length;
+                if (score(m) > score(dup)) {
+                  msgMap.delete(dup.id);
+                  msgMap.set(m.id, m);
+                  waIdMap.set(m.whatsapp_msg_id!, m);
+                }
+                return;
+              }
               msgMap.set(m.id, m);
               if (m.whatsapp_msg_id) waIdMap.set(m.whatsapp_msg_id, m);
             });
@@ -1337,6 +1352,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
       {activeTab === 'tecnicos' && (
         <TechBoard user={user} onBack={() => setActiveTab('home')} />
+      )}
+
+      {activeTab === 'compras' && (
+        <ComprasPanel user={user} onBack={() => setActiveTab('home')} />
+      )}
+
+      {activeTab === 'relatorios' && (
+        <RelatoriosPanel user={user} onBack={() => setActiveTab('home')} />
       )}
 
       {activeTab === 'admin' && (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, Wrench, Settings, LayoutGrid } from 'lucide-react';
+import { MessageSquare, Wrench, ShoppingCart, Settings, LayoutGrid, BarChart3 } from 'lucide-react';
 import { User } from '../types';
 import { DashboardTab } from './ModuleHome';
 
@@ -22,6 +22,8 @@ export const ModuleTabBar: React.FC<ModuleTabBarProps> = ({ user, activeTab, onS
   const tabs: TabDef[] = [
     { id: 'chats', label: 'WhatsApp', icon: <MessageSquare size={14} />, matches: ['chats', 'groups', 'contacts', 'segmentation'] },
     { id: 'tecnicos', label: 'Assistência Técnica', icon: <Wrench size={14} />, matches: ['tecnicos'] },
+    { id: 'compras', label: 'Compras & Balcão', icon: <ShoppingCart size={14} />, matches: ['compras'] },
+    { id: 'relatorios', label: 'Relatórios', icon: <BarChart3 size={14} />, matches: ['relatorios'] },
   ];
   if (user.role === 'admin') {
     tabs.push({ id: 'admin', label: 'Configurações', icon: <Settings size={14} />, matches: ['admin'] });

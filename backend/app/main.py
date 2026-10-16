@@ -26,6 +26,9 @@ from app.api.v1.calendar import router as calendar_router
 from app.api.v1.os_handler_ingest import router as os_handler_ingest_router
 from app.api.v1.os_board import router as os_board_router
 from app.api.v1.technician_portal import router as technician_portal_router
+from app.api.v1.compras import router as compras_router
+from app.api.v1.relatorios import router as relatorios_router
+from app.api.v1.catalogo import router as catalogo_router, public_router as site_publico_router
 from app.api.websockets import router as ws_router
 
 from app.services.inactivity_service import start_inactivity_checker_loop
@@ -144,6 +147,9 @@ async def lifespan(app: FastAPI):
     # app/services/media_recovery_service.py) - ligado em 13/10/2026: o contrato em PDF de um
     # cliente ficou "indisponível" no sistema porque a busca do arquivo estourou o tempo na chegada.
     media_recovery_task = asyncio.create_task(start_media_recovery_loop())
+    # fotos de O.S. que ficaram pendentes por queda/reinício (15/10/2026) - conclui WhatsApp/Drive/Softsystem
+    from app.services.os_board_photo_service import loop_retomar_pendentes
+    fotos_os_retomada_task = asyncio.create_task(loop_retomar_pendentes())
 
     # Catálogo de peças do bibliotecário do Copiloto Técnico (ver app/services/librarian_service.py)
     # - ligado em 13/10/2026: monta no primeiro boot (15 min depois) e reconstrói toda madrugada.
@@ -209,6 +215,7 @@ async def lifespan(app: FastAPI):
     rag_warmer_task.cancel()
     whatsapp_read_sync_task.cancel()
     media_recovery_task.cancel()
+    fotos_os_retomada_task.cancel()
     librarian_catalog_task.cancel()
     if reconcile_task:
         reconcile_task.cancel()
@@ -266,6 +273,10 @@ app.include_router(calendar_router, prefix=settings.API_V1_STR)
 app.include_router(os_handler_ingest_router, prefix=settings.API_V1_STR)
 app.include_router(os_board_router, prefix=settings.API_V1_STR)
 app.include_router(technician_portal_router, prefix=settings.API_V1_STR)
+app.include_router(compras_router, prefix=settings.API_V1_STR)
+app.include_router(relatorios_router, prefix=settings.API_V1_STR)
+app.include_router(catalogo_router, prefix=settings.API_V1_STR)
+app.include_router(site_publico_router, prefix=settings.API_V1_STR)  # site da Hostinger (sem login)
 app.include_router(ws_router)
 
 

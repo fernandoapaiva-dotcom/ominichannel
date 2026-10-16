@@ -1,8 +1,8 @@
 import React from 'react';
-import { MessageSquare, Wrench, DollarSign, ShoppingCart, Truck, Settings } from 'lucide-react';
+import { MessageSquare, Wrench, DollarSign, ShoppingCart, Truck, Settings, BarChart3 } from 'lucide-react';
 import { User } from '../types';
 
-export type DashboardTab = 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'home';
+export type DashboardTab = 'chats' | 'groups' | 'contacts' | 'segmentation' | 'admin' | 'tecnicos' | 'compras' | 'relatorios' | 'home';
 
 interface ModuleDef {
   id: DashboardTab;
@@ -27,6 +27,18 @@ const MODULES: ModuleDef[] = [
     icon: <Wrench size={28} />,
   },
   {
+    id: 'compras',
+    label: 'Compras & Balcão',
+    description: 'Entrada de NF-e, custos, precificação com IA e aviso de clientes',
+    icon: <ShoppingCart size={28} />,
+  },
+  {
+    id: 'relatorios',
+    label: 'Relatórios',
+    description: 'Envios e cobranças de O.S. pelo WhatsApp, na tela e em PDF',
+    icon: <BarChart3 size={28} />,
+  },
+  {
     id: 'admin',
     label: 'Configurações',
     description: 'Números de WhatsApp, usuários, automações e integrações',
@@ -38,13 +50,6 @@ const MODULES: ModuleDef[] = [
     label: 'Financeiro',
     description: 'Cobrança, contas a pagar/receber e boletos',
     icon: <DollarSign size={28} />,
-    comingSoon: true,
-  },
-  {
-    id: 'home',
-    label: 'Compras',
-    description: 'Pedidos a fornecedores e controle de estoque',
-    icon: <ShoppingCart size={28} />,
     comingSoon: true,
   },
   {

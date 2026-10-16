@@ -32,6 +32,7 @@ from app.core.security import get_current_user
 from app.models.models import OsBoardOrder, OsBoardEvent, OsBoardItem, OsBoardPhoto, OsTechnicianNote, User, UserRole, WhatsAppNumber
 from app.api.v1.os_handler_ingest import verify_os_handler_key, TIPO_OS_LABEL
 from app.services.os_board_photo_service import handle_os_photo_upload
+from app.services.os_interaction_service import open_pendencias_by_order
 
 logger = logging.getLogger("os_board")
 router = APIRouter(prefix="/os-board", tags=["Quadro de Técnicos"])
@@ -414,9 +415,11 @@ def _efetivada_motivo(order: OsBoardOrder) -> Optional[str]:
     return None
 
 
-def _card(order: OsBoardOrder, now: datetime) -> Dict[str, Any]:
+def _card(order: OsBoardOrder, now: datetime, pendencias: Optional[Dict[tuple, Dict[str, Any]]] = None) -> Dict[str, Any]:
     ref = order.ultimo_evento_em or order.data_entrada
     return {
+        # pendência interna aberta (alerta "!" no cartão) - ver os_interaction_service
+        "pendencia": (pendencias or {}).get((order.empresa, order.codos)),
         "codos": order.codos,
         "empresa": order.empresa,
         "cliente": order.cliente,
@@ -464,6 +467,7 @@ async def build_board_data(
         )
     ).order_by(OsBoardOrder.data_entrada.desc())
     orders = (await db.execute(stmt)).scalars().all()
+    pendencias = await open_pendencias_by_order(db, tenant_id)
 
     rows: Dict[str, Dict[str, Any]] = {}
     totals = {st["key"]: 0 for st in BOARD_STAGES}
@@ -480,7 +484,7 @@ async def build_board_data(
         totals[stage] += 1
         row["total_open"] += 1
         if len(cell["cards"]) < cards_per_cell:
-            cell["cards"].append(_card(o, now))
+            cell["cards"].append(_card(o, now, pendencias))
 
     technicians = sorted(rows.values(), key=lambda r: (r["name"] == NO_TECH_LABEL, -r["total_open"], r["name"]))
     return {
@@ -595,7 +599,8 @@ async def get_board_cell(
         ),
     ).order_by(OsBoardOrder.data_entrada.desc()))).scalars().all()
 
-    return {"tecnico": tech, "stage": stage, "label": stage_def["label"], "cards": [_card(o, now) for o in orders]}
+    pendencias = await open_pendencias_by_order(db, current_user.tenant_id)
+    return {"tecnico": tech, "stage": stage, "label": stage_def["label"], "cards": [_card(o, now, pendencias) for o in orders]}
 
 
 async def _search_orders(db: AsyncSession, tenant_id: int, q: str, empresa: Optional[str], tech_filter: list) -> List[Dict[str, Any]]:
@@ -620,9 +625,10 @@ async def _search_orders(db: AsyncSession, tenant_id: int, q: str, empresa: Opti
         or_(*conditions),
     ).order_by(OsBoardOrder.data_entrada.desc()).limit(100))).scalars().all()
 
+    pendencias = await open_pendencias_by_order(db, tenant_id)
     result = []
     for o in orders:
-        card = _card(o, now)
+        card = _card(o, now, pendencias)
         stage = _stage_of(o)
         card["tecnico"] = o.tecnico or NO_TECH_LABEL
         card["stage"] = stage
@@ -664,6 +670,7 @@ async def _order_detail(db: AsyncSession, tenant_id: int, codos: int) -> Dict[st
         "data_entrada": _iso(order.data_entrada),
         "tipo_os": TIPO_OS_LABEL.get(order.cod_tipo_os, None),
         "situacao": EVENT_LABELS.get(order.situacao_evento or 0, "—"),
+        "situacao_evento": order.situacao_evento,
         "stage": _stage_of(order),
         "valor_total": order.valor_total,
         "forma_pagamento": order.forma_pagamento,
@@ -695,7 +702,32 @@ async def get_order_detail(
     db: AsyncSession = Depends(get_db)
 ):
     """Detalhe de uma O.S. (histórico + peças + fotos) pro modal do quadro administrativo."""
-    return await _order_detail(db, current_user.tenant_id, codos)
+    detail = await _order_detail(db, current_user.tenant_id, codos)
+    # admin: todos os botões de status liberados na O.S. (ver change_order_status)
+    detail["pode_mudar_qualquer_status"] = current_user.role == UserRole.ADMIN
+    return detail
+
+
+class ChangeOrderStatusRequest(BaseModel):
+    status: int
+    obs: Optional[str] = None
+
+
+@router.post("/order/{codos}/status")
+async def change_order_status(
+    codos: int,
+    payload: ChangeOrderStatusRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Muda o status da O.S. pela plataforma (pedido do usuário em 14/10/2026). Admin: qualquer
+    status, sem travas. Demais usuários: mesmas regras do Portal do Técnico (inclusive o reenvio
+    automático do orçamento quando tenta "Aguardando retirada" sem aprovação)."""
+    from app.api.v1.technician_portal import change_os_status
+    return await change_os_status(
+        db, current_user.tenant_id, codos, payload.status, payload.obs, current_user.nome or "Atendente",
+        admin_override=current_user.role == UserRole.ADMIN, origem="plataforma",
+    )
 
 
 @router.post("/order/{codos}/photos")
@@ -746,6 +778,21 @@ async def get_order_report(
     if not draft:
         raise HTTPException(status_code=404, detail="Nenhum rascunho pendente pra essa O.S.")
     return draft
+
+
+@router.get("/order/{codos}/last-sent-report")
+async def get_order_last_sent_report(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Último relatório já enviado ao cliente - libera o botão de reenviar com valores
+    atualizados (orçamento renegociado)."""
+    from app.services.os_report_service import get_last_sent_report
+    sent = await get_last_sent_report(current_user.tenant_id, codos)
+    if not sent:
+        raise HTTPException(status_code=404, detail="Nenhum relatório enviado pra essa O.S.")
+    return sent
 
 
 @router.post("/order/{codos}/draft-report")
@@ -800,6 +847,51 @@ async def send_order_report(
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+class CreateInteractionRequest(BaseModel):
+    tipo: str = "observacao"  # observacao | pendencia | resolucao
+    mensagem: str = ""
+
+
+async def broadcast_interaction_update(tenant_id: int):
+    """Interação nova pode acender/apagar o alerta (!) do cartão - avisa o quadro pra recarregar."""
+    try:
+        await ws_manager.broadcast_to_tenant(tenant_id, {"type": "OS_BOARD_UPDATE"})
+    except Exception as err:
+        logger.debug(f"[OS BOARD] broadcast de interação falhou: {err}")
+
+
+@router.get("/order/{codos}/interactions")
+async def list_order_interactions(
+    codos: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Histórico de interações internas da O.S. (técnico <-> escritório) - ver os_interaction_service."""
+    from app.services.os_interaction_service import list_interactions
+    try:
+        return await list_interactions(db, current_user.tenant_id, codos, "admin", current_user.nome or "Atendente")
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/order/{codos}/interactions")
+async def create_order_interaction(
+    codos: int,
+    payload: CreateInteractionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Nova interação: observação (só registro), pendência (acende o alerta) ou resolução (apaga)."""
+    from app.services.os_interaction_service import create_interaction
+    try:
+        row = await create_interaction(db, current_user.tenant_id, codos, payload.tipo, payload.mensagem,
+                                       current_user.nome or "Atendente", "admin")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    await broadcast_interaction_update(current_user.tenant_id)
+    return row
 
 
 class CreateTechnicianNoteRequest(BaseModel):

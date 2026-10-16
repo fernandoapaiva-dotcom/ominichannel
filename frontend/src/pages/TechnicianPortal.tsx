@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { LogOut, RefreshCw, User as UserIcon, Bell } from 'lucide-react';
+import { LogOut, RefreshCw, User as UserIcon, Bell, AlertTriangle, Send } from 'lucide-react';
 import { techApiFetch } from '../services/techApi';
 import { MobileBoard, BoardGrid, BoardData, ChangeStatusFn, SearchBar, SearchResultsList, SearchResultCard, colorForTechnician, titleCase } from '../components/TechBoard';
 import { TechCopilot } from '../components/TechCopilot';
@@ -183,9 +183,18 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
   // Só disponível na aba "Minhas O.S." - no "Quadro Geral" o técnico está vendo O.S. de outras
   // pessoas, não faz sentido mudar status por lá (o backend também bloqueia, ver
   // technician_update_os_status: só deixa se a O.S. bate com o nome do técnico logado).
+  // Aviso próprio do sistema (não window.alert - não aparece no app da Play Store, ver toast acima)
+  // quando o técnico tenta "Aguardando retirada" numa O.S. que o cliente ainda não aprovou: o
+  // backend não muda o status e reenvia o orçamento sozinho (pedido do usuário em 14/10/2026).
+  const [approvalNotice, setApprovalNotice] = useState<{ title: string; message: string; resent: boolean } | null>(null);
+
   const handleChangeStatus: ChangeStatusFn = async (codos, _empresa, status, label, obs) => {
     try {
       const res = await techApiFetch('/os/status', { method: 'POST', body: JSON.stringify({ codos, status, obs }) });
+      if (res?.status === 'needs_approval') {
+        setApprovalNotice({ title: res.title, message: res.message, resent: !!res.resent });
+        return;
+      }
       setToast(res.message || 'Status atualizado.');
       load();
     } catch (err: any) {
@@ -359,6 +368,28 @@ export const TechnicianPortal: React.FC<TechnicianPortalProps> = ({ onLogout }) 
           />
         )}
       </div>
+
+      {approvalNotice && (
+        <div onClick={() => setApprovalNotice(null)} style={{ position: 'fixed', inset: 0, zIndex: 10001, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: '400px', background: 'var(--bg-primary, #0b1220)', border: '1px solid rgba(245,158,11,0.45)', borderRadius: '14px', padding: '20px', boxShadow: '0 12px 32px rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '50%', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                <AlertTriangle size={20} />
+              </div>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-main)', lineHeight: 1.3 }}>{approvalNotice.title}</div>
+            </div>
+            <div style={{ fontSize: '13.5px', color: 'var(--text-main)', lineHeight: 1.5 }}>{approvalNotice.message}</div>
+            {approvalNotice.resent && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12.5px', fontWeight: 700, color: 'var(--accent-primary, #00e699)', background: 'rgba(0,230,153,0.08)', border: '1px solid rgba(0,230,153,0.25)', borderRadius: '8px', padding: '8px 10px' }}>
+                <Send size={14} /> Orçamento sendo reenviado ao cliente
+              </div>
+            )}
+            <button onClick={() => setApprovalNotice(null)} style={{ marginTop: '4px', padding: '11px', borderRadius: '8px', border: 'none', background: 'var(--accent-primary, #00e699)', color: '#04140d', fontSize: '14px', fontWeight: 800, cursor: 'pointer' }}>
+              Entendi
+            </button>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div style={{ position: 'fixed', left: '50%', bottom: '20px', transform: 'translateX(-50%)', zIndex: 10000, maxWidth: 'calc(100% - 32px)', padding: '10px 16px', borderRadius: '10px', background: 'var(--bg-primary, #0b1220)', border: '1px solid var(--border-color, rgba(255,255,255,0.18))', boxShadow: '0 6px 18px rgba(0,0,0,0.4)', color: 'var(--text-main)', fontSize: '12.5px', fontWeight: 700, textAlign: 'center' }}>

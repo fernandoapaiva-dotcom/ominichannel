@@ -10,7 +10,9 @@ mensagens que não chegaram, tem como criar um sensor quando cai e já começar 
 
 ## Como funciona
 
-1. A cada 2 minutos, verifica `https://ominichannel.duckdns.org/` (timeout de 10s).
+1. A cada 2 minutos, verifica `http://127.0.0.1:8000/api/v1/health` direto no backend local
+   (timeout de 10s). Até 13/10/2026 checava o `ominichannel.duckdns.org`, que ficou desatualizado
+   e fazia o vigia achar que o sistema estava fora o tempo todo.
 2. Só age depois de **3 falhas seguidas** (~4-6 min de indisponibilidade real) — nunca por uma
    soneca só.
 3. Antes de reiniciar, manda um WhatsApp de aviso pro número do Fernando — **direto via
@@ -20,7 +22,7 @@ mensagens que não chegaram, tem como criar um sensor quando cai e já começar 
    reinicia.
 5. Manda um segundo aviso quando confirma que voltou ao normal.
 6. **Cooldown de 20 minutos**: não reinicia de novo antes disso, mesmo se continuar falhando —
-   só avisa que o problema persiste.
+   só avisa que o problema persiste, **uma vez por incidente** (antes avisava a cada 2 min).
 7. **Teto de 3 reinícios automáticos por dia**: depois disso, só avisa (não reinicia mais
    sozinho) — evita loop de reinício por causa de um bug de deploy que um restart não resolve.
 

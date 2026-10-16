@@ -19,7 +19,7 @@ Fluxo, sempre com revisão humana no meio (nunca envia nem grava nada sozinho):
      posso ficar travado esperando uma de cada vez").
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import select
@@ -131,7 +131,14 @@ async def generate_report_draft(tenant_id: int, codos: int, reject_reason: Optio
             draft.reject_reason = reject_reason
             draft.revisao = (draft.revisao or 1) + 1
             draft.gerado_em = datetime.utcnow()
+            # Rascunho novo = ciclo novo de revisão: limpa a aprovação anterior junto com o
+            # enviado_em. Sem isso, num REENVIO (orçamento renegociado - pedido do usuário em
+            # 14/10/2026) ficava aprovado_em antigo + enviado_em vazio, que é exatamente o sinal
+            # de "aprovação travada" do _recover_stuck_approvals - ele mandaria o texto novo pro
+            # cliente sozinho, sem ninguém aprovar.
             draft.enviado_em = None
+            draft.aprovado_em = None
+            draft.aprovado_por = None
         else:
             draft = OsReportDraft(
                 tenant_id=tenant_id, empresa=order.empresa, loja=order.loja, codos=codos,
@@ -177,6 +184,31 @@ async def get_pending_draft(tenant_id: int, codos: int) -> Optional[dict]:
             "customer_message": draft.customer_message,
             "revisao": draft.revisao,
             "reject_reason": draft.reject_reason,
+        }
+
+
+async def get_last_sent_report(tenant_id: int, codos: int) -> Optional[dict]:
+    """Último relatório já aprovado e enviado ao cliente (se houver) - a tela da O.S. usa pra
+    mostrar "enviado em X por Y" e oferecer o REENVIO com valores atualizados (pedido do usuário
+    em 14/10/2026: renegociou o preço com o cliente e não tinha como mandar a proposta de novo)."""
+    async with AsyncSessionLocal() as db:
+        order = (await db.execute(select(OsBoardOrder).where(
+            OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos
+        ))).scalars().first()
+        if not order:
+            return None
+        draft = (await db.execute(select(OsReportDraft).where(
+            OsReportDraft.tenant_id == tenant_id, OsReportDraft.empresa == order.empresa,
+            OsReportDraft.loja == order.loja, OsReportDraft.codos == codos,
+            OsReportDraft.enviado_em.isnot(None)
+        ))).scalars().first()
+        if not draft:
+            return None
+        return {
+            "codos": codos,
+            "enviado_em": draft.enviado_em.isoformat() + "Z",
+            "aprovado_por": draft.aprovado_por,
+            "valor_total": order.valor_total,
         }
 
 
@@ -299,10 +331,20 @@ async def _approve_report_background(tenant_id: int, codos: int, internal_note: 
             # informando que a máquina foi avaliada, manda o PDF com diagnóstico e pergunta se
             # aprova, e pronto... esse tanto de mensagem atrapalha"): o aviso de "diagnóstico
             # pronto" vai como LEGENDA do próprio PDF (uma balão só), não como texto separado antes.
-            caption = (
-                f"Olá, {order.contato_nome or order.cliente or 'Cliente'}! 👋 A máquina foi avaliada "
-                f"e o diagnóstico da sua Ordem de Serviço #{codos} está pronto - segue o PDF com o orçamento."
-            )
+            # Reenvio (O.S. já estava em "Orçamento enviado" - ex.: preço renegociado com o
+            # cliente, pedido do usuário em 14/10/2026): legenda deixa claro que é a versão
+            # ATUALIZADA, pra o cliente não confundir com o PDF anterior.
+            is_resend = order.situacao_evento == EVENTO_ORCAMENTO_ENVIADO
+            if is_resend:
+                caption = (
+                    f"Olá, {order.contato_nome or order.cliente or 'Cliente'}! 👋 Segue o orçamento "
+                    f"*atualizado* da sua Ordem de Serviço #{codos} - este PDF substitui o enviado anteriormente."
+                )
+            else:
+                caption = (
+                    f"Olá, {order.contato_nome or order.cliente or 'Cliente'}! 👋 A máquina foi avaliada "
+                    f"e o diagnóstico da sua Ordem de Serviço #{codos} está pronto - segue o PDF com o orçamento."
+                )
             approval_prompt = (
                 "Você *aprova* a execução do serviço pelo valor informado no orçamento? "
                 "Responda *SIM* para aprovar ou *NÃO* para recusar."
@@ -361,8 +403,11 @@ async def _approve_report_background(tenant_id: int, codos: int, internal_note: 
             # (cai no fallback ultimo_evento_em, que fica velho), disparando a cobrança automática
             # "Só confirmando..." minutos depois do PDF, duplicando a pergunta de aprovação pro
             # cliente. "Agora" é o certo: acabei de avisar, o relógio da cobrança começa daqui.
-            order.last_nudge_at = datetime.utcnow()
-            order.ultimo_evento_em = datetime.utcnow()
+            # Horário de Brasília (não UTC): é o relógio que a cobrança automática e o quadro usam
+            # (ver os_board_followup_service._now_brt) - em UTC a O.S. ficava 3h "no futuro".
+            agora_brt = datetime.utcnow() - timedelta(hours=3)
+            order.last_nudge_at = agora_brt
+            order.ultimo_evento_em = agora_brt
             order.atualizado_em = datetime.utcnow()
 
             draft = (await db.execute(select(OsReportDraft).where(
@@ -380,3 +425,88 @@ async def _approve_report_background(tenant_id: int, codos: int, internal_note: 
             logger.info(f"[RELATORIO IA] Relatório da O.S. #{codos} aprovado por {approved_by}, PDF enviado e enfileirado pro Softsystem.")
     except Exception as e:
         logger.error(f"[RELATORIO IA] Falha processando aprovação em segundo plano da O.S. #{codos}: {e}", exc_info=True)
+
+
+# --------------------------------------------------------------------------- reenvio automático
+# Pedido do usuário em 14/10/2026: técnico (qualquer um, mesmo não sendo o dono da O.S.) tenta
+# marcar "Aguardando retirada" numa O.S. que o cliente ainda NÃO aprovou -> o status não muda, o
+# técnico recebe um aviso, e o sistema reenvia o orçamento sozinho: IA monta laudo + orçamento
+# (mesmo generate_report_draft do botão "Gerar com IA") e já aprova/envia pro cliente, SEM revisão
+# humana (decisão explícita do usuário, diferente do fluxo manual do quadro).
+
+# Não reenvia de novo se o último envio foi há menos que isso - técnico tentando várias vezes
+# no mesmo dia não pode virar enxurrada de PDF pro cliente.
+AUTO_RESEND_COOLDOWN_HOURS = 6
+
+# O.S. com reenvio automático rodando agora (geração da IA leva ~15-30s) - trava contra o
+# técnico tocar de novo antes de terminar. Em memória basta: um processo só de backend.
+_auto_resend_in_progress: set = set()
+
+
+async def check_auto_resend(tenant_id: int, codos: int) -> Optional[str]:
+    """None = pode reenviar; senão o motivo (texto pro técnico) de não reenviar agora."""
+    if (tenant_id, codos) in _auto_resend_in_progress:
+        return "O orçamento desta O.S. já está sendo reenviado ao cliente agora."
+    async with AsyncSessionLocal() as db:
+        order = (await db.execute(select(OsBoardOrder).where(
+            OsBoardOrder.tenant_id == tenant_id, OsBoardOrder.codos == codos
+        ))).scalars().first()
+        if not order:
+            return f"O.S. #{codos} não encontrada no quadro."
+        if not order.valor_total or order.valor_total <= 0:
+            return "Não há peças/mão de obra lançadas nesta O.S., então não dá pra montar o orçamento. Lance no Softsystem primeiro."
+        if not _clean_phone(order.telefone):
+            return "A O.S. não tem telefone do cliente cadastrado - avise o escritório."
+        draft = (await db.execute(select(OsReportDraft).where(
+            OsReportDraft.tenant_id == tenant_id, OsReportDraft.empresa == order.empresa,
+            OsReportDraft.loja == order.loja, OsReportDraft.codos == codos
+        ))).scalars().first()
+        if draft:
+            now = datetime.utcnow()
+            if draft.aprovado_em and not draft.enviado_em and (now - draft.aprovado_em).total_seconds() < APPROVAL_DEDUP_WINDOW_SECONDS:
+                return "O orçamento desta O.S. já está sendo enviado ao cliente agora."
+            if draft.enviado_em and (now - draft.enviado_em).total_seconds() < AUTO_RESEND_COOLDOWN_HOURS * 3600:
+                # enviado_em é UTC -> horário de Brasília
+                quando = (draft.enviado_em - timedelta(hours=3)).strftime("%d/%m às %H:%M")
+                return f"O orçamento já foi enviado ao cliente em {quando} - estamos aguardando a resposta dele."
+    return None
+
+
+async def _log_interaction(tenant_id: int, codos: int, tipo: str, mensagem: str):
+    """Deixa o que aconteceu registrado nas Interações da O.S. (falha vira pendência = "!" no quadro)."""
+    try:
+        from app.services.os_interaction_service import create_interaction
+        async with AsyncSessionLocal() as db:
+            await create_interaction(db, tenant_id, codos, tipo, mensagem, "Sistema", "admin")
+        from app.api.v1.os_board import broadcast_interaction_update
+        await broadcast_interaction_update(tenant_id)
+    except Exception as e:
+        logger.warning(f"[REENVIO AUTO] O.S. #{codos}: não consegui registrar a interação: {e}")
+
+
+async def auto_resend_quote(tenant_id: int, codos: int, requested_by: str):
+    """Roda em segundo plano (asyncio.create_task) - o técnico já recebeu o aviso na hora."""
+    key = (tenant_id, codos)
+    if key in _auto_resend_in_progress:
+        return
+    _auto_resend_in_progress.add(key)
+    try:
+        draft = await generate_report_draft(tenant_id, codos)
+        await approve_report(
+            tenant_id, codos, draft["internal_note"], draft["customer_message"],
+            f"Reenvio automático ({requested_by})",
+        )
+        logger.info(f"[REENVIO AUTO] O.S. #{codos}: orçamento reenviado ao cliente (pedido por {requested_by}).")
+        await _log_interaction(
+            tenant_id, codos, "observacao",
+            f"{requested_by} tentou marcar \"Aguardando retirada\", mas o cliente ainda não tinha aprovado. "
+            f"Orçamento montado pela IA e reenviado automaticamente ao cliente.",
+        )
+    except Exception as e:
+        logger.error(f"[REENVIO AUTO] O.S. #{codos}: falha no reenvio automático: {e}", exc_info=True)
+        await _log_interaction(
+            tenant_id, codos, "pendencia",
+            f"Falha no reenvio automático do orçamento (pedido por {requested_by}): {e}. Reenvie manualmente pela O.S.",
+        )
+    finally:
+        _auto_resend_in_progress.discard(key)

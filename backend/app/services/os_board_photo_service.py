@@ -73,6 +73,10 @@ async def handle_os_photo_upload(
         file_path = os.path.join("uploads", unique_filename)
         with open(file_path, "wb") as f:
             f.write(file_bytes)
+            # 15/10/2026: a VM caiu 1 min depois de 2 fotos da O.S. #2026 e os arquivos ficaram com 0
+            # bytes (ainda estavam só no cache). Força a gravação no disco antes de responder.
+            f.flush()
+            os.fsync(f.fileno())
 
         mimetype = content_type or "image/jpeg"
         photo = OsBoardPhoto(
@@ -256,3 +260,64 @@ async def _enqueue_softsystem_attach(photo_id: int, tenant_id: int, order: dict,
     except Exception as e:
         logger.error(f"[OS BOARD PHOTO] Erro ao enfileirar anexo no Softsystem pra O.S. #{order.get('codos')}: {e}", exc_info=True)
         await _set_photo_status(photo_id, softsystem_status="failed")
+
+
+# ---------------------------------------------------------------------------- retomada
+# 15/10/2026: a VM caiu às 18:12 no meio do envio de 2 fotos da O.S. #2026 - os 3 envios rodam em
+# segundo plano (asyncio.create_task), então uma queda/reinício deixava a foto "pending" para sempre
+# e o cliente nunca recebia. Agora, ao subir e a cada 10 min, conclui o que ficou pendente (fotos
+# das últimas 24 h, paradas há mais de 3 min - a que está sendo enviada agora não entra).
+async def retomar_pendentes() -> int:
+    agora = datetime.utcnow()
+    async with AsyncSessionLocal() as db:
+        fotos = list((await db.execute(select(OsBoardPhoto).where(
+            OsBoardPhoto.criado_em >= agora - timedelta(hours=24),
+            OsBoardPhoto.criado_em <= agora - timedelta(minutes=3),
+            (OsBoardPhoto.whatsapp_status == "pending") | (OsBoardPhoto.gdrive_status == "pending")
+            | (OsBoardPhoto.softsystem_status == "pending"),
+        ))).scalars().all())
+        if not fotos:
+            return 0
+        ja_enfileiradas = {r for (r,) in (await db.execute(select(SoftsystemPendingFileAttach.photo_id).where(
+            SoftsystemPendingFileAttach.photo_id.in_([f.id for f in fotos])))).all()}
+        pedidos = {}
+        for f in fotos:
+            if (f.tenant_id, f.codos) not in pedidos:
+                pedidos[(f.tenant_id, f.codos)] = (await db.execute(select(OsBoardOrder).where(
+                    OsBoardOrder.tenant_id == f.tenant_id, OsBoardOrder.codos == f.codos))).scalars().first()
+    n = 0
+    for f in sorted(fotos, key=lambda x: x.id):
+        order = pedidos.get((f.tenant_id, f.codos))
+        file_path = (f.file_url or "").lstrip("/")
+        if not order or not os.path.exists(file_path):
+            continue
+        if os.path.getsize(file_path) == 0:  # perdida numa queda antes de ir para o disco - tirar de novo
+            await _set_photo_status(f.id, **{k: "arquivo_perdido" for k, v in (
+                ("whatsapp_status", f.whatsapp_status), ("gdrive_status", f.gdrive_status),
+                ("softsystem_status", f.softsystem_status)) if v == "pending"})
+            logger.warning(f"[OS BOARD PHOTO] Foto {f.id} da O.S. #{f.codos} perdida (arquivo vazio) - precisa tirar de novo")
+            continue
+        snap = {"empresa": order.empresa, "loja": order.loja, "codos": order.codos,
+                "telefone": order.telefone, "contato_nome": order.contato_nome or order.cliente}
+        logger.info(f"[OS BOARD PHOTO] Retomando foto {f.id} da O.S. #{f.codos} (whatsapp={f.whatsapp_status}, "
+                    f"drive={f.gdrive_status}, softsystem={f.softsystem_status})")
+        if f.whatsapp_status == "pending":
+            await _send_whatsapp(f.id, f.tenant_id, snap, file_path, f.mimetype or "image/jpeg", f.original_filename)
+        if f.gdrive_status == "pending":
+            await _upload_drive(f.id, f.tenant_id, snap, file_path, f.mimetype or "image/jpeg")
+        if f.softsystem_status == "pending" and f.id not in ja_enfileiradas:
+            await _enqueue_softsystem_attach(f.id, f.tenant_id, snap, file_path, f.original_filename, f.uploaded_by)
+        n += 1
+    return n
+
+
+async def loop_retomar_pendentes():
+    await asyncio.sleep(240)  # deixa o backend e o WhatsApp (Evolution) terminarem de subir
+    while True:
+        try:
+            n = await retomar_pendentes()
+            if n:
+                logger.info(f"[OS BOARD PHOTO] {n} foto(s) pendente(s) retomada(s).")
+        except Exception as e:
+            logger.error(f"[OS BOARD PHOTO] Erro ao retomar fotos pendentes: {e}", exc_info=True)
+        await asyncio.sleep(600)

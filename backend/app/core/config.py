@@ -40,6 +40,47 @@ class Settings(BaseSettings):
     # approval/rejection of the technician's quote gets announced (fase 2 do OS Handler).
     SERV_OS_GROUP_JID: str = os.getenv("SERV_OS_GROUP_JID", "120363423806324709@g.us")
 
+    # Compras - NF-e de entrada.
+    # Pastas onde o Softsystem salva os XMLs (separadas por ";"). Na VM Linux, apontar para o
+    # ponto de montagem CIFS do \\SRV-SERVWELD (ex: /mnt/srv-servweld/NFe/xml;/mnt/srv-servweld/NFe_LOJA02/Xml).
+    NFE_XML_DIRS: str = os.getenv("NFE_XML_DIRS", r"\\SRV-SERVWELD\NFe\xml;\\SRV-SERVWELD\NFe_LOJA02\Xml")
+    # Cache local dos XMLs baixados da SEFAZ (nunca consultar a mesma chave duas vezes - a SEFAZ
+    # bloqueia o CNPJ por "consumo indevido" quando repete consulta).
+    NFE_XML_CACHE_DIR: str = os.getenv(
+        "NFE_XML_CACHE_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "uploads", "nfe_xml"),
+    )
+    # Certificados A1 (.pfx) de cada loja, para buscar a nota na SEFAZ (Distribuição DF-e).
+    # O normal é enviar pela tela (Compras > Parâmetros): o .pfx vai para NFE_CERT_DIR e a senha
+    # é gravada criptografada. As variáveis abaixo são alternativa via .env - nunca no Git.
+    NFE_CERT_DIR: str = os.getenv(
+        "NFE_CERT_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "certificados"),
+    )
+    NFE_CERT_SERVWELD_PATH: str = os.getenv("NFE_CERT_SERVWELD_PATH", "")
+    NFE_CERT_SERVWELD_SENHA: str = os.getenv("NFE_CERT_SERVWELD_SENHA", "")
+    NFE_CERT_CENTROOESTE_PATH: str = os.getenv("NFE_CERT_CENTROOESTE_PATH", "")
+    NFE_CERT_CENTROOESTE_SENHA: str = os.getenv("NFE_CERT_CENTROOESTE_SENHA", "")
+    # 1 = produção, 2 = homologação
+    NFE_AMBIENTE: int = int(os.getenv("NFE_AMBIENTE", "1"))
+    # Lançamento da entrada no Softsystem (compra, contas a pagar, estoque, preço) - ver
+    # softsystem_compra_writer.py. "desligado" (padrão) | "teste" (grava só na cópia abaixo) | "producao"
+    SOFTSYSTEM_COMPRAS_MODO: str = os.getenv("SOFTSYSTEM_COMPRAS_MODO", "desligado")
+    SOFTSYSTEM_COMPRAS_DB_TESTE: str = os.getenv("SOFTSYSTEM_COMPRAS_DB_TESTE", "")
+    # Catálogo do site (etapas 5/6): pasta onde o Softsystem guarda as fotos ("Produto {cod} {img}.jpg",
+    # CONFIGURACAO.DIRETORIOIMAGENS = Z:\SOFTSYSTEM\Arquivos) montada na VM, para importar as fotos que já existem.
+    SOFTSYSTEM_IMAGENS_DIR_SERVWELD: str = os.getenv("SOFTSYSTEM_IMAGENS_DIR_SERVWELD", "")
+    SOFTSYSTEM_IMAGENS_DIR_CENTROOESTE: str = os.getenv("SOFTSYSTEM_IMAGENS_DIR_CENTROOESTE", "/mnt/softsystem_arquivos_centrooeste")
+    # Via da nota de fornecedor (XML + DANFE) arquivada no lançamento: ANO/MÊS/FORNECEDOR/N.F x
+    # (Z:\Documentos\NOTAS FISCAIS- FORNECEDORES da Servweld). Vazio = não arquiva.
+    NOTAS_FORNECEDORES_DIR_SERVWELD: str = os.getenv(
+        "NOTAS_FORNECEDORES_DIR_SERVWELD", "/mnt/softsystem_drive/Documentos/NOTAS FISCAIS- FORNECEDORES")
+    NOTAS_FORNECEDORES_DIR_CENTROOESTE: str = os.getenv("NOTAS_FORNECEDORES_DIR_CENTROOESTE", "")
+    # Site público (Hostinger) lê /api/v1/public/site: endereço público das fotos e de qual loja é o catálogo
+    SITE_PUBLIC_BASE_URL: str = os.getenv("SITE_PUBLIC_BASE_URL", "https://app.servweld.com.br")
+    SITE_EMPRESA: str = os.getenv("SITE_EMPRESA", "servweld")
+    SITE_TENANT_ID: int = int(os.getenv("SITE_TENANT_ID", "1"))
+
     class Config:
         env_file = ".env"
         extra = "ignore"

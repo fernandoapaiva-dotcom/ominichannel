@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 import httpx
 from sqlalchemy import select, and_
@@ -11,6 +11,9 @@ from app.core.database import AsyncSessionLocal
 from app.models.models import Contact, Conversation, Message, WhatsAppNumber, MessageSender, MessageType, ConversationStatus, WhatsAppGroup
 from app.api.websockets import manager as ws_manager
 from app.services.lid_resolver_service import resolve_lid_info, download_and_cache_avatar_locally, resolve_and_bind_contact
+
+# Conversa importada do histórico só fica aberta se a última mensagem for mais recente que isso.
+IMPORT_OPEN_WINDOW_HOURS = 24
 
 logger = logging.getLogger("whatsapp_sync_service")
 
@@ -478,7 +481,9 @@ class WhatsAppSyncService:
                                 conv_res = await session.execute(conv_stmt)
                                 conv = conv_res.scalars().first()
 
+                                conv_created_now = False
                                 if not conv:
+                                    conv_created_now = True
                                     conv = Conversation(
                                         tenant_id=tenant_id,
                                         whatsapp_number_id=whatsapp_number_id,
@@ -520,7 +525,8 @@ class WhatsAppSyncService:
                                                 ts_int = int(ts_raw)
                                                 if ts_int > 1e11:
                                                     ts_int = ts_int / 1000.0
-                                                msg_dt = datetime.fromtimestamp(ts_int)
+                                                # UTC, igual ao webhook e ao resto do banco (utcnow)
+                                                msg_dt = datetime.utcfromtimestamp(ts_int)
                                             except Exception:
                                                 pass
 
@@ -562,7 +568,21 @@ class WhatsAppSyncService:
                                         logger.debug(f"Skipping unparseable message record in chat {jid}: {msg_err}")
                                         continue
 
-                                if latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
+                                if conv_created_now:
+                                    # Conversa criada agora pela importação: o horário dela é o da última
+                                    # mensagem de verdade, não o momento da importação. Antes ficava com
+                                    # utcnow() (e a condição abaixo nunca trocava, porque mensagem antiga
+                                    # nunca é "mais nova" que agora) - toda reconexão jogava centenas de
+                                    # conversas velhas no topo da lista como se tivessem acabado de chegar
+                                    # (achado em 13/10/2026, 722 chats da instancia_tecnica).
+                                    if latest_msg_dt:
+                                        conv.ultima_interacao_em = latest_msg_dt
+                                    # Conversa antiga importada já entra encerrada, pra não lotar a fila de
+                                    # atendimento com "HUMANO". Se o cliente mandar mensagem nova, o fluxo
+                                    # normal reabre. Só fica aberta se a última conversa foi recente.
+                                    if not latest_msg_dt or latest_msg_dt < datetime.utcnow() - timedelta(hours=IMPORT_OPEN_WINDOW_HOURS):
+                                        conv.status = ConversationStatus.ENCERRADA
+                                elif latest_msg_dt and (not conv.ultima_interacao_em or latest_msg_dt > conv.ultima_interacao_em):
                                     conv.ultima_interacao_em = latest_msg_dt
 
                                 await session.commit()

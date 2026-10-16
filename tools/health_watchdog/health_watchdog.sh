@@ -29,7 +29,13 @@ LOG_FILE="$DIR/watchdog.log"
 # o travamento original de CPU 100% que este vigia foi testado contra), "/" continuava respondendo
 # 200 rápido mesmo com o backend praticamente parado (80-140s pra responder de verdade), e o vigia
 # nunca via o problema. /api/v1/health passa pelo nginx E faz uma consulta real ao banco.
-HEALTH_URL="https://ominichannel.duckdns.org/api/v1/health"
+# Checa direto o backend local (127.0.0.1:8000), sem passar por DNS/Cloudflare/internet.
+# Achado em 13/10/2026: o vigia apontava pro ominichannel.duckdns.org, que ficou desatualizado
+# (o endereço certo é o app.servweld.com.br) - toda checagem dava timeout, o vigia achava que o
+# backend estava fora e ficava reiniciando o backend à toa e mandando alerta pelo WhatsApp a cada
+# 2 minutos (envio repetitivo = risco de bloqueio do número). Queda de internet/DNS não é problema
+# que um restart do backend resolva, então não deve contar como falha.
+HEALTH_URL="http://127.0.0.1:8000/api/v1/health"
 CHECK_TIMEOUT=10
 # Mesmo achado: um 200 que demora quase o timeout inteiro pra chegar já é sintoma de sobrecarga
 # real (nenhum atendente espera 8s por uma tela) - conta como falha igual a um HTTP não-200, em
@@ -86,7 +92,7 @@ Nenhuma ação adicional necessária.
 
 $(date '+%d/%m %H:%M')"
     fi
-    jq '.consecutive_failures = 0' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+    jq '.consecutive_failures = 0 | .persist_alerted = false' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
     exit 0
 fi
 
@@ -101,8 +107,16 @@ fi
 
 # 3. Problema sustentado - respeita o cooldown antes de reiniciar de novo
 seconds_since_restart=$((now_ts - last_restart_ts))
+# Os avisos de "ainda com problema" / "precisa de atenção manual" saem UMA vez por incidente (até
+# recuperar) - antes saíam a cada execução do cron (de 2 em 2 min), o que vira um envio repetitivo
+# pelo número da assistência e arrisca bloqueio pelo WhatsApp.
+persist_alerted=$(jq -r '.persist_alerted // false' "$STATE_FILE")
+mark_persist_alerted() { jq '.persist_alerted = true' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"; }
+
 if [ "$seconds_since_restart" -lt "$COOLDOWN_SECONDS" ]; then
-    log "Sustentado há $consecutive_failures checagens, mas ainda em cooldown (${seconds_since_restart}s desde o último restart) - só avisando, sem reiniciar de novo."
+    log "Sustentado há $consecutive_failures checagens, mas ainda em cooldown (${seconds_since_restart}s desde o último restart) - sem reiniciar de novo."
+    [ "$persist_alerted" = "true" ] && exit 0
+    mark_persist_alerted
     send_whatsapp_alert "⚠️ *OminiChannel - Ainda lento/sem resposta*
 
 Já reiniciei há pouco e o problema persiste (HTTP $http_code). Pode ser algo além de sobrecarga passageira - melhor você dar uma olhada quando puder.
@@ -115,7 +129,9 @@ fi
 today=$(date '+%Y-%m-%d')
 restarts_today_count=$(jq --arg d "$today" '[.restarts_today[] | select(startswith($d))] | length' "$STATE_FILE")
 if [ "$restarts_today_count" -ge "$MAX_RESTARTS_PER_DAY" ]; then
-    log "Limite de $MAX_RESTARTS_PER_DAY reinícios automáticos hoje atingido - só avisando, precisa de intervenção manual."
+    log "Limite de $MAX_RESTARTS_PER_DAY reinícios automáticos hoje atingido - precisa de intervenção manual."
+    [ "$persist_alerted" = "true" ] && exit 0
+    mark_persist_alerted
     send_whatsapp_alert "🚨 *OminiChannel - Precisa de atenção manual*
 
 O sistema caiu de novo (HTTP $http_code) e já bati o limite de $MAX_RESTARTS_PER_DAY reinícios automáticos hoje. Não vou reiniciar sozinho de novo - por favor dê uma olhada.

@@ -576,6 +576,69 @@ class OsTechnicianNote(Base):
     resolved_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
 
 
+class OsInteraction(Base):
+    """
+    Interação interna numa O.S. entre a equipe (técnico <-> escritório), no estilo do "Interagir na
+    Ordem de Serviço" do Telecontrol - pedido do usuário em 14/10/2026: o técnico escreve "parei,
+    a placa não tem em estoque", a O.S. ganha um alerta (!) no quadro pra alguém providenciar, o
+    escritório responde ("placa chegou") e resolve; também serve só pra deixar registro ("cotação
+    enviada pra fábrica, aguardando retorno"). Linha do tempo plana por O.S. (sem threads).
+      - tipo "observacao": só registro, não acende alerta.
+      - tipo "pendencia": acende o alerta (!) no cartão até alguém resolver (resolved_at).
+      - tipo "resolucao": mensagem que fecha TODAS as pendências abertas da O.S.
+    `autor_tipo` ("admin" | "tecnico") define de que lado veio - `lido_em` marca a leitura
+    confirmada quando alguém do OUTRO lado abre a O.S. (mesma ideia dos ícones de leitura do
+    Telecontrol). Diferente de OsTechnicianNote (lembrete do dono pro técnico com cobrança no
+    WhatsApp a cada 2 dias), aqui não há cobrança automática.
+    """
+    __tablename__ = "os_interactions"
+    __table_args__ = (
+        Index("ix_os_interactions_order", "tenant_id", "empresa", "codos"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    loja: Mapped[int] = mapped_column(Integer, default=1)
+    codos: Mapped[int] = mapped_column(Integer, index=True)
+    tipo: Mapped[str] = mapped_column(String(20), default="observacao")
+    mensagem: Mapped[str] = mapped_column(Text)
+    autor: Mapped[str] = mapped_column(String(80))
+    autor_tipo: Mapped[str] = mapped_column(String(10))
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    lido_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    lido_por: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+
+
+class OsEnvioLog(Base):
+    """
+    Um aviso/cobrança de O.S. mandado ao cliente pelo WhatsApp, ligado à O.S. - base do módulo
+    Relatórios (pedido do usuário em 14/10/2026: "andamento das cobranças" de Aguardando
+    aprovação e Aguardando retirada). NÃO é gravado pelos fluxos de envio: o indexador
+    (os_envio_report_service.index_new_messages) reconhece as mensagens do sistema pelo texto e
+    preenche esta tabela - assim cobre o histórico inteiro e qualquer caminho de envio sem mexer
+    neles. O status do WhatsApp (enviada/entregue/lida/falhou) é lido ao vivo de `message_id`.
+      etapa: "orcamento" (aguardando aprovação) | "retirada" (aguardando retirada)
+      tipo:  "envio" (aviso inicial) | "cobranca" (lembrete de 2 em 2 dias) | "descarte" (prazo esgotado)
+    """
+    __tablename__ = "os_envio_logs"
+    __table_args__ = (
+        Index("ix_os_envio_logs_periodo", "tenant_id", "enviado_em"),
+        Index("ix_os_envio_logs_os", "tenant_id", "codos", "etapa"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    message_id: Mapped[int] = mapped_column(Integer, unique=True)
+    conversation_id: Mapped[int] = mapped_column(Integer, index=True)
+    codos: Mapped[int] = mapped_column(Integer)
+    etapa: Mapped[str] = mapped_column(String(20))
+    tipo: Mapped[str] = mapped_column(String(20))
+    enviado_em: Mapped[datetime] = mapped_column(DateTime)
+
+
 class SoftsystemPendingWrite(Base):
     """
     Pedido de escrita no Softsystem (Firebird) ainda não executado. O backend roda na nuvem e não
@@ -736,10 +799,43 @@ class LojaParametrosCusto(Base):
     tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     empresa: Mapped[str] = mapped_column(String(30))  # "servweld" | "centrooeste"
     regime_tributario: Mapped[str] = mapped_column(String(30), default="lucro_presumido")  # "lucro_presumido" | "simples_nacional"
-    custo_fixo_operacional_pct: Mapped[float] = mapped_column(Float, default=12.0)  # ex: 12% overhead
+    # % usado quando não há custos fixos lançados em LojaCustoFixo (senão é calculado deles)
+    custo_fixo_operacional_pct: Mapped[float] = mapped_column(Float, default=12.0)
     despesas_variaveis_pct: Mapped[float] = mapped_column(Float, default=5.0)  # comissao, cartao
-    aliquota_imposto_saida_pct: Mapped[float] = mapped_column(Float, default=6.5)  # DAS ou aliquota efetiva
-    margem_lucro_padrao_pct: Mapped[float] = mapped_column(Float, default=35.0)  # margem alvo
+    margem_lucro_padrao_pct: Mapped[float] = mapped_column(Float, default=25.0)  # margem alvo
+    margem_minima_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Legado (versão anterior do módulo): a coluna é NOT NULL nos bancos já criados - não é mais
+    # usada no cálculo, só precisa de um valor ao inserir.
+    aliquota_imposto_saida_pct: Mapped[Optional[float]] = mapped_column(Float, default=0.0, nullable=True)
+    # Impostos na venda - Lucro Presumido
+    icms_saida_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    pis_saida_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cofins_saida_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    irpj_csll_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    # Impostos na venda - Simples Nacional
+    das_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # alíquota efetiva do DAS
+    das_parcela_icms_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    icms_antecipacao_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # entrada interestadual
+    faturamento_medio_mensal: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # base do % de custo fixo
+    condicao_pagamento_padrao: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # ex "30/60/90"
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    atualizado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+
+class LojaCustoFixo(Base):
+    """
+    Custos fixos mensais da loja (aluguel, folha, energia...). Somados e divididos pelo
+    faturamento médio viram o % de custo fixo que entra no preço de venda.
+    """
+    __tablename__ = "loja_custos_fixos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30), index=True)
+    categoria: Mapped[str] = mapped_column(String(50))
+    descricao: Mapped[str] = mapped_column(String(200))
+    valor_mensal: Mapped[float] = mapped_column(Float, default=0.0)
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
     atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     atualizado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
@@ -782,7 +878,8 @@ class ComprasFornecedor(Base):
     """
     __tablename__ = "compras_fornecedores"
     __table_args__ = (
-        Index("ix_compras_fornecedores_cnpj", "tenant_id", "cnpj", unique=True),
+        # Nome diferente do índice automático de `cnpj` (index=True gera ix_compras_fornecedores_cnpj)
+        Index("ix_compras_fornecedores_tenant_cnpj", "tenant_id", "cnpj", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -850,11 +947,34 @@ class ComprasEntrada(Base):
     tipo_rateio_frete: Mapped[str] = mapped_column(String(20), default="valor")  # "valor" | "peso"
     valor_despesas_acessorias: Mapped[float] = mapped_column(Float, default=0.0)
     valor_total_nota: Mapped[float] = mapped_column(Float, default=0.0)
-    status: Mapped[str] = mapped_column(String(30), default="rascunho", index=True)  # rascunho | confirmada | sincronizada
+    # aguardando_contagem -> contagem_divergente -> contada -> fechada -> enviada_softsystem | cancelada
+    status: Mapped[str] = mapped_column(String(30), default="aguardando_contagem", index=True)
     criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     criado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    origem_xml: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # pasta_softsystem | sefaz | upload
+    nota_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # nota completa interpretada (reprocessamento)
+    cte_chave: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    cte_numero: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    valor_frete_cte: Mapped[float] = mapped_column(Float, default=0.0)
+    valor_icms_cte: Mapped[float] = mapped_column(Float, default=0.0)
+    despesas_extras_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parcelas_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # contas a pagar do fornecedor
+    parcelas_cte_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # contas a pagar da transportadora
+    cte_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # CT-e interpretado (cadastro da transportadora no Softsystem)
+    pasta_notas: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)  # ANO/MÊS/FORNECEDOR/N.F criada na importação
+    # Conferência física (contagem cega)
+    conferencia_iniciada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    conferencia_finalizada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    conferente: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    divergencia_aprovada_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    divergencia_justificativa: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fechada_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    fechada_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    softsystem_codcompra: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     itens: Mapped[List["ComprasEntradaItem"]] = relationship("ComprasEntradaItem", back_populates="entrada", cascade="all, delete-orphan")
+    eventos: Mapped[List["ComprasEntradaEvento"]] = relationship("ComprasEntradaEvento", back_populates="entrada", cascade="all, delete-orphan")
 
 
 class ComprasEntradaItem(Base):
@@ -907,5 +1027,94 @@ class ComprasEntradaItem(Base):
     synced_softsystem: Mapped[bool] = mapped_column(Boolean, default=False)
     synced_ecommerce: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Conferência física: quantidade esperada na unidade da loja = quantidade x fator_conversao
+    # (ex.: nota em CX com 12 UN -> fator 12). O conferente nunca vê a quantidade esperada.
+    fator_conversao: Mapped[float] = mapped_column(Float, default=1.0)
+    qtd_contada: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    contado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    recontagens: Mapped[int] = mapped_column(Integer, default=0)
+    vinculo_metodo: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # codigo_fornecedor | ean | manual | similar
+    produto_modelo_codigo: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # similar copiado p/ cadastro novo
+    calculo_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # composição de custo/preço completa
+    # Auditoria depois do lançamento: estoque real na prateleira (vira ajuste no Softsystem) e
+    # localização gravada em ESTOQUE.LOCALIZACAO (Localização 1) - 15/10/2026
+    # produto novo: cadastro sugerido pela IA e CONFIRMADO pela pessoa (criado no Softsystem no lançamento)
+    cadastro_novo_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    estoque_auditado: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    auditado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    auditado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
     entrada: Mapped["ComprasEntrada"] = relationship("ComprasEntrada", back_populates="itens")
+
+
+class CatalogoProduto(Base):
+    """
+    Dados de e-commerce de um produto do Softsystem (etapas 5 e 6 da entrada de nota, 15/10/2026):
+    o que aparece no site (Hostinger), textos da aba "Para Lojas Web" (gravados também em
+    PRODUTOSWEB / VIDEOSPRODUTOS do Softsystem) e vídeos. Preço e estoque vêm sempre do Softsystem.
+    """
+    __tablename__ = "catalogo_produtos"
+    __table_args__ = (Index("ix_catalogo_produto_cod", "tenant_id", "empresa", "codproduto", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    codproduto: Mapped[int] = mapped_column(Integer, index=True)
+    publicar_site: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    destaque: Mapped[bool] = mapped_column(Boolean, default=False)
+    titulo_web: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    descricao_web: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    especificacoes_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # [{"nome","valor"}]
+    videos_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # [{"titulo","url","youtube_id"}]
+    keywords: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    dica: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    material: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    cor: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    garantia: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    frete_gratis: Mapped[bool] = mapped_column(Boolean, default=False)
+    nunca_mostra_preco: Mapped[bool] = mapped_column(Boolean, default=False)
+    desconto_web_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    atualizado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    atualizado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    softsystem_sincronizado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    softsystem_erro: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class CatalogoMidia(Base):
+    """Imagens (já tratadas: fundo branco + marca d'água) e PDFs técnicos de um produto."""
+    __tablename__ = "catalogo_midias"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30))
+    codproduto: Mapped[int] = mapped_column(Integer, index=True)
+    tipo: Mapped[str] = mapped_column(String(10))  # imagem | pdf
+    arquivo: Mapped[str] = mapped_column(String(300))  # caminho em /uploads (ex.: /uploads/catalogo/servweld/913/ab12.jpg)
+    miniatura: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    original: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)  # arquivo recebido, sem tratamento
+    titulo: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    ordem: Mapped[int] = mapped_column(Integer, default=0)
+    origem: Mapped[str] = mapped_column(String(20), default="upload")  # upload | link | softsystem
+    url_origem: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    fundo_removido: Mapped[bool] = mapped_column(Boolean, default=False)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    criado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # número da foto no Softsystem (PRODUTOSIMAGENS.CODIMAGEM / arquivo "Produto {cod} {n}.jpg")
+    softsystem_codimagem: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+class ComprasEntradaEvento(Base):
+    """Trilha de auditoria da entrada: quem importou, contou, recontou, aprovou divergência, fechou."""
+    __tablename__ = "compras_entrada_eventos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entrada_id: Mapped[int] = mapped_column(Integer, ForeignKey("compras_entradas.id", ondelete="CASCADE"), index=True)
+    item_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quando: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    usuario: Mapped[str] = mapped_column(String(100))
+    acao: Mapped[str] = mapped_column(String(50))
+    detalhe: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    entrada: Mapped["ComprasEntrada"] = relationship("ComprasEntrada", back_populates="eventos")
 

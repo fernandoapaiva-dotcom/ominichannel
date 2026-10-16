@@ -76,6 +76,11 @@ STABILITY_INTERVAL = 2.0
 # inteiro, então nunca entra no bloqueio, não precisa de uma exceção separada pra "véspera".
 PROTECTED_START = dtime(7, 50)
 PROTECTED_END = dtime(18, 0)
+# 15/10/2026 (depois de 6 quedas da VM no dia, uma logo após o treino começar às 18h): o treino passa
+# a rodar SÓ de 23h30 às 06h30, todos os dias - depois do backup do Softsystem (20h) e da subida do
+# Google Drive para a nuvem (20h30, agendada no servidor), para não disputar CPU/disco/rede com eles.
+JANELA_TREINO_INICIO = dtime(23, 30)
+JANELA_TREINO_FIM = dtime(6, 30)
 
 # Teto máximo de tempo por arquivo. Evita que um PDF corrompido/loop infinito de OCR trave o
 # processo a noite inteira - mas achado em produção em 11/10/2026: 180s (3min) é tempo DEMAIS
@@ -119,10 +124,8 @@ def _is_business_day(d) -> bool:
 
 def _in_night_window(now: datetime = None) -> bool:
     now = now or _now_brt()
-    if not _is_business_day(now.date()):
-        return True
     t = now.time()
-    return not (PROTECTED_START <= t < PROTECTED_END)
+    return t >= JANELA_TREINO_INICIO or t < JANELA_TREINO_FIM
 
 
 # Fila de arquivos detectados durante o horário comercial, aguardando a janela livre (18h, ou
@@ -326,10 +329,12 @@ async def main():
     logger.info(f"{len(DONE_IDS)} documento(s) já treinados antes (não serão reprocessados)")
 
     loop = asyncio.get_running_loop()
-    # timeout=30s: intervalo de varredura do PollingObserver - não precisa ser instantâneo (o
-    # vigia só serve pra não esquecer de indexar manualmente, não pra tempo real), e varrer uma
-    # pasta de rede a cada 1s (padrão) geraria tráfego CIFS desnecessário o tempo todo.
-    observer = Observer(timeout=30)
+    # timeout=900s (15 min): intervalo de varredura do PollingObserver. Era 30 s, mas medido em
+    # 15/10/2026: DOC. TÉCNICOS tem ~4.850 arquivos em ~1.600 pastas e UMA varredura pela rede leva
+    # ~57 s - com 30 s o vigia nunca parava de ler a pasta do SRV-SERVWELD (25-50% de CPU o tempo
+    # todo + tráfego CIFS constante, o tipo de engasgo que já travou a VM). O treino desses
+    # documentos só roda de madrugada (_night_drain_loop), então 15 min não atrasa nada.
+    observer = Observer(timeout=900)
 
     any_root = False
     for root in WATCHED_ROOTS:
@@ -347,11 +352,11 @@ async def main():
 
     observer.start()
     drain_task = asyncio.create_task(_night_drain_loop())
-    reconcile_task = asyncio.create_task(_reconcile_backlog_loop(tenant_id))
+    reconcile_task = asyncio.create_task(_reconcile_backlog_loop(tenant_id, interval_seconds=3600))  # 1 h (era 5 min - ver acima)
     heartbeat_task = asyncio.create_task(_heartbeat_loop())
     logger.info(
         f"Observador rodando. Aguardando arquivos novos... "
-        f"(treinamento roda fora do horário comercial - 18h às 07h50 em dia útil, sem corte em "
+        f"(treinamento roda só de 23h30 às 06h30 - antes era 18h às 07h50 em dia útil, sem corte em "
         f"fim de semana/feriado; durante o expediente, fica na fila)"
     )
     try:

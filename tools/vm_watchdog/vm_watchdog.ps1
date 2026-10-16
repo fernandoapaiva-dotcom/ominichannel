@@ -49,7 +49,7 @@ try {
 
     if (Test-Path $StateFile) { $state = Get-Content $StateFile -Raw | ConvertFrom-Json }
     else { $state = [pscustomobject]@{ first_failure = $null; last_action = $null; actions = @(); pending_alerts = @(); last_ip = $null } }
-    foreach ($p in 'first_failure', 'last_action', 'actions', 'pending_alerts', 'last_ip') {
+    foreach ($p in 'first_failure', 'last_action', 'actions', 'pending_alerts', 'last_ip', 'alive_alerted') {
         if (-not ($state.PSObject.Properties.Name -contains $p)) { $state | Add-Member -NotePropertyName $p -NotePropertyValue $null }
     }
     if ($null -eq $state.actions) { $state.actions = @() }
@@ -184,6 +184,7 @@ try {
         }
         if ($usedIp -ne $state.last_ip) { if ($state.last_ip) { Log "IP da VM mudou: $($state.last_ip) -> $usedIp (reserve o IP no DHCP do roteador)" }; $state.last_ip = $usedIp }
         $state.first_failure = $null
+        $state.alive_alerted = $null
         Flush-Alerts $usedIp
         Save-State; exit 0
     }
@@ -197,11 +198,31 @@ try {
     Log ("Falha: {0} ha {1:N1} min (limite {2} min) | publico={3} | {4}" -f $kind, $downMin, $limit, $publicOk, ($errors -join '; '))
 
     if ($downMin -lt $limit) { Save-State; exit 0 }
+
+    # VM viva (SSH ok) e so o backend fora: NAO reinicia a VM. Reiniciar a VM derruba junto o
+    # container da Evolution API e a sessao do WhatsApp - e cada queda/reconexao forcada do numero
+    # aumenta o risco de bloqueio. Backend fora com a VM viva e trabalho do vigia interno
+    # (health_watchdog.sh -> pm2 restart), que nao toca no WhatsApp. Aqui so avisa, uma vez.
+    # Para voltar ao comportamento antigo, ponha "restart_vm_when_alive": true no config.json.
+    if ($alive -and -not $cfg.restart_vm_when_alive) {
+        if (-not $state.alive_alerted) {
+            Log "Backend fora ha $([math]::Round($downMin)) min com a VM viva - NAO reinicio a VM (protege a sessao do WhatsApp). Precisa de atencao manual."
+            Queue-Alert "OminiChannel - backend sem resposta ha $([math]::Round($downMin)) min, mas a VM esta viva. Nao reiniciei a VM pra nao derrubar o WhatsApp. Precisa de atencao manual."
+            $state.alive_alerted = $true
+        }
+        Save-State; exit 0
+    }
     if ($inCooldown) { Log "Sustentado, mas em cooldown desde $($state.last_action) - nao reinicia de novo ainda"; Save-State; exit 0 }
     if ($actionsToday -ge $cfg.max_actions_per_day) {
-        Log "Teto de $($cfg.max_actions_per_day) reinicios automaticos hoje atingido - precisa de intervencao manual"
-        if ($downMin -lt $limit + 2) { Queue-Alert "OminiChannel - CAIU DE NOVO ($kind) e ja bati o teto de reinicios automaticos hoje. Precisa de atencao manual." }
-        Save-State; exit 0
+        # 15/10/2026: o teto parava tudo e o sistema ficou ~3h fora esperando alguem. Depois do teto
+        # continua tentando, mas so 1 vez por hora (nunca em rajada).
+        $minDesdeUltima = if ($state.last_action) { ($now - [datetime]$state.last_action).TotalMinutes } else { 999 }
+        if ($minDesdeUltima -lt 60) {
+            Log "Teto de $($cfg.max_actions_per_day) reinicios hoje atingido - proxima tentativa espacada em $([math]::Round(60 - $minDesdeUltima)) min"
+            if ($downMin -lt $limit + 2) { Queue-Alert "OminiChannel - CAIU DE NOVO ($kind) e ja bati o teto de reinicios automaticos hoje. Sigo tentando 1x por hora; se puder, de uma olhada." }
+            Save-State; exit 0
+        }
+        Log "Teto de reinicios hoje ja atingido, mas faz $([math]::Round($minDesdeUltima)) min da ultima tentativa - tentando de novo (1x/hora)"
     }
 
     # --- Age: ACPI primeiro, reset forcado se nao obedecer --------------------------------------
@@ -214,8 +235,12 @@ try {
     } while ($st -eq 'running' -and (Get-Date) -lt $deadline)
 
     if ($st -eq 'running') {
-        Log "Nao desligou pelo ACPI em $($cfg.acpi_wait_seconds)s (kernel travado) - RESET forcado"
-        & $VBox controlvm $vmName reset 2>&1 | ForEach-Object { Log "  $_" }
+        # 15/10/2026: o "reset" a quente deixou a VM presa no boot ("Loading essential drivers") 4 vezes
+        # seguidas; desligar de vez e ligar de novo (processo da VM novo) resolveu na hora.
+        Log "Nao desligou pelo ACPI em $($cfg.acpi_wait_seconds)s (kernel travado) - DESLIGA e LIGA do zero"
+        & $VBox controlvm $vmName poweroff 2>&1 | ForEach-Object { Log "  $_" }
+        Start-Sleep 8
+        & $VBox startvm $vmName --type headless 2>&1 | ForEach-Object { Log "  $_" }
     } else {
         Log "Desligou pelo ACPI ($st) - ligando de novo"
         Start-Sleep 3
