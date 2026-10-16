@@ -2010,3 +2010,438 @@ async def atualizar_status_balcao_espera(
     )
     await db.commit()
     return {"success": True, "demanda": demanda}
+
+
+# ============================================================ 7. Pedidos de Compra por Fabricante / Telecontrol
+class PedidoItemIn(BaseModel):
+    referencia: str
+    descricao: str
+    quantidade: float = 1.0
+    unidade: str = "UN"
+    preco_estimado: Optional[float] = None
+    softsystem_codproduto: Optional[int] = None
+    balcao_espera_id: Optional[int] = None
+    observacao: Optional[str] = None
+
+
+class PedidoCriarIn(BaseModel):
+    empresa: str = "servweld"
+    fabricante_nome: str
+    fornecedor_cnpj: Optional[str] = None
+    fornecedor_email: Optional[str] = None
+    fornecedor_whatsapp: Optional[str] = None
+    contato_nome: Optional[str] = None
+    observacao: Optional[str] = None
+
+
+class ProdutoDiretoIn(BaseModel):
+    empresa: str = "servweld"
+    descricao: str
+    modelo_codigo: int
+    unidade: str = "UN"
+    ncm: str
+    codgrupo: int
+    codsubgrupo: int
+    codsubgruponivel2: Optional[int] = None
+    codsubgruponivel3: Optional[int] = None
+    codmarca: Optional[int] = None
+    marca_nova: Optional[str] = None
+    referencia: Optional[str] = None
+    peso: Optional[float] = None
+    preco_venda: Optional[float] = None
+    preco_custo: Optional[float] = None
+
+
+@router.get("/pedidos")
+async def listar_pedidos(
+    empresa: Optional[str] = None,
+    status: Optional[str] = None,
+    fabricante: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    stmt = select(ComprasPedido).where(ComprasPedido.tenant_id == current_user.tenant_id)
+    if empresa and empresa != "todas":
+        stmt = stmt.where(ComprasPedido.empresa == empresa.lower())
+    if status and status != "todos":
+        stmt = stmt.where(ComprasPedido.status == status.lower())
+    if fabricante:
+        stmt = stmt.where(ComprasPedido.fabricante_nome.ilike(f"%{fabricante.strip()}%"))
+    
+    res = await db.execute(stmt.options(selectinload(ComprasPedido.itens)).order_by(desc(ComprasPedido.criado_em)))
+    pedidos = res.scalars().all()
+    
+    return {
+        "success": True,
+        "total": len(pedidos),
+        "pedidos": [
+            {
+                "id": p.id,
+                "empresa": p.empresa,
+                "fabricante_nome": p.fabricante_nome,
+                "fornecedor_cnpj": p.fornecedor_cnpj,
+                "fornecedor_email": p.fornecedor_email,
+                "fornecedor_whatsapp": p.fornecedor_whatsapp,
+                "contato_nome": p.contato_nome,
+                "status": p.status,
+                "observacao": p.observacao,
+                "criado_em": p.criado_em,
+                "criado_por": p.criado_por,
+                "fechado_em": p.fechado_em,
+                "fechado_por": p.fechado_por,
+                "total_itens": len(p.itens),
+                "total_pecas": sum(it.quantidade for it in p.itens)
+            } for p in pedidos
+        ]
+    }
+
+
+@router.post("/pedidos")
+async def criar_ou_obter_pedido(
+    payload: PedidoCriarIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido
+    empresa = payload.empresa.lower()
+    fab_nome = payload.fabricante_nome.strip()
+    
+    # Regra: se já tem pedido em aberto do mesmo fabricante na mesma empresa, avisa e retorna o existente
+    stmt = select(ComprasPedido).where(
+        ComprasPedido.tenant_id == current_user.tenant_id,
+        ComprasPedido.empresa == empresa,
+        ComprasPedido.fabricante_nome.ilike(fab_nome),
+        ComprasPedido.status == "aberto"
+    ).options(selectinload(ComprasPedido.itens))
+    res = await db.execute(stmt)
+    aberto = res.scalar_one_or_none()
+    
+    if aberto:
+        return {
+            "success": True,
+            "ja_existia": True,
+            "mensagem": f"Já existe um pedido aberto para '{aberto.fabricante_nome}' (Nº {aberto.id}). Continue lançando nele!",
+            "pedido": aberto
+        }
+
+    novo = ComprasPedido(
+        tenant_id=current_user.tenant_id,
+        empresa=empresa,
+        fabricante_nome=fab_nome,
+        fornecedor_cnpj=payload.fornecedor_cnpj,
+        fornecedor_email=payload.fornecedor_email,
+        fornecedor_whatsapp=payload.fornecedor_whatsapp,
+        contato_nome=payload.contato_nome,
+        observacao=payload.observacao,
+        status="aberto",
+        criado_em=datetime.utcnow(),
+        criado_por=_usuario(current_user)
+    )
+    db.add(novo)
+    await db.commit()
+    await db.refresh(novo)
+    
+    # Recarrega itens
+    res = await db.execute(select(ComprasPedido).where(ComprasPedido.id == novo.id).options(selectinload(ComprasPedido.itens)))
+    return {"success": True, "ja_existia": False, "pedido": res.scalar_one()}
+
+
+@router.get("/pedidos/{pedido_id}")
+async def obter_detalhe_pedido(
+    pedido_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    res = await db.execute(
+        select(ComprasPedido)
+        .where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+        .options(selectinload(ComprasPedido.itens))
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    return {"success": True, "pedido": pedido}
+
+
+@router.post("/pedidos/{pedido_id}/itens")
+async def adicionar_item_pedido(
+    pedido_id: int,
+    item_in: PedidoItemIn,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem, BalcaoFilaEspera
+    res = await db.execute(
+        select(ComprasPedido).where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+    if pedido.status != "aberto":
+        raise HTTPException(status_code=400, detail="Este pedido já está fechado ou cancelado.")
+
+    item = ComprasPedidoItem(
+        pedido_id=pedido.id,
+        referencia=item_in.referencia.strip(),
+        descricao=item_in.descricao.strip(),
+        quantidade=float(item_in.quantidade),
+        unidade=item_in.unidade.strip().upper(),
+        preco_estimado=item_in.preco_estimado,
+        softsystem_codproduto=item_in.softsystem_codproduto,
+        balcao_espera_id=item_in.balcao_espera_id,
+        observacao=item_in.observacao,
+        criado_em=datetime.utcnow()
+    )
+    db.add(item)
+
+    # Se veio de uma demanda do balcão, atualiza o histórico da demanda
+    if item_in.balcao_espera_id:
+        b_res = await db.execute(select(BalcaoFilaEspera).where(BalcaoFilaEspera.id == item_in.balcao_espera_id))
+        demanda = b_res.scalar_one_or_none()
+        if demanda:
+            demanda.historico_auditoria = BalcaoEsperaService._adicionar_log_auditoria(
+                demanda.historico_auditoria,
+                f"Item incluído no Pedido de Compra #{pedido.id} ({pedido.fabricante_nome}) por {_usuario(current_user)}."
+            )
+
+    await db.commit()
+    await db.refresh(item)
+    return {"success": True, "item": item}
+
+
+@router.delete("/pedidos/{pedido_id}/itens/{item_id}")
+async def remover_item_pedido(
+    pedido_id: int,
+    item_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    res = await db.execute(
+        select(ComprasPedidoItem).join(ComprasPedido).where(
+            ComprasPedidoItem.id == item_id,
+            ComprasPedido.id == pedido_id,
+            ComprasPedido.tenant_id == current_user.tenant_id
+        )
+    )
+    item = res.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item não encontrado")
+    await db.delete(item)
+    await db.commit()
+    return {"success": True}
+
+
+@router.get("/pedidos/{pedido_id}/sugestoes-balcao")
+async def buscar_sugestoes_balcao(
+    pedido_id: int,
+    termo: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Localiza pedidos de clientes na fila de espera do balcão que:
+    1) Sejam do mesmo fabricante do pedido, OU
+    2) Tenham similaridade de nome/tipo com o termo informado ou com os itens já lançados no pedido.
+    """
+    from app.models.models import ComprasPedido, ComprasPedidoItem, BalcaoFilaEspera
+    from app.services.compras_pedido_service import ComprasPedidoService
+    
+    res = await db.execute(
+        select(ComprasPedido).where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+        .options(selectinload(ComprasPedido.itens))
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+
+    # Busca todas as demandas 'aguardando' da empresa
+    stmt = select(BalcaoFilaEspera).where(
+        BalcaoFilaEspera.tenant_id == current_user.tenant_id,
+        BalcaoFilaEspera.empresa == pedido.empresa,
+        BalcaoFilaEspera.status == "aguardando"
+    )
+    d_res = await db.execute(stmt)
+    todas_aguardando = d_res.scalars().all()
+
+    sugestoes = []
+    termos_pedido = [it.descricao for it in pedido.itens]
+    if termo:
+        termos_pedido.append(termo)
+
+    for dem in todas_aguardando:
+        motivo = None
+        # Mesma menção de fabricante na observação ou produto
+        if pedido.fabricante_nome.lower() in (dem.produto_nome or "").lower() or pedido.fabricante_nome.lower() in (dem.observacao or "").lower():
+            motivo = f"Mesmo fabricante ({pedido.fabricante_nome})"
+        else:
+            # Testa similaridade com itens do pedido
+            for t_item in termos_pedido:
+                if ComprasPedidoService.verificar_similaridade(t_item, dem.produto_nome):
+                    motivo = f"Similar ao item do pedido: '{t_item}'"
+                    break
+
+        if motivo:
+            sugestoes.append({
+                "demanda_id": dem.id,
+                "cliente_nome": dem.cliente_nome,
+                "cliente_telefone": dem.cliente_telefone,
+                "produto_nome": dem.produto_nome,
+                "produto_codigo": dem.produto_codigo,
+                "quantidade_desejada": dem.quantidade_desejada,
+                "observacao": dem.observacao,
+                "criado_em": dem.criado_em,
+                "motivo_sugestao": motivo
+            })
+
+    return {"success": True, "sugestoes": sugestoes}
+
+
+@router.get("/pedidos/{pedido_id}/exportar-csv")
+async def exportar_pedido_csv(
+    pedido_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    from app.services.compras_pedido_service import ComprasPedidoService
+
+    res = await db.execute(
+        select(ComprasPedido).where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+        .options(selectinload(ComprasPedido.itens))
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+
+    itens_dict = [
+        {"referencia": it.referencia, "quantidade": it.quantidade}
+        for it in pedido.itens
+    ]
+    arquivos = ComprasPedidoService.gerar_csv_telecontrol(itens_dict, limite_linhas=500)
+    return {"success": True, "arquivos": arquivos}
+
+
+@router.get("/pedidos/{pedido_id}/exportar-pdf")
+async def exportar_pedido_pdf(
+    pedido_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    from app.services.compras_pedido_service import ComprasPedidoService
+    from fastapi.responses import Response
+
+    res = await db.execute(
+        select(ComprasPedido).where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+        .options(selectinload(ComprasPedido.itens))
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+
+    p_dict = {
+        "id": pedido.id,
+        "empresa": pedido.empresa,
+        "fabricante_nome": pedido.fabricante_nome,
+        "contato_nome": pedido.contato_nome,
+        "fornecedor_email": pedido.fornecedor_email,
+        "fornecedor_whatsapp": pedido.fornecedor_whatsapp,
+        "status": pedido.status,
+        "observacao": pedido.observacao,
+        "criado_em": pedido.criado_em
+    }
+    itens_dict = [
+        {"referencia": it.referencia, "descricao": it.descricao, "quantidade": it.quantidade, "unidade": it.unidade}
+        for it in pedido.itens
+    ]
+
+    pdf_bytes = ComprasPedidoService.gerar_pdf_pedido(p_dict, itens_dict)
+    nome_arq = f"pedido_{pedido.id:05d}_{pedido.fabricante_nome.replace(' ', '_')}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={nome_arq}"}
+    )
+
+
+@router.post("/pedidos/{pedido_id}/fechar")
+async def fechar_pedido(
+    pedido_id: int,
+    enviar_whatsapp: bool = False,
+    enviar_email: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from app.models.models import ComprasPedido, ComprasPedidoItem
+    res = await db.execute(
+        select(ComprasPedido).where(ComprasPedido.id == pedido_id, ComprasPedido.tenant_id == current_user.tenant_id)
+        .options(selectinload(ComprasPedido.itens))
+    )
+    pedido = res.scalar_one_or_none()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado")
+
+    pedido.status = "fechado"
+    pedido.fechado_em = datetime.utcnow()
+    pedido.fechado_por = _usuario(current_user)
+
+    # Disparo de WhatsApp se solicitado e tiver telefone
+    if enviar_whatsapp and pedido.fornecedor_whatsapp:
+        try:
+            from app.services.evolution_service import evolution_service
+            clean_phone = re.sub(r"\D", "", pedido.fornecedor_whatsapp)
+            if len(clean_phone) in (10, 11) and not clean_phone.startswith("55"):
+                clean_phone = f"55{clean_phone}"
+            
+            nome_loja = "Servweld" if pedido.empresa == "servweld" else "Centro Oeste"
+            msg = (
+                f"Olá! Segue fechamento do nosso *Pedido de Compra Nº {pedido.id:05d}* ({nome_loja}).\n\n"
+                f"Fabricante: *{pedido.fabricante_nome}*\n"
+                f"Total de itens: *{len(pedido.itens)}*\n"
+                f"Total de peças: *{sum(it.quantidade for it in pedido.itens):.0f}*\n\n"
+                f"Por favor, confirmar o recebimento e prazo de faturamento/entrega."
+            )
+            await evolution_service.send_text_message("instancia_vendas", clean_phone, msg)
+            pedido.enviado_whatsapp_em = datetime.utcnow()
+        except Exception as e:
+            logger.warning(f"[PEDIDO] Erro ao enviar whatsapp ao fornecedor: {e}")
+
+    await db.commit()
+    return {"success": True, "pedido": pedido}
+
+
+@router.post("/cadastrar-produto-direto")
+async def cadastrar_produto_direto_endpoint(
+    payload: ProdutoDiretoIn,
+    current_user: User = Depends(get_current_user)
+):
+    """Cria um novo produto diretamente no Softsystem a partir do modelo selecionado."""
+    from app.services.softsystem_compra_writer import cadastrar_produto_direto, LancamentoErro
+    from app.services.cadastro_produto_service import arvore, validar_cadastro
+
+    empresa = payload.empresa.lower()
+    arv = arvore(empresa)
+    cad_dict = payload.model_dump()
+    
+    erros = validar_cadastro(arv, cad_dict)
+    if erros:
+        raise HTTPException(status_code=400, detail=" ".join(erros))
+
+    try:
+        cod_criado = await asyncio.to_thread(
+            cadastrar_produto_direto,
+            empresa=empresa,
+            cad=cad_dict,
+            operador=_usuario(current_user)
+        )
+        return {"success": True, "codproduto": cod_criado, "descricao": payload.descricao}
+    except LancamentoErro as le:
+        raise HTTPException(status_code=400, detail=str(le))
+    except Exception as e:
+        logger.error(f"[CADASTRO_DIRETO] Erro ao cadastrar produto: {e}")
+        raise HTTPException(status_code=500, detail=f"Erro interno ao gravar no Softsystem: {e}")
+

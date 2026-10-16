@@ -8,6 +8,8 @@ import { EntradaNotaFiscal } from './compras/EntradaNotaFiscal';
 import { ParametrosCustoLoja } from './compras/ParametrosCustoLoja';
 import { AcertoEstoque } from './compras/AcertoEstoque';
 import { CatalogoSite } from './compras/CatalogoSite';
+import { PedidosCompraPanel } from './compras/PedidosCompraPanel';
+
 
 interface ComprasPanelProps {
   user: User;
@@ -47,8 +49,9 @@ interface BalcaoDemanda {
 }
 
 export const ComprasPanel: React.FC<ComprasPanelProps> = ({ user, onBack }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'nfe' | 'balcao' | 'estoque' | 'site' | 'custos'>('nfe');
+  const [activeSubTab, setActiveSubTab] = useState<'nfe' | 'pedidos' | 'balcao' | 'estoque' | 'site' | 'custos'>('nfe');
   const [empresaAtiva, setEmpresaAtiva] = useState<'servweld' | 'centrooeste'>('servweld');
+
   
   // Balcão Estado
   const [demandas, setDemandas] = useState<BalcaoDemanda[]>([]);
@@ -325,10 +328,31 @@ export const ComprasPanel: React.FC<ComprasPanelProps> = ({ user, onBack }) => {
             Entrada de NF-e & Precificação
           </button>
           <button
+            onClick={() => setActiveSubTab('pedidos')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '8px 14px',
+              fontSize: '13px',
+              fontWeight: 600,
+              borderRadius: 'var(--radius-sm)',
+              border: 'none',
+              cursor: 'pointer',
+              background: activeSubTab === 'pedidos' ? 'var(--bg-primary)' : 'transparent',
+              color: activeSubTab === 'pedidos' ? 'var(--accent-primary)' : 'var(--text-muted)',
+              borderBottom: activeSubTab === 'pedidos' ? '2px solid var(--accent-primary)' : 'none'
+            }}
+          >
+            <ClipboardList size={15} />
+            Pedidos por Fabricante
+          </button>
+          <button
             onClick={() => {
               setActiveSubTab('balcao');
               carregarDemandas();
             }}
+
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -433,8 +457,16 @@ export const ComprasPanel: React.FC<ComprasPanelProps> = ({ user, onBack }) => {
         )}
 
         {/* ============================================================== */}
+        {/* ABA: PEDIDOS DE COMPRA POR FABRICANTE (TELECONTROL / BALCÃO)   */}
+        {/* ============================================================== */}
+        {activeSubTab === 'pedidos' && (
+          <PedidosCompraPanel empresa={empresaAtiva} usuarioNome={user.name || user.email} />
+        )}
+
+        {/* ============================================================== */}
         {/* ABA 2: BALCÃO - FILA "AVISE-ME QUANDO CHEGAR"                   */}
         {/* ============================================================== */}
+
         {activeSubTab === 'balcao' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* Barra de Ações do Balcão */}

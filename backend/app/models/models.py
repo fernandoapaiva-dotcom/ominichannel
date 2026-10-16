@@ -1118,3 +1118,57 @@ class ComprasEntradaEvento(Base):
 
     entrada: Mapped["ComprasEntrada"] = relationship("ComprasEntrada", back_populates="eventos")
 
+
+class ComprasPedido(Base):
+    """
+    Pedido de compra contínuo por fabricante/fornecedor.
+    Regra: Apenas 1 pedido com status 'aberto' por fabricante por empresa.
+    Status: aberto (em lançamento) | fechado (enviado ao fornecedor) | cancelado
+    """
+    __tablename__ = "compras_pedidos"
+    __table_args__ = (
+        Index("ix_compras_pedidos_empresa_fab", "tenant_id", "empresa", "fabricante_nome", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    empresa: Mapped[str] = mapped_column(String(30), default="servweld")  # servweld | centrooeste
+    fabricante_nome: Mapped[str] = mapped_column(String(200), index=True)
+    fornecedor_cnpj: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    fornecedor_email: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    fornecedor_whatsapp: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    contato_nome: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="aberto", index=True)  # aberto | fechado | cancelado
+    observacao: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    criado_por: Mapped[str] = mapped_column(String(100))
+    fechado_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    fechado_por: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    enviado_whatsapp_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    enviado_email_em: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    itens: Mapped[List["ComprasPedidoItem"]] = relationship("ComprasPedidoItem", back_populates="pedido", cascade="all, delete-orphan")
+
+
+class ComprasPedidoItem(Base):
+    """
+    Item do pedido de compra.
+    Exportação CSV Telecontrol: referencia;quantidade (máx 500 linhas por arquivo).
+    """
+    __tablename__ = "compras_pedido_itens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pedido_id: Mapped[int] = mapped_column(Integer, ForeignKey("compras_pedidos.id", ondelete="CASCADE"), index=True)
+    referencia: Mapped[str] = mapped_column(String(100))  # Código de fábrica ou referência Telecontrol
+    descricao: Mapped[str] = mapped_column(String(255))
+    quantidade: Mapped[float] = mapped_column(Float, default=1.0)
+    unidade: Mapped[str] = mapped_column(String(10), default="UN")
+    preco_estimado: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    softsystem_codproduto: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    balcao_espera_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("balcao_fila_espera.id", ondelete="SET NULL"), nullable=True)
+    criado_em: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    observacao: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    pedido: Mapped["ComprasPedido"] = relationship("ComprasPedido", back_populates="itens")
+
+

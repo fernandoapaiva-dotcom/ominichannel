@@ -773,3 +773,47 @@ def atualizar_preco_venda(empresa: str, precos: Dict[int, float], operador: str,
             con.close()
         except Exception:
             pass
+
+
+def cadastrar_produto_direto(empresa: str, cad: Dict[str, Any], operador: str,
+                             db_path: Optional[str] = None) -> int:
+    """
+    Cadastra um novo produto diretamente no Softsystem a partir do modelo base.
+    Usado no Pedido de Compra / Balcão quando o item ainda não existe no catálogo.
+    """
+    loja = LOJA_POR_EMPRESA[empresa]
+    op = (operador or "OMINICHANNEL").upper()[:20]
+    con = _conectar(empresa, db_path)
+    tpb = TPB(access_mode=TraAccessMode.WRITE, isolation=Isolation.READ_COMMITTED_RECORD_VERSION, lock_timeout=15)
+    tra = con.transaction_manager(tpb.get_buffer())
+    tra.begin()
+    try:
+        cur = tra.cursor()
+        g = _Gravador(cur)
+
+        def um(sql, params=()):
+            cur.execute(sql, params)
+            return cur.fetchone()
+
+        agora = _agora_brt()
+        linha_mock = {
+            "preco_venda": _f(cad.get("preco_venda")),
+            "preco_unit": _f(cad.get("preco_custo")) or _f(cad.get("preco_aquisicao")) or 0.0,
+        }
+        cod_forn = str(cad.get("codfornecedor") or "0")
+        novo_cod = _criar_produto(g, um, cur, cad, linha_mock, cod_forn, op, agora)
+        tra.commit()
+        logger.info(f"[SOFTSYSTEM] Produto {novo_cod} cadastrado diretamente por {op} ({cad.get('descricao')})")
+        return novo_cod
+    except Exception:
+        try:
+            tra.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+

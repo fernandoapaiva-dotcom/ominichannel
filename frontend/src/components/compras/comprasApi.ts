@@ -269,3 +269,40 @@ export const formatarChave = (chave: string) => chave.replace(/\D/g, '').slice(0
 // Catálogo do site (fotos, textos web, vídeos, PDFs) - /api/v1/catalogo
 export const catalogoApi = <T = any>(path: string, options: { method?: string; body?: any; form?: FormData } = {}) =>
   api<T>(path, { ...options, base: '/api/v1/catalogo' });
+
+export interface PedidoCompraItem {
+  id: number;
+  pedido_id: number;
+  referencia: string;
+  descricao: string;
+  quantidade: number;
+  unidade: string;
+  preco_estimado?: number | null;
+  softsystem_codproduto?: number | null;
+  balcao_espera_id?: number | null;
+  observacao?: string | null;
+  criado_em?: string;
+}
+
+export interface PedidoCompraResumo {
+  id: number;
+  empresa: Empresa;
+  fabricante_nome: string;
+  fornecedor_cnpj?: string | null;
+  fornecedor_email?: string | null;
+  fornecedor_whatsapp?: string | null;
+  contato_nome?: string | null;
+  status: 'aberto' | 'fechado' | 'cancelado';
+  observacao?: string | null;
+  criado_em: string;
+  criado_por: string;
+  fechado_em?: string | null;
+  fechado_por?: string | null;
+  total_itens: number;
+  total_pecas: number;
+}
+
+export interface PedidoCompraDetalhe extends PedidoCompraResumo {
+  itens: PedidoCompraItem[];
+}
+
