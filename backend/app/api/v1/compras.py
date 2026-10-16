@@ -524,16 +524,39 @@ async def _carregar_entrada(db: AsyncSession, tenant_id: int, entrada_id: int) -
     return entrada
 
 
+def _safe_float(val: Any, default: Optional[float] = 0.0) -> Optional[float]:
+    if val is None or val == "":
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    try:
+        val_str = str(val).strip().replace("R$", "").replace(" ", "").replace(",", ".")
+        return float(val_str)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(val: Any, default: int = 1) -> int:
+    if val is None or val == "":
+        return default
+    if isinstance(val, int):
+        return val
+    try:
+        return int(float(str(val).strip().replace(",", ".")))
+    except (ValueError, TypeError):
+        return default
+
+
 def _aplicar_calculo_no_item(item_db: ComprasEntradaItem, calc: Dict[str, Any]):
-    item_db.frete_rateado = calc.get("frete_rateado") or 0.0
-    item_db.custo_fixo_rateado = calc.get("custo_fixo_rateado") or 0.0
-    item_db.custo_unitario_real = calc.get("custo_unitario_real") or 0.0
-    item_db.margem_lucro_pct = calc.get("margem_lucro_pct") or 0.0
-    item_db.preco_venda_sugerido = calc.get("preco_venda_sugerido") or 0.0
-    item_db.preco_venda_final = calc.get("preco_venda_final") or 0.0
-    item_db.preco_mercado_min = calc.get("preco_mercado_min")
-    item_db.preco_mercado_med = calc.get("preco_mercado_med")
-    item_db.preco_mercado_max = calc.get("preco_mercado_max")
+    item_db.frete_rateado = _safe_float(calc.get("frete_rateado"), 0.0)
+    item_db.custo_fixo_rateado = _safe_float(calc.get("custo_fixo_rateado"), 0.0)
+    item_db.custo_unitario_real = _safe_float(calc.get("custo_unitario_real"), 0.0)
+    item_db.margem_lucro_pct = _safe_float(calc.get("margem_lucro_pct"), 0.0)
+    item_db.preco_venda_sugerido = _safe_float(calc.get("preco_venda_sugerido"), 0.0)
+    item_db.preco_venda_final = _safe_float(calc.get("preco_venda_final"), 0.0)
+    item_db.preco_mercado_min = _safe_float(calc.get("preco_mercado_min"), None)
+    item_db.preco_mercado_med = _safe_float(calc.get("preco_mercado_med"), None)
+    item_db.preco_mercado_max = _safe_float(calc.get("preco_mercado_max"), None)
     item_db.calculo_json = json.dumps(calc, ensure_ascii=False, default=str)
 
 
@@ -1134,111 +1157,114 @@ async def criar_entrada(
     current_user: User = Depends(get_current_user),
 ):
     """Salva a nota importada e libera para a contagem física (cega)."""
-    empresa = _empresa_valida(payload.empresa)
-    nota = payload.nota
-    chave = nota.get("chave_acesso") or ""
-    res = await db.execute(select(ComprasEntrada).where(
-        ComprasEntrada.tenant_id == current_user.tenant_id,
-        ComprasEntrada.chave_acesso == chave, ComprasEntrada.status != "cancelada",
-    ))
-    if res.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Esta nota já foi importada.")
-
-    cte = payload.cte or {}
-    frete_cte = float(cte.get("valor_frete_total") or 0.0) if cte.get("frete_da_loja") else 0.0
-    data_emissao = None
     try:
-        data_emissao = datetime.fromisoformat((nota.get("data_emissao") or "")[:19])
-    except ValueError:
-        pass
-    totais = nota.get("totais") or {}
+        empresa = _empresa_valida(payload.empresa)
+        nota = payload.nota
+        chave = nota.get("chave_acesso") or ""
+        res = await db.execute(select(ComprasEntrada).where(
+            ComprasEntrada.tenant_id == current_user.tenant_id,
+            ComprasEntrada.chave_acesso == chave, ComprasEntrada.status != "cancelada",
+        ))
+        if res.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Esta nota já foi importada.")
 
-    entrada = ComprasEntrada(
-        tenant_id=current_user.tenant_id,
-        empresa=empresa,
-        chave_acesso=chave,
-        numero_nf=str(nota.get("numero_nf") or ""),
-        serie=nota.get("serie"),
-        data_emissao=data_emissao,
-        fornecedor_cnpj=(nota.get("fornecedor") or {}).get("cnpj", ""),
-        fornecedor_nome=(nota.get("fornecedor") or {}).get("razao_social", ""),
-        transportadora_cnpj=(cte.get("transportadora") or {}).get("cnpj") or (nota.get("transportadora") or {}).get("cnpj"),
-        transportadora_nome=(cte.get("transportadora") or {}).get("razao_social") or (nota.get("transportadora") or {}).get("razao_social"),
-        valor_produtos=float(totais.get("valor_produtos") or 0.0),
-        valor_frete_nota=float(totais.get("valor_frete") or 0.0),
-        valor_frete_extra_transportadora=frete_cte,
-        tipo_rateio_frete=payload.tipo_rateio,
-        valor_despesas_acessorias=float(totais.get("valor_outras_despesas") or 0.0) + float(totais.get("valor_seguro") or 0.0),
-        valor_total_nota=float(totais.get("valor_total_nf") or 0.0),
-        status="aguardando_contagem",
-        criado_em=datetime.utcnow(),
-        criado_por=_usuario(current_user),
-        origem_xml=payload.origem_xml,
-        nota_json=json.dumps(nota, ensure_ascii=False, default=str),
-        cte_chave=cte.get("chave_acesso") if cte.get("carregado") else None,
-        cte_numero=cte.get("numero_cte"),
-        valor_frete_cte=frete_cte,
-        valor_icms_cte=float((cte.get("icms") or {}).get("v_icms") or 0.0) if cte.get("frete_da_loja") else 0.0,
-        despesas_extras_json=json.dumps(payload.despesas_extras or [], ensure_ascii=False),
-        parcelas_json=json.dumps(payload.parcelas, ensure_ascii=False),
-        parcelas_cte_json=json.dumps(payload.parcelas_cte, ensure_ascii=False),
-        cte_json=json.dumps(cte, ensure_ascii=False, default=str) if cte.get("carregado") else None,
-    )
-    db.add(entrada)
-    await db.flush()
+        cte = payload.cte or {}
+        frete_cte = _safe_float(cte.get("valor_frete_total"), 0.0) if cte.get("frete_da_loja") else 0.0
+        data_emissao = None
+        try:
+            data_emissao = datetime.fromisoformat((nota.get("data_emissao") or "")[:19])
+        except (ValueError, TypeError):
+            pass
+        totais = nota.get("totais") or {}
 
-    for it in payload.itens:
-        mod_cod = it.get("produto_modelo_codigo")
-        if mod_cod is not None:
-            mod_cod = str(mod_cod)
-        soft_cod = it.get("softsystem_prod_codigo")
-        if soft_cod is not None:
-            soft_cod = str(soft_cod)
-
-        item_db = ComprasEntradaItem(
-            entrada_id=entrada.id,
-            numero_item=int(it.get("numero_item") or 1),
-            codigo_fornecedor=str(it.get("codigo_fornecedor") or ""),
-            ean=it.get("ean") or None,
-            descricao_fornecedor=str(it.get("descricao_fornecedor") or ""),
-            ncm=it.get("ncm"),
-            cfop=it.get("cfop"),
-            unidade=str(it.get("unidade") or "UN"),
-            quantidade=float(it.get("quantidade") or 1.0),
-            valor_unitario=float(it.get("valor_unitario") or 0.0),
-            valor_total=float(it.get("valor_total") or 0.0),
-            v_ipi=float(it.get("v_ipi") or 0.0),
-            v_icms=float(it.get("v_icms") or 0.0),
-            v_icms_st=float(it.get("v_icms_st") or 0.0),
-            v_pis=float(it.get("v_pis") or 0.0),
-            v_cofins=float(it.get("v_cofins") or 0.0),
-            softsystem_prod_codigo=soft_cod,
-            softsystem_descricao=it.get("softsystem_descricao"),
-            softsystem_grupo=it.get("softsystem_grupo"),
-            softsystem_subgrupo=it.get("softsystem_subgrupo"),
-            fator_conversao=float(it.get("fator_conversao") or 1.0),
-            vinculo_metodo=it.get("vinculo_metodo"),
-            produto_modelo_codigo=mod_cod,
-            cadastro_novo_json=json.dumps(it.get("cadastro_novo"), ensure_ascii=False) if it.get("cadastro_novo") else None,
-            recontagens=0,
+        entrada = ComprasEntrada(
+            tenant_id=current_user.tenant_id,
+            empresa=empresa,
+            chave_acesso=chave,
+            numero_nf=str(nota.get("numero_nf") or ""),
+            serie=str(nota.get("serie") or "") if nota.get("serie") is not None else None,
+            data_emissao=data_emissao,
+            fornecedor_cnpj=(nota.get("fornecedor") or {}).get("cnpj", ""),
+            fornecedor_nome=(nota.get("fornecedor") or {}).get("razao_social", ""),
+            transportadora_cnpj=(cte.get("transportadora") or {}).get("cnpj") or (nota.get("transportadora") or {}).get("cnpj"),
+            transportadora_nome=(cte.get("transportadora") or {}).get("razao_social") or (nota.get("transportadora") or {}).get("razao_social"),
+            valor_produtos=_safe_float(totais.get("valor_produtos"), 0.0),
+            valor_frete_nota=_safe_float(totais.get("valor_frete"), 0.0),
+            valor_frete_extra_transportadora=_safe_float(frete_cte, 0.0),
+            tipo_rateio_frete=payload.tipo_rateio or "valor",
+            valor_despesas_acessorias=_safe_float(totais.get("valor_outras_despesas"), 0.0) + _safe_float(totais.get("valor_seguro"), 0.0),
+            valor_total_nota=_safe_float(totais.get("valor_total_nf"), 0.0),
+            status="aguardando_contagem",
+            criado_em=datetime.utcnow(),
+            criado_por=_usuario(current_user),
+            origem_xml=payload.origem_xml,
+            nota_json=json.dumps(nota, ensure_ascii=False, default=str),
+            cte_chave=cte.get("chave_acesso") if cte.get("carregado") else None,
+            cte_numero=cte.get("numero_cte"),
+            valor_frete_cte=_safe_float(frete_cte, 0.0),
+            valor_icms_cte=_safe_float((cte.get("icms") or {}).get("v_icms"), 0.0) if cte.get("frete_da_loja") else 0.0,
+            despesas_extras_json=json.dumps(payload.despesas_extras or [], ensure_ascii=False),
+            parcelas_json=json.dumps(payload.parcelas or [], ensure_ascii=False),
+            parcelas_cte_json=json.dumps(payload.parcelas_cte or [], ensure_ascii=False),
+            cte_json=json.dumps(cte, ensure_ascii=False, default=str) if cte.get("carregado") else None,
         )
-        _aplicar_calculo_no_item(item_db, it)
-        db.add(item_db)
+        db.add(entrada)
+        await db.flush()
 
-    _registrar_evento(db, entrada.id, _usuario(current_user), "importada",
-                      f"NF-e {entrada.numero_nf} de {entrada.fornecedor_nome} importada ({payload.origem_xml or 'manual'}), "
-                      f"{len(payload.itens)} itens, total R$ {entrada.valor_total_nota:.2f}. Aguardando contagem física.")
-    try:
+        for it in payload.itens:
+            mod_cod = it.get("produto_modelo_codigo")
+            if mod_cod is not None:
+                mod_cod = str(mod_cod)
+            soft_cod = it.get("softsystem_prod_codigo")
+            if soft_cod is not None:
+                soft_cod = str(soft_cod)
+
+            item_db = ComprasEntradaItem(
+                entrada_id=entrada.id,
+                numero_item=_safe_int(it.get("numero_item"), 1),
+                codigo_fornecedor=str(it.get("codigo_fornecedor") or ""),
+                ean=str(it.get("ean")) if it.get("ean") else None,
+                descricao_fornecedor=str(it.get("descricao_fornecedor") or ""),
+                ncm=str(it.get("ncm")) if it.get("ncm") else None,
+                cfop=str(it.get("cfop")) if it.get("cfop") else None,
+                unidade=str(it.get("unidade") or "UN"),
+                quantidade=_safe_float(it.get("quantidade"), 1.0),
+                valor_unitario=_safe_float(it.get("valor_unitario"), 0.0),
+                valor_total=_safe_float(it.get("valor_total"), 0.0),
+                v_ipi=_safe_float(it.get("v_ipi"), 0.0),
+                v_icms=_safe_float(it.get("v_icms"), 0.0),
+                v_icms_st=_safe_float(it.get("v_icms_st"), 0.0),
+                v_pis=_safe_float(it.get("v_pis"), 0.0),
+                v_cofins=_safe_float(it.get("v_cofins"), 0.0),
+                softsystem_prod_codigo=soft_cod,
+                softsystem_descricao=it.get("softsystem_descricao"),
+                softsystem_grupo=it.get("softsystem_grupo"),
+                softsystem_subgrupo=it.get("softsystem_subgrupo"),
+                fator_conversao=_safe_float(it.get("fator_conversao"), 1.0),
+                vinculo_metodo=it.get("vinculo_metodo"),
+                produto_modelo_codigo=mod_cod,
+                cadastro_novo_json=json.dumps(it.get("cadastro_novo"), ensure_ascii=False) if it.get("cadastro_novo") else None,
+                recontagens=0,
+            )
+            _aplicar_calculo_no_item(item_db, it)
+            db.add(item_db)
+
+        _registrar_evento(db, entrada.id, _usuario(current_user), "importada",
+                          f"NF-e {entrada.numero_nf} de {entrada.fornecedor_nome} importada ({payload.origem_xml or 'manual'}), "
+                          f"{len(payload.itens)} itens, total R$ {entrada.valor_total_nota:.2f}. Aguardando contagem física.")
         await db.commit()
+
+        # já cria a pasta ANO/MÊS/FORNECEDOR/N.F da via da nota (em segundo plano, não atrasa a tela)
+        asyncio.create_task(_preparar_pasta_bg(entrada.id, entrada.empresa, entrada.chave_acesso, entrada.numero_nf,
+                                               nota.get("fornecedor") or {"razao_social": entrada.fornecedor_nome}))
+        return {"success": True, "entrada_id": entrada.id}
+
+    except HTTPException:
+        raise
     except Exception as e:
         await db.rollback()
-        logger.error(f"[CRIAR_ENTRADA] Erro ao commitar entrada #{entrada.id}: {e}", exc_info=True)
+        logger.error(f"[CRIAR_ENTRADA] Erro inesperado ao criar entrada: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erro ao salvar entrada: {e}")
-
-    # já cria a pasta ANO/MÊS/FORNECEDOR/N.F da via da nota (em segundo plano, não atrasa a tela)
-    asyncio.create_task(_preparar_pasta_bg(entrada.id, entrada.empresa, entrada.chave_acesso, entrada.numero_nf,
-                                           nota.get("fornecedor") or {"razao_social": entrada.fornecedor_nome}))
-    return {"success": True, "entrada_id": entrada.id}
 
 
 

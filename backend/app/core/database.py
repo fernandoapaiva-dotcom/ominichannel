@@ -112,6 +112,13 @@ async def init_db():
             "ALTER TABLE loja_parametros_custo ADD COLUMN icms_antecipacao_pct FLOAT;",
             "ALTER TABLE loja_parametros_custo ADD COLUMN faturamento_medio_mensal FLOAT;",
             "ALTER TABLE loja_parametros_custo ADD COLUMN condicao_pagamento_padrao VARCHAR(50);",
+            "ALTER TABLE compras_entradas ADD COLUMN transportadora_cnpj VARCHAR(20);",
+            "ALTER TABLE compras_entradas ADD COLUMN transportadora_nome VARCHAR(255);",
+            "ALTER TABLE compras_entradas ADD COLUMN serie VARCHAR(10);",
+            "ALTER TABLE compras_entradas ADD COLUMN valor_frete_nota FLOAT DEFAULT 0;",
+            "ALTER TABLE compras_entradas ADD COLUMN valor_frete_extra_transportadora FLOAT DEFAULT 0;",
+            "ALTER TABLE compras_entradas ADD COLUMN tipo_rateio_frete VARCHAR(20) DEFAULT 'valor';",
+            "ALTER TABLE compras_entradas ADD COLUMN valor_despesas_acessorias FLOAT DEFAULT 0;",
             "ALTER TABLE compras_entradas ADD COLUMN origem_xml VARCHAR(30);",
             "ALTER TABLE compras_entradas ADD COLUMN nota_json TEXT;",
             "ALTER TABLE compras_entradas ADD COLUMN cte_chave VARCHAR(50);",
@@ -145,6 +152,9 @@ async def init_db():
             "ALTER TABLE compras_entrada_itens ADD COLUMN cadastro_novo_json TEXT;",
             "ALTER TABLE compras_entrada_itens ADD COLUMN auditado_por VARCHAR(100);",
             "ALTER TABLE compras_entrada_itens ADD COLUMN auditado_em DATETIME;",
+            "ALTER TABLE compras_entrada_itens ADD COLUMN localizacao_estoque VARCHAR(100);",
+            "ALTER TABLE compras_entrada_itens ADD COLUMN synced_softsystem BOOLEAN DEFAULT 0;",
+            "ALTER TABLE compras_entrada_itens ADD COLUMN synced_ecommerce BOOLEAN DEFAULT 0;",
         ]
         for sql in migrations:
             try:
