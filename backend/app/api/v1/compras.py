@@ -1161,12 +1161,20 @@ async def criar_entrada(
         empresa = _empresa_valida(payload.empresa)
         nota = payload.nota
         chave = nota.get("chave_acesso") or ""
-        res = await db.execute(select(ComprasEntrada).where(
+        # Se já existe entrada para essa chave:
+        # Se for 'cancelada', remove para permitir reimportação limpa sem violar a restrição UNIQUE.
+        # Se for qualquer outro status, informa que já está importada.
+        res_antiga = await db.execute(select(ComprasEntrada).where(
             ComprasEntrada.tenant_id == current_user.tenant_id,
-            ComprasEntrada.chave_acesso == chave, ComprasEntrada.status != "cancelada",
+            ComprasEntrada.chave_acesso == chave,
         ))
-        if res.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="Esta nota já foi importada.")
+        existente = res_antiga.scalar_one_or_none()
+        if existente:
+            if existente.status == "cancelada":
+                await db.delete(existente)
+                await db.flush()
+            else:
+                raise HTTPException(status_code=409, detail=f"Esta nota já foi importada (entrada #{existente.id}, status: {existente.status}).")
 
         cte = payload.cte or {}
         frete_cte = _safe_float(cte.get("valor_frete_total"), 0.0) if cte.get("frete_da_loja") else 0.0
